@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/soc2-checklist.md
-sourceHash: 5e26d1387374b453
+sourceHash: b5cb6a423bd78ce5
 ---
 
 # Critères de services de confiance SOC 2 — les contrôles de BatleHub
@@ -95,10 +95,10 @@ Le journal d'audit s'exporte pour un auditeur par :
 
 ```bash
 # Export JSON (30 derniers jours)
-batlehub admin export-audit-log --from 2026-06-01T00:00:00Z --format json --output audit.json
+batlehub-cli audit export --from 2026-06-01T00:00:00Z --format json --output audit.json
 
 # Export CSV (pour une revue en tableur)
-batlehub admin export-audit-log --from 2026-06-01T00:00:00Z --format csv --output audit.csv
+batlehub-cli audit export --from 2026-06-01T00:00:00Z --format csv --output audit.csv
 ```
 
 Ou depuis la console → **Journal d'audit** → bouton **Exporter**.

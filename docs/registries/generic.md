@@ -43,7 +43,7 @@ export NODEJS_ORG_MIRROR=https://batlehub.example.com/proxy/node-dist/generic
 export RUSTUP_DIST_SERVER=https://batlehub.example.com/proxy/rust-dist/generic
 ```
 
-Tools like `mise` read these automatically, and can also route direct downloads through a `[settings.url_replacements]` block (the `mise` `[settings.url_replacements]` use case). `batlehub registry suggest` scans a project (including `mise.toml` / `mise.lock`) and prints both the registry config blocks and the matching client environment variables.
+Tools like `mise` read these automatically, and can also route direct downloads through a `[settings.url_replacements]` block (the `mise` `[settings.url_replacements]` use case). `batlehub-cli registry suggest` scans a project (including `mise.toml` / `mise.lock`) and prints both the registry config blocks and the matching client environment variables.
 
 ## Authentication
 

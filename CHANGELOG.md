@@ -198,6 +198,13 @@ spellings*.
 
 ### Fixed
 
+- **The docs' CLI commands run as written.** 212 examples called the server
+  binary (`batlehub why …`, `batlehub admin …`) instead of `batlehub-cli`, 172
+  used a spelling RFC 0040 deprecated, and `incident-response` showed four
+  commands that never existed (`admin ip-blocks add`, `admin token revoke`,
+  `admin block`, `admin packages unlist`). Every command the published docs
+  show now parses with the current CLI, in both languages.
+
 - **`--format json` prints one document when some items of a bulk `package`
   verb fail.** The outcome was followed by a second error document on stdout.
 

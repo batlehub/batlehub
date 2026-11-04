@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: 64e275ec543162ec
+sourceHash: 9341303af495517b
 ---
 
 # Mise en cache
@@ -83,7 +83,7 @@ sous `…/{tag}/filename/{file}` quand il est récupéré par nom et sous
 classée sous le commit vers lequel sa ref s'est résolue, pas sous la branche
 demandée.
 
-`batlehub mise export` lit les trois
+`batlehub-cli mise export` lit les trois
 ([RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate) §14.1), et c'est ainsi qu'un
 lot de coupure réseau nomme des clés que l'instance déconnectée cherchera
 réellement.

@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-gdpr.md
-sourceHash: 333281e6c9024e19
+sourceHash: 14073db841495fa0
 ---
 
 # RGPD — les contrôles de BatleHub
@@ -50,7 +50,7 @@ ou un mot de passe.
 | 5(1)(e) – Limitation de la conservation | Deux classes de conservation : les lignes d'accès (`Download`, `ViewMetadata`) et les lignes de sécurité (toutes les autres actions, événements d'authentification compris), chacune expirée par la tâche de cycle de vie | ✅ Implémenté | `[audit] access_retention_days`, `[audit] security_retention_days` |
 | 5(1)(e) – Limitation de la conservation | Passé un âge donné, les lignes de la classe d'accès perdent leur précision : IP tronquée en /24 (IPv4) ou /48 (IPv6), user agent supprimé | ✅ Implémenté | `[audit] pseudonymise_after_days` |
 | 5(1)(e) – Choisir les durées | Des durées de conservation adaptées à vos finalités et à vos obligations légales | Processus manuel | votre registre des traitements |
-| 5(1)(f) – Intégrité | Les fenêtres closes de la piste sont chaînées par hachage et signées ; une ligne réécrite sans la clé est détectée | ✅ Implémenté | `[audit] seal_interval_secs`, `[audit] seal_signing_key`, `batlehub-cli admin audit verify` |
+| 5(1)(f) – Intégrité | Les fenêtres closes de la piste sont chaînées par hachage et signées ; une ligne réécrite sans la clé est détectée | ✅ Implémenté | `[audit] seal_interval_secs`, `[audit] seal_signing_key`, `batlehub-cli audit verify` |
 | 5(2) – Responsabilité | Chaque passage du cycle de vie, chaque export et chaque effacement est lui-même un événement d'audit de la classe sécurité (`audit_lifecycle_run`, `gdpr_export`, `gdpr_erase`) | ✅ Implémenté | `GET /api/v1/admin/audit-log?action=gdpr_erase` |
 
 ## Art. 6 — Base légale
@@ -64,10 +64,10 @@ ou un mot de passe.
 
 | Article | Contrôle | Statut | Preuve |
 |---------|----------|--------|--------|
-| 15 – Droit d'accès | Exporte toutes les lignes concernant une personne, y compris les lignes de publication et de propriété que l'effacement conserve ; enregistré comme `gdpr_export` | ✅ Implémenté | `batlehub-cli admin gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verbe `audit:read`) |
-| 17 – Droit à l'effacement | Remplace l'identifiant de la personne par `erased:<hmac>` dans `access_events` — comme auteur, et là où une ligne de grant ou d'export écrite par un administrateur la désigne comme sujet —, les lignes de tokens et les lignes de blocage ; les lignes d'une même personne restent liées entre elles et à personne d'autre | ✅ Implémenté | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verbe `gdpr:erase`), `[audit] erasure_key` |
+| 15 – Droit d'accès | Exporte toutes les lignes concernant une personne, y compris les lignes de publication et de propriété que l'effacement conserve ; enregistré comme `gdpr_export` | ✅ Implémenté | `batlehub-cli gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verbe `audit:read`) |
+| 17 – Droit à l'effacement | Remplace l'identifiant de la personne par `erased:<hmac>` dans `access_events` — comme auteur, et là où une ligne de grant ou d'export écrite par un administrateur la désigne comme sujet —, les lignes de tokens et les lignes de blocage ; les lignes d'une même personne restent liées entre elles et à personne d'autre | ✅ Implémenté | `batlehub-cli gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verbe `gdpr:erase`), `[audit] erasure_key` |
 | 17(3) – Exceptions | Les lignes de publication et de propriété sont conservées au titre de l'intérêt légitime : « qui a publié ceci » doit rester une question à laquelle chaque consommateur du paquet obtient une réponse | Documenté | [RFC 0036 §4.2](/rfc/0036-regulatory-alignment#_4-2-behaviour-rules) |
-| 17 – Effacement face à une décision ouverte | Refusé pour une personne visée par une quarantaine ou un blocage ouvert, sauf forçage | ✅ Implémenté | `batlehub-cli admin gdpr erase --user <id> --force` |
+| 17 – Effacement face à une décision ouverte | Refusé pour une personne visée par une quarantaine ou un blocage ouvert, sauf forçage | ✅ Implémenté | `batlehub-cli gdpr erase --user <id> --ignore-open-decisions` |
 | 17 – Qui peut effacer | `gdpr:erase` est un verbe à part ; `audit:purge` ne l'implique pas | ✅ Implémenté | [Contrôle d'accès § verbes](../guide/access-control.md#verbs) |
 | 12 – Répondre sous un mois | Recevoir, vérifier et traiter la demande | Processus manuel | [Réponse à incident § données personnelles](./incident-response.md#pii-handling) |
 | 21 – Droit d'opposition | Mettre une opposition en balance avec votre intérêt légitime | Processus manuel | — |
@@ -95,7 +95,7 @@ quoi le pseudonyme est réversible par quiconque lit la base.
 | 32 – Chiffrement au repos | Chiffrement de Postgres et du stockage objet | Processus manuel | les réglages de votre base et de votre bucket |
 | 32 – Résilience et restauration | Procédures de sauvegarde et de restauration | Documenté | [Reprise après sinistre](./disaster-recovery.md) |
 | 33 – Notification d'une violation (72 h) | Détecter la violation et la notifier à l'autorité de contrôle | Processus manuel | [Réponse à incident](./incident-response.md), le flux d'audit |
-| 33(5) – Documenter une violation | L'export du journal d'audit et une chaîne vérifiée pour la fenêtre de l'incident | ✅ Implémenté | `batlehub-cli admin export-audit-log`, `batlehub-cli admin audit verify --from <start> --to <end>` |
+| 33(5) – Documenter une violation | L'export du journal d'audit et une chaîne vérifiée pour la fenêtre de l'incident | ✅ Implémenté | `batlehub-cli audit export`, `batlehub-cli audit verify --from <start> --to <end>` |
 
 ## Art. 44 — Transferts
 

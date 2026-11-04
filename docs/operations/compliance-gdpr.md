@@ -42,7 +42,7 @@ carries a token, a hash, an OIDC code or a password.
 | 5(1)(e) – Storage limitation | Two retention classes: access rows (`Download`, `ViewMetadata`) and security rows (every other action, auth events included), each expired by the lifecycle job | ✅ Implemented | `[audit] access_retention_days`, `[audit] security_retention_days` |
 | 5(1)(e) – Storage limitation | Access-class rows lose precision after a set age: IP truncated to /24 (IPv4) or /48 (IPv6), user agent dropped | ✅ Implemented | `[audit] pseudonymise_after_days` |
 | 5(1)(e) – Choosing the periods | Retention periods that fit your purposes and legal obligations | Manual process | your record of processing |
-| 5(1)(f) – Integrity | Closed windows of the trail are hash-chained and signed; rewriting a row without the key is detected | ✅ Implemented | `[audit] seal_interval_secs`, `[audit] seal_signing_key`, `batlehub-cli admin audit verify` |
+| 5(1)(f) – Integrity | Closed windows of the trail are hash-chained and signed; rewriting a row without the key is detected | ✅ Implemented | `[audit] seal_interval_secs`, `[audit] seal_signing_key`, `batlehub-cli audit verify` |
 | 5(2) – Accountability | Each lifecycle run, export and erasure is itself a security-class audit event (`audit_lifecycle_run`, `gdpr_export`, `gdpr_erase`) | ✅ Implemented | `GET /api/v1/admin/audit-log?action=gdpr_erase` |
 
 ## Art. 6 — Lawful basis
@@ -56,10 +56,10 @@ carries a token, a hash, an OIDC code or a password.
 
 | Article | Control | Status | Evidence |
 |---------|---------|--------|----------|
-| 15 – Right of access | Export every row about one subject, including the publication and ownership rows erasure keeps; recorded as `gdpr_export` | ✅ Implemented | `batlehub-cli admin gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verb `audit:read`) |
-| 17 – Right to erasure | Replaces the subject's id with `erased:<hmac>` in `access_events` — as the actor, and where an admin's grant or export row names them as its subject — token rows and block rows; rows of one subject stay linkable to each other and to nobody | ✅ Implemented | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verb `gdpr:erase`), `[audit] erasure_key` |
+| 15 – Right of access | Export every row about one subject, including the publication and ownership rows erasure keeps; recorded as `gdpr_export` | ✅ Implemented | `batlehub-cli gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verb `audit:read`) |
+| 17 – Right to erasure | Replaces the subject's id with `erased:<hmac>` in `access_events` — as the actor, and where an admin's grant or export row names them as its subject — token rows and block rows; rows of one subject stay linkable to each other and to nobody | ✅ Implemented | `batlehub-cli gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verb `gdpr:erase`), `[audit] erasure_key` |
 | 17(3) – Exemptions | Publication and ownership rows are retained under legitimate interest: "who published this" stays answerable for every consumer of the package | Documented | [RFC 0036 §4.2](../rfc/0036-regulatory-alignment.md#_4-2-behaviour-rules) |
-| 17 – Erasure against an open decision | Refused for a subject with an open quarantine or block decision unless forced | ✅ Implemented | `batlehub-cli admin gdpr erase --user <id> --force` |
+| 17 – Erasure against an open decision | Refused for a subject with an open quarantine or block decision unless forced | ✅ Implemented | `batlehub-cli gdpr erase --user <id> --ignore-open-decisions` |
 | 17 – Who may erase | `gdpr:erase` is its own verb; `audit:purge` does not imply it | ✅ Implemented | [Access control § verbs](../guide/access-control.md#verbs) |
 | 12 – Answering within a month | Receiving, verifying and answering the request | Manual process | [Incident response § PII handling](./incident-response.md#pii-handling) |
 | 21 – Right to object | Weighing an objection against your legitimate interest | Manual process | — |
@@ -87,7 +87,7 @@ whoever reads the database.
 | 32 – Encryption at rest | Postgres and object-storage encryption | Manual process | your database and bucket settings |
 | 32 – Resilience and restore | Backup and restore runbooks | Documented | [Disaster recovery](./disaster-recovery.md) |
 | 33 – Breach notification (72 h) | Detecting the breach and notifying the supervisory authority | Manual process | [Incident response](./incident-response.md), the audit stream |
-| 33(5) – Documenting a breach | The audit log export and a verified chain for the incident window | ✅ Implemented | `batlehub-cli admin export-audit-log`, `batlehub-cli admin audit verify --from <start> --to <end>` |
+| 33(5) – Documenting a breach | The audit log export and a verified chain for the incident window | ✅ Implemented | `batlehub-cli audit export`, `batlehub-cli audit verify --from <start> --to <end>` |
 
 ## Art. 44 — Transfers
 

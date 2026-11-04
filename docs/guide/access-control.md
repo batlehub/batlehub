@@ -149,7 +149,7 @@ Two things follow for a grant you write:
 - A token created with no groups matches no `group:` subject at all, whatever
   its owner belongs to. That is the default, and it is what every token minted
   before the snapshot existed carries. If a pipeline cannot see something its
-  owner can, this is the first thing to check: `batlehub auth token list` shows
+  owner can, this is the first thing to check: `batlehub-cli auth token list` shows
   what each token carries.
 - A token keeps its groups when its owner loses them. Revoking the token is what
   ends that, not the change at the IDP — so offboarding revokes tokens, and a
@@ -248,16 +248,16 @@ not enumerate them in TOML.
 
 ```sh
 # every verb the vocabulary defines, on one package, for one group
-batlehub admin grants set npm1 @acme/billing --subject group:oidc1:eng \
+batlehub-cli grant set npm1/@acme/billing --subject group:oidc1:eng \
     --actions releases:read,releases:list
 
 # …or on one version. `name@version` is the coordinate, split on the last `@`,
 # so a scoped npm name is still a package name
-batlehub admin grants set npm1 @acme/billing@2.4.0-rc.1 \
+batlehub-cli grant set npm1/@acme/billing@2.4.0-rc.1 \
     --subject group:oidc1:release-managers --actions releases:read
 
-batlehub admin grants list npm1 @acme/billing   # both tiers
-batlehub admin grants rm   npm1 @acme/billing --subject group:oidc1:eng
+batlehub-cli grant list npm1/@acme/billing   # both tiers
+batlehub-cli grant remove npm1/@acme/billing --subject group:oidc1:eng
 ```
 
 The console has the same controls on a package's detail page, under **Who can
@@ -422,7 +422,7 @@ refuses to start with a date already past. An expired shadow **enforces**.
 
 Every reload warns, naming each node and its expiry, and the warning appears on
 the Config Reload page rather than only in a log. What a shadow has served is on
-the [authorization page](#watching) and in `batlehub authz shadow`.
+the [authorization page](#watching) and in `batlehub-cli authz shadow`.
 
 `versioning` takes a `dry_run = true` too. Its direction is milder — a
 badly-named or duplicate version is accepted, so bad data lands but nothing leaks
@@ -449,10 +449,10 @@ to remember.
 #### From a terminal {#cli}
 
 ```bash
-batlehub authz explain npm1 --subject role:user --action releases:read \
+batlehub-cli authz explain npm1 --subject role:user --action releases:read \
   --package @acme/billing/cards
 
-batlehub authz shadow --detail
+batlehub-cli authz shadow --detail
 ```
 
 `explain` answers with **which tier granted each verb**, which is the difference

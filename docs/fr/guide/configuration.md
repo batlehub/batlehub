@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 79ff89677644cb84
+sourceHash: cd922ce26624bd4f
 ---
 
 # Référence de configuration
@@ -672,7 +672,7 @@ opérateur :
 - **Un token nomme le groupe que le fournisseur émet réellement.** C'est la forme
   préfixée pour tout ce que `role_mappings` ci-dessus ne renomme pas —
   `k8s:system:serviceaccounts:digital` chez un fournisseur nommé `k8s`, et non
-  `system:serviceaccounts:digital`. `batlehub auth whoami` les imprime tels que
+  `system:serviceaccounts:digital`. `batlehub-cli auth whoami` les imprime tels que
   résolus, ce qui est la façon fiable d'en écrire un ; la console les propose sous
   forme de boutons pour la même raison.
 
@@ -1991,7 +1991,7 @@ et `forgejo` uniquement ; RFC 0019) :**
 >
 > Avec `[registries.security]`, ces trois faits voyagent avec le verdict de la
 > version : une branche avertie répond donc `X-BatleHub-Verdict: warned`, et
-> `batlehub why` l'explique. Sans lui, il n'y a pas de verdict pour les porter :
+> `batlehub-cli why` l'explique. Sans lui, il n'y a pas de verdict pour les porter :
 > un `deny` est un simple `403` qui nomme le code, et un `warn` se réduit aux
 > en-têtes ci-dessus.
 
@@ -2093,7 +2093,7 @@ on_webhook    = true
 | `require_provenance` | booléen | `false` | Une version sans attestation de provenance vaut `PROVENANCE_MISSING` (un constat en `high`). N'a de sens qu'avec un scanner qui contrôle la provenance (`sigstore`, phase 3). |
 | `deny_install_hooks` | chaîne | `"warn"` | Ce qu'est un hook d'installation (un `preinstall` npm, un `setup.py` Python) : `deny`, `warn` ou `ignore`. Lu par les scanners d'archive de la phase 3. |
 | `scanner_error` | chaîne | `"quarantine"` | Un scanner qui ne peut pas répondre après `[worker].max_attempts` : `quarantine` retient la version (`SCANNER_ERROR`, borné dans le temps), `warn` la sert avertie, `ignore` abandonne le constat. |
-| `pullers_window_days` | u32 | `30` | Quand une réanalyse fait passer une version *déjà servie* en `denied`, la notification `verdict_changed` nomme toutes les identités qui l'ont récupérée dans cette fenêtre, lues dans le journal d'accès (RFC 0018, décision 23) ; c'est aussi la fenêtre par défaut de `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` et de `batlehub verdicts pullers`. Les récupérations anonymes sont conservées sous `ip:<addr>`. |
+| `pullers_window_days` | u32 | `30` | Quand une réanalyse fait passer une version *déjà servie* en `denied`, la notification `verdict_changed` nomme toutes les identités qui l'ont récupérée dans cette fenêtre, lues dans le journal d'accès (RFC 0018, décision 23) ; c'est aussi la fenêtre par défaut de `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` et de `batlehub-cli verdict pullers`. Les récupérations anonymes sont conservées sous `ip:<addr>`. |
 | `rescan.interval_secs` | u64 | `0` | `> 0` : l'ordonnanceur de réanalyse — un par parc, élu par un verrou consultatif PostgreSQL — met en file une `Rescan` (sous `FirstSeen` et `Webhook`, au-dessus de `Backfill`) pour tout verdict de ce registre dont la dernière analyse est plus ancienne que l'intervalle. Un verdict qui bascule de servi à `denied` lève l'alerte ci-dessus ; une retenue qui se lève lève `artifact_released` vers les identités à qui la version avait été refusée. `0` ne réanalyse jamais sur horloge ; `POST …/rescan` et le webhook `security.rescan` le font toujours. |
 
 > **Où vont les règles.** `min_age_secs` *remplace* une règle
@@ -2109,7 +2109,7 @@ on_webhook    = true
 > l'artefact.
 >
 > **Qui voit pourquoi.** Un téléchargement refusé est un simple `403` pour tout
-> le monde ; les codes de motif et l'indication `batlehub why` du corps exigent
+> le monde ; les codes de motif et l'indication `batlehub-cli why` du corps exigent
 > `quarantine:read` (accordé à `user` et `admin` par défaut), et les constats
 > derrière eux exigent `findings:read` (`admin`). Une dérogation d'opérateur est
 > une `GateExemption` sur le garde-fou `security_verdict` (`gates:exempt`) : elle
@@ -3066,7 +3066,7 @@ verrou d'audit ferme la fenêtre terminée depuis au moins une fenêtre : ses
 lignes sont hachées, l'empreinte est chaînée à l'enregistrement précédent et
 signée. La pseudonymisation, la rétention, une purge et un effacement
 consignent chacun ce qu'ils ont modifié dans une fenêtre scellée par un `amend`
-ou un `expire` signé : `batlehub-cli admin audit verify` distingue ainsi les
+ou un `expire` signé : `batlehub-cli audit verify` distingue ainsi les
 modifications du cycle de vie de toutes les autres. Associez le scellement à
 `[logging] format = "json"` : chaque enregistrement devient aussi une ligne
 `audit_seal`, et la copie que détient votre SIEM est ce qui détecte une queue
@@ -3309,7 +3309,7 @@ processus en proxy seul avec cette section active journalise un avertissement et
 lève `upstream-audit.no-worker-role`. Sur un registre doté de
 [`[registries.security]`](#registries-security), une disparition confirmée est
 aussi un constat `UNPUBLISHED_UPSTREAM` sur le verdict de la version —
-enregistré et visible dans `batlehub why`, jamais une retenue sous `"audit"`.
+enregistré et visible dans `batlehub-cli why`, jamais une retenue sous `"audit"`.
 
 **Les métriques.** `batlehub_upstream_missing_total` et
 `batlehub_upstream_disappeared_total` (jauges, par registre),
@@ -3395,7 +3395,7 @@ qu'ils partagent le schéma de vérification.
   canal avant qu'un incident ne s'en charge.
 
 Les trois mêmes sont
-`batlehub-cli admin notifications channels|list|delete` ; voir
+`batlehub-cli notification channels|list|delete` ; voir
 [la référence de la CLI](/fr/use/cli#notifications). Les canaux eux-mêmes sont de
 la configuration : en ajouter un est un changement de configuration et un
 rechargement, pas un appel d'API.
@@ -3794,7 +3794,7 @@ configuré comme tel pourrait publier dans n'importe quel namespace de la cible.
 Vérifiez ce qu'il a le droit de faire avant la première exécution :
 
 ```bash
-batlehub authz explain vsx-local \
+batlehub-cli authz explain vsx-local \
   --subject user:svc-release-import \
   --action releases:publish \
   --package batlehub.batlehub-vsx
@@ -3804,8 +3804,8 @@ batlehub authz explain vsx-local \
 pre-release par son nom :
 
 ```bash
-batlehub-cli admin import vsx-local
-batlehub-cli admin import vsx-local --tag v1.1.0-rc.1
+batlehub-cli import vsx-local
+batlehub-cli import vsx-local --tag v1.1.0-rc.1
 ```
 
 La même chose en HTTP, pour un pipeline sans CLI :

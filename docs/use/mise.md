@@ -18,7 +18,7 @@ This page is the one home for that, connected and disconnected.
 Ask the CLI what your project needs, and it prints the block:
 
 ```bash
-batlehub registry suggest --mise
+batlehub-cli registry suggest --mise
 ```
 
 It scans `mise.lock` first — the lock records the exact URL of every tool,
@@ -59,7 +59,7 @@ timeout with no name attached. Three things change that
 ### 2.1 Plan
 
 ```bash
-batlehub mise plan --lock mise.lock --platform linux-x64 -o mise-plan.json
+batlehub-cli mise plan --lock mise.lock --platform linux-x64 -o mise-plan.json
 ```
 
 ```text
@@ -102,7 +102,7 @@ machine with no network.
 ### 2.2 Seed
 
 ```bash
-batlehub mise seed --plan mise-plan.json --verify
+batlehub-cli mise seed --plan mise-plan.json --verify
 ```
 
 Every planned entry is fetched *through* BatleHub — fetching is warming — and
@@ -120,10 +120,10 @@ refuses an unsigned artifact whoever asks.
 
 ```bash
 # connected side
-batlehub mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
+batlehub-cli mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
 
 # disconnected side
-batlehub mise import estate.bhub
+batlehub-cli mise import estate.bhub
 ```
 
 A bundle is a tar of three things:
@@ -162,7 +162,7 @@ with no trusted keys would accept any bundle at all.
 ### 3.1 The catch-all rule
 
 ```bash
-batlehub registry suggest --mise --mise-catch-all
+batlehub-cli registry suggest --mise --mise-catch-all
 ```
 
 appends one final rule sending anything no other rule matched to
@@ -178,8 +178,8 @@ backend you had already pointed at BatleHub into the `501` sink.
 ## 4. Reading what is missing
 
 ```bash
-batlehub admin air-gap-missing
-batlehub admin bundles
+batlehub-cli air-gap missing
+batlehub-cli bundle list
 ```
 
 or the console's **Air gap** page under Operations. The miss log is one row

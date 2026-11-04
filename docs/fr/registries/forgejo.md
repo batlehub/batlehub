@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/forgejo.md
-sourceHash: b4d776b1e1891259
+sourceHash: 013646846368a567
 ---
 
 # Forgejo / Gitea
@@ -114,7 +114,7 @@ comparer — et un changement est remarqué à la résolution suivante, après
 Sur un registre doté de
 [`[registries.security]`](/fr/guide/configuration#security), ces faits voyagent
 avec le verdict de la version : une branche avertie répond donc avec
-`X-BatleHub-Verdict: warned`, et `batlehub why` l'explique. Sans cette section,
+`X-BatleHub-Verdict: warned`, et `batlehub-cli why` l'explique. Sans cette section,
 il n'y a pas de verdict pour les porter : un `deny` est un simple `403` qui nomme
 le code, et un `warn` se réduit aux en-têtes ci-dessus. C'est la dégradation
 honnête, et c'est la raison d'être de `X-BatleHub-Ref-Previous-Commit`.
@@ -216,7 +216,7 @@ Avec `mise`, c'est la seconde règle de la paire :
 "regex:^https://codeberg\\.org/attachments/(.+)" = "https://batlehub.example/proxy/<registre>/attachments/$1"
 ```
 
-`batlehub registry suggest --mise` écrit les deux — voir [mise](/fr/use/mise).
+`batlehub-cli registry suggest --mise` écrit les deux — voir [mise](/fr/use/mise).
 
 ## Authentification
 

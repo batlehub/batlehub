@@ -40,8 +40,8 @@ before a background sweep.
 | --- | --- | --- |
 | `first_seen` | the proxy, on the first request for a version it has no verdict for | 0 |
 | `webhook` | a SOC flag, or an administrator marking a package | 1 |
-| `rescan` | the rescan scheduler, and `verdicts rescan` | 2 |
-| `backfill` | `verdicts backfill` — every cached version of a registry | 3 |
+| `rescan` | the rescan scheduler, and `verdict rescan` | 2 |
+| `backfill` | `verdict backfill` — every cached version of a registry | 3 |
 
 Enqueue is **idempotent on the coordinate**: a partial unique index allows one
 *open* job per version, so a burst of first requests for the same package
@@ -142,11 +142,11 @@ A hold with a clock lifts by itself and says when. A hold with no clock —
 and waiting on it never helps.
 
 Users have two commands for this and they are documented in the
-[CLI reference](/use/cli#commands-security): `batlehub why` explains a refusal,
-`batlehub wait` blocks until a held version becomes servable and exits non-zero
+[CLI reference](/use/cli#commands-security): `batlehub-cli why` explains a refusal,
+`batlehub-cli wait` blocks until a held version becomes servable and exits non-zero
 straight away when waiting cannot help. The administrator's side — listing
 verdicts by state, rescanning, backfilling, and asking who already pulled a
-version — is [`batlehub verdicts`](/use/cli#commands-verdicts).
+version — is [`batlehub-cli verdict`](/use/cli#commands-verdicts).
 
 ## When something is wrong
 
@@ -154,7 +154,7 @@ version — is [`batlehub verdicts`](/use/cli#commands-verdicts).
 | --- | --- | --- |
 | Every install on a `[security]` registry is refused `SCAN_PENDING` | `batlehub_workers_live`, and the startup warning naming the registries | Nothing is scanning. Start a process with `--roles worker`, or set `worker.enabled` in the chart |
 | Queue depth climbing, jobs eventually complete | `batlehub_scan_jobs_queued` by registry and trigger | Raise `max_concurrent`, or add worker replicas — the autoscaler scales on this metric |
-| One version stuck, others fine | `batlehub why <coordinate>`, then the job's `attempts` and `last_error` | Let the attempts run out, or `batlehub why --rescan` after fixing the cause |
+| One version stuck, others fine | `batlehub-cli why <coordinate>`, then the job's `attempts` and `last_error` | Let the attempts run out, or `batlehub-cli why --rescan` after fixing the cause |
 | Versions coming back `SCANNER_ERROR` in bulk | `batlehub_scanner_errors_total` by scanner and class | One scanner is down or unreachable. Check its egress and its `[scanners.<name>]` entry |
 | Jobs keep returning to the queue without completing | `batlehub_scan_jobs_expired_total`, and the pod's memory | A lease is expiring. Usually the sandbox's `memory_limit_mb` against a large or hostile archive, or `job_timeout` under a slow scanner |
 | Two instances, one database, jobs vanishing from one | both processes' `worker_id` in `worker_heartbeats` | The queue is estate-wide by design. Scope each worker with `[worker] registries` if they must not share |
@@ -179,7 +179,7 @@ instances against one Postgres.
 A transition is the one to alert on. A version that was `allowed` and is now
 `quarantined` means something arrived after people had already installed it,
 and the flip alert carries the list of who pulled it — the same query
-[`batlehub verdicts pullers`](/use/cli#commands-verdicts) answers, and the
+[`batlehub-cli verdict pullers`](/use/cli#commands-verdicts) answers, and the
 starting point of the [incident-response](/operations/incident-response) path.
 
 ## The two images

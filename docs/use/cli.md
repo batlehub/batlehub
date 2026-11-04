@@ -370,7 +370,7 @@ the rendered TOML under a `toml` key.
 ## 5. Commands — package
 
 ```
-batlehub-cli package list   [-r <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
+batlehub-cli package list   [-r <r>] [--search <q>] [--blocked] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
 batlehub-cli package show     <registry>/<name>[@<version>]
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
@@ -1494,7 +1494,7 @@ refuse, and `detect` prints the snippets instead.
 
 - **Without `--yes`, nothing is written**: the diff of every file is printed.
 - **Only what is between the markers is ever touched.** A block starts with
-  `# >>> batlehub setup … >>>` and ends with `# <<< batlehub setup <<<`; files
+  `# >>> batlehub-cli setup … >>>` and ends with `# <<< batlehub-cli setup <<<`; files
   managed whole (`settings.xml`, the drop-ins) carry the start marker on their
   first line. `remove` gives every file back byte for byte.
 - **What you edit stops being managed.** The marker records a hash of what was

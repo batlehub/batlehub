@@ -50,7 +50,7 @@ On a machine that can reach both the project's source and a **connected**
 BatleHub:
 
 ```bash
-batlehub mise plan --lock mise.lock --platform linux-x64,darwin-arm64 \
+batlehub-cli mise plan --lock mise.lock --platform linux-x64,darwin-arm64 \
   --include-mise -o mise-plan.json
 ```
 
@@ -81,7 +81,7 @@ for any provider archive whose two sidecars the plan does not name.
 ## 2. Seed and verify
 
 ```bash
-batlehub mise seed --plan mise-plan.json --verify
+batlehub-cli mise seed --plan mise-plan.json --verify
 ```
 
 Non-zero exit means the bundle would be incomplete or wrong. Do not build
@@ -92,7 +92,7 @@ agree and is worth understanding before it is carried across a gap.
 ## 3. Export
 
 ```bash
-batlehub mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
+batlehub-cli mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
 ```
 
 ```text
@@ -117,7 +117,7 @@ content-addressed, so an artifact reachable at two addresses ships once.
 ## 4. Carry and import
 
 ```bash
-batlehub mise import estate.bhub
+batlehub-cli mise import estate.bhub
 ```
 
 ```text
@@ -135,9 +135,9 @@ Importing the same bundle twice writes once and says so.
 ## 5. Reconcile
 
 ```bash
-batlehub admin air-gap-missing --kind artifact
-batlehub admin air-gap-missing --kind document
-batlehub admin air-gap-missing --kind unmirrored_host
+batlehub-cli air-gap missing --kind artifact
+batlehub-cli air-gap missing --kind document
+batlehub-cli air-gap missing --kind unmirrored_host
 ```
 
 or the console's **Air gap** page. The first list is content the next bundle
@@ -160,7 +160,7 @@ record, and only a lock naming that version will.
 Feed both into the next plan, and purge what you have satisfied:
 
 ```bash
-batlehub admin air-gap-missing            # confirm the list first
+batlehub-cli air-gap missing            # confirm the list first
 curl -X DELETE "$BATLEHUB/api/v1/admin/air-gap/missing?before=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -H "Authorization: Bearer $TOKEN"
 ```

@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-iso27001.md
-sourceHash: 78d1b5e92e73863c
+sourceHash: 9bf46c64c863f6ff
 ---
 
 # ISO/IEC 27001:2022 — les contrôles de BatleHub
@@ -31,12 +31,12 @@ et les contrôles physiques (7.x) vous appartiennent et ne sont pas listés.
 | 5.15 – Contrôle d'accès | Des droits sur des verbes, le long de la hiérarchie registre → paquet → version ; une décision est un refus sauf si un droit l'autorise | ✅ Implémenté | [Contrôle d'accès](../guide/access-control.md), `POST /api/v1/admin/access-check` |
 | 5.16 – Gestion des identités | Les identités viennent de votre IdP (OIDC), de comptes de service Kubernetes, de l'OIDC d'une CI ou de tokens statiques ; les noms de fournisseurs sont uniques | ✅ Implémenté | `[[auth]]` dans la [configuration](../guide/configuration.md), `crates/adapters/src/auth/` |
 | 5.17 – Informations d'authentification | Tokens d'accès personnels stockés sous forme d'empreinte SHA-256, avec expiration ; la valeur n'est montrée qu'une fois | ✅ Implémenté | `crates/adapters/src/db/auth/user_tokens.rs`, `crates/adapters/src/auth/user_token.rs` |
-| 5.18 – Droits d'accès | Révoquer un token, bloquer un utilisateur, lister et retirer des droits | ✅ Implémenté | `DELETE /api/v1/auth/tokens/{id}`, `POST /api/v1/admin/users/{user_id}/block`, `batlehub-cli admin grants` |
-| 5.18 – Revue périodique des accès | Revoir droits et tokens selon un calendrier | Processus manuel | `batlehub-cli admin grants`, `GET /api/v1/admin/audit-log?action=sign_in` |
+| 5.18 – Droits d'accès | Révoquer un token, bloquer un utilisateur, lister et retirer des droits | ✅ Implémenté | `DELETE /api/v1/auth/tokens/{id}`, `POST /api/v1/admin/users/{user_id}/block`, `batlehub-cli grant list` |
+| 5.18 – Revue périodique des accès | Revoir droits et tokens selon un calendrier | Processus manuel | `batlehub-cli grant list`, `GET /api/v1/admin/audit-log?action=sign_in` |
 | 5.21 – Chaîne d'approvisionnement TIC | Chaque artefact relayé peut être analysé (SBOM, CVE, verdicts), signalé par votre SOC, retenu par une barrière d'âge de publication ou bloqué | ✅ Implémenté | [SBOM](../guide/sbom.md), [Scan worker](./scan-worker.md), `crates/core/src/rules/` |
 | 5.21 – La chaîne d'approvisionnement de BatleHub | `cargo audit`, `cargo deny`, `pnpm audit`, postmortem, Trivy ; aucune exception | ✅ Implémenté | `.github/workflows/back-dep-audit.yaml`, `.github/workflows/image-scan.yaml`, `deny.toml` |
 | 5.24–5.27 – Gestion des incidents | Procédure : gravité, détection, confinement, éradication, reprise, retour d'expérience | Documenté | [Réponse à incident](./incident-response.md) |
-| 5.28 – Collecte de preuves | Export du journal d'audit, et une chaîne de scellement signée dont `verify` prouve que la fenêtre exportée n'a pas été modifiée | ✅ Implémenté | `batlehub-cli admin export-audit-log`, `batlehub-cli admin audit verify` |
+| 5.28 – Collecte de preuves | Export du journal d'audit, et une chaîne de scellement signée dont `verify` prouve que la fenêtre exportée n'a pas été modifiée | ✅ Implémenté | `batlehub-cli audit export`, `batlehub-cli audit verify` |
 | 5.33 – Protection des enregistrements | Les lignes de sécurité ne disparaissent que par leur conservation — une purge manuelle n'atteint que les lignes d'accès, si bien que l'enregistrement d'une purge survit aux purges suivantes | ✅ Implémenté | `DELETE /api/v1/admin/audit-log?before=`, `[audit] security_retention_days` |
 | 5.34 – Vie privée et données personnelles | Classes de conservation, pseudonymisation, effacement et export pour le droit d'accès | ✅ Implémenté | [Correspondance RGPD](./compliance-gdpr.md) |
 
@@ -51,11 +51,11 @@ et les contrôles physiques (7.x) vous appartiennent et ne sont pas listés.
 | 8.8 – Vulnérabilités techniques (les vôtres) | Analyse CVE des artefacts relayés ; rapport d'exposition de qui a récupéré une version signalée | ✅ Implémenté | [Réponse à incident § qui a récupéré une version signalée](./incident-response.md#who-pulled-a-flagged-version) |
 | 8.8 – Vulnérabilités techniques (celles du projet) | Signalement privé, délais annoncés, avis de sécurité avec CVE, VEX | Documenté | `SECURITY.md`, [Correspondance CRA](./compliance-cra.md) |
 | 8.9 – Gestion de la configuration | Chaque rechargement appliqué ou refusé est enregistré avec son auteur et son diff ; les avertissements de validation sont listés | ✅ Implémenté | `GET /api/v1/admin/config/changes`, `GET /api/v1/admin/config/warnings` |
-| 8.10 – Suppression des informations | Expiration par classe de conservation ; effacement d'une personne | ✅ Implémenté | `[audit]`, `batlehub-cli admin gdpr erase` |
+| 8.10 – Suppression des informations | Expiration par classe de conservation ; effacement d'une personne | ✅ Implémenté | `[audit]`, `batlehub-cli gdpr erase` |
 | 8.11 – Masquage des données | Lignes de la classe d'accès pseudonymisées passé un âge donné | ✅ Implémenté | `[audit] pseudonymise_after_days` |
 | 8.13 – Sauvegarde des informations | Procédures de sauvegarde et de restauration de Postgres et du stockage objet | Documenté | [Reprise après sinistre](./disaster-recovery.md) |
 | 8.15 – Journalisation | Chaque téléchargement, publication, blocage, droit, purge, changement de configuration et événement d'authentification dans `access_events`, avec utilisateur, heure, IP et user agent | ✅ Implémenté | `GET /api/v1/admin/audit-log` |
-| 8.15 – Journaux protégés contre l'altération | Chaîne de hachage signée sur les fenêtres closes ; troncature détectée contre la dernière ligne `audit_seal` du SIEM | ✅ Implémenté | `[audit] seal_interval_secs`, `batlehub-cli admin audit verify --head <digest>`, `deploy/siem/sigma/audit_chain_gap.yml` |
+| 8.15 – Journaux protégés contre l'altération | Chaîne de hachage signée sur les fenêtres closes ; troncature détectée contre la dernière ligne `audit_seal` du SIEM | ✅ Implémenté | `[audit] seal_interval_secs`, `batlehub-cli audit verify --head <digest>`, `deploy/siem/sigma/audit_chain_gap.yml` |
 | 8.15 – Une copie hors de l'hôte | Le flux d'audit JSON sur la sortie standard, pour un collecteur | ✅ Implémenté | `[logging] format = "json"`, [Intégration SIEM](./siem.md) |
 | 8.15 – Stockage non réinscriptible | Stockage immuable pour la copie expédiée (S3 Object Lock, bucket WORM) | Processus manuel | la destination de votre collecteur |
 | 8.16 – Activités de surveillance | Règles Sigma sur le flux ; alertes Prometheus | ✅ Implémenté | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |

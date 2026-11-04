@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains.md
-sourceHash: ac50d56f089a698d
+sourceHash: 9499a08130a4b000
 ---
 
 # IDE JetBrains
@@ -48,7 +48,7 @@ Employez les **vrais** noms d'archive : `idea-<ver>` pour l'installateur unifié
 (Community) n'existent que pour les versions ≤ 2025.2. Un nom erroné renvoie le
 404 de l'amont.
 
-La CLI `batlehub download` récupère un fichier à travers le proxy (et le met en
+La CLI `batlehub-cli download` récupère un fichier à travers le proxy (et le met en
 cache au passage) :
 
 ```bash
@@ -71,7 +71,7 @@ authentification.
 - Les registres adressés par chemin se préchauffent sur des **chemins** (il n'y a
   pas de modèle de version). Listez-les sous `[registries.cache] warm_paths` pour
   les récupérer au démarrage, ou préchauffez à la demande avec
-  `batlehub admin cache warm <registry> --paths "idea/idea-2026.1.3.tar.gz"`.
+  `batlehub-cli cache warm -r <registry> --paths "idea/idea-2026.1.3.tar.gz"`.
 - Pour l'écosystème des **plugins** JetBrains (plugins.jetbrains.com), utilisez
   le type dédié `jetbrains-marketplace` — ne pointez pas celui-ci vers cet hôte.
 

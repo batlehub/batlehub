@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: f0fe40f25c1064cd
+sourceHash: 219bb47f152defb2
 ---
 
 # batlehub-cli
@@ -388,7 +388,7 @@ suggestions structurées, plus le TOML rendu sous une clé `toml`.
 ## 5. Commandes — package
 
 ```
-batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
+batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
 batlehub-cli package show     <registry>/<name>[@<version>]
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
@@ -1559,7 +1559,7 @@ Windows, ils refusent de s'exécuter, et `detect` imprime les extraits à la pla
 
 - **Sans `--yes`, rien n'est écrit** : le diff de chaque fichier est imprimé.
 - **Seul ce qui se trouve entre les marqueurs est modifié.** Un bloc commence
-  par `# >>> batlehub setup … >>>` et finit par `# <<< batlehub setup <<<` ;
+  par `# >>> batlehub-cli setup … >>>` et finit par `# <<< batlehub-cli setup <<<` ;
   les fichiers gérés en entier (`settings.xml`, les fichiers déposés) portent le
   marqueur de début en première ligne. `remove` rend chaque fichier à
   l'identique, octet pour octet.

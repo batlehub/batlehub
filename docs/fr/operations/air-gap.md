@@ -1,7 +1,7 @@
 ---
 title: Procédure de coupure réseau
 sourcePath: operations/air-gap.md
-sourceHash: 4a377935ecae2774
+sourceHash: e186cd071ca85591
 ---
 
 # Procédure de coupure réseau
@@ -53,7 +53,7 @@ Sur une machine capable d'atteindre à la fois la source du projet et un BatleHu
 **connecté** :
 
 ```bash
-batlehub mise plan --lock mise.lock --platform linux-x64,darwin-arm64 \
+batlehub-cli mise plan --lock mise.lock --platform linux-x64,darwin-arm64 \
   --include-mise -o mise-plan.json
 ```
 
@@ -85,7 +85,7 @@ archive de provider dont le plan ne nomme pas les deux fichiers annexes.
 ## 2. Amorcer et vérifier
 
 ```bash
-batlehub mise seed --plan mise-plan.json --verify
+batlehub-cli mise seed --plan mise-plan.json --verify
 ```
 
 Un code de sortie non nul signifie que le lot serait incomplet ou faux. N'en
@@ -97,7 +97,7 @@ transporté à travers une coupure.
 ## 3. Exporter
 
 ```bash
-batlehub mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
+batlehub-cli mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
 ```
 
 ```text
@@ -123,7 +123,7 @@ le contenu, donc un artefact atteignable à deux adresses ne part qu'une fois.
 ## 4. Transporter et importer
 
 ```bash
-batlehub mise import estate.bhub
+batlehub-cli mise import estate.bhub
 ```
 
 ```text
@@ -141,9 +141,9 @@ Importer deux fois le même lot n'écrit qu'une fois, et le dit.
 ## 5. Réconcilier
 
 ```bash
-batlehub admin air-gap-missing --kind artifact
-batlehub admin air-gap-missing --kind document
-batlehub admin air-gap-missing --kind unmirrored_host
+batlehub-cli air-gap missing --kind artifact
+batlehub-cli air-gap missing --kind document
+batlehub-cli air-gap missing --kind unmirrored_host
 ```
 
 ou la page **Coupure réseau** de la console. La première liste est le contenu que
@@ -168,7 +168,7 @@ fera.
 Alimentez le prochain plan avec les deux, et purgez ce que vous avez satisfait :
 
 ```bash
-batlehub admin air-gap-missing            # confirmez d'abord la liste
+batlehub-cli air-gap missing            # confirmez d'abord la liste
 curl -X DELETE "$BATLEHUB/api/v1/admin/air-gap/missing?before=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -H "Authorization: Bearer $TOKEN"
 ```

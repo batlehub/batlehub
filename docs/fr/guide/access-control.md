@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 71680454839c8ac7
+sourceHash: 4d93888070c410b0
 ---
 
 # Contrôle d'accès
@@ -159,7 +159,7 @@ que vous écrivez :
   soient les groupes de son propriétaire. C'est le défaut, et c'est ce que porte
   tout token émis avant l'existence de l'instantané. Si un pipeline ne voit pas
   quelque chose que son propriétaire voit, c'est la première chose à vérifier :
-  `batlehub auth token list` montre ce que chaque token porte.
+  `batlehub-cli auth token list` montre ce que chaque token porte.
 - Un token garde ses groupes quand son propriétaire les perd. C'est la révocation
   du token qui y met fin, pas le changement chez le fournisseur d'identité — un
   départ s'accompagne donc d'une révocation de tokens, et l'expiration d'un token
@@ -266,16 +266,16 @@ niveaux : un registre de 200 000 paquets ne les énumérera pas en TOML.
 
 ```sh
 # tous les verbes du vocabulaire, sur un paquet, pour un groupe
-batlehub admin grants set npm1 @acme/billing --subject group:oidc1:eng \
+batlehub-cli grant set npm1/@acme/billing --subject group:oidc1:eng \
     --actions releases:read,releases:list
 
 # …ou sur une version. `name@version` est la coordonnée, coupée sur le dernier `@`,
 # de sorte qu'un nom npm à scope reste un nom de paquet
-batlehub admin grants set npm1 @acme/billing@2.4.0-rc.1 \
+batlehub-cli grant set npm1/@acme/billing@2.4.0-rc.1 \
     --subject group:oidc1:release-managers --actions releases:read
 
-batlehub admin grants list npm1 @acme/billing   # les deux niveaux
-batlehub admin grants rm   npm1 @acme/billing --subject group:oidc1:eng
+batlehub-cli grant list npm1/@acme/billing   # les deux niveaux
+batlehub-cli grant remove npm1/@acme/billing --subject group:oidc1:eng
 ```
 
 La console offre les mêmes contrôles sur la page de détail d'un paquet, sous
@@ -451,7 +451,7 @@ passée. Un mode fantôme expiré **applique**.
 Chaque rechargement avertit, en nommant chaque nœud et son expiration, et
 l'avertissement apparaît sur la page de rechargement de la configuration plutôt
 que seulement dans un log. Ce qu'un mode fantôme a servi est sur la
-[page d'autorisation](#watching) et dans `batlehub authz shadow`.
+[page d'autorisation](#watching) et dans `batlehub-cli authz shadow`.
 
 `versioning` accepte aussi un `dry_run = true`. Sa direction est plus douce — une
 version mal nommée ou en double est acceptée, donc de mauvaises données arrivent
@@ -478,10 +478,10 @@ la liste de tout ce qui compte actuellement sur votre mémoire.
 #### Depuis un terminal {#cli}
 
 ```bash
-batlehub authz explain npm1 --subject role:user --action releases:read \
+batlehub-cli authz explain npm1 --subject role:user --action releases:read \
   --package @acme/billing/cards
 
-batlehub authz shadow --detail
+batlehub-cli authz shadow --detail
 ```
 
 `explain` répond en nommant **le niveau qui a accordé chaque verbe**, et c'est

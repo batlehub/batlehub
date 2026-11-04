@@ -74,16 +74,16 @@ never an empty page, which reads as "nothing happened".
 
 ```sh
 # Every deletion in a registry: by hand and by policy
-batlehub admin audit-log --registry acme-npm --action delete,retention_reclaim
+batlehub-cli audit log --registry acme-npm --action delete,retention_reclaim
 
 # Un-caching is a different question — the bytes come back on the next request
-batlehub admin audit-log --registry acme-npm --action cache_evict,cache_clear
+batlehub-cli audit log --registry acme-npm --action cache_evict,cache_clear
 
 # One package's whole history
-batlehub admin audit-log --registry acme-npm --package internal-tool
+batlehub-cli audit log --registry acme-npm --package internal-tool
 
 # The same set, exported for an auditor
-batlehub admin export-audit-log --action delete,retention_reclaim --format csv
+batlehub-cli audit export --action delete,retention_reclaim --format csv
 ```
 
 `--action` and `--package` are query parameters on the endpoint too

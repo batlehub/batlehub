@@ -29,7 +29,7 @@ Use the **canonical** `download.jetbrains.com` path. That host 302-redirects to 
 
 Use the **real** archive names: `idea-<ver>` for the unified installer (2025.3+); the legacy `ideaIU-<ver>` (Ultimate) / `ideaIC-<ver>` (Community) names only exist for releases ≤ 2025.2. A wrong name returns the upstream's 404.
 
-The `batlehub download` CLI fetches a file through the proxy (and caches it as a side effect):
+The `batlehub-cli download` CLI fetches a file through the proxy (and caches it as a side effect):
 
 ```bash
 # registry-relative (needs -r); writes ./idea-2026.1.3.tar.gz
@@ -43,7 +43,7 @@ Add `-H "Authorization: Bearer $BATLEHUB_TOKEN"` when the registry requires auth
 ## Notes
 
 - IDE archives are large (~1–1.7 GB). The proxy buffers the whole artifact in memory before caching and rejects anything over `limits.max_artifact_size_bytes` (default 500 MiB), so raise that limit — e.g. `2147483648` for 2 GiB — or downloads will fail.
-- Path-addressed registries pre-warm specific **paths** (there is no version model). List them under `[registries.cache] warm_paths` to fetch on startup, or warm on demand with `batlehub admin cache warm <registry> --paths "idea/idea-2026.1.3.tar.gz"`.
+- Path-addressed registries pre-warm specific **paths** (there is no version model). List them under `[registries.cache] warm_paths` to fetch on startup, or warm on demand with `batlehub-cli cache warm -r <registry> --paths "idea/idea-2026.1.3.tar.gz"`.
 - For the JetBrains **plugin** ecosystem (plugins.jetbrains.com), use the dedicated `jetbrains-marketplace` type instead — don't point this kind at that host.
 
 ## See also

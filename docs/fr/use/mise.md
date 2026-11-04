@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: da940cf35f94219e
+sourceHash: 043c8a07050946ce
 ---
 
 # Faire pointer mise vers BatleHub
@@ -21,7 +21,7 @@ coupé.
 Demandez à la CLI ce dont votre projet a besoin, elle imprime le bloc :
 
 ```bash
-batlehub registry suggest --mise
+batlehub-cli registry suggest --mise
 ```
 
 Elle lit d'abord `mise.lock` — le verrou enregistre l'URL exacte de chaque outil,
@@ -65,7 +65,7 @@ dépassé, sans nom attaché. Trois choses changent cela
 ### 2.1 Planifier
 
 ```bash
-batlehub mise plan --lock mise.lock --platform linux-x64 -o mise-plan.json
+batlehub-cli mise plan --lock mise.lock --platform linux-x64 -o mise-plan.json
 ```
 
 ```text
@@ -111,7 +111,7 @@ qu'au moment de l'installation, sur une machine sans réseau.
 ### 2.2 Amorcer
 
 ```bash
-batlehub mise seed --plan mise-plan.json --verify
+batlehub-cli mise seed --plan mise-plan.json --verify
 ```
 
 Chaque entrée planifiée est récupérée *à travers* BatleHub — récupérer, c'est
@@ -130,10 +130,10 @@ demandeur.
 
 ```bash
 # côté connecté
-batlehub mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
+batlehub-cli mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
 
 # côté coupé du réseau
-batlehub mise import estate.bhub
+batlehub-cli mise import estate.bhub
 ```
 
 Un lot est une archive tar de trois choses :
@@ -174,7 +174,7 @@ proxy sortant à côté de `enabled = true` est une contradiction, et
 ### 3.1 La règle attrape-tout
 
 ```bash
-batlehub registry suggest --mise --mise-catch-all
+batlehub-cli registry suggest --mise --mise-catch-all
 ```
 
 ajoute une dernière règle qui envoie tout ce qu'aucune autre règle n'a attrapé
@@ -192,8 +192,8 @@ vers BatleHub.
 ## 4. Lire ce qui manque
 
 ```bash
-batlehub admin air-gap-missing
-batlehub admin bundles
+batlehub-cli air-gap missing
+batlehub-cli bundle list
 ```
 
 ou la page **Coupure réseau** de la console, sous Exploitation. Le journal des

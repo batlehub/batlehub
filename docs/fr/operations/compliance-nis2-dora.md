@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-nis2-dora.md
-sourceHash: c6525abe691a6ca9
+sourceHash: 9e27b918687401e2
 ---
 
 # NIS2 et DORA — ce qui existe, ce qui est prévu
@@ -29,7 +29,7 @@ code, à l'endroit nommé dans la colonne Preuve. Voir [Conformité](./complianc
 |--------|-------------------|--------|--------|
 | (b) – Gestion des incidents | Procédure de réponse à incident ; flux d'audit et règles Sigma pour la détection | Documenté | [Réponse à incident](./incident-response.md), [Intégration SIEM](./siem.md) |
 | (c) – Continuité d'activité, sauvegarde | Procédures de sauvegarde et de restauration ; réplicas sans état | Documenté | [Reprise après sinistre](./disaster-recovery.md), [Haute disponibilité](../guide/high-availability.md) |
-| (d) – Sécurité de la chaîne d'approvisionnement | Analyse, signalements du SOC, verdicts et barrières d'âge de publication sur chaque artefact relayé ; un rapport d'exposition de qui a récupéré une version signalée | ✅ Implémenté | [Scan worker](./scan-worker.md), `batlehub-cli admin exposure` |
+| (d) – Sécurité de la chaîne d'approvisionnement | Analyse, signalements du SOC, verdicts et barrières d'âge de publication sur chaque artefact relayé ; un rapport d'exposition de qui a récupéré une version signalée | ✅ Implémenté | [Scan worker](./scan-worker.md), `batlehub-cli exposure list` |
 | (e) – Traitement et divulgation des vulnérabilités | Signalement privé, délais et avis de sécurité du projet | Documenté | `SECURITY.md`, [Correspondance CRA](./compliance-cra.md) |
 | (h) – Cryptographie | Signatures Ed25519 sur les publications et sur la chaîne de scellement de l'audit | ✅ Implémenté | `crates/core/src/services/signature.rs`, `[audit] seal_signing_key` |
 | (i) – Contrôle d'accès | Droits et verbes ; chaque événement d'authentification est audité | ✅ Implémenté | [Contrôle d'accès](../guide/access-control.md), [Correspondance ISO 27001](./compliance-iso27001.md) |
@@ -46,8 +46,8 @@ sont rédigées.
 | Obligation | Contrôle BatleHub | Statut | Preuve |
 |------------|-------------------|--------|--------|
 | Avoir connaissance de l'incident | Règles Sigma sur le flux d'audit ; alertes Prometheus | ✅ Implémenté | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |
-| Les faits de l'incident | Le journal d'audit de la fenêtre, exporté | ✅ Implémenté | `batlehub-cli admin export-audit-log --from <start> --to <end>` |
-| Les faits n'ont pas été modifiés | La chaîne de scellement se vérifie sur la fenêtre, et sa tête correspond à la copie du SIEM | ✅ Implémenté | `batlehub-cli admin audit verify --from <start> --to <end> --head <digest>` |
+| Les faits de l'incident | Le journal d'audit de la fenêtre, exporté | ✅ Implémenté | `batlehub-cli audit export --from <start> --to <end>` |
+| Les faits n'ont pas été modifiés | La chaîne de scellement se vérifie sur la fenêtre, et sa tête correspond à la copie du SIEM | ✅ Implémenté | `batlehub-cli audit verify --from <start> --to <end> --head <digest>` |
 | Les notifications elles-mêmes | 24 h / 72 h / un mois | Processus manuel | [Réponse à incident § NIS2 art. 23](./incident-response.md#nis2-reporting) |
 
 ## DORA — art. 9–12, 18, 30
