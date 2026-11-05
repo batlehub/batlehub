@@ -2191,3 +2191,247 @@ async fn terraform_provider_upload_rejects_a_slash_in_a_coordinate_part() {
         "the victim's binary is untouched"
     );
 }
+
+// ── Issue #281: a local provider's SHA256SUMS and its signature ──────────────
+
+const SUMS_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+async fn publish_manifest_for_sums(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+) {
+    let manifest = format!(
+        r#"{{"version": "5.0.0", "protocols": ["5.0"], "platforms": [
+            {{"os": "linux", "arch": "amd64", "filename": "terraform-provider-aws_5.0.0_linux_amd64.zip", "shasum": "{SUMS_HASH}"}}
+        ]}}"#
+    );
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(manifest)
+        .to_request();
+    assert_eq!(call_service(app, req).await.status(), 201);
+}
+
+/// What `terraform init` needs from a provider published here: the download
+/// document names the checksum list and its signature on this host, and both
+/// serve what the publisher uploaded.
+#[actix_web::test]
+async fn terraform_provider_local_shasums_round_trip() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+    publish_manifest_for_sums(&app).await;
+
+    let sums = format!("{SUMS_HASH}  terraform-provider-aws_5.0.0_linux_amd64.zip\n");
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(sums.clone())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums.sig")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"\x89sig-bytes".as_slice())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/download/linux/amd64")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let body: Value = read_body_json(call_service(&app, req).await).await;
+    for (field, tail) in [
+        ("shasums_url", "/v1/providers/hashicorp/aws/5.0.0/shasums"),
+        (
+            "shasums_signature_url",
+            "/v1/providers/hashicorp/aws/5.0.0/shasums.sig",
+        ),
+    ] {
+        let url = body[field].as_str().unwrap_or_default();
+        assert!(url.ends_with(tail), "{field} = {url:?}");
+    }
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(&read_body(resp).await[..], sums.as_bytes());
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums.sig")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(&read_body(resp).await[..], b"\x89sig-bytes");
+}
+
+/// A list Terraform would refuse at every `terraform init` is refused once,
+/// at upload, and nothing is stored.
+#[actix_web::test]
+async fn terraform_provider_shasums_disagreeing_with_the_manifest_returns_400() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+    publish_manifest_for_sums(&app).await;
+
+    let other = "f".repeat(64);
+    for sums in [
+        format!("{other}  terraform-provider-aws_5.0.0_linux_amd64.zip\n"),
+        format!("{SUMS_HASH}  terraform-provider-aws_5.0.0_darwin_arm64.zip\n"),
+        "not a checksum list\n".to_owned(),
+    ] {
+        let req = TestRequest::put()
+            .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_payload(sums.clone())
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 400, "{sums}");
+    }
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
+#[actix_web::test]
+async fn terraform_provider_shasums_upload_guards() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+    publish_manifest_for_sums(&app).await;
+    let sums = format!("{SUMS_HASH}  terraform-provider-aws_5.0.0_linux_amd64.zip\n");
+
+    // Anonymous: the publish gate, as for the archives.
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums")
+        .set_payload(sums.clone())
+        .to_request();
+    let status = call_service(&app, req).await.status();
+    assert!(
+        status == 401 || status == 403,
+        "anonymous upload answered {status}"
+    );
+
+    // A version with no manifest.
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/9.9.9/shasums")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(sums.clone())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+
+    // Traversal in the version, before a storage key is built.
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/..%2F..%2Fetc/shasums.sig")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"sig".as_slice())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 400);
+
+    // An empty signature.
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums.sig")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 400);
+}
+
+const FIXTURES: &str = "../core/src/services/openpgp/testdata";
+
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{}/{FIXTURES}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+async fn put_sums_file(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+    leaf: &str,
+    body: Vec<u8>,
+) -> (u16, String) {
+    let req = TestRequest::put()
+        .uri(&format!(
+            "/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/{leaf}"
+        ))
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(body)
+        .to_request();
+    let resp = call_service(app, req).await;
+    let status = resp.status().as_u16();
+    (
+        status,
+        String::from_utf8_lossy(&read_body(resp).await).into_owned(),
+    )
+}
+
+/// With a key registered for the namespace, the instance checks a signature
+/// made by `gpg --detach-sign` before storing it, instead of leaving a bad one
+/// for the first `terraform init` to find.
+#[actix_web::test]
+async fn terraform_provider_signature_is_verified_against_the_namespace_key() {
+    let (app, store) = make_terraform_signing_app().await;
+    publish_manifest_for_sums(&app).await;
+    let rsa_key = String::from_utf8(fixture("rsa2048.asc")).unwrap();
+    store
+        .set_signing_key(
+            "local-tf",
+            "hashicorp",
+            batlehub_core::entities::SigningKey {
+                key_id: "63D5670FB64AC856".into(),
+                ascii_armor: rsa_key,
+                trust_signature: None,
+                source: None,
+                source_url: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // The signature is over the list, so the list comes first.
+    let (status, body) = put_sums_file(&app, "shasums.sig", fixture("rsa2048.sig")).await;
+    assert_eq!(status, 409, "{body}");
+
+    assert_eq!(put_sums_file(&app, "shasums", fixture("sums")).await.0, 200);
+    // Signed by a key the namespace does not register.
+    let (status, body) = put_sums_file(&app, "shasums.sig", fixture("ed25519.sig")).await;
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("9CF09FF1369E2D26"), "{body}");
+    // Not a signature at all.
+    assert_eq!(
+        put_sums_file(&app, "shasums.sig", b"\x89garbage".to_vec())
+            .await
+            .0,
+        400
+    );
+    let (status, body) = put_sums_file(&app, "shasums.sig", fixture("rsa2048.sig")).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains("verified with key 63D5670FB64AC856"),
+        "{body}"
+    );
+
+    // A new list voids the signature over the old one.
+    assert_eq!(put_sums_file(&app, "shasums", fixture("sums")).await.0, 200);
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/shasums.sig")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
+/// A namespace with no key: the signature cannot be checked here, so it is
+/// stored and the response says so — Terraform still verifies it.
+#[actix_web::test]
+async fn terraform_provider_signature_without_a_namespace_key_is_stored_unverified() {
+    let (app, _store) = make_terraform_signing_app().await;
+    publish_manifest_for_sums(&app).await;
+    assert_eq!(put_sums_file(&app, "shasums", fixture("sums")).await.0, 200);
+    let (status, body) = put_sums_file(&app, "shasums.sig", fixture("rsa2048.sig")).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("unverified"), "{body}");
+}

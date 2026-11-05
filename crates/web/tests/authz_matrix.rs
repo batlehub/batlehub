@@ -2508,6 +2508,8 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("POST", "/proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/versions/{version}/unyank", WriteCoverage::NoRow("write, not yet exercised")),
     ("POST", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions", WriteCoverage::NoRow("write, not yet exercised")),
     ("PUT", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/artifact/{os}/{arch}", WriteCoverage::NoRow("write, not yet exercised: a provider binary is uploaded per platform against a version created by the route above")),
+    ("PUT", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums", WriteCoverage::NoRow("write, not yet exercised: through `enforce_publish_policy`, the archive upload's gate, against a version created by the manifest route")),
+    ("PUT", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig", WriteCoverage::NoRow("write, not yet exercised: through `enforce_publish_policy`, the archive upload's gate, against a version created by the manifest route")),
     ("DELETE", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}", WriteCoverage::NoRow("write, not yet exercised")),
     ("POST", "/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}/unyank", WriteCoverage::NoRow("write, not yet exercised")),
     // ── jetbrains marketplace ────────────────────────────────────────────────

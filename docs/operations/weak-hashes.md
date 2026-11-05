@@ -42,6 +42,7 @@ survive it.
 | 9 | `web/…/proxy/maven/proxy.rs` — `.md5`/`.sha1` sidecars | MD5, SHA-1 | The algorithm *is* the file extension |
 | 10 | `adapters/repo/apk.rs` — the index's `C:` field | SHA-1 | Mandated by apk-tools, and checked at install |
 | 11 | `cli/src/api/publish.rs` — `with_maven_checksums` | MD5, SHA-1 | The sidecars of entry 9, uploaded by `batlehub-cli publish` |
+| 12 | `core/services/openpgp/mod.rs` — fingerprint | SHA-1 | Entry 7's fingerprint, computed to find a signature's key |
 
 Entries 4, 5 and 6 are struck through because the code no longer computes them.
 Entry 4 was the one the 2026-08-31 recheck left standing as "a compatibility
@@ -180,6 +181,12 @@ computing it any other way produces a fingerprint no client recognises, and apt'
 
 RFC 9580 v6 keys use SHA-256, but apt and rpm do not consume v6 keys today.
 **Immutable while the key is v4.**
+
+Entry 12 is the same construction on the other side: the verifier of a
+Terraform provider's `SHA256SUMS` signature (issue #281) computes each
+registered key's fingerprint to match the issuer id the signature names. The
+signature itself is checked over SHA-2, and one over any other hash is not
+verified.
 
 ## 10. The apk package identity {#apk-identity}
 

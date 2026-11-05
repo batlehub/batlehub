@@ -772,6 +772,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 terraform_module_versions, terraform_module_yank, terraform_provider_artifact,
                 terraform_provider_binary_upload, terraform_provider_download,
                 terraform_provider_shasums, terraform_provider_shasums_sig,
+                terraform_provider_shasums_sig_upload, terraform_provider_shasums_upload,
                 terraform_provider_unyank, terraform_provider_upload, terraform_provider_versions,
                 terraform_provider_yank,
             },
@@ -1018,6 +1019,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                                               // `shasums.sig` before `shasums`: the shorter literal is a prefix of the
                                               // longer one only in reading order, but registering the specific one first
                                               // keeps that independent of actix's matching order.
+    cfg.service(terraform_provider_shasums_sig_upload); // PUT …/{ver}/shasums.sig
+    cfg.service(terraform_provider_shasums_upload); // PUT …/{ver}/shasums
     cfg.service(terraform_provider_shasums_sig); // GET …/{ver}/shasums.sig
     cfg.service(terraform_provider_shasums); // GET …/{ver}/shasums
     cfg.service(terraform_provider_download); // GET …/{ver}/download/{os}/{arch}

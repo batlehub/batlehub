@@ -226,6 +226,28 @@ pub fn provider_platforms(dir: &Path) -> Result<(String, Vec<ProviderPlatform>)>
     Ok((version, out))
 }
 
+/// The release's checksum list and its signature, as goreleaser names them
+/// (`terraform-provider-{type}_{version}_SHA256SUMS` and `….sig`): what
+/// `terraform init` verifies a provider published here against (issue #281).
+pub fn provider_shasums(dir: &Path, version: &str) -> Result<(Option<PathBuf>, Option<PathBuf>)> {
+    let (mut sums, mut sig) = (None, None);
+    let sums_suffix = format!("_{version}_SHA256SUMS");
+    let sig_suffix = format!("{sums_suffix}.sig");
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("terraform-provider-") {
+            continue;
+        }
+        if name.ends_with(&sig_suffix) {
+            sig = Some(entry.path());
+        } else if name.ends_with(&sums_suffix) {
+            sums = Some(entry.path());
+        }
+    }
+    Ok((sums, sig))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +355,14 @@ mod tests {
         }
         let (v, ps) = provider_platforms(d).unwrap();
         assert_eq!(v, "1.2.0");
+        let (sums, sig) = provider_shasums(d, &v).unwrap();
+        assert_eq!(
+            sums.unwrap().file_name().unwrap(),
+            "terraform-provider-null_1.2.0_SHA256SUMS"
+        );
+        assert_eq!(sig, None);
+        std::fs::write(d.join("terraform-provider-null_1.2.0_SHA256SUMS.sig"), b"s").unwrap();
+        assert!(provider_shasums(d, &v).unwrap().1.is_some());
         assert_eq!(
             ps.iter()
                 .map(|p| format!("{}_{}", p.os, p.arch))

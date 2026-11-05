@@ -283,14 +283,35 @@ module "consul" {
 
 ### Publishing providers
 
-::: warning A provider published here is not installable yet
-Terraform verifies a provider against a signed `SHA256SUMS`, and this instance
-has no way to receive one: the upload below stores the archives, but the
-download document names no checksum list, so `terraform init` refuses the
-archive with *"checksum list has no SHA-256 hash for …"*. Modules are not
-affected. Publishing the publisher-signed `SHA256SUMS` and its `.sig` is the
-planned fix ([#281](https://github.com/batlehub/batlehub/issues/281)).
-:::
+Terraform installs a provider only once it has verified it: the archive
+against the release's `SHA256SUMS`, and that list against a detached GPG
+signature by a key the registry serves for the namespace. So a provider
+published here is three things — the archives, their `SHA256SUMS` and its
+`.sig` — plus the namespace's public key, registered once:
+
+```sh
+batlehub-cli namespace signing-key set myorg -r internal-tf \
+  --key-id 51852D87348FFC4C --armor myorg-signing-key.asc
+```
+
+`batlehub-cli publish <dir> -r internal-tf --name myorg/mycloud` sends a
+goreleaser release directory as it is: every
+`terraform-provider-mycloud_<version>_<os>_<arch>.zip`, then
+`terraform-provider-mycloud_<version>_SHA256SUMS` and its `.sig`. It warns when
+either is missing, because `terraform init` will refuse the provider until both
+are there. The steps below are what it sends.
+
+The instance signs nothing; it checks. It refuses a `SHA256SUMS` that does not
+list every platform of the manifest under its `filename` with the manifest's
+`shasum` (`400`). It then checks the signature against the namespace's keys
+before storing it, so the list has to go up first (`409` otherwise), and a
+signature by a key the namespace does not register, or one that does not
+verify, is a `400`. RSA (2048 bits or more) and Ed25519 v4 signatures are
+checked. Anything it cannot check is stored, and the response says
+"stored unverified" with the reason. That covers a namespace with no key yet,
+another algorithm, or a text-mode signature, and `terraform init` still
+verifies those. Uploading a new `SHA256SUMS` drops the signature over the old
+one.
 
 **Step 1 — Upload version manifest** (JSON describing the version and its platforms):
 
@@ -323,6 +344,20 @@ curl -X PUT \
 ```
 
 Repeat the binary upload for each supported platform.
+
+**Step 3 — Upload the checksum list and its signature**, once every archive is
+up:
+
+```sh
+curl -X PUT \
+  -H "Authorization: Bearer <your-token>" \
+  --data-binary @terraform-provider-mycloud_1.0.0_SHA256SUMS \
+  "https://batlehub.example.com/proxy/internal-tf/v1/providers/myorg/mycloud/1.0.0/shasums"
+curl -X PUT \
+  -H "Authorization: Bearer <your-token>" \
+  --data-binary @terraform-provider-mycloud_1.0.0_SHA256SUMS.sig \
+  "https://batlehub.example.com/proxy/internal-tf/v1/providers/myorg/mycloud/1.0.0/shasums.sig"
+```
 
 ### Using a private provider
 
@@ -377,7 +412,9 @@ curl -X POST \
 | `PUT` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/artifact/{os}/{arch}` | Upload a platform binary for a locally-published Terraform provider. |
 | `GET` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/download/{os}/{arch}` | Get download information for a specific Terraform provider version and platform. |
 | `GET` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums` | The provider's checksum manifest (`SHA256SUMS`) and its detached signature. |
+| `PUT` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums` | Upload a locally published provider version's `SHA256SUMS` (issue #281). |
 | `GET` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig` | The detached signature over the checksum manifest. See |
+| `PUT` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig` | Upload the detached GPG signature over a provider version's `SHA256SUMS` |
 | `GET` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions` | List available versions for a Terraform provider. |
 | `POST` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions` | Upload a Terraform provider version manifest (JSON describing version + platforms). |
 | `DELETE` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}` | Yank a Terraform provider version (local/hybrid registries only). |

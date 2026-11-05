@@ -553,6 +553,7 @@ impl BatleHubClient {
         namespace_type: &str,
         version: &str,
         platforms: &[super::publish_input::ProviderPlatform],
+        shasums: (Option<&Path>, Option<&Path>),
     ) -> Result<()> {
         let mut entries = Vec::new();
         let mut archives = Vec::new();
@@ -598,6 +599,18 @@ impl BatleHubClient {
                 return Err(crate::exit::CliError::new(
                     crate::exit::ExitCode::Partial,
                     format!("{e:#}"),
+                )
+                .into());
+            }
+        }
+        // After the archives: the server checks the list against the manifest.
+        for (path, leaf) in [(shasums.0, "shasums"), (shasums.1, "shasums.sig")] {
+            let Some(path) = path else { continue };
+            let url = format!("/proxy/{registry}/v1/providers/{namespace_type}/{version}/{leaf}");
+            if let Err(e) = self.put_bytes(&url, tokio::fs::read(path).await?).await {
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Partial,
+                    format!("{:#}", e.context(format!("not sent: {}", path.display()))),
                 )
                 .into());
             }

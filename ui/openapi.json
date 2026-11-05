@@ -18178,6 +18178,94 @@
             "bearer_token": []
           }
         ]
+      },
+      "put": {
+        "tags": [
+          "proxy/terraform"
+        ],
+        "summary": "Upload a locally published provider version's `SHA256SUMS` (issue #281).",
+        "description": "The publisher's checksum list, as goreleaser writes it\n(`terraform-provider-{type}_{version}_SHA256SUMS`). Refused with `400` when\nit does not list every platform of the version's manifest with the\nmanifest's hash. Its signature goes to `…/shasums.sig`, after it: a new\nlist drops the signature over the previous one.",
+        "operationId": "terraform_provider_shasums_upload",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Provider namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ptype",
+            "in": "path",
+            "description": "Provider type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Provider version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Checksum list stored; a signature over the previous one is dropped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed, or disagrees with the manifest"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Ownership denied"
+          },
+          "404": {
+            "description": "Registry or version not found, or not in local/hybrid mode"
+          },
+          "413": {
+            "description": "Larger than 1 MiB"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
       }
     },
     "/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig": {
@@ -18241,6 +18329,96 @@
           },
           "404": {
             "description": "Unknown provider or no signature"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/terraform"
+        ],
+        "summary": "Upload the detached GPG signature over a provider version's `SHA256SUMS`\n(issue #281). Checked against the namespace's signing keys\n(`namespace signing-key set`) and the stored list before it is stored; one\nthis instance cannot check is stored unverified, and Terraform still checks it.",
+        "operationId": "terraform_provider_shasums_sig_upload",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Provider namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ptype",
+            "in": "path",
+            "description": "Provider type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Provider version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactBytes"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signature stored, verified against the namespace's keys when they and it can be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty, malformed, signed by a key the namespace does not register, or does not verify"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Ownership denied"
+          },
+          "404": {
+            "description": "Registry or version not found, or not in local/hybrid mode"
+          },
+          "409": {
+            "description": "No SHA256SUMS uploaded for this version yet"
+          },
+          "413": {
+            "description": "Larger than 64 KiB"
           }
         },
         "security": [
