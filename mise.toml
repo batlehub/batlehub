@@ -1,11 +1,7 @@
 [tools]
 claude = "latest"
 cocogitto = "latest"
-# Pinned ahead of mise's index: Go 1.27.2 (2026-10-08) fixes CVE-2026-78667
-# and CVE-2026-97031, and was on go.dev before `mise ls-remote go` listed it, so
-# "latest" still resolved to 1.27.1 and the toolchain scan went over budget.
-# Back to "latest" once the index has caught up.
-go = "1.27.2"
+go = "latest"
 helm = "latest"
 # Generates helm/batlehub/README.md. Built from a pinned commit rather than the
 # last release: v1.14.2 (2024-07) was compiled with Go 1.22 against
@@ -25,9 +21,10 @@ k6 = "latest"
 # S3 client (alias set, bucket create, object list, object show), so it drives
 # MinIO and RustFS alike.
 #
-# `exe` is required: the repository is `rustfs/cli` and the binary inside the
-# release tarball is `rc`, which is not a name mise can guess.
-"github:rustfs/cli" = { version = "latest", exe = "rc" }
+# The binary inside the release tarball is `rc`, not `cli`; the github backend
+# finds it on its own. No `exe =`: that was the ubi backend's option, and mise
+# 2026.10 refuses an option its backend does not use.
+"github:rustfs/cli" = "latest"
 node = "26"
 rust = "latest"
 sonar-scanner-cli = "latest"
@@ -56,7 +53,7 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 # input (.github/workflows/postmortem.yaml) and in Containerfile.worker's
 # POSTMORTEM_VERSION, so the gate and the worker's scanner are one binary.
 "github:mlab-sh/postmortem" = "2.9.2"
-"github:mlab-sh/mlab-cli" = "1.0.4"
+"github:mlab-sh/mlab-cli" = "1.2.0"
 uv = "latest"
 python = "latest"
 pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
