@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-05
+
 ### Changed
 
 - **`batlehub-cli` has one table of exit codes** (RFC 0040 §4.6). Every error
@@ -2011,7 +2013,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.3...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.9.0...HEAD
+[1.9.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.3...v1.9.0
 [1.8.3]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.2...v1.8.3
 [1.8.2]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...v1.8.2
 [1.8.1]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...v1.8.1
