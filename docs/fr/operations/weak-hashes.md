@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/weak-hashes.md
-sourceHash: b8c2a79893dfb335
+sourceHash: f12c408dbf3205ee
 ---
 
 # MD5 et SHA-1
@@ -50,6 +50,7 @@ ont pas survécu.
 | 9 | `web/…/proxy/maven/proxy.rs` — fichiers `.md5`/`.sha1` | MD5, SHA-1 | L'algorithme *est* l'extension du fichier |
 | 10 | `adapters/repo/apk.rs` — le champ `C:` de l'index | SHA-1 | Imposé par apk-tools, et vérifié à l'installation |
 | 11 | `cli/src/api/publish.rs` — `with_maven_checksums` | MD5, SHA-1 | Les fichiers annexes de l'entrée 9, téléversés par `batlehub-cli publish` |
+| 12 | `core/services/openpgp/mod.rs` — empreinte | SHA-1 | L'empreinte de l'entrée 7, calculée pour retrouver la clé d'une signature |
 
 Les entrées 4, 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
 est en gras parce que c'est un choix de compatibilité plutôt qu'une exigence, et
@@ -192,6 +193,12 @@ tous deux.
 
 Les clés v6 de la RFC 9580 emploient SHA-256, mais apt et rpm ne consomment pas
 de clés v6 aujourd'hui. **Immuable tant que la clé est en v4.**
+
+L'entrée 12 est la même construction, de l'autre côté. Le vérificateur de la
+signature du `SHA256SUMS` d'un provider Terraform (issue #281) calcule
+l'empreinte de chaque clé enregistrée pour retrouver celle que la signature
+désigne. La signature elle-même est vérifiée en SHA-2, et une signature faite
+avec un autre algorithme n'est pas vérifiée.
 
 ## 10. L'identité de paquet d'apk {#apk-identity}
 
