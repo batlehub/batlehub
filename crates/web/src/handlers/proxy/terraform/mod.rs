@@ -40,8 +40,10 @@ pub use modules::{
 };
 pub use providers::{
     terraform_provider_artifact, terraform_provider_binary_upload, terraform_provider_download,
-    terraform_provider_shasums, terraform_provider_shasums_sig, terraform_provider_unyank,
-    terraform_provider_upload, terraform_provider_versions, terraform_provider_yank,
+    terraform_provider_shasums, terraform_provider_shasums_sig,
+    terraform_provider_shasums_sig_upload, terraform_provider_shasums_upload,
+    terraform_provider_unyank, terraform_provider_upload, terraform_provider_versions,
+    terraform_provider_yank,
 };
 use shared::{
     identity_for_artifact, mark_uncacheable_if_signed, off_origin_checksum_urls,

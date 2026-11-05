@@ -7,7 +7,7 @@ use batlehub_core::entities::RegistryKind;
 
 use crate::api::{
     publish::{detect_meta, devfile_bundle, with_maven_checksums},
-    publish_input::{go_module_zip, pom_coordinate, provider_platforms},
+    publish_input::{go_module_zip, pom_coordinate, provider_platforms, provider_shasums},
     BatleHubClient,
 };
 use crate::exit::{CliError, ExitCode};
@@ -223,8 +223,26 @@ pub async fn run(
                     ));
                 }
                 let (v, platforms) = provider_platforms(&args.file)?;
+                let (sums, sig) = provider_shasums(&args.file, &v)?;
+                match (&sums, &sig) {
+                    (None, _) => crate::render::warn(
+                        "no _SHA256SUMS beside the archives: terraform init will refuse \
+                         this provider until one is uploaded",
+                    ),
+                    (Some(_), None) => crate::render::warn(
+                        "no _SHA256SUMS.sig beside the checksum list: terraform init \
+                         will refuse this provider until one is uploaded",
+                    ),
+                    _ => {}
+                }
                 client
-                    .publish_terraform_provider(&registry, &ns_type, &v, &platforms)
+                    .publish_terraform_provider(
+                        &registry,
+                        &ns_type,
+                        &v,
+                        &platforms,
+                        (sums.as_deref(), sig.as_deref()),
+                    )
                     .await?;
                 published = (Some(format!("providers/{ns_type}")), Some(v));
             } else {

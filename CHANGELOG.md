@@ -103,6 +103,21 @@ Two old spellings stay: `proxy serve --registry` and `vsx verify --registry`
 
 ### Added
 
+- **A Terraform provider published here installs** (issue #281). A local
+  provider version now takes the publisher's `SHA256SUMS` and its detached GPG
+  signature (`PUT /proxy/{registry}/v1/providers/{ns}/{type}/{version}/shasums`
+  and `…/shasums.sig`), the download document names both on this host, and
+  `batlehub-cli publish <dir>` sends a goreleaser directory's
+  `_SHA256SUMS`/`.sig` after the archives. A list that does not match the
+  version's manifest is refused with `400`. The signature is verified at
+  upload against the namespace's key (`namespace signing-key set`), so a bad
+  one is a `400` for the publisher rather than a failure at the first
+  `terraform init`. The check covers RSA ≥ 2048 and Ed25519, through
+  `aws-lc-rs`, and the `rsa` crate stays banned. A signature the instance
+  cannot check is stored with a "stored unverified" answer. Before,
+  `terraform init` refused every locally published provider with
+  "checksum list has no SHA-256 hash".
+
 - **The TUI speaks the CLI's grammar** (RFC 0040 §4.10). On a version: `w`
   opens a Why pane (`why`'s answer and your refusals of the package), `o` lists
   the owners, `d` deletes, `p`/`P` pin and unpin. `y` and `d` ask first in a

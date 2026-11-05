@@ -212,6 +212,23 @@ z=zipfile.ZipFile(sys.argv[1],'w')
 i=zipfile.ZipInfo('terraform-provider-probe_v0.1.0'); i.external_attr=0o755<<16
 z.writestr(i, open('terraform-provider-probe_v0.1.0','rb').read())" \
   "$HEAVY_WORK/provider/terraform-provider-probe_0.1.0_linux_amd64.zip")
+# The release as goreleaser lays it out: the archives, their `SHA256SUMS` and
+# a detached signature over it, by a key this run makes and registers for the
+# `heavy` namespace (issue #281). A short GNUPGHOME: gpg-agent's socket path
+# has to fit in 108 bytes, which the work directory may not.
+heavy_need gpg "gpg"
+GNUPGHOME="$(mktemp -d)"
+export GNUPGHOME
+gpg --batch --passphrase '' --quick-gen-key "heavy <heavy@localhost>" rsa3072 sign never 2>/dev/null
+TF_KEY_ID="$(gpg --with-colons --list-keys heavy@localhost | awk -F: '$1 == "pub" { print $5; exit }')"
+gpg --armor --export heavy@localhost >"$HEAVY_WORK/provider-key.asc"
+(cd "$HEAVY_WORK/provider" \
+  && sha256sum terraform-provider-probe_0.1.0_*.zip >terraform-provider-probe_0.1.0_SHA256SUMS \
+  && gpg --batch --detach-sign terraform-provider-probe_0.1.0_SHA256SUMS)
+heavy_cli "$ADMIN_TOKEN" namespace signing-key set heavy -r "$REGISTRY" \
+  --key-id "$TF_KEY_ID" --armor "$HEAVY_WORK/provider-key.asc"
+[[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli could not register the namespace's signing key (exit $HEAVY_CLI_CODE)"; }
+
 heavy_mark "provider-publish"
 heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/provider" -r "$REGISTRY" --name heavy/probe
 [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli could not publish the provider (exit $HEAVY_CLI_CODE)"; }
@@ -220,10 +237,46 @@ heavy_wire_after "provider-publish" "POST /proxy/$REGISTRY/v1/providers/heavy/pr
 heavy_wire_after "provider-publish" "PUT /proxy/$REGISTRY/v1/providers/heavy/probe/0.1.0/artifact/linux/amd64" \
   "the CLI did not upload the provider's platform archive"
 
-# Not installed with `terraform init`: a provider published here has no
-# `SHA256SUMS` or signature to serve — nothing uploads them — so Terraform
-# refuses its archive ("checksum list has no SHA-256 hash for …"). Measured on
-# 2026-11-03 and recorded in RFC 0040 §17.1; the install joins this phase when
-# local providers can carry a publisher-signed checksum list (issue #281).
-heavy_log "TERRAFORM-PUBLISH-OK (a module published by batlehub-cli and installed by terraform init; a provider published)"
+heavy_wire_after "provider-publish" "PUT /proxy/$REGISTRY/v1/providers/heavy/probe/0.1.0/shasums -> 200" \
+  "the CLI did not upload the release's SHA256SUMS"
+heavy_wire_after "provider-publish" "PUT /proxy/$REGISTRY/v1/providers/heavy/probe/0.1.0/shasums.sig -> 200" \
+  "the CLI did not upload the signature over SHA256SUMS"
+
+# The instance checked that signature against the namespace's key before
+# storing it: gpg's own RSA output, through the server's OpenPGP verifier.
+SIG_ANSWER="$(curl -sk -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" \
+  --data-binary "@$HEAVY_WORK/provider/terraform-provider-probe_0.1.0_SHA256SUMS.sig" \
+  "$HEAVY_CLI_SERVER/proxy/$REGISTRY/v1/providers/heavy/probe/0.1.0/shasums.sig")"
+[[ "$SIG_ANSWER" == *"verified with key $TF_KEY_ID"* ]] \
+  || heavy_fail "the instance did not verify the gpg signature with the namespace's key: $SIG_ANSWER"
+
+# Installed by `terraform init`, which verifies the archive against the list
+# and the list against the namespace's key. Before issue #281 nothing uploaded
+# either, and Terraform refused the archive ("checksum list has no SHA-256
+# hash for …", RFC 0040 §17.1).
+PROV_PROJECT="$HEAVY_WORK/provider-project"
+mkdir -p "$PROV_PROJECT"
+cat > "$PROV_PROJECT/main.tf" <<EOF
+terraform {
+  required_providers {
+    probe = {
+      source  = "$TF_HOST/heavy/probe"
+      version = "0.1.0"
+    }
+  }
+}
+EOF
+heavy_mark "provider-init"
+(cd "$PROV_PROJECT" && "${TF[@]}" init -no-color) >"$HEAVY_WORK/provider-init.log" 2>&1 \
+  || { cat "$HEAVY_WORK/provider-init.log" >&2; heavy_fail "terraform init could not install the provider the CLI published"; }
+grep -q "signed by" "$HEAVY_WORK/provider-init.log" \
+  || { cat "$HEAVY_WORK/provider-init.log" >&2; heavy_fail "terraform did not verify the published provider's signature"; }
+PROV_BASE="/v1/providers/heavy/probe/0.1.0"
+heavy_wire_after "provider-init" "$PROV_BASE/shasums -> 200" \
+  "terraform did not read the published SHA256SUMS from this instance"
+heavy_wire_after "provider-init" "$PROV_BASE/shasums.sig -> 200" \
+  "terraform did not read the published signature from this instance"
+heavy_wire_after "provider-init" "$PROV_BASE/artifact/linux/amd64 -> 200" \
+  "terraform did not fetch the published archive from this instance"
+heavy_log "TERRAFORM-PUBLISH-OK (a module and a provider published by batlehub-cli, both installed by terraform init)"
 heavy_done TERRAFORM-HEAVY-OK

@@ -1646,7 +1646,7 @@ row names has landed; a partial phase lists what is still open.
 | 1 | done | `ac8e4fca` | This RFC, accepted |
 | 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
-| 4 | done | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, `62e591b1`, + the heavy publish commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12) 4–7 (in each kind's own suite), 11 (`authz.sh cargo`) and 13 (`authz.sh npm`). A locally published terraform provider is not installable: issue #281 (§17.1) |
+| 4 | done | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, `62e591b1`, + the heavy publish commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12) 4–7 (in each kind's own suite), 11 (`authz.sh cargo`) and 13 (`authz.sh npm`). A locally published terraform provider was not installable: fixed by issue #281 (§17.1) |
 | 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | done | PR #280 | `cli/src/{api,cli}/journeys.rs`: `policy`, `exemption`, `me`, `upstream`, `namespace signing-key`, `flag create/delete`, `server config pending/apply/discard/warnings`; `package block/unblock` in `lifecycle.rs`; `package list --blocked` filtered by the server (`?blocked=true`); the loopback `auth login` with `--no-browser`, `sso.rs`'s `return_to` and migration 064. T6's tests: `login_rejects_wrong_state` and `return_to_must_be_exact_loopback` |
 | 7 | done | PR #280 | `crates/core/src/lockfile.rs` (17 readers, 16 MiB cap) and `fuzz_cli_lockfile`; `cli/src/cli/check.rs` (`mise.lock` through `mise plan`); `POST /api/v1/packages/access/batch` (≤ 50, cache-only through `pullability::cache_only`, 10 s deadline, charged per item); the Check column in `coverage.rs` with a `<kind>_check` test per ✅ cell (`cli/tests/check.rs`); the `pullability` and `pullability_batch` soak arms and `db_calls.py` scenarios; heavy case 14 (`quarantine.sh`) |
@@ -1794,10 +1794,13 @@ row names has landed; a partial phase lists what is still open.
   the gzip as an HTML page ("XML syntax error … U+001F") — no published module
   installed, in any mode. Fixed for a version published here
   (`?archive=tar.gz`); an upstream module's format is still the upstream's.
-  (3) **Open:** a provider published here has no `SHA256SUMS` or signature —
-  nothing uploads them — so `terraform init` refuses it ("checksum list has no
-  SHA-256 hash"). The CLI publish is asserted; the install is not, until local
-  providers can carry a publisher-signed checksum list (issue #281).
+  (3) A provider published here had no `SHA256SUMS` or signature —
+  nothing uploaded them — so `terraform init` refused it ("checksum list has no
+  SHA-256 hash"). Fixed by issue #281: `PUT …/{version}/shasums` and
+  `…/shasums.sig` take the publisher's goreleaser files, the list checked
+  against the manifest and the signature against the
+  namespace's key; the download document names both, and `publish <dir>`
+  sends them. `terraform.sh` §4 now installs the provider it publishes.
 - **`publish -t` is kept, not deprecated.** Reading the kind from the
   listing made a token holding `releases:publish` alone — the least-privilege
   CI identity — exit 5 before any upload, though the server accepts its PUT.

@@ -503,6 +503,43 @@ pub fn terraform_provider_binary_storage_key(
     format!("local:{registry}/providers/{namespace}/{ptype}/{version}/{os}-{arch}")
 }
 
+/// The checksum files a provider version can carry (issue #281): the
+/// publisher's `SHA256SUMS` and its detached GPG signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerraformShasumsFile {
+    Sums,
+    Signature,
+}
+
+impl TerraformShasumsFile {
+    /// The artifact name the routes, the audit trail and URL signing use.
+    pub fn artifact(self) -> &'static str {
+        match self {
+            Self::Sums => "shasums",
+            Self::Signature => "shasums.sig",
+        }
+    }
+}
+
+/// Storage key for a provider version's `SHA256SUMS` or its signature.
+///
+/// Beside the platform binaries, and never one of them: a binary's last segment
+/// is `{os}-{arch}` and always holds a dash (`validate_terraform_platform`),
+/// these two never do.
+pub fn terraform_provider_shasums_storage_key(
+    registry: &str,
+    namespace: &str,
+    ptype: &str,
+    version: &str,
+    file: TerraformShasumsFile,
+) -> String {
+    let leaf = match file {
+        TerraformShasumsFile::Sums => "SHA256SUMS",
+        TerraformShasumsFile::Signature => "SHA256SUMS.sig",
+    };
+    format!("local:{registry}/providers/{namespace}/{ptype}/{version}/{leaf}")
+}
+
 #[cfg(test)]
 pub(crate) mod test_support;
 

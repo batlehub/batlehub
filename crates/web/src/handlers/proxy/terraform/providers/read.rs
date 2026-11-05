@@ -1,6 +1,6 @@
 use super::{
     append_signature_headers, get, identity_for_artifact, mark_uncacheable_if_signed, proxy_stream,
-    registry_public_base, require_registry_type, sign_download_document,
+    registry_public_base, require_registry_type, require_segments, sign_download_document,
     terraform_provider_binary_storage_key, terraform_versions_response, upstream_may_answer, web,
     AppError, Arc, AuthIdentity, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService,
     PackageId, ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder,
@@ -8,7 +8,9 @@ use super::{
 };
 use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
 use batlehub_core::entities::Action;
-use batlehub_core::services::SignedUrlCoordinate;
+use batlehub_core::services::{
+    terraform_provider_shasums_storage_key, SignedUrlCoordinate, TerraformShasumsFile,
+};
 
 /// Resolve the identity for one of the three routes Terraform fetches with no
 /// `Authorization` header (RFC 0012 §6.5): the provider zip, its `SHA256SUMS`,
@@ -363,12 +365,15 @@ pub(super) async fn try_local_provider_download(
     security(("bearer_token" = [])),
 )]
 #[get("/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums")]
+#[allow(clippy::too_many_arguments)]
 pub async fn terraform_provider_shasums(
     req: HttpRequest,
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
     map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, namespace, ptype, version) = path.into_inner();
     require_registry_type(&registry, "terraform", &map)?;
@@ -382,8 +387,15 @@ pub async fn terraform_provider_shasums(
     )
     .await?;
 
-    let pkg = PackageId::new(&registry, &auth_name, &version).with_artifact("shasums");
-    proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some("text/plain")).await
+    serve_shasums_file(
+        TerraformShasumsFile::Sums,
+        (&registry, &namespace, &ptype, &version),
+        identity,
+        svc,
+        &local_svc,
+        &mode_map,
+    )
+    .await
 }
 
 /// The detached signature over the checksum manifest. See
@@ -406,12 +418,15 @@ pub async fn terraform_provider_shasums(
     security(("bearer_token" = [])),
 )]
 #[get("/proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig")]
+#[allow(clippy::too_many_arguments)]
 pub async fn terraform_provider_shasums_sig(
     req: HttpRequest,
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
     map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, namespace, ptype, version) = path.into_inner();
     require_registry_type(&registry, "terraform", &map)?;
@@ -431,15 +446,67 @@ pub async fn terraform_provider_shasums_sig(
     )
     .await?;
 
-    let pkg = PackageId::new(&registry, &auth_name, &version).with_artifact("shasums.sig");
-    proxy_stream(
-        svc,
-        pkg,
+    serve_shasums_file(
+        TerraformShasumsFile::Signature,
+        (&registry, &namespace, &ptype, &version),
         identity,
-        Action::ReleasesRead,
-        Some("application/octet-stream"),
+        svc,
+        &local_svc,
+        &mode_map,
     )
     .await
+}
+
+/// `SHA256SUMS` or its signature: the upstream's in proxy mode, the
+/// publisher's upload for a local version (issue #281), and the upstream's in
+/// hybrid for a provider with no local version — the archive's rule.
+async fn serve_shasums_file(
+    file: TerraformShasumsFile,
+    (registry, namespace, ptype, version): (&str, &str, &str, &str),
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: &LocalRegistryService,
+    mode_map: &RegistryModeMap,
+) -> Result<HttpResponse, AppError> {
+    let content_type = match file {
+        TerraformShasumsFile::Sums => "text/plain",
+        TerraformShasumsFile::Signature => "application/octet-stream",
+    };
+    let name = format!("providers/{namespace}/{ptype}");
+    let pkg = PackageId::new(registry, &name, version).with_artifact(file.artifact());
+    let mode = mode_map.get(registry);
+    if mode == RegistryMode::Proxy {
+        return proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some(content_type)).await;
+    }
+    // The key is built from the path: refuse traversal before it is.
+    require_segments(&[
+        ("namespace", namespace),
+        ("provider type", ptype),
+        ("version", version),
+    ])?;
+    let key = terraform_provider_shasums_storage_key(registry, namespace, ptype, version, file);
+    match local_svc
+        .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity, &identity.1)
+        .await
+        .map_err(AppError::from)?
+    {
+        Some(buf) => Ok(HttpResponse::Ok().content_type(content_type).body(buf)),
+        None if mode == RegistryMode::Hybrid
+            && upstream_may_answer(
+                local_svc
+                    .get_terraform_provider_versions_response(registry, &name, &identity)
+                    .await,
+            )? =>
+        {
+            proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some(content_type)).await
+        }
+        None => Err(AppError::not_found(format!(
+            "provider {namespace}/{ptype}@{version} has no {}: the publisher uploads it \
+             to …/{version}/{}",
+            file.artifact(),
+            file.artifact()
+        ))),
+    }
 }
 
 /// Download a Terraform provider platform binary from local storage.

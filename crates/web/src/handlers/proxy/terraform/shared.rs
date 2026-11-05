@@ -180,12 +180,11 @@ pub async fn sign_download_document(
         };
         if !is_on_origin(url, base) {
             // `debug`, not `warn`, despite naming a host this server does not
-            // control. This file's own docs say an off-origin
-            // `shasums_url`/`shasums_signature_url` is "today the *only* way a
-            // local-mode provider install verifies anything" — so it is the
-            // expected steady state for a signing local registry, not an
-            // anomaly, and every `terraform init` would emit two WARN lines per
-            // platform document. A warning nobody can act on and everybody sees
+            // control. An off-origin `shasums_url`/`shasums_signature_url` is
+            // the publisher's choice of where its signed checksum list lives
+            // (the alternative to uploading it here, issue #281) — a steady
+            // state, not an anomaly, and every `terraform init` would emit two
+            // WARN lines per platform document. A warning nobody can act on and everybody sees
             // on every request is how real warnings get missed.
             //
             // The condition is not going unreported: `off_origin_checksum_urls`
