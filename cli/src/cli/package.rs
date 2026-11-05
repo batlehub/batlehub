@@ -3,7 +3,6 @@ use anyhow::Result;
 use super::lifecycle::Verb;
 use crate::coordinate::Coordinate;
 use crate::exit::{CliError, ExitCode};
-use crate::render::deprecated;
 use clap::Subcommand;
 use comfy_table::{Cell, Color, Table};
 
@@ -29,8 +28,6 @@ pub enum PackageCommand {
         /// Only blocked versions (the server filters, so paging stays exact)
         #[arg(long)]
         blocked: bool,
-        #[arg(long, hide = true)]
-        blocked_only: bool,
         /// Page number (0-based)
         #[arg(long, default_value = "0")]
         page: u64,
@@ -40,9 +37,8 @@ pub enum PackageCommand {
     },
     /// The versions of a package: `registry/name`, or a bare name with `-r`
     Versions {
-        /// `registry/name` (the older `<registry> <name>` still works, with a warning)
-        #[arg(num_args = 1..=2, required = true)]
-        coordinate: Vec<String>,
+        /// `registry/name`
+        coordinate: String,
         /// Rows per page (the server caps it at `[limits].versions_per_page`)
         #[arg(long)]
         limit: Option<u64>,
@@ -181,19 +177,15 @@ async fn consult(
         PackageCommand::List {
             search,
             blocked,
-            blocked_only,
             page,
             per_page,
         } => {
-            if blocked_only {
-                crate::render::deprecated("package list --blocked-only", "package list --blocked");
-            }
             let reg = default_registry.map(str::to_string);
             let resp = client
                 .list_packages(PackageQuery {
                     registry: reg,
                     name: search,
-                    blocked: blocked || blocked_only,
+                    blocked,
                     page,
                     per_page,
                 })
@@ -237,18 +229,7 @@ async fn consult(
             all,
             no_upstream,
         } => {
-            let raw = match coordinate.as_slice() {
-                [registry, name] => {
-                    deprecated(
-                        "package versions <registry> <name>",
-                        "package versions <registry>/<name>",
-                    );
-                    format!("{registry}/{name}")
-                }
-                [one] => one.clone(),
-                _ => anyhow::bail!("expected registry/name"),
-            };
-            let c = Coordinate::resolve(client, &raw, default_registry).await?;
+            let c = Coordinate::resolve(client, &coordinate, default_registry).await?;
             let (registry, name) = (c.registry, c.name);
             let mut rows: Vec<serde_json::Value> = Vec::new();
             let mut page = page;

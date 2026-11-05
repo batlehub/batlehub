@@ -15,8 +15,8 @@ use clap::Parser;
 
 use cli::groups::{self, Group};
 use cli::{
-    admin, auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy,
-    publish, registry, security, setup, version, vsx, Cli, Command,
+    auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy, publish,
+    registry, security, setup, vsx, Cli, Command,
 };
 use config::ConfigFile;
 use exit::{CliError, ExitCode};
@@ -75,10 +75,6 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
     if let Command::Profile { cmd } = cli.command {
         render::init(context(cli.registry.clone()));
         return config_cmd::run_profile(cmd, cli.profile.as_deref());
-    }
-    if let Command::Config { cmd } = cli.command {
-        render::init(context(cli.registry.clone()));
-        return config_cmd::run(cmd, cli.profile.as_deref());
     }
     // The Java engine runs locally: no server, no token, no config.
     if let Command::Java(args) = cli.command {
@@ -229,18 +225,6 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         Command::Policy { cmd } => cli::journeys::run_policy(cmd, &client).await?,
         Command::Exemption { cmd } => cli::journeys::run_exemption(cmd, &client).await?,
         Command::Upstream { cmd } => cli::journeys::run_upstream(cmd, &client).await?,
-        // ── deprecated spellings ──
-        Command::Version { cmd } => version::run(cmd, &client).await?,
-        Command::Owners { cmd } => owner::run_legacy(cmd, &client, json).await?,
-        Command::Verdicts { cmd } => {
-            render::deprecated("verdicts", "verdict");
-            security::run_verdicts(cmd, &client, json).await?
-        }
-        Command::Admin { cmd } => {
-            let (old, new) = groups::admin_replacement(&cmd);
-            render::deprecated(old, new);
-            admin::run(cmd, &client, json).await?
-        }
         Command::Authz { cmd } => authz::run(cmd, &client, json).await?,
         Command::Mise { cmd } => mise::run(cmd, &client, json).await?,
         Command::Proxy { cmd } => proxy::run(cmd).await?,
@@ -262,8 +246,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
             .await?
         }
         Command::Tui => tui::run(client, profile_name).await?,
-        Command::Config { .. }
-        | Command::Profile { .. }
+        Command::Profile { .. }
         | Command::Completion { .. }
         | Command::Setup { .. }
         | Command::Java(_) => {

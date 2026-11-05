@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 219bb47f152defb2
+sourceHash: b63b4b86c2ceaf61
 ---
 
 # batlehub-cli
@@ -1368,10 +1368,12 @@ batlehub-cli gdpr export --user <subject>
 quand une décision ouverte nomme la personne ; ce n'est pas un moyen d'éviter la
 confirmation, qui exige toujours `--yes` dans un script.
 
-### Anciennes formes {#deprecated-spellings}
+### Formes retirées {#removed-spellings}
 
-Chacune des formes ci-dessous fonctionne encore jusqu'à la 1.10, en imprimant un
-`warning:` qui nomme son remplacement.
+La grammaire de la RFC 0040 a remplacé toutes les formes ci-dessous. Aucune ne
+fonctionne plus : chacune est refusée comme erreur d'usage (code 2), si bien
+qu'un script qui en utilise encore une échoue bruyamment au lieu de faire
+autre chose.
 
 | Avant | Maintenant |
 | --- | --- |
@@ -1409,7 +1411,11 @@ Chacune des formes ci-dessous fonctionne encore jusqu'à la 1.10, en imprimant u
 | `auth token revoke` | `auth token delete` |
 | `--csv` | `--format csv` |
 | `mise plan/export --out` | `--output` (`-o`) |
-| `proxy serve --registry`, `vsx verify --registry` (une URL) | `--registry-url`, conservé en alias pour les extensions d'éditeur |
+
+Un alias reste : `proxy serve --registry` et `vsx verify --registry` (une URL)
+sont toujours acceptés pour `--registry-url`, parce que les extensions
+d'éditeur les passent. La coordonnée `registry:name@version` est acceptée
+définitivement, avec un `warning:` qui nomme la forme `registry/name@version`.
 
 Deux formes ont changé sans alias, parce que l'option globale `--format` a pris
 leur nom : `admin sbom get/export --format` devient `--sbom-format`, et

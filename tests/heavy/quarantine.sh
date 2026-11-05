@@ -35,7 +35,7 @@
 #      the suite runs, installed, then rescanned after that OSV learned an
 #      advisory: the next `npm install` from a clean cache is refused, the
 #      admin alert lands at a webhook receiver the suite runs and names the
-#      identity that pulled it, and `batlehub verdicts pullers` names the
+#      identity that pulled it, and `batlehub-cli verdict pullers` names the
 #      same one. The rescan is the *scheduler's* — `interval_secs = 1`, a
 #      tick a minute — not an admin's request.
 #
@@ -669,14 +669,14 @@ set -e
 grep -q "ETARGET\|VULNERABILITY" "$HEAVY_WORK/install-10.err" \
   || { cat "$HEAVY_WORK/install-10.err" >&2; heavy_fail "npm failed for a reason that is neither the hidden version nor the refusal"; }
 
-heavy_log "batlehub verdicts pullers $RESCAN_REG:$FLIP_PKG@$FLIP_VERSION"
-"$CLI" verdicts pullers "$RESCAN_REG:$FLIP_PKG@$FLIP_VERSION" >"$HEAVY_WORK/pullers.out" 2>&1 \
-  || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub verdicts pullers failed"; }
+heavy_log "batlehub-cli verdict pullers $RESCAN_REG:$FLIP_PKG@$FLIP_VERSION"
+"$CLI" verdict pullers "$RESCAN_REG:$FLIP_PKG@$FLIP_VERSION" >"$HEAVY_WORK/pullers.out" 2>&1 \
+  || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub-cli verdict pullers failed"; }
 grep -q "ci-admin" "$HEAVY_WORK/pullers.out" \
-  || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub verdicts pullers does not name ci-admin"; }
+  || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub-cli verdict pullers does not name ci-admin"; }
 # stderr apart: a warning on it is not a CSV row.
-"$CLI" verdicts pullers "$RESCAN_REG/$FLIP_PKG@$FLIP_VERSION" --format csv >"$HEAVY_WORK/pullers.csv" 2>"$HEAVY_WORK/pullers-csv.err" \
-  || { cat "$HEAVY_WORK/pullers-csv.err" >&2; heavy_fail "batlehub verdicts pullers --format csv failed"; }
+"$CLI" verdict pullers "$RESCAN_REG/$FLIP_PKG@$FLIP_VERSION" --format csv >"$HEAVY_WORK/pullers.csv" 2>"$HEAVY_WORK/pullers-csv.err" \
+  || { cat "$HEAVY_WORK/pullers-csv.err" >&2; heavy_fail "batlehub-cli verdict pullers --format csv failed"; }
 head -1 "$HEAVY_WORK/pullers.csv" | grep -q '^identity,role,first_pull,last_pull,count' \
   || { cat "$HEAVY_WORK/pullers.csv" >&2; heavy_fail "the CSV has no header"; }
 grep -q '^ci-admin,admin,' "$HEAVY_WORK/pullers.csv" \
@@ -841,14 +841,14 @@ for i, c in enumerate(checks):
 sys.exit(0 if all(checks) else 1)
 PY
 
-"$CLI" admin flags list --registry "$FLAGS_REG" >"$HEAVY_WORK/flags-list.out" 2>&1 \
-  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub admin flags list failed"; }
+"$CLI" flag list --registry "$FLAGS_REG" >"$HEAVY_WORK/flags-list.out" 2>&1 \
+  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub-cli flag list failed"; }
 grep -q "$FLAG_ID" "$HEAVY_WORK/flags-list.out" \
-  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub admin flags list does not name the flag"; }
-"$CLI" admin exposure --registry "$FLAGS_REG" >"$HEAVY_WORK/exposure.out" 2>&1 \
-  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub admin exposure failed"; }
+  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub-cli flag list does not name the flag"; }
+"$CLI" exposure list --registry "$FLAGS_REG" >"$HEAVY_WORK/exposure.out" 2>&1 \
+  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub-cli exposure list failed"; }
 grep -q "ci-admin" "$HEAVY_WORK/exposure.out" \
-  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub admin exposure does not name ci-admin"; }
+  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub-cli exposure list does not name ci-admin"; }
 
 heavy_log "DELETE /api/v1/flags/soc/$FLAG_ID — the revoke, and the scheduler re-deriving"
 REVOKE_CODE="$(curl -sS -o "$HEAVY_WORK/revoke.json" -w "$CURL_CODE" -X DELETE \

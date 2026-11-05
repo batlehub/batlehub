@@ -24,7 +24,7 @@ use clap::Args;
 use crate::api::BatleHubClient;
 use crate::coordinate::Coordinate;
 use crate::exit::{CliError, ExitCode};
-use crate::render::{ctx, deprecated, Format};
+use crate::render::{ctx, Format};
 
 /// `registry/name@version` (or a bare `name@version` with `-r`), resolved
 /// against the registries the caller can see.
@@ -73,17 +73,10 @@ pub struct PullersArgs {
     /// default: the registry's `pullers_window_days`
     #[arg(long, default_value = "")]
     pub since: String,
-    /// Deprecated: `--format csv`
-    #[arg(long, hide = true)]
-    pub csv: bool,
 }
 
-/// `--csv` is the old spelling of `--format csv`.
-fn csv_wanted(flag: bool) -> bool {
-    if flag {
-        deprecated("--csv", "--format csv");
-    }
-    flag || ctx().format == Format::Csv
+fn csv_wanted() -> bool {
+    ctx().format == Format::Csv
 }
 
 /// `verdict list`: the registry's stored verdicts, newest scan first.
@@ -145,15 +138,9 @@ fn print_verdict_row(v: &serde_json::Value) {
 async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let (registry, name, version) = versioned(client, &args.coordinate).await?;
     let body = client
-        .pullers(
-            &registry,
-            &name,
-            &version,
-            &args.since,
-            csv_wanted(args.csv),
-        )
+        .pullers(&registry, &name, &version, &args.since, csv_wanted())
         .await?;
-    if args.csv || json {
+    if json {
         print!("{body}");
         if !body.ends_with('\n') {
             println!();
@@ -214,9 +201,6 @@ pub struct PullsArgs {
     /// default: 30 days
     #[arg(long, default_value = "")]
     pub since: String,
-    /// Deprecated: `--format csv`
-    #[arg(long, hide = true)]
-    pub csv: bool,
 }
 
 pub async fn run_audit(cmd: AuditCommand, client: &BatleHubClient, json: bool) -> Result<()> {
@@ -233,12 +217,12 @@ async fn list_pulls(args: &PullsArgs, client: &BatleHubClient, json: bool) -> Re
             ctx().registry.as_deref(),
             args.package.as_deref(),
             &args.since,
-            csv_wanted(args.csv),
+            csv_wanted(),
         )
         .await?;
     // The server rendered it; printing it verbatim is what keeps the CSV an
     // auditor keeps identical to the one the API serves.
-    if args.csv || json {
+    if json {
         print!("{body}");
         if !body.ends_with('\n') {
             println!();

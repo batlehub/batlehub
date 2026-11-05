@@ -85,20 +85,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[registries.grants]` (no `[registries.rbac]` role) is now visible to it, as it
   already was to the download.
 
-### Deprecated
+### Removed
 
-These spellings still run until 1.10, and each prints a `warning:` that names
-its replacement. The full table is in the CLI reference, under *Deprecated
-spellings*.
+The old CLI spellings are gone in this release, not kept as aliases for one
+more minor version: each one is now a usage error (exit 2). The full old → new
+table is in the CLI reference, under *Removed spellings*.
 
 - `admin …`, `version …`, `owners …`, `verdicts …` and `config …`;
 - `registry info`, `auth token revoke` and `package versions <registry> <name>`;
 - `--csv` (now `--format csv`), `gdpr erase --force` (now
   `--ignore-open-decisions`), `mise plan/export --out` (now `--output`);
-- `proxy serve --registry` and `vsx verify --registry`, which take a URL.
-  `--registry-url` is the new name, and `--registry` stays as an alias for the
-  editor extensions.
 - `package list --blocked-only` (now `--blocked`).
+
+Two old spellings stay: `proxy serve --registry` and `vsx verify --registry`
+(a URL) remain aliases of `--registry-url` for the editor extensions, and the
+`registry:name@version` coordinate is still read, with a warning.
 
 ### Added
 

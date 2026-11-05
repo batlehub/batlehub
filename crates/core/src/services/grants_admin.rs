@@ -256,7 +256,7 @@ impl GrantAdminService {
     /// - **A grant on a version that was later deleted became invisible.** It
     ///   kept resolving — `version_grants_in_registry` still feeds it to
     ///   `Readable::with_version_grants`, so it went on admitting the package
-    ///   name into listings — while `GET /grants`, `batlehub admin grants list`
+    ///   name into listings — while `GET /grants`, `batlehub-cli grant list`
     ///   and the console panel all showed nothing. An operator could neither
     ///   discover it nor remove it through the surface built to remove it.
     /// - **With no local backend wired, no version row was ever listed**, though
@@ -363,7 +363,7 @@ impl GrantAdminService {
             .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
 
         // Ownership rows are the projection's to remove. Letting this delete one
-        // would make `owners remove` the only way to restore it, and the next
+        // would make `owner remove` the only way to restore it, and the next
         // owner change would silently put it back — the same race §4.3 refuses
         // on the write side, arriving through the delete.
         self.refuse_ownership_removal(target, &matcher).await?;
@@ -440,7 +440,7 @@ impl GrantAdminService {
         }
         Err(CoreError::Conflict(format!(
             "'{}' holds {} on '{}' through ownership; this write would drop {}. \
-             Use `batlehub-cli owners remove` to change ownership.",
+             Use `batlehub-cli owner remove` to change ownership.",
             matcher,
             OWNERSHIP_ACTIONS
                 .iter()
@@ -466,7 +466,7 @@ impl GrantAdminService {
         }
         Err(CoreError::Conflict(format!(
             "'{}' holds this grant through ownership of '{}'; remove the owner with \
-             `batlehub-cli owners remove` instead",
+             `batlehub-cli owner remove` instead",
             matcher, target.package
         )))
     }
@@ -1095,7 +1095,7 @@ mod tests {
             unreachable!()
         };
         assert!(
-            msg.contains("owners remove"),
+            msg.contains("owner remove"),
             "the refusal has to name the way to do it: {msg}"
         );
     }

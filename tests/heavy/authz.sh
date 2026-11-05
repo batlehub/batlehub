@@ -3859,7 +3859,7 @@ only looks covered."
 #      closed registry's `403` — and leaves one `credential_rejected` line;
 #      twenty more in the same minute leave none, and the next row after the
 #      minute carries the count it held back;
-#   4. once the run's windows are sealed, `batlehub-cli admin audit verify`
+#   4. once the run's windows are sealed, `batlehub-cli audit verify`
 #      exits 0; one row altered with SQL makes it exit 1 naming the window
 #      that holds it, and putting the row back makes it pass again;
 #   5. a purge removes the access rows and nothing else — the purge's own row
@@ -3938,13 +3938,13 @@ sys.exit(0 if any(e > t for e in ends) else 1)' "$t"; then
   heavy_fail "no window ending after $t was sealed within 60 s — the sealer is not running"
 }
 
-# audit_verify <out> [flag]... — `batlehub-cli admin audit verify` over this
+# audit_verify <out> [flag]... — `batlehub-cli audit verify` over this
 # run's windows; returns the CLI's exit code, output in <out>.
 audit_verify() {
   local out="$1"
   shift
   set +e
-  "$AUDIT_CLI" --json admin audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
+  "$AUDIT_CLI" --json audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
   local rc=$?
   set -e
   return $rc

@@ -4,7 +4,7 @@ use comfy_table::Table;
 
 use crate::api::{owner::AddOwnerRequest, BatleHubClient};
 use crate::coordinate::Coordinate;
-use crate::render::{ctx, deprecated};
+use crate::render::ctx;
 
 /// `registry/name`, or a bare name in the default registry. Ownership is per
 /// package, so a version is refused rather than silently dropped.
@@ -45,94 +45,6 @@ pub enum OwnerCommand {
         #[arg(long, default_value = "user")]
         r#type: String,
     },
-}
-
-/// The deprecated `owners … REG NAME`, kept for one minor.
-#[derive(Subcommand)]
-pub enum LegacyOwnerCommand {
-    /// List owners of a package
-    List {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
-    },
-    /// Add an owner to a package
-    Add {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
-        /// Principal ID (user ID or group name)
-        principal: String,
-        /// Principal type: user or group
-        #[arg(long, default_value = "user")]
-        r#type: String,
-        /// Ownership role: admin or maintainer
-        #[arg(long, default_value = "maintainer")]
-        role: String,
-    },
-    /// Remove an owner from a package
-    Remove {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
-        /// Principal ID (user ID or group name)
-        principal: String,
-        /// Principal type: user or group
-        #[arg(long, default_value = "user")]
-        r#type: String,
-    },
-}
-
-/// `owners …`: warns, then runs `owner …` with the coordinate.
-pub async fn run_legacy(
-    cmd: LegacyOwnerCommand,
-    client: &BatleHubClient,
-    json: bool,
-) -> Result<()> {
-    let (word, cmd) = match cmd {
-        LegacyOwnerCommand::List { registry, name } => (
-            "list",
-            OwnerCommand::List {
-                coordinate: format!("{registry}/{name}"),
-            },
-        ),
-        LegacyOwnerCommand::Add {
-            registry,
-            name,
-            principal,
-            r#type,
-            role,
-        } => (
-            "add",
-            OwnerCommand::Add {
-                coordinate: format!("{registry}/{name}"),
-                principal,
-                r#type,
-                role,
-            },
-        ),
-        LegacyOwnerCommand::Remove {
-            registry,
-            name,
-            principal,
-            r#type,
-        } => (
-            "remove",
-            OwnerCommand::Remove {
-                coordinate: format!("{registry}/{name}"),
-                principal,
-                r#type,
-            },
-        ),
-    };
-    deprecated(
-        &format!("owners {word} <registry> <name>"),
-        &format!("owner {word} <registry>/<name>"),
-    );
-    run(cmd, client, json).await
 }
 
 pub async fn run(cmd: OwnerCommand, client: &BatleHubClient, json: bool) -> Result<()> {

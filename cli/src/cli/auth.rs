@@ -153,8 +153,6 @@ pub enum TokenCommand {
         /// Token UUID
         id: uuid::Uuid,
     },
-    #[command(hide = true)]
-    Revoke { id: uuid::Uuid },
 }
 
 fn mask_token(t: &str) -> String {
@@ -476,7 +474,6 @@ async fn handle_token_command(
     client: &BatleHubClient,
     json: bool,
 ) -> Result<()> {
-    let cmd_was_revoke = matches!(cmd, TokenCommand::Revoke { .. });
     match cmd {
         TokenCommand::List => {
             let tokens = client.list_tokens().await?;
@@ -512,10 +509,7 @@ async fn handle_token_command(
                 print_created_token(&name, &role, &resp);
             }
         }
-        TokenCommand::Delete { id } | TokenCommand::Revoke { id } => {
-            if cmd_was_revoke {
-                crate::render::deprecated("auth token revoke", "auth token delete");
-            }
+        TokenCommand::Delete { id } => {
             crate::confirm::confirm("revoke", &[format!("token {id}")], None)?;
             client.revoke_token(id).await?;
             println!("Revoked token {id}");

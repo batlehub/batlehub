@@ -17,7 +17,6 @@ pub mod publish;
 pub mod registry;
 pub mod security;
 pub mod setup;
-pub mod version;
 pub mod vsx;
 pub mod why;
 
@@ -263,32 +262,5 @@ pub enum Command {
         /// Target shell
         #[arg(value_enum)]
         shell: Shell,
-    },
-
-    // ── Deprecated spellings, hidden; each warns and runs the new command ──
-    #[command(hide = true)]
-    Admin {
-        #[command(subcommand)]
-        cmd: admin::AdminCommand,
-    },
-    #[command(hide = true)]
-    Version {
-        #[command(subcommand)]
-        cmd: version::VersionCommand,
-    },
-    #[command(hide = true)]
-    Owners {
-        #[command(subcommand)]
-        cmd: owner::LegacyOwnerCommand,
-    },
-    #[command(hide = true)]
-    Verdicts {
-        #[command(subcommand)]
-        cmd: security::VerdictsCommand,
-    },
-    #[command(hide = true)]
-    Config {
-        #[command(subcommand)]
-        cmd: config_cmd::ConfigCommand,
     },
 }

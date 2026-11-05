@@ -84,7 +84,7 @@ pub async fn unmirrored_sink(
              for it and rebuild the bundle, or drop the tool that needs it."
         ),
         "host": host,
-        "bundle_hint": "batlehub-cli admin air-gap-missing --kind unmirrored_host",
+        "bundle_hint": "batlehub-cli air-gap missing --kind unmirrored_host",
     })))
 }
 

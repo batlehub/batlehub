@@ -15,7 +15,7 @@ use super::journeys::{self, PendingCmd};
 use super::security::{self, PullsArgs};
 use crate::api::BatleHubClient;
 use crate::coordinate::Coordinate;
-use crate::render::{ctx, deprecated};
+use crate::render::ctx;
 
 /// A coordinate, resolved against the default registry.
 async fn coord(client: &BatleHubClient, raw: &str) -> Result<Coordinate> {
@@ -272,8 +272,6 @@ pub enum GdprCmd {
         /// Erase even while an open decision names the subject
         #[arg(long)]
         ignore_open_decisions: bool,
-        #[arg(long, hide = true)]
-        force: bool,
     },
     /// Everything held about a subject, as JSON [admin]
     Export {
@@ -581,18 +579,12 @@ pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()
         Group::Gdpr(GdprCmd::Erase {
             user,
             ignore_open_decisions,
-            force,
-        }) => {
-            if force {
-                deprecated("gdpr erase --force", "gdpr erase --ignore-open-decisions");
-            }
-            AdminCommand::Gdpr {
-                cmd: GdprCommand::Erase {
-                    user,
-                    force: ignore_open_decisions || force,
-                },
-            }
-        }
+        }) => AdminCommand::Gdpr {
+            cmd: GdprCommand::Erase {
+                user,
+                force: ignore_open_decisions,
+            },
+        },
         Group::Gdpr(GdprCmd::Export { user }) => AdminCommand::Gdpr {
             cmd: GdprCommand::Export { user },
         },
@@ -721,82 +713,4 @@ async fn run_config(cmd: ServerConfigCmd, client: &BatleHubClient, json: bool) -
         | ServerConfigCmd::Warnings => unreachable!("dispatched by `run`"),
     };
     admin::run(AdminCommand::Config { cmd }, client, json).await
-}
-
-/// The new spelling of an `admin …` command, for its deprecation warning.
-pub fn admin_replacement(cmd: &AdminCommand) -> (&'static str, &'static str) {
-    use AdminCommand as A;
-    match cmd {
-        A::Quota { cmd } => match cmd {
-            QuotaCommand::List => ("admin quota list", "quota list"),
-            QuotaCommand::Reset { .. } => ("admin quota reset", "quota reset -r <registry>"),
-        },
-        A::IpBlock { .. } => ("admin ip-block", "ip-block"),
-        A::Config { cmd } => match cmd {
-            ConfigAdminCommand::View => ("admin config view", "server config show"),
-            _ => ("admin config", "server config"),
-        },
-        A::Cache { cmd } => match cmd {
-            CacheCommand::Clear { .. } => ("admin cache clear", "cache delete -r <registry>"),
-            _ => (
-                "admin cache <verb> <registry>",
-                "cache <verb> -r <registry>",
-            ),
-        },
-        A::Import { .. } => ("admin import", "import"),
-        A::Banner { cmd } => match cmd {
-            BannerCommand::Clear => ("admin banner clear", "banner delete"),
-            BannerCommand::Set { .. } => ("admin banner set", "banner set"),
-        },
-        A::Retention { reclaim: true, .. } => ("admin retention --reclaim", "retention apply"),
-        A::Retention { .. } => ("admin retention", "retention show"),
-        A::Exposure { .. } => ("admin exposure", "exposure list"),
-        A::Bundles => ("admin bundles", "bundle list"),
-        A::AirGapMissing { .. } => ("admin air-gap-missing", "air-gap missing"),
-        A::Flags { .. } => ("admin flags list", "flag list"),
-        A::AuditLog {
-            purge_before: Some(_),
-            ..
-        } => ("admin audit-log --purge-before", "audit purge --before"),
-        A::AuditLog { .. } => ("admin audit-log", "audit log"),
-        A::Gdpr { .. } => ("admin gdpr", "gdpr"),
-        A::Audit { .. } => ("admin audit verify", "audit verify"),
-        A::Stats => ("admin stats", "server stats"),
-        A::Health => ("admin health", "server health"),
-        A::Visibility { cmd } => match cmd {
-            VisibilityCommand::Get { .. } => {
-                ("admin visibility get", "visibility show <registry>/<name>")
-            }
-            VisibilityCommand::Set { .. } => {
-                ("admin visibility set", "visibility set <registry>/<name>")
-            }
-        },
-        A::Grants { cmd } => match cmd {
-            GrantsCommand::Rm { .. } => ("admin grants rm", "grant remove <registry>/<name>"),
-            _ => ("admin grants", "grant <verb> <registry>/<name>[@<version>]"),
-        },
-        A::Namespace { cmd } => match cmd {
-            NamespaceCommand::Release { .. } => ("admin namespace release", "namespace remove"),
-            _ => ("admin namespace", "namespace <verb> -r <registry>"),
-        },
-        A::Users { cmd } => match cmd {
-            UsersCommand::ListBlocked => ("admin users list-blocked", "user list"),
-            _ => ("admin users", "user"),
-        },
-        A::Sbom { cmd } => match cmd {
-            SbomCommand::Get { .. } => ("admin sbom get", "sbom show <registry>/<name>@<version>"),
-            SbomCommand::Export { .. } => ("admin sbom export", "sbom export"),
-        },
-        A::Notifications { .. } => ("admin notifications", "notification"),
-        A::Bulk { .. } => (
-            "admin bulk <verb> <registry> <name@version>…",
-            "package <verb> <registry>/<name>@<version>…",
-        ),
-        A::Deprecate { .. } => ("admin deprecate", "package deprecate"),
-        A::Undeprecate { .. } => ("admin undeprecate", "package undeprecate"),
-        A::Unlist { .. } => ("admin unlist", "package unlist"),
-        A::Relist { .. } => ("admin relist", "package relist"),
-        A::AccessCheck { .. } => ("admin access-check", "authz check"),
-        A::ExportAuditLog { .. } => ("admin export-audit-log", "audit export"),
-    }
 }

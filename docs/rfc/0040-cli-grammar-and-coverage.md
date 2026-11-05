@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2 to 8 landed; §17 records how far each phase is and where the built thing differs |
+| Status      | **Implemented** — all phases landed; §17 records each one and where the built thing differs, including the aliases removed in the same release as phase 3 |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1651,9 +1651,18 @@ row names has landed; a partial phase lists what is still open.
 | 6 | done | PR #280 | `cli/src/{api,cli}/journeys.rs`: `policy`, `exemption`, `me`, `upstream`, `namespace signing-key`, `flag create/delete`, `server config pending/apply/discard/warnings`; `package block/unblock` in `lifecycle.rs`; `package list --blocked` filtered by the server (`?blocked=true`); the loopback `auth login` with `--no-browser`, `sso.rs`'s `return_to` and migration 064. T6's tests: `login_rejects_wrong_state` and `return_to_must_be_exact_loopback` |
 | 7 | done | PR #280 | `crates/core/src/lockfile.rs` (17 readers, 16 MiB cap) and `fuzz_cli_lockfile`; `cli/src/cli/check.rs` (`mise.lock` through `mise plan`); `POST /api/v1/packages/access/batch` (≤ 50, cache-only through `pullability::cache_only`, 10 s deadline, charged per item); the Check column in `coverage.rs` with a `<kind>_check` test per ✅ cell (`cli/tests/check.rs`); the `pullability` and `pullability_batch` soak arms and `db_calls.py` scenarios; heavy case 14 (`quarantine.sh`) |
 | 8 | done | PR #280 | `tui/`: the login writes the `-P` profile and reconnects without a restart; `y`/`d` confirm in a modal (`render_confirm`), and every lifecycle key goes through `lifecycle::apply_one`, the dispatch `package <verb>` uses; `p`/`P` pin and unpin, `o` owners, `w` the Why pane (`why::render` and the caller's refusals of the package); the publish form shows the name and version it read and runs `publish::run`. `TestBackend` tests in `tui/mod.rs` |
-| 9 | partial | PR #280 | The docs pass: every command the published docs show, in both languages, parses with the current CLI and none goes through a deprecated alias (172 alias spellings rewritten, 212 commands that named the server binary `batlehub` instead of `batlehub-cli`, and four commands that never existed in `incident-response`). **Open:** removing the aliases, in the minor after the one that ships phase 3 (§13): 1.10, since phase 3 ships in 1.9 |
+| 9 | done | PR #280 | The docs pass: every command the published docs show, in both languages, parses with the current CLI and none goes through a deprecated alias (172 alias spellings rewritten, 212 commands that named the server binary `batlehub` instead of `batlehub-cli`, and four commands that never existed in `incident-response`). The aliases are removed: `admin`, `version`, `owners`, `verdicts` and `config`, and the hidden flags (`--csv`, `--out`, `--blocked-only`, `gdpr erase --force`, `registry info`, `auth token revoke`, `package versions <reg> <name>`); `render::deprecated` is gone, and `docs:cli-commands` reports an old spelling as not parsing. The server's hints that named removed commands (`bundle_hint`, the last-owner refusal) name the new ones |
 
 ### 17.1 Where the built thing differs
+
+- **Phase 9: no deprecation window.** §13 and decision 2 kept the old
+  spellings for one minor; they were removed in the same release that ships
+  phase 3 (1.9), before any release carried the aliases, at the maintainer's
+  call. Decision 2's "no script breaks silently" still holds: an old spelling is
+  a usage error (exit 2), not a different command. Two exceptions stay, as §13
+  allowed: the `registry:name@version` coordinate (decision 42), and
+  `--registry` for `--registry-url` on `proxy serve` and `vsx verify`, which
+  the editor extensions pass.
 
 - **Phase 8: the TUI shows owners, it does not edit them.** Adding an owner
   needs a principal and a role typed in, which `owner add` already takes; the

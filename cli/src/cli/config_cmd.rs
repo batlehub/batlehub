@@ -3,28 +3,6 @@ use clap::Subcommand;
 
 use crate::config::ConfigFile;
 
-#[derive(Subcommand)]
-pub enum ConfigCommand {
-    /// Interactive setup wizard
-    Init,
-    /// Print resolved configuration
-    Show {
-        /// Profile to show (defaults to 'default')
-        #[arg(long)]
-        profile: Option<String>,
-    },
-    /// Set a config value in the default profile
-    Set {
-        /// Key: server_url | token | registry
-        key: String,
-        /// Value to set
-        value: String,
-        /// Profile to write to (defaults to 'default')
-        #[arg(long)]
-        profile: Option<String>,
-    },
-}
-
 /// `profile …` (RFC 0040 §4.2): the local file, by the name the server's
 /// configuration (`server config`) does not use.
 #[derive(Subcommand)]
@@ -167,37 +145,6 @@ pub fn run_profile(cmd: ProfileCommand, global_profile: Option<&str>) -> Result<
         }
     }
     Ok(())
-}
-
-/// The deprecated `config …`: warns, then runs `profile …`.
-pub fn run(cmd: ConfigCommand, global_profile: Option<&str>) -> Result<()> {
-    match cmd {
-        ConfigCommand::Init => {
-            crate::render::deprecated("config init", "profile init");
-            run_profile(ProfileCommand::Init, global_profile)
-        }
-        ConfigCommand::Show { profile } => {
-            crate::render::deprecated("config show", "profile show");
-            run_profile(
-                ProfileCommand::Show {
-                    name: profile,
-                    key: None,
-                },
-                global_profile,
-            )
-        }
-        ConfigCommand::Set {
-            key,
-            value,
-            profile,
-        } => {
-            crate::render::deprecated("config set", "profile set");
-            run_profile(
-                ProfileCommand::Set { key, value },
-                profile.as_deref().or(global_profile),
-            )
-        }
-    }
 }
 
 fn interactive_init() -> Result<()> {

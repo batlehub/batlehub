@@ -56,9 +56,6 @@ pub struct ExportArgs {
     /// Where to write the bundle (default `estate.bhub`).
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
-    /// Deprecated: `--output`
-    #[arg(long, hide = true, conflicts_with = "output")]
-    pub out: Option<PathBuf>,
     /// A name for this bundle. Defaults to the plan's digest, which makes
     /// the same plan produce the same id and an import idempotent.
     #[arg(long)]
@@ -102,17 +99,6 @@ pub struct PlanArgs {
     /// Write the plan here instead of standard output.
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
-    /// Deprecated: `--output`
-    #[arg(long, hide = true, conflicts_with = "output")]
-    pub out: Option<PathBuf>,
-}
-
-/// `-o/--output`, or the deprecated `--out` (RFC 0040 §4.2).
-fn output_path(output: Option<PathBuf>, out: Option<PathBuf>) -> Option<PathBuf> {
-    if out.is_some() {
-        crate::render::deprecated("--out", "--output");
-    }
-    output.or(out)
 }
 
 pub async fn run(cmd: MiseCommand, client: &BatleHubClient, json: bool) -> Result<()> {
@@ -367,7 +353,9 @@ fn print_export_report(
 }
 
 async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let out = output_path(args.output.clone(), args.out.clone())
+    let out = args
+        .output
+        .clone()
         .unwrap_or_else(|| PathBuf::from("estate.bhub"));
     use batlehub_core::services::bundle::{BundleEntry, BundleManifest, BUNDLE_VERSION};
     use ed25519_dalek::Signer;
@@ -618,7 +606,7 @@ async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result
 }
 
 async fn run_plan(args: PlanArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let out = output_path(args.output.clone(), args.out.clone());
+    let out = args.output.clone();
     // An unreachable server costs the registry annotation, not the plan: the
     // lock is the bill of materials, and a plan built against no registries
     // reports every host as unmirrored, which is true of a server with none.

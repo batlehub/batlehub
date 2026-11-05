@@ -1,9 +1,8 @@
 """Every `batlehub-cli …` command the published docs show parses with the CLI as built.
 
 Each command is run as `<bin> <args> --help`: clap refuses an unknown
-subcommand or flag before it reaches `--help`, and the `Usage:` line names the
-command path it resolved, so a deprecated alias (`admin …`, `version …`) is
-caught even though it still parses. A command spelled `batlehub …` is the
+subcommand or flag before it reaches `--help`, so a spelling RFC 0040 removed
+(`admin …`, `version …`) is caught as not parsing. A command spelled `batlehub …` is the
 server binary, which has no such subcommand, and is reported as well.
 
 Only code is read — fenced blocks and inline spans that start with the binary —
@@ -28,12 +27,6 @@ TOP = (
 ).split()
 # The pages that show old spellings on purpose, and the trees that are not published.
 SKIP = ("rfc/", "fr/rfc/", "internal/", ".vitepress/")
-# The spellings `render::deprecated` warns about (RFC 0040 §13), until 1.10
-# removes them and they stop parsing at all.
-DEPRECATED = re.compile(
-    r"^Usage: batlehub-cli (admin|version|owners|verdicts|config|registry info|auth token revoke)\b"
-)
-DEPRECATED_FLAGS = {"--blocked-only", "--csv", "--out"}
 COMMAND = re.compile(
     r"\b(batlehub(?:-cli)?) ((?:" + "|".join(map(re.escape, TOP)) + r")(?=[\s`]|$)[^`#\n]*)"
 )
@@ -98,19 +91,11 @@ def main():
                 for args in args_of(raw):
                     shown = " ".join(args)
                     r = subprocess.run([binary, *args, "--help"], capture_output=True, text=True)
-                    usage = next((l for l in r.stdout.splitlines() if l.startswith("Usage:")), "")
                     if r.returncode != 0:
                         error = (r.stderr.strip().splitlines() or ["?"])[0]
                         if "a value is required for" in error and "but none was supplied" in error:
                             continue
                         print(f"{where}: `batlehub-cli {shown}` does not parse: {error}")
-                        problems += 1
-                    elif (
-                        DEPRECATED.match(usage)
-                        or DEPRECATED_FLAGS.intersection(args)
-                        or (args[:2] == ["gdpr", "erase"] and "--force" in args)
-                    ):
-                        print(f"{where}: `batlehub-cli {shown}` is a deprecated spelling (RFC 0040 §13)")
                         problems += 1
     if problems:
         print(f"{problems} documented command(s) do not run as written")

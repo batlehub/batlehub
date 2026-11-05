@@ -1310,10 +1310,11 @@ batlehub-cli gdpr export --user <subject>
 while an open decision names the subject; it is not a way to skip the
 confirmation, which still needs `--yes` in a script.
 
-### Deprecated spellings {#deprecated-spellings}
+### Removed spellings {#removed-spellings}
 
-Every spelling below still runs until 1.10, printing a `warning:` that names
-its replacement. Nothing is hidden from a script that reads its own stderr.
+The grammar of RFC 0040 replaced every spelling below. None of them runs any
+more: each one is refused as a usage error (exit 2), so a script that still
+uses one fails loudly instead of doing something else.
 
 | Before | Now |
 | --- | --- |
@@ -1351,7 +1352,11 @@ its replacement. Nothing is hidden from a script that reads its own stderr.
 | `auth token revoke` | `auth token delete` |
 | `--csv` | `--format csv` |
 | `mise plan/export --out` | `--output` (`-o`) |
-| `proxy serve --registry`, `vsx verify --registry` (a URL) | `--registry-url`, kept as an alias for the editor extensions |
+
+One alias stays: `proxy serve --registry` and `vsx verify --registry` (a URL)
+are still accepted for `--registry-url`, because the editor extensions pass
+them. The `registry:name@version` coordinate is accepted for good, with a
+`warning:` naming the `registry/name@version` form.
 
 Two spellings changed with no alias, because the global `--format` took their
 name: `admin sbom get/export --format` is now `--sbom-format`, and

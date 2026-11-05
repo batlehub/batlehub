@@ -381,15 +381,6 @@ export const sidebar = {
       ],
     },
     {
-      text: "Ready to build",
-      items: [
-        {
-          text: "0040 — CLI grammar and coverage",
-          link: "/rfc/0040-cli-grammar-and-coverage",
-        },
-      ],
-    },
-    {
       text: "Settled",
       items: [
         {
@@ -535,6 +526,10 @@ export const sidebar = {
         {
           text: "0039 — Devfile publish",
           link: "/rfc/0039-devfile-local-mode",
+        },
+        {
+          text: "0040 — CLI grammar and coverage",
+          link: "/rfc/0040-cli-grammar-and-coverage",
         },
       ],
     },

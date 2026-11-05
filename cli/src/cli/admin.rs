@@ -8,22 +8,15 @@ use crate::render::ctx;
 
 use crate::api::{
     admin::{
-        AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
-        CoherenceReportDto, DeleteGrantResponse, EvictionReportDto, ExposureQuery,
-        ExposureResponse, FlagsQuery, FlagsResponse, GrantListResponse, ImportReportDto,
-        MissingQuery, NotificationChannelEntry, NotificationSubscriptionEntry, PutGrantResponse,
-        RegistryHealthEntry, SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
+        AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, CoherenceReportDto,
+        DeleteGrantResponse, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
+        FlagsResponse, GrantListResponse, ImportReportDto, MissingQuery, NotificationChannelEntry,
+        NotificationSubscriptionEntry, PutGrantResponse, RegistryHealthEntry,
+        SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
     },
     version::RetentionReport,
     BatleHubClient,
 };
-
-fn parse_pkg_version(s: &str) -> anyhow::Result<(String, String)> {
-    let (name, version) = s
-        .split_once('@')
-        .ok_or_else(|| anyhow::anyhow!("expected name@version, got: {s}"))?;
-    Ok((name.to_string(), version.to_string()))
-}
 
 #[derive(Subcommand)]
 pub enum FlagsCommand {
@@ -229,38 +222,6 @@ pub enum AdminCommand {
         #[command(subcommand)]
         cmd: NotificationsCommand,
     },
-    /// Bulk yank / unyank / delete versions across a registry
-    Bulk {
-        #[command(subcommand)]
-        cmd: BulkCommand,
-    },
-    /// Mark a package version as deprecated
-    Deprecate {
-        registry: String,
-        name: String,
-        version: String,
-        #[arg(long)]
-        message: Option<String>,
-    },
-    /// Remove deprecation from a package version
-    Undeprecate {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Hide a package version from search / listings (without deleting)
-    Unlist {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Re-list a previously unlisted package version
-    Relist {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Simulate whether an identity would be allowed to access a registry resource
     AccessCheck {
         /// Set by `authz check` from its coordinate; the alias reads `-r`.
         #[arg(skip)]
@@ -547,28 +508,6 @@ pub enum NotificationsCommand {
     Delete { id: String },
 }
 
-#[derive(Subcommand)]
-pub enum BulkCommand {
-    /// Yank multiple versions (format: name@version)
-    Yank {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-    /// Unyank multiple versions (format: name@version)
-    Unyank {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-    /// Delete multiple versions (format: name@version)
-    Delete {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-}
-
 /// RFC 0002 §13's exposure report.
 async fn handle_exposure(q: ExposureQuery, client: &BatleHubClient, json: bool) -> Result<()> {
     let resp = client.exposure(q).await?;
@@ -832,45 +771,6 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         AdminCommand::Users { cmd } => handle_users(cmd, client, json).await?,
         AdminCommand::Sbom { cmd } => handle_sbom(cmd, client, json).await?,
         AdminCommand::Notifications { cmd } => handle_notifications(cmd, client, json).await?,
-        AdminCommand::Bulk { cmd } => handle_bulk(cmd, client, json).await?,
-        AdminCommand::Deprecate {
-            registry,
-            name,
-            version,
-            message,
-        } => {
-            client
-                .deprecate_package(&registry, &name, &version, message.as_deref())
-                .await?;
-            println!("Deprecated {registry}/{name}@{version}");
-        }
-        AdminCommand::Undeprecate {
-            registry,
-            name,
-            version,
-        } => {
-            client
-                .undeprecate_package(&registry, &name, &version)
-                .await?;
-            println!("Undeprecated {registry}/{name}@{version}");
-        }
-        AdminCommand::Unlist {
-            registry,
-            name,
-            version,
-        } => {
-            confirm("unlist", &[format!("{registry}/{name}@{version}")], None)?;
-            client.unlist_package(&registry, &name, &version).await?;
-            println!("Unlisted {registry}/{name}@{version}");
-        }
-        AdminCommand::Relist {
-            registry,
-            name,
-            version,
-        } => {
-            client.relist_package(&registry, &name, &version).await?;
-            println!("Relisted {registry}/{name}@{version}");
-        }
         AdminCommand::AccessCheck {
             registry,
             package,
@@ -1783,64 +1683,6 @@ async fn handle_notifications(
             client.delete_notification_subscription(&id).await?;
             println!("Deleted subscription {id}");
         }
-    }
-    Ok(())
-}
-
-async fn handle_bulk(cmd: BulkCommand, client: &BatleHubClient, json: bool) -> Result<()> {
-    match cmd {
-        BulkCommand::Yank { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let objects: Vec<String> = packages.iter().map(|p| format!("{registry}/{p}")).collect();
-            confirm("yank", &objects, None)?;
-            let resp = client.bulk_yank(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-        BulkCommand::Unyank { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let resp = client.bulk_unyank(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-        BulkCommand::Delete { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let objects: Vec<String> = packages.iter().map(|p| format!("{registry}/{p}")).collect();
-            confirm("delete", &objects, None)?;
-            let resp = client.bulk_delete(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-    }
-    Ok(())
-}
-
-fn print_bulk_result(json: bool, resp: &BulkPackageResult) -> Result<()> {
-    if json {
-        crate::render::data(resp)?;
-    } else {
-        println!(
-            "processed={} succeeded={} failed={}",
-            resp.processed,
-            resp.succeeded,
-            resp.failed.len()
-        );
-        for f in &resp.failed {
-            println!("  FAILED {}@{}: {}", f.name, f.version, f.error);
-        }
-    }
-    if !resp.failed.is_empty() {
-        return Err(CliError::new(
-            ExitCode::Partial,
-            format!("{} of {} item(s) failed", resp.failed.len(), resp.processed),
-        )
-        .into());
     }
     Ok(())
 }
