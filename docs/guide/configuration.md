@@ -547,7 +547,7 @@ role_claim = "groups"                  # default: "role"
 | `client_id` | string | — | OAuth2 client identifier |
 | `client_secret` | string | — | Required for confidential clients; optional for public clients |
 | `redirect_uri` | string | — | When set, enables browser SSO at `/api/v1/auth/oidc/callback` (default provider) or `/api/v1/auth/oidc/{name}/callback` (named providers). Must be registered with the OIDC provider. |
-| `frontend_url` | string | `""` | After a successful SSO callback the browser is redirected to `{frontend_url}/#oidc_access_token=...`. The tokens ride in the URL **fragment**, so they never reach the server hosting the SPA. Leave empty in production (same origin). Set to `http://localhost:5173` when running the Vite dev server separately. |
+| `frontend_url` | string | `""` | After a successful SSO callback the browser is redirected to `{frontend_url}/#oidc_access_token=...`. The tokens ride in the URL **fragment**, so they never reach the server hosting the SPA. A sign-in started by `batlehub-cli auth login` goes back to the CLI's `http://127.0.0.1:<port>/callback` instead, and this is the only other target the server accepts. Leave empty in production (same origin). Set to `http://localhost:5173` when running the Vite dev server separately. |
 | `scopes` | string[] | `["openid","profile","email"]` | OAuth2 scopes to request |
 | `audiences` | string[] | `[client_id]` | Values the token's `aud` claim is accepted for. Set explicitly when the provider issues tokens for a separate API audience (Auth0 `audience`, an Okta authorization server). Never unchecked. |
 | `user_id_claim` | string | `"sub"` | JWT claim used as the user identifier. `"preferred_username"` gives human-readable names from Authentik/Keycloak. |
@@ -563,7 +563,7 @@ role_claim = "groups"                  # default: "role"
 **A personal access token carries a snapshot of its creator's groups.** The groups are chosen at creation, capped to the ones the creator holds — asking for one they do not is `403` — and never re-resolved afterwards, because a token has no session to re-resolve from. Two consequences for an operator:
 
 - **A token's expiry is an access-control lifetime, not hygiene.** Group membership on a token does not follow the IDP, so a departed member keeps whatever the token carries until it expires or is revoked. Expiry is mandatory and capped at 90 days, and **offboarding should revoke tokens** rather than rely on the IDP change reaching them. For interactive users, an OIDC session re-resolves groups on every refresh and stays the recommended posture; tokens are for automation.
-- **A token names the group the provider actually emits.** That is the prefixed form for anything not renamed by `role_mappings` above — `k8s:system:serviceaccounts:digital` from a provider named `k8s`, not `system:serviceaccounts:digital`. `batlehub auth whoami` prints them as resolved, which is the reliable way to spell one; the console offers them as buttons for the same reason.
+- **A token names the group the provider actually emits.** That is the prefixed form for anything not renamed by `role_mappings` above — `k8s:system:serviceaccounts:digital` from a provider named `k8s`, not `system:serviceaccounts:digital`. `batlehub-cli auth whoami` prints them as resolved, which is the reliable way to spell one; the console offers them as buttons for the same reason.
 
 Tokens minted before this existed carry no groups and are unchanged by it: they see `public` and `internal` and nothing granted to a team, exactly as they did. A user who needs a token to reach team packages creates a new one.
 
@@ -1547,7 +1547,7 @@ BatleHub stores physical artifact bytes at a content-addressed key (`blob/{sha25
 
 > Every archive (`tarball/{ref}`, `zipball/{ref}`) and raw file is resolved to a commit before it is fetched, and cached under that commit — `main` today and `main` tomorrow are two entries. Every forge response carries `X-BatleHub-Ref-Kind` (`commit`, `tag` or `branch`), `X-BatleHub-Resolved-Commit`, and `X-BatleHub-Ref-Previous-Commit` when the ref moved. A forge registry with no `[registries.upstream_auth]` raises the `forge.anonymous-upstream` warning: anonymous GitHub allows 60 API requests an hour, and ref resolution spends one or two per new ref.
 >
-> With `[registries.security]` these three facts ride the version's verdict, so a warned branch answers `X-BatleHub-Verdict: warned` and `batlehub why` explains it. Without it there is no verdict to carry them: a `deny` is a plain `403` naming the code, and a `warn` is the headers above.
+> With `[registries.security]` these three facts ride the version's verdict, so a warned branch answers `X-BatleHub-Verdict: warned` and `batlehub-cli why` explains it. Without it there is no verdict to carry them: a `deny` is a plain `403` naming the code, and a `warn` is the headers above.
 
 **`[registries.raw]` — Raw file serving (forge kinds only; RFC 0019):** {#registries-raw}
 
@@ -1641,7 +1641,7 @@ on_webhook    = true
 | `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
 | `deny_install_hooks` | string | `"warn"` | What an install hook (npm `preinstall`, a Python `setup.py`) is: `deny`, `warn` or `ignore`. Read by the archive scanners of phase 3. |
 | `scanner_error` | string | `"quarantine"` | A scanner that cannot answer after `[worker].max_attempts`: `quarantine` holds the version (`SCANNER_ERROR`, time-bound), `warn` serves it warned, `ignore` drops the finding. |
-| `pullers_window_days` | u32 | `30` | When a rescan moves a *served* version to `denied`, the `verdict_changed` notification names every identity that pulled it inside this window, read from the access log (RFC 0018 decision 23); it is also the default window of `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` and `batlehub verdicts pullers`. Anonymous pulls are kept under `ip:<addr>`. |
+| `pullers_window_days` | u32 | `30` | When a rescan moves a *served* version to `denied`, the `verdict_changed` notification names every identity that pulled it inside this window, read from the access log (RFC 0018 decision 23); it is also the default window of `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` and `batlehub-cli verdict pullers`. Anonymous pulls are kept under `ip:<addr>`. |
 | `rescan.interval_secs` | u64 | `0` | `> 0`: the rescan scheduler — one per estate, elected with a PostgreSQL advisory lock — queues a `Rescan` (below `FirstSeen` and `Webhook`, above `Backfill`) for every verdict of this registry whose last scan is older than the interval. A verdict that flips from served to `denied` raises the alert above; a hold that lifts raises `artifact_released` to the identities that were refused it. `0` never rescans on a clock; `POST …/rescan` and the `security.rescan` webhook still do. |
 
 > **Where the rules go.** `min_age_secs` *replaces* a `release_age_gate` rule
@@ -1655,7 +1655,7 @@ on_webhook    = true
 > stay in the chain; they judge the request, not the artifact.
 >
 > **Who sees why.** A refused download is a plain `403` for everyone; the
-> reason codes and the `batlehub why` hint in the body need `quarantine:read`
+> reason codes and the `batlehub-cli why` hint in the body need `quarantine:read`
 > (granted to `user` and `admin` by default) and the findings behind them
 > need `findings:read` (`admin`). An operator override is a `GateExemption`
 > on the gate `security_verdict` (`gates:exempt`): it turns a hold into
@@ -2349,7 +2349,7 @@ access class deliberately.
 closes the window that ended one window ago: its rows are hashed, the digest is
 chained to the previous record and signed. Pseudonymisation, retention, a purge
 and an erasure each record what they changed in a sealed window as a signed
-`amend` or `expire`, so `batlehub-cli admin audit verify` can tell the
+`amend` or `expire`, so `batlehub-cli audit verify` can tell the
 lifecycle's changes from anyone else's. Pair sealing with `[logging] format =
 "json"`: every record is also an `audit_seal` line, and the copy your SIEM holds
 is what detects a truncated tail ([SIEM integration](../operations/siem.md)).
@@ -2566,7 +2566,7 @@ bounds the simultaneous upstream requests. A proxy-only process with the
 section enabled logs a warning and raises `upstream-audit.no-worker-role`.
 On a registry with [`[registries.security]`](#registries-security) a
 confirmed disappearance is also an `UNPUBLISHED_UPSTREAM` finding on the
-version's verdict — recorded and visible in `batlehub why`, never a hold
+version's verdict — recorded and visible in `batlehub-cli why`, never a hold
 under `"audit"`.
 
 **Metrics.** `batlehub_upstream_missing_total` and
@@ -2650,7 +2650,7 @@ share the verification scheme.
   through it, which is the only way to prove a channel's URL and secret before an
   incident does.
 
-The same three are `batlehub-cli admin notifications channels|list|delete`; see
+The same three are `batlehub-cli notification channels|list|delete`; see
 [the CLI reference](/use/cli#notifications). Channels themselves are config, so
 adding one is a config change and a reload, not an API call.
 
@@ -3037,7 +3037,7 @@ publish into any namespace on the target. Check what it may do before the
 first run:
 
 ```bash
-batlehub authz explain vsx-local \
+batlehub-cli authz explain vsx-local \
   --subject user:svc-release-import \
   --action releases:publish \
   --package batlehub.batlehub-vsx
@@ -3046,8 +3046,8 @@ batlehub authz explain vsx-local \
 **Run one now**, whatever the interval says, and import a pre-release by name:
 
 ```bash
-batlehub-cli admin import vsx-local
-batlehub-cli admin import vsx-local --tag v1.1.0-rc.1
+batlehub-cli import vsx-local
+batlehub-cli import vsx-local --tag v1.1.0-rc.1
 ```
 
 The same over HTTP, for a pipeline with no CLI:

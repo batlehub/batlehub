@@ -25,6 +25,8 @@ use crate::api::{
 
 #[derive(Subcommand)]
 pub enum AuthzCommand {
+    /// Simulate whether an identity may access a version: `registry/name@version` [admin]
+    Check(super::groups::AccessCheckArgs),
     /// Resolve what a subject may do, and say which tier granted each verb
     Explain {
         /// Registry name
@@ -73,15 +75,18 @@ pub async fn run(cmd: AuthzCommand, client: &BatleHubClient, json: bool) -> Resu
                 })
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&answer)?);
+                crate::render::data(&answer)?;
             } else {
                 print_explain(&answer, &subject, &action);
             }
         }
+        AuthzCommand::Check(args) => {
+            return super::groups::run(super::groups::Group::AccessCheck(args), client, json).await
+        }
         AuthzCommand::Shadow { limit, detail } => {
             let report = client.authz_shadow(limit).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                crate::render::data(&report)?;
             } else {
                 print_shadow(&report, detail);
             }

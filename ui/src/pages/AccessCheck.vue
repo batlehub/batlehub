@@ -60,11 +60,16 @@ async function check() {
   error.value = null;
   result.value = null;
   try {
-    const { data, error: apiErr } = await checkAccess({
+    const {
+      data,
+      error: apiErr,
+      response,
+    } = await checkAccess({
       query: {
         registry: registry.value,
         name: name.value,
-        version: version.value,
+        // Empty asks which version a client would receive (RFC 0040 §4.8).
+        version: version.value || null,
         artifact: artifact.value || null,
       },
     });
@@ -73,7 +78,15 @@ async function check() {
       // to the operator asking why a pull was refused — the one page whose
       // whole job is to answer that question. `extractMessage` reads the
       // object's `message`/`error` field, which is where the answer is.
-      error.value = apiErr ? extractMessage(apiErr) : t("accessCheck.noResponse");
+      // A 404 is one answer for "no such package" and "one you may not see"
+      // (RFC 0040 T1), so it is said as one sentence, not the raw body.
+      if (!apiErr) {
+        error.value = t("accessCheck.noResponse");
+      } else if (response?.status === 404) {
+        error.value = t("accessCheck.notFound");
+      } else {
+        error.value = extractMessage(apiErr);
+      }
     } else {
       result.value = data;
     }
@@ -83,6 +96,26 @@ async function check() {
     loading.value = false;
   }
 }
+
+/** The headline's three answers, each with its word, matrix and hue. */
+const HEADLINE = {
+  pullable: { variant: "known", state: "cached", key: "accessCheck.pullable" },
+  waiting: { variant: "copper", state: "held", key: "accessCheck.waiting" },
+  refused: { variant: "destructive", state: "blocked", key: "accessCheck.refused" },
+} as const;
+const headline = computed(() => (result.value ? HEADLINE[result.value.headline] : null));
+const nextStep = computed(
+  () => result.value?.causes.find((c) => c.state === "refuse" || c.state === "wait")?.next ?? null,
+);
+const STATE_ICON: Record<string, string> = { pass: "✅", warn: "⚠️", wait: "⏳", refuse: "⛔" };
+/** Spelled out so the catalogue check can see every key. */
+const STATE_LABEL: Record<string, string> = {
+  pass: "accessCheck.state.pass",
+  warn: "accessCheck.state.warn",
+  wait: "accessCheck.state.wait",
+  refuse: "accessCheck.state.refuse",
+};
+const formatTime = (iso: string) => new Date(iso).toLocaleString();
 </script>
 
 <template>
@@ -159,17 +192,40 @@ async function check() {
                reader. Inside, the badge is the frame, the matrix is the
                pattern, the word is the word, and the hue Resolution sets on
                itself is the one its variant already carries. -->
-            <Badge :variant="result.can_access ? 'known' : 'destructive'">
-              <Resolution
-                :state="result.can_access ? 'cached' : 'blocked'"
-                :label="result.can_access ? t('accessCheck.allowed') : t('accessCheck.denied')"
-                class="gap-2"
-              />
+            <Badge v-if="headline" :variant="headline.variant">
+              <Resolution :state="headline.state" :label="t(headline.key)" class="gap-2" />
             </Badge>
-            <span v-if="!result.can_access" class="text-sm text-muted-foreground">
-              {{ result.reason ?? t("accessCheck.noReasonGiven") }}
+            <span class="text-sm text-muted-foreground">
+              {{ result.package.version }}
+              <template v-if="result.headline === 'waiting' && result.until">
+                — {{ t("accessCheck.pullableFrom", { time: formatTime(result.until) }) }}
+              </template>
+              <template v-else-if="result.headline === 'waiting'">
+                — {{ t("accessCheck.whenScanned") }}
+              </template>
             </span>
           </div>
+          <p v-if="result.resolved_version" class="text-sm">
+            {{ t("accessCheck.resolvesTo", { version: result.resolved_version }) }}
+          </p>
+          <!-- In the server's order, which is also the reading and focus
+               order; every icon has its state word beside it (RFC 0040 §11). -->
+          <ol class="space-y-1 text-sm">
+            <li v-for="(cause, i) in result.causes" :key="i" class="flex gap-2">
+              <span aria-hidden="true">{{ STATE_ICON[cause.state] ?? "•" }}</span>
+              <span class="font-mono w-14 shrink-0">{{
+                STATE_LABEL[cause.state] ? t(STATE_LABEL[cause.state]) : cause.state
+              }}</span>
+              <span class="font-mono w-20 shrink-0 text-muted-foreground">{{ cause.kind }}</span>
+              <span class="break-words">
+                <code v-if="cause.reason_code">{{ cause.reason_code }}</code>
+                {{ cause.detail }}
+              </span>
+            </li>
+          </ol>
+          <p v-if="nextStep" class="text-sm select-text">
+            <span class="font-medium">{{ t("accessCheck.next") }}</span> {{ nextStep }}
+          </p>
           <p v-if="result.proxy_url" class="text-xs text-muted-foreground break-all">
             URL:
             <a

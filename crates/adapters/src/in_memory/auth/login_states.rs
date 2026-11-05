@@ -71,6 +71,7 @@ mod tests {
             code_verifier: "verifier".to_owned(),
             nonce: "nonce".to_owned(),
             spa_state: "spa".to_owned(),
+            return_to: None,
         }
     }
 

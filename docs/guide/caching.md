@@ -70,7 +70,7 @@ under `…/{tag}/filename/{file}` when fetched by name and `…/unknown/{id}` wh
 fetched by id, and a forge archive is filed under the commit its ref resolved
 to, not the branch that was asked for.
 
-`batlehub mise export` reads all three
+`batlehub-cli mise export` reads all three
 ([RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate) §14.1), which is how an
 air-gap bundle names keys the disconnected instance will actually look under.
 

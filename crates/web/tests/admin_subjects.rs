@@ -26,6 +26,7 @@ use batlehub_core::{
 /// One allowed download by `user_id`, so the access log has a subject in it.
 async fn record_pull(repo: &Arc<InMemoryRepo>, user_id: &str) {
     repo.record_access(AccessEvent {
+        reason_code: None,
         id: uuid::Uuid::new_v4(),
         timestamp: Utc::now(),
         user_id: Some(user_id.to_owned()),

@@ -850,6 +850,47 @@ impl RegistryKind {
         }
     }
 
+    /// The lifecycle verbs this kind's owner may run through the generic
+    /// lifecycle endpoint (RFC 0040 §6.4, decision 34): exactly what the
+    /// kind's native owner route grants, plus the undo of each. `delete` and
+    /// `pin` are never here — they stay `releases:delete` / instance-tier for
+    /// everyone. Exhaustive, so a new kind does not inherit verbs by default.
+    pub fn owner_verbs(&self) -> &'static [LifecycleVerb] {
+        use LifecycleVerb::{Unyank, Yank};
+        match self {
+            // The native routes that call `LocalRegistryService::yank/unyank`
+            // under the ownership check: cargo, composer, rubygems, terraform,
+            // and NuGet's unlist, which is a yank.
+            Self::Cargo | Self::Composer | Self::Rubygems | Self::Terraform | Self::Nuget => {
+                &[Yank, Unyank]
+            }
+            Self::Github
+            | Self::Forgejo
+            | Self::Gitlab
+            | Self::Npm
+            | Self::Openvsx
+            | Self::Goproxy
+            | Self::Pypi
+            | Self::Conda
+            | Self::VscodeMarketplace
+            | Self::Maven
+            | Self::Deb
+            | Self::Rpm
+            | Self::Pacman
+            | Self::Apk
+            | Self::Jetbrains
+            | Self::JetbrainsMarketplace
+            | Self::Generic
+            | Self::Nodedist
+            | Self::Sdkman
+            | Self::Rustup
+            | Self::Galaxy
+            | Self::Nix
+            | Self::Devfile
+            | Self::Helm => &[],
+        }
+    }
+
     /// Whether "fetch this version" has a single meaning for this kind
     /// (RFC 0007-bis §4.4).
     ///
@@ -1322,6 +1363,15 @@ impl std::fmt::Display for RegistryKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+/// A verb an owner may be granted on the generic lifecycle endpoint
+/// (RFC 0040 §6.4). Only the ones some kind grants exist; `delete` and `pin`
+/// never will.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleVerb {
+    Yank,
+    Unyank,
 }
 
 #[cfg(test)]

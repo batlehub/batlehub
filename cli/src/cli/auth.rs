@@ -6,11 +6,15 @@ use clap::{Args, Subcommand};
 use comfy_table::Table;
 
 use crate::api::{
-    auth::{parse_oidc_paste, CreateTokenRequest, CreateTokenResponse, TokenListItem},
+    auth::{
+        extract_param, parse_oidc_paste, CreateTokenRequest, CreateTokenResponse, OidcPaste,
+        TokenListItem,
+    },
     BatleHubClient,
 };
 use crate::config::ConfigFile;
 use crate::contract::{self, ContractFile, Entry, Kind};
+use crate::exit::{CliError, ExitCode};
 
 #[derive(Subcommand)]
 pub enum AuthCommand {
@@ -40,6 +44,10 @@ pub enum AuthCommand {
         /// Config profile to save credentials into (defaults to 'default')
         #[arg(long)]
         profile: Option<String>,
+        /// Print the sign-in URL and read the URL you land on from stdin,
+        /// instead of listening on 127.0.0.1 for the browser (SSH, the CDE)
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Refresh if needed, then update the credential contract file that
     /// non-CLI consumers read
@@ -140,8 +148,8 @@ pub enum TokenCommand {
         #[arg(long)]
         all_groups: bool,
     },
-    /// Revoke a token by its UUID
-    Revoke {
+    /// Delete (revoke) a token by its UUID (destructive: asks first)
+    Delete {
         /// Token UUID
         id: uuid::Uuid,
     },
@@ -168,7 +176,7 @@ pub async fn run(
         AuthCommand::Whoami => {
             let me = client.whoami().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&me)?);
+                crate::render::data(&me)?;
             } else {
                 let mut table = Table::new();
                 table.add_row(["User ID", me.user_id.as_deref().unwrap_or("(anonymous)")]);
@@ -191,6 +199,7 @@ pub async fn run(
             provider,
             kubernetes_token_path,
             profile,
+            no_browser,
         } => {
             handle_auth_login(
                 client,
@@ -198,6 +207,7 @@ pub async fn run(
                 kubernetes_token_path,
                 profile,
                 global_profile,
+                no_browser,
             )
             .await?
         }
@@ -325,7 +335,12 @@ async fn handle_print_token(
             );
         }
     }
-    match args.output.as_str() {
+    // `--format json` is the global spelling of `--output json` (RFC 0040 §4.3).
+    let output = match crate::render::ctx().format {
+        crate::render::Format::Json => "json",
+        _ => args.output.as_str(),
+    };
+    match output {
         "raw" => println!("{token}"),
         "json" => println!(
             "{}",
@@ -364,7 +379,7 @@ async fn handle_write_token_file(
             match r.token {
                 Some(_) => {}
                 None => eprintln!(
-                    "Warning: that path yields no credential right now ({}).                      The entry is written anyway; `auth status` re-checks it.",
+                    "warning: that path yields no credential right now ({}).                      The entry is written anyway; `auth status` re-checks it.",
                     r.detail.as_deref().unwrap_or("no reason given")
                 ),
             }
@@ -412,7 +427,7 @@ fn handle_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        crate::render::data(&rows)?;
         return Ok(());
     }
     if rows.is_empty() {
@@ -463,7 +478,7 @@ async fn handle_token_command(
         TokenCommand::List => {
             let tokens = client.list_tokens().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&tokens)?);
+                crate::render::data(&tokens)?;
             } else {
                 print_tokens_table(&tokens);
             }
@@ -489,12 +504,13 @@ async fn handle_token_command(
                 })
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_created_token(&name, &role, &resp);
             }
         }
-        TokenCommand::Revoke { id } => {
+        TokenCommand::Delete { id } => {
+            crate::confirm::confirm("revoke", &[format!("token {id}")], None)?;
             client.revoke_token(id).await?;
             println!("Revoked token {id}");
         }
@@ -549,8 +565,13 @@ async fn handle_auth_login(
     kubernetes_token_path: Option<String>,
     profile: Option<String>,
     global_profile: Option<&str>,
+    no_browser: bool,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
     let mut cfg = ConfigFile::load()?;
 
     if let Some(k8s_path) = kubernetes_token_path {
@@ -578,7 +599,185 @@ async fn handle_auth_login(
     }
 
     let csrf = uuid::Uuid::new_v4().to_string();
-    let login_url = client.oidc_login_url(&csrf, provider.as_deref()).await?;
+    let paste = if no_browser {
+        paste_login(client, &csrf, provider.as_deref()).await?
+    } else {
+        loopback_login(client, &csrf, provider.as_deref()).await?
+    };
+
+    let entry = match target_profile {
+        Some(n) => cfg.profiles.entry(n.to_string()).or_default(),
+        None => &mut cfg.default,
+    };
+    let access_token = paste.access_token;
+    entry.token = Some(access_token.clone());
+    entry.oidc_refresh_token = paste.refresh_token;
+    entry.oidc_expires_at = paste.expires_at;
+    // Recorded, because `resolve_token` sends it with every refresh. Without it
+    // the server falls back to `flows.first()`, so on a deployment with more
+    // than one provider the refresh token goes to the wrong token endpoint,
+    // comes back `400`, and the CLI keeps presenting an expired access token.
+    // The server's own echo wins over `--provider`: it names the flow that
+    // actually issued this token.
+    entry.oidc_provider = paste.provider.or_else(|| provider.clone());
+    entry.kubernetes_token_path = None;
+    cfg.save()?;
+
+    println!(
+        "Logged in. Token saved to profile '{}'.",
+        target_profile.unwrap_or("default")
+    );
+    println!("  {}", mask_token(&access_token));
+    Ok(())
+}
+
+/// How long `auth login` waits for the browser (RFC 0040 §7.3).
+const LOOPBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// RFC 0040 §4.9: listen on `127.0.0.1:<free port>`, send the browser to the
+/// server's sign-in with `return_to` naming the listener, and take the one
+/// callback that comes back — checked against `csrf`, which only this process
+/// knows (T6).
+async fn loopback_login(
+    client: &BatleHubClient,
+    csrf: &str,
+    provider: Option<&str>,
+) -> Result<OidcPaste> {
+    let unreachable = |what: String| {
+        CliError::new(ExitCode::Failure, what)
+            .hint("use `auth login --no-browser` to paste the URL instead")
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| unreachable(format!("cannot listen on 127.0.0.1: {e}")))?;
+    let return_to = format!(
+        "http://127.0.0.1:{}/callback",
+        listener.local_addr()?.port()
+    );
+    let login_url = client
+        .oidc_login_url(csrf, provider, Some(&return_to))
+        .await?;
+
+    if !open_browser(&login_url) {
+        crate::render::warn("could not open a browser; open the URL below yourself");
+    }
+    eprintln!("Sign in in your browser; waiting up to 5 minutes for it.\n\n  {login_url}\n");
+
+    let (mut stream, query) = tokio::time::timeout(LOOPBACK_TIMEOUT, await_callback(&listener))
+        .await
+        .map_err(|_| unreachable("no sign-in reached the CLI within 5 minutes".to_owned()))??;
+    drop(listener);
+    let outcome = check_callback(&query, csrf);
+    let page = match &outcome {
+        Ok(_) => "Signed in. You can close this tab and return to the terminal.",
+        Err(_) => "Sign-in failed. The terminal says why.",
+    };
+    let _ = respond(&mut stream, "200 OK", page).await;
+    Ok(outcome?)
+}
+
+/// The query of the first request for `/callback`. Any other path is a 404 and
+/// the wait goes on, so a browser's favicon probe does not end it.
+async fn await_callback(
+    listener: &tokio::net::TcpListener,
+) -> Result<(tokio::net::TcpStream, String)> {
+    use tokio::io::AsyncReadExt;
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        // A request head: tokens are a few KiB, and nothing past the head is read.
+        let mut buf = vec![0u8; 32 * 1024];
+        let mut len = 0;
+        while len < buf.len() && !buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf[len..]).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => len += n,
+            }
+        }
+        let head = String::from_utf8_lossy(&buf[..len]);
+        let target = head
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("GET "))
+            .and_then(|r| r.split(' ').next())
+            .unwrap_or("");
+        match target.split_once('?') {
+            Some(("/callback", query)) => return Ok((stream, query.to_owned())),
+            _ if target == "/callback" => return Ok((stream, String::new())),
+            _ => {
+                let _ = respond(&mut stream, "404 Not Found", "Not found.").await;
+            }
+        }
+    }
+}
+
+/// The tokens a callback carries, if it belongs to this login.
+fn check_callback(query: &str, csrf: &str) -> Result<OidcPaste, CliError> {
+    if let Some(e) = extract_param(query, "oidc_error") {
+        return Err(CliError::new(
+            ExitCode::Failure,
+            format!("sign-in failed: {e}"),
+        ));
+    }
+    if !query.contains("oidc_access_token=") {
+        return Err(CliError::new(
+            ExitCode::Failure,
+            "the callback carried no token",
+        ));
+    }
+    let paste = parse_oidc_paste(query);
+    if paste.state.as_deref() != Some(csrf) {
+        return Err(CliError::new(
+            ExitCode::Failure,
+            "the callback does not belong to the sign-in this CLI started; nothing was saved",
+        )
+        .hint("run `auth login` again"));
+    }
+    Ok(paste)
+}
+
+async fn respond(stream: &mut tokio::net::TcpStream, status: &str, text: &str) -> io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let body = format!("<!doctype html><meta charset=utf-8><title>BatleHub</title><p>{text}</p>");
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
+         Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body.as_bytes()).await?;
+    stream.shutdown().await
+}
+
+/// `$BROWSER` when set (the convention `xdg-open` and Python's `webbrowser`
+/// share), else the platform's opener. `false` when nothing could be started.
+fn open_browser(url: &str) -> bool {
+    use std::process::{Command, Stdio};
+    let mut cmd = match std::env::var("BROWSER").ok().filter(|b| !b.is_empty()) {
+        Some(b) => Command::new(b.split(':').next().unwrap_or(&b)),
+        None if cfg!(target_os = "macos") => Command::new("open"),
+        // Not `cmd /C start`: cmd.exe would split the URL at its `&`s.
+        None if cfg!(windows) => {
+            let mut c = Command::new("rundll32");
+            c.arg("url.dll,FileProtocolHandler");
+            c
+        }
+        None => Command::new("xdg-open"),
+    };
+    cmd.arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// `--no-browser`: print the URL, read back the one the browser lands on.
+async fn paste_login(
+    client: &BatleHubClient,
+    csrf: &str,
+    provider: Option<&str>,
+) -> Result<OidcPaste> {
+    let login_url = client.oidc_login_url(csrf, provider, None).await?;
 
     println!("Open this URL in your browser:");
     println!();
@@ -613,35 +812,11 @@ async fn handle_auth_login(
              Run `auth login` again and paste the URL it sends you to."
         ),
         None => eprintln!(
-            "Warning: pasted a bare token, so this sign-in could not be matched \
+            "warning: pasted a bare token, so this sign-in could not be matched \
              to the one just started. Paste the full URL to have it checked."
         ),
     }
-
-    let entry = match target_profile {
-        Some(n) => cfg.profiles.entry(n.to_string()).or_default(),
-        None => &mut cfg.default,
-    };
-    let access_token = paste.access_token;
-    entry.token = Some(access_token.clone());
-    entry.oidc_refresh_token = paste.refresh_token;
-    entry.oidc_expires_at = paste.expires_at;
-    // Recorded, because `resolve_token` sends it with every refresh. Without it
-    // the server falls back to `flows.first()`, so on a deployment with more
-    // than one provider the refresh token goes to the wrong token endpoint,
-    // comes back `400`, and the CLI keeps presenting an expired access token.
-    // The server's own echo wins over `--provider`: it names the flow that
-    // actually issued this token.
-    entry.oidc_provider = paste.provider.or_else(|| provider.clone());
-    entry.kubernetes_token_path = None;
-    cfg.save()?;
-
-    println!(
-        "Logged in. Token saved to profile '{}'.",
-        target_profile.unwrap_or("default")
-    );
-    println!("  {}", mask_token(&access_token));
-    Ok(())
+    Ok(paste)
 }
 
 /// RFC 0011 §4.1.3's `auth logout`.
@@ -662,7 +837,11 @@ fn handle_auth_logout(
     keep_contract: bool,
     global_profile: Option<&str>,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
 
     // ── the profile store ───────────────────────────────────────────────────
     let mut cfg = ConfigFile::load()?;
@@ -713,7 +892,7 @@ fn handle_auth_logout(
             // the profile.
             Err(e) => {
                 eprintln!(
-                    "Warning: left {} alone — it is not a usable contract file: {e}",
+                    "warning: left {} alone — it is not a usable contract file: {e}",
                     path.display()
                 );
                 false
@@ -742,7 +921,11 @@ async fn handle_auth_refresh(
     profile: Option<String>,
     global_profile: Option<&str>,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
     let mut cfg = ConfigFile::load()?;
 
     let refresh_token = {

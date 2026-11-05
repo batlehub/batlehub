@@ -6,7 +6,7 @@
 # un plafond, une phrase que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-config.md
-sourceHash: de192053b412ad03
+sourceHash: 0384d439bf45e5ca
 ---
 
 # Configuration du serveur
@@ -235,7 +235,7 @@ admin = ["*"]
 Tout registre qui a une notion de *paquet comme chose à propos de laquelle on
 lit* porte un README, et la plupart en portent un différent par version.
 BatleHub le stocke indexé par `(registre, nom, version)` et le rend — nettoyé,
-côté serveur — sur la page du paquet et par `batlehub package readme`.
+côté serveur — sur la page du paquet et par `batlehub-cli package readme`.
 
 **Absent veut dire actif.** Pour les types de registre dont le README voyage dans
 les métadonnées, le texte est un champ d'un document que le proxy récupère et

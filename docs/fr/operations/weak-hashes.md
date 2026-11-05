@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/weak-hashes.md
-sourceHash: 88cd8d1e8c89a9aa
+sourceHash: b8c2a79893dfb335
 ---
 
 # MD5 et SHA-1
@@ -49,6 +49,7 @@ ont pas survécu.
 | 8 | `core/services/listing_synthesis.rs` — listings composés | SHA-1 | Imposé par le format imité |
 | 9 | `web/…/proxy/maven/proxy.rs` — fichiers `.md5`/`.sha1` | MD5, SHA-1 | L'algorithme *est* l'extension du fichier |
 | 10 | `adapters/repo/apk.rs` — le champ `C:` de l'index | SHA-1 | Imposé par apk-tools, et vérifié à l'installation |
+| 11 | `cli/src/api/publish.rs` — `with_maven_checksums` | MD5, SHA-1 | Les fichiers annexes de l'entrée 9, téléversés par `batlehub-cli publish` |
 
 Les entrées 4, 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
 est en gras parce que c'est un choix de compatibilité plutôt qu'une exigence, et
@@ -216,6 +217,15 @@ Deux raisons rendent ce choix sûr, les mêmes que pour les sidecars Maven :
 Résolvez-le dans le scanner, jamais dans le code : un « correctif » ici produit
 un dépôt qu'aucun apk ne peut installer.
 
+## 11. La publication Maven du CLI {#cli-maven-publish}
+
+`batlehub-cli publish app.jar --pom pom.xml` téléverse chaque fichier avec son
+`.sha1` et son `.md5`, comme le fait `mvn deploy` : ce sont les fichiers annexes
+de l'entrée 9, écrits par l'éditeur au lieu d'être calculés par le serveur, et un
+résolveur Maven configuré par défaut demande exactement ces deux noms
+(`SHA-1,MD5`). Le CLI ne s'y fie pour rien ; `maven.sh` vérifie qu'un vrai `mvn`
+résout ce qu'il a envoyé. Elle se traite dans le scanner, comme l'entrée 9.
+
 ## Revérifié le 31 août 2026 {#rechecked-2026-08-31}
 
 Le tri initial enregistrait les treize comme « imposés par un format d'échange ».
@@ -307,10 +317,10 @@ avec son raisonnement en ligne. Ce sont des exclusions configurées plutôt que 
 résolutions par constat dans le tableau de bord, pour que la justification soit
 versionnée et relisible.
 
-Onze fichiers sont épinglés : les six du registre qui relèvent du code produit,
+Douze fichiers sont épinglés : les sept du registre qui relèvent du code produit,
 et les cinq ci-dessus. La portée est délibérée — une empreinte faible *en dehors*
 d'eux est un vrai constat. N'élargissez pas une `resourceKey` à un répertoire, et
-n'ajoutez pas une douzième entrée sans un argument de même nature, ce qui, comme
+n'ajoutez pas une treizième entrée sans un argument de même nature, ce qui, comme
 cette page le montre, veut dire vérifier la spécification plutôt que répéter ce
 que disait le commentaire précédent.
 

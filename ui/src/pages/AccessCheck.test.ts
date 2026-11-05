@@ -86,13 +86,24 @@ describe("AccessCheck prefill", () => {
  * DESIGN.md: "Never colour alone — pattern, word and hue all carry it."
  */
 describe("AccessCheck answer", () => {
-  const answerWith = async (canAccess: boolean) => {
+  type Headline = "pullable" | "waiting" | "refused";
+  const answerWith = async (
+    headline: Headline,
+    causes: Array<Record<string, unknown>> = [],
+    until: string | null = null,
+  ) => {
     mockRoute = { query: {} };
     checkAccessMock.mockResolvedValue({
       data: {
-        can_access: canAccess,
-        reason: canAccess ? null : "blocked by rule",
+        package: { registry: "npm1", name: "left-pad", version: "1.4.0", artifact: null },
+        can_access: headline === "pullable",
+        reason: null,
         proxy_url: null,
+        headline,
+        until,
+        causes,
+        resolved_version: null,
+        versions: [],
       },
     });
     const wrapper = mountWith({});
@@ -104,15 +115,14 @@ describe("AccessCheck answer", () => {
     return wrapper;
   };
 
-  it("does not paint an allowed answer in the refusal hue", async () => {
-    const wrapper = await answerWith(true);
-    const badge = wrapper.findComponent(Badge);
-    expect(badge.props("variant")).toBe("known");
+  it("does not paint a pullable answer in the refusal hue", async () => {
+    const wrapper = await answerWith("pullable");
+    expect(wrapper.findComponent(Badge).props("variant")).toBe("known");
   });
 
-  it("paints a refusal in the refusal hue", async () => {
-    const wrapper = await answerWith(false);
-    expect(wrapper.findComponent(Badge).props("variant")).toBe("destructive");
+  it("paints a refusal in the refusal hue, and a wait in the held one", async () => {
+    expect((await answerWith("refused")).findComponent(Badge).props("variant")).toBe("destructive");
+    expect((await answerWith("waiting")).findComponent(Badge).props("variant")).toBe("copper");
   });
 
   /**
@@ -121,16 +131,56 @@ describe("AccessCheck answer", () => {
    * this costs nothing in the accessible name — the word is still the word.
    */
   it("carries the answer in the pattern as well as the hue", async () => {
-    const allowed = await answerWith(true);
+    const allowed = await answerWith("pullable");
     expect(allowed.findComponent(Resolution).props("state")).toBe("cached");
     expect(allowed.find("[data-testid=resolution-matrix]").attributes("aria-hidden")).toBe("true");
-
-    const denied = await answerWith(false);
-    expect(denied.findComponent(Resolution).props("state")).toBe("blocked");
+    expect((await answerWith("waiting")).findComponent(Resolution).props("state")).toBe("held");
+    expect((await answerWith("refused")).findComponent(Resolution).props("state")).toBe("blocked");
   });
 
   it("still says the answer in words", async () => {
-    expect((await answerWith(true)).text()).toContain("Allowed");
-    expect((await answerWith(false)).text()).toContain("Denied");
+    expect((await answerWith("pullable")).text()).toContain("Pullable");
+    expect((await answerWith("refused")).text()).toContain("Not pullable");
+  });
+
+  /** RFC 0040 §4.8: every cause, in the server's order, each with its word. */
+  it("lists every cause in order with its state word, code and next step", async () => {
+    const wrapper = await answerWith(
+      "waiting",
+      [
+        { kind: "access", state: "pass", detail: "you may read npm1", reason_code: null },
+        {
+          kind: "verdict",
+          state: "wait",
+          detail: "quarantined — MIN_AGE_NOT_MET",
+          reason_code: "MIN_AGE_NOT_MET",
+          next: "`batlehub-cli wait` returns when it is served",
+        },
+      ],
+      "2026-11-04T14:00:00Z",
+    );
+    const items = wrapper.findAll("ol li").map((li) => li.text());
+    expect(items).toHaveLength(2);
+    expect(items[0]).toContain("pass");
+    expect(items[0]).toContain("access");
+    expect(items[1]).toContain("wait");
+    expect(items[1]).toContain("MIN_AGE_NOT_MET");
+    expect(wrapper.text()).toContain("pullable from");
+    expect(wrapper.text()).toContain("returns when it is served");
+  });
+
+  /** T1: an invisible package and an unknown one are one sentence. */
+  it("says a 404 as not found, whatever the body", async () => {
+    mockRoute = { query: {} };
+    checkAccessMock.mockResolvedValue({
+      data: undefined,
+      error: { error: "not found", message: "package not found" },
+      response: { status: 404 },
+    });
+    const wrapper = mountWith({});
+    const submit = wrapper.findAll("button").find((b) => /check access/i.test(b.text()))!;
+    await submit.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("No such package, or not one you can see.");
   });
 });

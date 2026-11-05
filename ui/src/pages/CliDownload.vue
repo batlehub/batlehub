@@ -163,7 +163,7 @@ const usageSnippets = [
     key: "yank",
     label: "cliDownload.yankVersion",
     lang: "bash",
-    code: "batlehub-cli version yank <registry> <name> <version>",
+    code: "batlehub-cli package yank <registry>/<name>@<version>",
   },
 ];
 </script>
@@ -252,7 +252,7 @@ const usageSnippets = [
               ><code class="font-mono text-xs">~/.config/batlehub/config.toml</code></template
             >
             <template #command
-              ><code class="font-mono text-xs">batlehub-cli config init</code></template
+              ><code class="font-mono text-xs">batlehub-cli profile init</code></template
             >
           </i18n-t>
         </CardDescription>

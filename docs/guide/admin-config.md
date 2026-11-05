@@ -216,7 +216,7 @@ admin = ["*"]
 Every registry that has a notion of *a package as a thing a person reads about*
 carries a README, and most carry a different one per version. BatleHub stores it
 keyed by `(registry, name, version)` and renders it — sanitised, on the server —
-on the package page and through `batlehub package readme`.
+on the package page and through `batlehub-cli package readme`.
 
 **Absent means on.** For the metadata-borne registry types the text is a field of
 a document the proxy already fetches and parses, so the default costs one

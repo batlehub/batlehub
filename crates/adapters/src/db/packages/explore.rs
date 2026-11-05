@@ -34,7 +34,7 @@ pub(super) async fn list_events_impl(
         r#"
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
-            package_artifact, action, outcome, deny_reason, created_at,
+            package_artifact, action, outcome, deny_reason, reason_code, created_at,
             ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE ($1::text IS NULL OR registry = $1)
@@ -88,6 +88,9 @@ pub(super) fn map_access_event(r: &sqlx::postgres::PgRow) -> Result<AccessEvent,
         _ => None,
     };
     Ok(AccessEvent {
+        // Selected only where a reader returns it (`me/downloads`): a query
+        // that leaves the column out reads as no code.
+        reason_code: r.try_get::<Option<String>, _>("reason_code").ok().flatten(),
         id: r.get("id"),
         user_id: r.get("user_id"),
         user_role: str_to_role(r.get::<&str, _>("user_role"))?,
@@ -132,17 +135,21 @@ pub(super) async fn list_own_downloads_impl(
     user_id: &str,
     since: DateTime<Utc>,
     limit: u64,
+    denied: bool,
 ) -> Result<Vec<AccessEvent>, CoreError> {
+    // `outcome` is a bound parameter, never a caller's string: allowed or
+    // denied, and `error` rows are never returned (RFC 0040 §6.1).
+    let outcome = if denied { "denied" } else { "allowed" };
     let rows = sqlx::query(
         r#"
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
-            package_artifact, action, outcome, deny_reason, created_at,
+            package_artifact, action, outcome, deny_reason, reason_code, created_at,
             ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE user_id = $1
           AND action = 'download'
-          AND outcome = 'allowed'
+          AND outcome = $4
           AND created_at >= $2
           AND package_name IS NOT NULL
         ORDER BY created_at DESC
@@ -152,6 +159,7 @@ pub(super) async fn list_own_downloads_impl(
     .bind(user_id)
     .bind(since)
     .bind(limit as i64)
+    .bind(outcome)
     .fetch_all(pool)
     .await
     .db_err()?;

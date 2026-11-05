@@ -350,6 +350,7 @@ impl PackageRepository for InMemoryPackageRepository {
         user_id: &str,
         since: DateTime<Utc>,
         limit: u64,
+        denied: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
         let events = self.events.read().await;
         let mut result: Vec<AccessEvent> = events
@@ -357,7 +358,12 @@ impl PackageRepository for InMemoryPackageRepository {
             .filter(|e| {
                 e.user_id.as_deref() == Some(user_id)
                     && matches!(e.action, AccessAction::Download)
-                    && matches!(e.result, AccessResult::Allowed)
+                    && match e.result {
+                        AccessResult::Allowed => !denied,
+                        AccessResult::Denied { .. } => denied,
+                        // A proxy error is neither, and never returned.
+                        AccessResult::ProxyError { .. } => false,
+                    }
                     && e.timestamp >= since
                     && e.package_id.is_some()
             })
@@ -746,6 +752,7 @@ mod tests {
 
     fn account_event(action: AccessAction) -> AccessEvent {
         AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: Some("admin".to_owned()),
             user_role: Role::Admin,
@@ -830,7 +837,7 @@ mod tests {
             .unwrap();
 
         let rows = repo
-            .list_own_downloads("alice", Utc::now() - chrono::Duration::days(1), 10)
+            .list_own_downloads("alice", Utc::now() - chrono::Duration::days(1), 10, false)
             .await
             .unwrap();
         let names: Vec<&str> = rows
@@ -858,7 +865,7 @@ mod tests {
         repo.record_access(viewed).await.unwrap();
 
         let rows = repo
-            .list_own_downloads("alice", Utc::now() - chrono::Duration::days(1), 10)
+            .list_own_downloads("alice", Utc::now() - chrono::Duration::days(1), 10, false)
             .await
             .unwrap();
         let names: Vec<&str> = rows
@@ -882,7 +889,10 @@ mod tests {
             .unwrap();
 
         let since = Utc::now() - chrono::Duration::days(7);
-        let rows = repo.list_own_downloads("alice", since, 10).await.unwrap();
+        let rows = repo
+            .list_own_downloads("alice", since, 10, false)
+            .await
+            .unwrap();
         let names: Vec<&str> = rows
             .iter()
             .map(|e| e.package_id.as_ref().unwrap().name.as_str())
@@ -893,7 +903,10 @@ mod tests {
             "10 days back is outside a 7-day window"
         );
 
-        let capped = repo.list_own_downloads("alice", since, 1).await.unwrap();
+        let capped = repo
+            .list_own_downloads("alice", since, 1, false)
+            .await
+            .unwrap();
         assert_eq!(capped.len(), 1);
         assert_eq!(
             capped[0].package_id.as_ref().unwrap().name,

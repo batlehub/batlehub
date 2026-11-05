@@ -156,14 +156,17 @@ curl -fsS -X PUT \
   --data-binary @"$VSIX" \
   "$BASE/proxy/vscode/$VSCODE_EXT_ID/$WEEBO_VERSION/vsix" >/dev/null
 
-log "Publishing the plugin to the local jetbrains-marketplace registry"
-curl -fsS -X POST \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -F "xmlId=$JB_PLUGIN_ID" \
-  -F "file=@$JBZIP" \
-  "$BASE/proxy/jbm/api/updates/upload" | tee "$WORK/upload-response.json"
-grep -q "\"pluginId\":\"$JB_PLUGIN_ID\"" "$WORK/upload-response.json" \
-  || { echo "ERROR: unexpected JetBrains upload response" >&2; exit 1; }
+# Through batlehub-cli with no `-t` and no xmlId (RFC 0040 §6.P case 7): the
+# registry's kind picks the upload route, and the id comes from plugin.xml.
+# IntelliJ's install in §4 is what proves the upload landed as that id.
+log "Publishing the plugin to the local jetbrains-marketplace registry with batlehub-cli"
+cargo build -p batlehub-cli >"$WORK/cli-build.log" 2>&1 \
+  || { cat "$WORK/cli-build.log" >&2; echo "ERROR: batlehub-cli did not build" >&2; exit 1; }
+HOME="$WORK/cli-home" BATLEHUB_SERVER="$BASE" BATLEHUB_TOKEN="$ADMIN_TOKEN" \
+  target/debug/batlehub-cli publish "$JBZIP" -r jbm </dev/null >"$WORK/jb-publish.out" 2>&1 \
+  || { cat "$WORK/jb-publish.out" >&2; echo "ERROR: batlehub-cli publish to jbm failed" >&2; exit 1; }
+curl -fsS "$BASE/proxy/jbm/updatePlugins.xml" | grep -q "id=\"$JB_PLUGIN_ID\"" \
+  || { echo "ERROR: updatePlugins.xml does not list $JB_PLUGIN_ID after the CLI publish" >&2; exit 1; }
 
 # ── 3. VS Code: headless install from this instance only ─────────────────────
 

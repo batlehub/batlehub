@@ -60,7 +60,7 @@ task cli:help
 `batlehub-cli` reads `~/.config/batlehub/config.toml`. Run the setup wizard to create it:
 
 ```bash
-batlehub-cli config init
+batlehub-cli profile init
 ```
 
 The file uses TOML and supports named profiles:
@@ -86,6 +86,7 @@ Every connection setting can be overridden by environment variables — useful i
 | `BATLEHUB_TOKEN`    | `--token`        |
 | `BATLEHUB_REGISTRY` | `--registry`     |
 | `BATLEHUB_PROFILE`  | `--profile`      |
+| `BATLEHUB_FORMAT`   | `--format`       |
 
 ---
 
@@ -98,8 +99,146 @@ These flags are available on every command:
 | `--profile <name>` | `-P` | Use a named config profile |
 | `--server <url>` | | Override the server URL |
 | `--token <tok>` | | Override the auth token |
-| `--registry <name>` | `-r` | Set a default registry |
-| `--json` | | Emit machine-readable JSON instead of tables |
+| `--registry <name>` | `-r` | The default registry: for a bare package name, and for every command's registry filter. Falls back to `BATLEHUB_REGISTRY`, then the profile's `registry` |
+| `--format <table\|json\|csv\|raw>` | | Output shape (below); `BATLEHUB_FORMAT` sets it once for a CI job |
+| `--json` | | Same as `--format json` |
+| `--yes` | `-y` | Answer yes to the confirmation a destructive command asks for |
+
+### Naming a package {#coordinate}
+
+A command that takes a package takes one coordinate, `registry/name[@version]`:
+the registry is everything before the first `/`, the version everything after
+the last `@` that is not the name's first character.
+
+```text
+npm-local/lodash@4.17.21
+npm-local/@scope/pkg@1.2.3        # name @scope/pkg
+go/github.com/x/y@v1.2.0          # the module path stays whole
+maven/org.slf4j:slf4j-api@2.0.9   # Maven's group:artifact stays whole
+```
+
+A coordinate with no `/` is a bare name, put in the default registry
+(`-r`, `BATLEHUB_REGISTRY`, the profile's `registry`); with none of them set the
+command fails with exit 2. A first segment that is not a registry you can see is
+read as part of the name when a default registry is set
+(`-r go github.com/x/y`), and fails with exit 5 otherwise, listing the registries
+you can see. The older `registry:name@version` spelling is still read, with a
+`warning:`.
+
+Every command that acts on one package takes a coordinate: `package`, `owner`,
+`visibility`, `grant`, `sbom show`, `authz check`, `why`, `wait` and
+`verdict pullers`. The lifecycle verbs take several at once.
+
+### Output and errors {#output}
+
+- **`table`** is the default, on a terminal and in a pipe alike.
+- **`json`** prints what the API sent, field names unchanged: a listing as an
+  array (or the API's page object), an action as its response, or `{"ok": true}`
+  when there is none.
+- **`csv`** works on every listing, with the JSON field names as headers. It is a
+  usage error (exit 2) on a command that prints one object.
+- **`raw`** is accepted only by `auth token`, which prints one value.
+
+Data goes to stdout. Progress, warnings, hints and confirmations go to stderr, so
+`batlehub-cli … --format json | jq` never reads a prompt.
+
+An error is one block on stderr:
+
+```text
+error: version 4.17.21 of npm-local/lodash is held until 2026-11-04 14:00 UTC
+  code: MIN_AGE_NOT_MET — https://batlehub.dev/use/refused-downloads#min-age-not-met
+hint: `batlehub-cli wait npm-local/lodash@4.17.21` returns when it becomes pullable
+```
+
+`error:` is the server's own message, `code:` the reason code when the server
+gave one, linked to [Why a download was refused](/use/refused-downloads). With
+`--format json` the same error is also written to stdout as
+`{"error": {"message", "code", "docs", "hint", "exit"}}`.
+
+### Exit codes {#exit-codes}
+
+| Code | Meaning | Typical source |
+| --- | --- | --- |
+| 0 | success | — |
+| 1 | generic failure | network error, unexpected 5xx, I/O |
+| 2 | usage | a flag clap refuses, a coordinate with no registry, an artifact written to a terminal, `--format csv` on one object, a lockfile over 16 MiB |
+| 3 | not authenticated | HTTP 401 |
+| 4 | refused | HTTP 403; `wait` when waiting cannot help; `check` on a ⛔ (or a ⏳ with `--strict`) |
+| 5 | not found | HTTP 404, an unknown registry |
+| 6 | conflict | HTTP 409; `setup` `conflict`/`ambiguous`/`orphaned` |
+| 7 | partial failure | a bulk operation with failed items, `mise seed`/`import` with failures |
+| 8 | timed out | `wait --timeout` |
+| 9 | confirmation required | a destructive command without a terminal and without `--yes`, a "no" at the prompt |
+| *n* | child's code | `java` passes its child's exit code through |
+
+### Destructive commands {#confirmation}
+
+A command that deletes, purges, erases, yanks, unlists, blocks, revokes or
+reclaims prints what it will do on stderr and asks `Proceed? [y/N]`. Anything
+other than `y`/`yes` exits 9. **Without a terminal** it asks nothing, does
+nothing and exits 9, so a script that forgets `--yes` fails loudly instead of
+hanging on a prompt or destroying silently:
+
+```text
+$ batlehub-cli package delete internal/serilog@2.0.0 </dev/null
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+error: refusing to delete without a terminal; pass --yes
+$ echo $?
+9
+```
+
+The commands that confirm: `package yank`, `delete` and `unlist`,
+`cache delete`, `cache evict` and `coherence` (not with `--dry-run`),
+`audit purge`, `user block`, `gdpr erase`, `retention apply`,
+`notification delete`, `auth token delete`, and `download` over an existing
+file. `setup apply` and
+`setup remove` keep their own contract: a dry run by default, `--yes` writes.
+
+### What each registry kind covers {#coverage}
+
+For every kind, what the CLI does for six capabilities: **configure** the client
+(`setup`), **publish**, **download** by coordinate, **consult** (`package
+versions`/`readme`), and the version **lifecycle** (`package yank`, …). A cell is
+✅ (implemented), **print** (the CLI prints what to run, because running it needs
+root or belongs to the native client) or **n.a.** (with the reason). The table is
+generated from `cli/src/coverage.rs`, and the build fails when a claimed cell has
+no test.
+
+<!-- cli-matrix:start (generated by `task docs:cli-matrix`) -->
+| Kind | Configure | Publish | Download | Consult | Lifecycle | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| github | ✅ mise | n.a. — proxy only | n.a. — a release asset is addressed by its filename, which the page does not know | ✅ `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | ✅ `mise.lock` |
+| forgejo | ✅ mise | n.a. — proxy only | n.a. — a release asset is addressed by its filename, which the page does not know | ✅ `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | ✅ `mise.lock` |
+| gitlab | ✅ mise | n.a. — proxy only | n.a. — a release asset is addressed by its filename, which the page does not know | ✅ `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | n.a. — `mise plan` maps no GitLab download to a registry yet |
+| cargo | ✅ `~/.cargo/config.toml` | ✅ `.crate` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `Cargo.lock` |
+| npm | ✅ `~/.npmrc`, `~/.yarnrc.yml` | ✅ `.tgz` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` |
+| openvsx | ✅ `setup ide` | ✅ `.vsix` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — editors keep no lockfile |
+| goproxy | ✅ `go env` file | ✅ module directory → one `{version}.zip` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `go.sum` |
+| pypi | ✅ `pip.conf`, `uv.toml` | ✅ wheel, sdist | n.a. — a PyPI version is a set of distribution files — an sdist and one wheel per interpreter and platform — each addressed by its own filename, so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `uv.lock`, `poetry.lock`, pinned `requirements*.txt` |
+| conda | ✅ `~/.condarc` | ✅ `.conda`, `.tar.bz2` | n.a. — a conda artifact is addressed by channel platform and build string as well as version, so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `conda-lock.yml` |
+| composer | ✅ composer `config.json` | ✅ `.zip` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `composer.lock` |
+| vscode-marketplace | ✅ `setup ide` | ✅ `.vsix` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — editors keep no lockfile |
+| maven | ✅ `~/.m2/settings.xml` | ✅ `.jar` + `--pom`, or `target/` | n.a. — a Maven version is a set of files — a jar, a pom, sources, javadoc — so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — Maven has no lockfile |
+| terraform | ✅ `~/.terraformrc` | ✅ module `.tar.gz`; provider directory of `_<os>_<arch>.zip` | n.a. — a Terraform provider binary is addressed by OS and architecture as well as version, and a module is fetched by the client from a URL this instance rewrites rather than as one artifact | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `.terraform.lock.hcl` |
+| rubygems | ✅ `~/.gemrc` | ✅ `.gem` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `Gemfile.lock` |
+| nuget | ✅ `NuGet.Config` | ✅ `.nupkg` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `packages.lock.json` |
+| deb | print — the sources file is root's | ✅ `.deb` + `--distribution`/`--component` | n.a. — path-addressed: there is no version to fetch by | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — the system's package manager keeps no lockfile |
+| rpm | print — the sources file is root's | ✅ `.rpm` | n.a. — path-addressed: there is no version to fetch by | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — the system's package manager keeps no lockfile |
+| pacman | print — the sources file is root's | ✅ `.pkg.tar.zst` | n.a. — path-addressed: there is no version to fetch by | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — the system's package manager keeps no lockfile |
+| apk | print — the sources file is root's | ✅ `.apk` | n.a. — a version needs a branch, a repo and an architecture as well, so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — the system's package manager keeps no lockfile |
+| jetbrains | n.a. — serves IDE downloads by path; `setup ide` configures the plugin marketplace | n.a. — proxy only | n.a. — path-addressed: there is no version to fetch by | ✅ `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | n.a. — editors keep no lockfile |
+| jetbrains-marketplace | ✅ `setup ide` | ✅ plugin `.zip`/`.jar` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — editors keep no lockfile |
+| generic | ✅ mise | n.a. — proxy only | n.a. — path-addressed: there is no version to fetch by | ✅ `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | n.a. — a mirrored file has no version to ask about |
+| nodedist | ✅ env + mise | n.a. — a vendor's releases, mirrored | n.a. — a Node release is a set of files — one per platform, plus headers, source and checksums — so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | ✅ `.nvmrc` |
+| sdkman | ✅ env | n.a. — a vendor's releases, mirrored | n.a. — an SDKMAN artifact is addressed by platform as well as version — one archive per platform — so "fetch this version" has no single meaning | ✅ `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | ✅ `.sdkmanrc` |
+| rustup | ✅ env | n.a. — a vendor's releases, mirrored | n.a. — a Rust release is a manifest plus one tarball per component per target, so "fetch this version" needs a target and a profile | ✅ `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | ✅ `rust-toolchain.toml` |
+| galaxy | ✅ `~/.ansible.cfg` | ✅ collection `.tar.gz` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — `requirements.yml` pins no exact version |
+| nix | ✅ user `nix.conf` | print — `nix copy --to` signs and uploads the closure | n.a. — a version is one or more store paths, each a separate build with its own 32-character hash, and the hash is not derivable from the version | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — `flake.lock` pins sources; the cache serves store paths by hash |
+| devfile | print — Che's `CheCluster` is cluster configuration | ✅ `devfile.yaml` or its directory | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | n.a. — editors keep no lockfile |
+| helm | print — `helm repo add`: helm rewrites its own repository file | ✅ chart `.tgz` | ✅ by coordinate, checksum verified | ✅ `package versions`, `package readme` | ✅ the generic lifecycle endpoint | ✅ `Chart.lock` |
+<!-- cli-matrix:end -->
 
 ---
 
@@ -107,7 +246,7 @@ These flags are available on every command:
 
 ```
 batlehub-cli registry list
-batlehub-cli registry info <name>
+batlehub-cli registry show <name>
 batlehub-cli registry suggest [--dir <path>] [--depth N] [--client-env] [--mise [--mise-commented]] [--include-existing]
 ```
 
@@ -127,7 +266,7 @@ $ batlehub-cli registry list
 3 registry/registries
 ```
 
-### `registry info <name>`
+### `registry show <name>`
 
 Show type and mode for a single registry.
 
@@ -231,8 +370,9 @@ the rendered TOML under a `toml` key.
 ## 5. Commands — package
 
 ```
-batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
-batlehub-cli package versions <registry> <name>
+batlehub-cli package list   [-r <r>] [--search <q>] [--blocked] [--page N] [--per-page N]
+batlehub-cli package versions <registry>/<name>
+batlehub-cli package show     <registry>/<name>[@<version>]
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
 ```
 
@@ -267,15 +407,49 @@ The JSON items use an internally-tagged `status` field:
 ]
 ```
 
-Filter in scripts with `jq`:
+`--blocked` keeps only blocked versions. The server filters before it cuts the
+page, so `--per-page` and the total count only include blocked rows:
+
 ```bash
-# List only blocked packages
-batlehub-cli --json package list | jq '[.[] | select(.status.status == "blocked")]'
+batlehub-cli package list --blocked -r internal
 ```
 
-### `package versions <registry> <name>`
+### `package versions <registry>/<name>`
 
-List all cached versions of a package with their status and download count.
+Every version of a package, including those only the upstream has, one page at a
+time, with the server's own state for each (held, upstream-only, yanked,
+blocked, …) and where it came from (`local`, `proxied`, `upstream`).
+
+```
+batlehub-cli package versions <registry>/<name> [--limit N] [--page N] [--all] [--no-upstream]
+```
+
+`--page` is 0-based. When more pages exist, `next: --page N` goes to stderr, so
+`--format json | jq '.[].version'` keeps working. `--all` follows the pages, up to
+10 000 rows. `--no-upstream` answers from what this instance holds only.
+
+### `package show <registry>/<name>[@<version>]`
+
+One version: its state (the same column as `package versions`), where it comes
+from, its published date, licence and links, then the answer `why` gives for it.
+Without a version, the one the console opens on: the newest stable version this
+instance holds. An unknown version exits 5. `--format json` returns
+`{registry, name, version, links, pullability}`, `version` being the
+`package versions` row.
+
+```
+$ batlehub-cli package show npm-local/left-pad@1.3.9
+version     1.3.9
+state       cached
+source      local
+published   2026-10-02T09:14:00Z
+license     MIT
+repository  https://github.com/left-pad/left-pad
+homepage    —
+
+✅ npm-local/left-pad@1.3.9 — pullable now
+  ✅ pass  access      you may read npm-local
+```
 
 ### `package readme <registry>/<name>[@<version>]`
 
@@ -320,17 +494,32 @@ the [README support table](/registries/#readmes).
 
 ---
 
-## 6. Commands — version {#commands-version}
+## 6. Commands — package lifecycle {#commands-version}
 
 ```
-batlehub-cli version yank   <registry> <name> <version>
-batlehub-cli version unyank <registry> <name> <version>
-batlehub-cli version delete <registry> <name> <version> [--yes]
-batlehub-cli version pin    <registry> <name> <version>
-batlehub-cli version unpin  <registry> <name> <version>
+batlehub-cli package yank        <registry>/<name>@<version>...
+batlehub-cli package unyank      <registry>/<name>@<version>...
+batlehub-cli package delete      <registry>/<name>@<version>...
+batlehub-cli package pin         <registry>/<name>@<version>...
+batlehub-cli package unpin       <registry>/<name>@<version>...
+batlehub-cli package deprecate   <registry>/<name>@<version>... [--message <text>]
+batlehub-cli package undeprecate <registry>/<name>@<version>...
+batlehub-cli package unlist      <registry>/<name>@<version>...
+batlehub-cli package relist      <registry>/<name>@<version>...
+batlehub-cli package block       <registry>/<name>@<version>... --reason <text>
+batlehub-cli package unblock     <registry>/<name>@<version>...
 ```
 
-These commands require an admin token.
+Each verb takes one coordinate or several, across registries; with `-r`, a bare
+`name@version` names a version of the default registry. These commands need the
+instance-tier `releases:yank` (`releases:delete` for `delete`), with one
+exception: on cargo, composer, rubygems, terraform and nuget registries, whose
+own clients let an owner yank, an **explicit owner of every package named** may
+`yank` and `unyank` them too. A request that names a package the caller does not
+own is refused whole, and a package with no owner is nobody's. `block` and `unblock` are moderation and need `packages:block`; they send one
+request for every registry named. `yank`, `delete`, `unlist` and `block` are
+[destructive](#confirmation): they ask on a terminal and need `--yes` in a
+script.
 
 | Command | Effect |
 |---------|--------|
@@ -339,15 +528,28 @@ These commands require an admin token.
 | `delete` | Drops the artifact **and spends the version number permanently** |
 | `pin` | Exempts a version from retention — it is never reclaimed automatically |
 | `unpin` | Releases the pin, so the registry's retention policy applies again |
+| `deprecate` | Warns a consumer and keeps serving |
+| `undeprecate` | Removes the deprecation |
+| `unlist` | Hides the version from search and listings, and keeps serving it to anyone who asks by exact version |
+| `relist` | Reverses an unlist |
+| `block` | Refuses the version to every client, with the code [`BLOCK_LIST`](/use/refused-downloads#block-list); `why` shows the reason to whoever can see findings |
+| `unblock` | Lifts a block |
 
-> **Package name casing**: package names are normalized to lowercase when published (NuGet lowercases the package ID, cargo and npm use lowercase by convention). Use the lowercase form with `version yank/unyank/delete` to match the stored name — e.g. `serilog`, not `Serilog`.
+> **Package name casing**: package names are normalized to lowercase when published (NuGet lowercases the package ID, cargo and npm use lowercase by convention). Use the lowercase form to match the stored name — e.g. `serilog`, not `Serilog`.
+
+With several coordinates, every one is attempted: the output names each that
+succeeded and each that failed (`FAILED <coordinate>: <error>`), and the command
+exits 7 when some failed. `--format json` prints
+`{"processed", "succeeded": [...], "failed": [{"coordinate", "error"}]}`.
 
 `delete` prompts for confirmation unless `--yes` is passed:
 
 ```
-$ batlehub-cli version delete internal serilog 2.0.0
-Delete internal/serilog@2.0.0? The artifact is dropped and the version number is
-spent permanently — 2.0.0 can never be published again. [y/N] y
+$ batlehub-cli package delete internal/serilog@2.0.0
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — it can never be published again
+Proceed? [y/N] y
 Deleted internal/serilog@2.0.0
 ```
 
@@ -360,18 +562,20 @@ behind for an auditor, are in
 
 ---
 
-## 7. Commands — owners
+## 7. Commands — owner {#commands-owner}
 
 ```
-batlehub-cli owners list   <registry> <name>
-batlehub-cli owners add    <registry> <name> <principal> [--type user|group] [--role admin|maintainer]
-batlehub-cli owners remove <registry> <name> <principal> [--type user|group]
+batlehub-cli owner list   <registry>/<name>
+batlehub-cli owner add    <registry>/<name> <principal> [--type user|group] [--role admin|maintainer]
+batlehub-cli owner remove <registry>/<name> <principal> [--type user|group]
 ```
 
-Ownership controls who can publish new versions to a local/hybrid registry. Requires an admin token.
+Ownership controls who can publish new versions to a local/hybrid registry. It
+is per package, so a coordinate with a version is refused. Requires an admin
+token.
 
 ```
-$ batlehub-cli owners list internal Serilog
+$ batlehub-cli owner list internal/Serilog
 +------+------------------+------------+------------+
 | Type | Principal        | Role       | Granted By |
 +------+------------------+------------+------------+
@@ -379,7 +583,7 @@ $ batlehub-cli owners list internal Serilog
 | group| nuget-maintainers| maintainer | alice      |
 +------+------------------+------------+------------+
 
-$ batlehub-cli owners add internal Serilog bob --type user --role maintainer
+$ batlehub-cli owner add internal/Serilog bob --type user --role maintainer
 Added user 'bob' as maintainer on internal/Serilog
 ```
 
@@ -388,46 +592,74 @@ Added user 'bob' as maintainer on internal/Serilog
 ## 8. Commands — publish
 
 ```
-batlehub-cli publish <file> [--registry <r>] [--name <n>] [--version <v>] [--type <t>]
-                             [--distribution <d>] [--component <c>] [--platform <p>]
+batlehub-cli publish <input> [-r <r>] [--name <n>] [--version <v>]
+                             [--pom <pom.xml>] [--distribution <d>] [--component <c>] [--platform <p>]
 ```
 
-Upload an artifact to a local or hybrid registry. The CLI auto-detects the registry type and package metadata from the file:
+Upload to a local or hybrid registry. **The registry decides the kind**: the
+CLI asks the server what `-r` is and uses that kind's upload route, so a Helm
+chart `.tgz` goes to Helm even though npm uses the same extension. The file name
+is read only for a name and a version, and only when it reads as that kind's own
+artifact.
 
-| Extension | Registry type | Metadata source |
-|-----------|---------------|-----------------|
-| `.nupkg` | nuget | embedded `.nuspec` |
-| `.whl` | pypi | filename (`name-version-*.whl`) |
-| `.gem` | rubygems | filename (`name-version.gem`) |
-| `.pkg.tar.{zst,xz,gz}` | pacman | filename (`name-pkgver-pkgrel-arch.pkg.tar.*`) |
-| `.tgz` | npm | filename (`name-version.tgz`, as produced by `npm pack`) |
-| `.crate` | cargo | filename (`name-version.crate`, as produced by `cargo package`) |
-| `.vsix` | openvsx | filename (`extension_id-version.vsix`) |
-| `.deb` | deb | server-side, from the package's control file — requires `--distribution` and `--component` |
-| `.rpm` | rpm | server-side, from the package's header |
-| `.tar.bz2` / `.conda` | conda | server-side, from the package's own `info/index.json` (`--platform` is only a fallback) |
+| Kind | Input | Name and version from |
+|------|-------|-----------------------|
+| nuget | `.nupkg` | the server, from the embedded `.nuspec` |
+| pypi | wheel or sdist | the file name |
+| rubygems | `.gem` | the server |
+| npm | `.tgz` | the file name (`name-version.tgz`, as `npm pack` writes it) |
+| cargo | `.crate` | the file name (`name-version.crate`) |
+| conda | `.conda`, `.tar.bz2` | the server, from `info/index.json` (`--platform` is only a fallback) |
+| composer | `.zip` | the server, from `composer.json` (`--version` overrides it) |
+| openvsx, vscode-marketplace | `.vsix` | the file name (`publisher.name-version.vsix`) |
+| jetbrains-marketplace | plugin `.zip`/`.jar` | the server, from `plugin.xml` |
+| galaxy | collection `.tar.gz` | the server, from `MANIFEST.json` |
+| helm | chart `.tgz` | the server, from `Chart.yaml` |
+| devfile | stack directory or `devfile.yaml` | the server, from `metadata` |
+| deb | `.deb` | the server — needs `--distribution` and `--component` |
+| rpm, pacman, apk | the package | the server |
+| goproxy | a module directory (zipped here), or a module `.zip` with `--name <module>` | `go.mod`'s `module` line; `--version v1.2.3` is required |
+| maven | a `.jar` with `--pom`, a `.pom` alone, or a `target/` directory | the pom's `groupId`/`artifactId`/`version` |
+| terraform | a module `.tar.gz`, with `--name <namespace>/<name>/<provider> --version` | the flags |
+| terraform | a provider directory of `terraform-provider-<type>_<version>_<os>_<arch>.zip`, with `--name <namespace>/<type>` | the archives' names |
 
-Composer ZIPs share the generic `.zip` extension with other formats and are not auto-detected — pass `--type composer` explicitly. Composer, like conda/deb/rpm, parses name/version server-side from `composer.json`, so no `--name`/`--version` is needed (an optional `--version` overrides the archive's own version).
+When a name or version cannot be read and no flag gives it, `publish` exits 2
+before sending anything.
 
-Use `--type` to override auto-detection entirely — useful for ambiguous extensions or when a file doesn't follow the expected naming convention.
+- **goproxy** sends one `PUT` of `{version}.zip`; the server derives `.mod` and
+  `.info` from it, so the publish is atomic. The zip carries no symlink, no
+  `vendor/` or version-control directory and no nested module.
+- **maven** sends the jar, the pom and their `.sha1`/`.md5` sidecars, the pom
+  last. A run that stops halfway exits 7 and names what was not sent; **run it
+  again**: a file the server already holds with the same bytes counts as sent.
+- **terraform** providers send the version manifest, then one archive per
+  platform. A re-run picks up from the manifest the same way, and a stopped run
+  exits 7.
+- **nix** is refused with the command to run instead: `nix copy --to` signs and
+  uploads a closure, which is not one file. Proxy-only kinds (jetbrains, github,
+  forgejo, gitlab, generic) and vendor mirrors (nodedist, sdkman, rustup) have
+  nothing to publish to.
 
-Maven (separate jar+pom+checksum files), Terraform (providers need shasums/signature files; modules need a packaging step), and Go modules (need an `.info`/`.mod`/`.zip` triad) don't fit this command's single-file model by design. Use your existing tooling (`mvn deploy`, Terraform registry publishing conventions, `go mod`) configured to point at the BatleHub endpoint — see [`docs/use/publishing.md`](publishing.md) for per-registry setup instructions.
+`-t/--type` names the registry's kind for a token that may publish to it but
+not list it (a least-privilege CI token holding `releases:publish` alone).
+Otherwise the registry's own kind decides, and a `-t` that disagrees with it
+exits 2.
 
 ```bash
 # NuGet
-batlehub-cli publish Serilog.3.1.1.nupkg --registry internal
+batlehub-cli publish Serilog.3.1.1.nupkg -r internal
 
-# Override detected metadata
-batlehub-cli publish dist/mylib-1.2.3.tar.gz --type pypi --name mylib --version 1.2.3
+# A Go module, from its directory
+batlehub-cli publish ./mymod -r go-local --version v0.1.0
 
-# Composer (ambiguous .zip extension — type must be explicit)
-batlehub-cli publish acme-widget.zip --type composer --registry internal
+# Maven, after `mvn package`
+batlehub-cli publish target/ -r maven-local
 
-# Debian (distribution/component aren't in the filename)
-batlehub-cli publish hello_1.0-1_amd64.deb --registry internal --distribution stable --component main
+# A Terraform provider release directory
+batlehub-cli publish dist/ -r tf-local --name acme/null
 
-# Conda (platform is only a fallback for packages with no embedded subdir)
-batlehub-cli publish numpy-1.26.0-py311h0.conda --registry internal --platform linux-64
+# Debian (distribution/component aren't in the file)
+batlehub-cli publish hello_1.0-1_amd64.deb -r internal --distribution stable --component main
 ```
 
 ---
@@ -435,18 +667,41 @@ batlehub-cli publish numpy-1.26.0-py311h0.conda --registry internal --platform l
 ## 9. Commands — auth
 
 ```
+batlehub-cli auth login [--provider <p>] [--profile <p>] [--no-browser]
+batlehub-cli auth login --kubernetes-token-path <path>
 batlehub-cli auth whoami
 batlehub-cli auth token                      # print a credential (refreshing it first)
 batlehub-cli auth token [--output raw|json] [--min-ttl <seconds>]
 batlehub-cli auth token list
 batlehub-cli auth token create --name <n> [--days <d>] [--role user|admin]
                                [--groups <g1,g2> | --all-groups]
-batlehub-cli auth token revoke <uuid>
+batlehub-cli auth token delete <uuid>
 batlehub-cli auth write-token-file [--path <p>] [--from-file <p>]
 batlehub-cli auth status [--path <p>] [--json]
-batlehub-cli proxy serve --registry <url> [--bind 127.0.0.1:0] [--contract <p>]
+batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <p>]
                          [--state-dir <d>] [--print-gallery-url]
 ```
+
+### `auth login` {#auth-login}
+
+Signs in through the server's OIDC provider and saves the token, with its
+refresh token, to the `-P` profile. The CLI listens on `127.0.0.1` on a free
+port and opens your browser at the server's sign-in. Once the provider has
+signed you in, the server redirects the browser back to that port. The CLI
+checks that the callback belongs to the sign-in it started, and then closes the
+port. It waits up to five minutes.
+
+The browser is `$BROWSER` when it is set, otherwise `xdg-open`, `open` or the
+Windows URL handler. When none of them starts, the CLI prints the URL for you to
+open. When the browser cannot reach `127.0.0.1` on the machine running the CLI
+(an SSH session, a cloud workspace), use `--no-browser`. The CLI then prints the
+URL, and you paste back the URL you land on.
+
+The provider's configuration does not change: the server completes the exchange
+as it does for the console, and accepts no `return_to` other than
+`http://127.0.0.1:<port>/callback`. A server without loopback support ignores `return_to`,
+so the login times out with a hint to use `--no-browser`. CI keeps
+`BATLEHUB_TOKEN` or `--kubernetes-token-path`.
 
 ### `auth whoami`
 
@@ -461,6 +716,20 @@ $ batlehub-cli auth whoami
 | Groups   | nuget-maintainers, …  |
 +----------+-----------------------+
 ```
+
+### `me`: your own state {#me}
+
+```
+batlehub-cli me show                      # user, role, groups, as the server sees you
+batlehub-cli me quota                     # your usage against each registry's quota
+batlehub-cli me downloads [--denied] [--limit 50] [--days <n>]
+batlehub-cli me advisories                # advisories on versions you published or pulled
+batlehub-cli me namespaces                # the team namespaces you belong to
+```
+
+`me downloads --denied` lists only your refused downloads, each with its reason
+code. Pass one to [`why`](#commands-security) for the full reason. Every `me`
+command reads only your own rows.
 
 ### `auth token`
 
@@ -630,7 +899,7 @@ gallery points at it, and it attaches the credential from the contract
 file, so the editor never holds one.
 
 ```
-$ batlehub-cli proxy serve --registry https://hub.example.dev/proxy/vsx
+$ batlehub-cli proxy serve --registry-url https://hub.example.dev/proxy/vsx
 gallery proxy for https://hub.example.dev/proxy/vsx on 127.0.0.1:41873
   extensionsGallery.serviceUrl = http://127.0.0.1:41873/9f2c…/vsx/vscode/gallery
   credential: /home/you/.batlehub/state/vsx-token.json
@@ -704,7 +973,7 @@ entries:
 
 ```
 $ batlehub-cli vsx verify weebo-bridge-notify-0.5.0.vsix \
-    --registry https://hub.example.dev/proxy/vsx --id batleforc.weebo-bridge-notify --version 0.5.0
+    --registry-url https://hub.example.dev/proxy/vsx --id batleforc.weebo-bridge-notify --version 0.5.0
 ok: weebo-bridge-notify-0.5.0.vsix is signed by key 3f1e0a9c7b2d4e61… (24503 bytes, manifest matches)
 ```
 
@@ -713,38 +982,59 @@ not run the editor's own verifier, which accepts the marketplace's signature
 and no other.
 
 
-## 12. Commands — admin
+## 12. Commands for administrators
 
-These commands require an admin token.
+These groups act on the server rather than on one package. A command marked
+`[admin]` in its `--help` needs an instance-tier grant; the server decides, so a
+command an operator has delegated works for whoever holds the grant. Groups take
+the registry from `-r` (or `BATLEHUB_REGISTRY`, or the profile) wherever the
+registry is a filter rather than the object.
 
 ### Quota
 
 ```
-batlehub-cli admin quota list   [--registry <r>]
-batlehub-cli admin quota reset  <registry> <user>
+batlehub-cli quota list  [-r <registry>]
+batlehub-cli quota reset -r <registry> <user>
 ```
 
 ### IP blocks
 
 ```
-batlehub-cli admin ip-block list
-batlehub-cli admin ip-block add    <ip> [--reason <text>]
-batlehub-cli admin ip-block remove <ip>
+batlehub-cli ip-block list
+batlehub-cli ip-block add    <ip> [--reason <text>]
+batlehub-cli ip-block remove <ip>
 ```
 
-### Config
+### Server
 
 ```
-batlehub-cli admin config reload    # trigger hot reload on the server
-batlehub-cli admin config changes   # view change history
+batlehub-cli server config reload     # trigger hot reload on the server
+batlehub-cli server config changes    # view change history
+batlehub-cli server config show       # the active configuration, as TOML
+batlehub-cli server config validate <file>
+batlehub-cli server config from-file <file>
+batlehub-cli server config pending    # the staged configuration, and what applying it changes
+batlehub-cli server config apply      # apply it (destructive: asks first)
+batlehub-cli server config discard    # drop it (destructive: asks first)
+batlehub-cli server config warnings   # what the running configuration's validation warned about
+batlehub-cli server stats             # cache hit rate, bytes served, aggregate counters
+batlehub-cli server health            # per-registry and per-backend health
 ```
+
+`stats` and `health` are read-only. `health` is the one to run when a client
+reports failures against one registry and not the others.
 
 ### Cache
 
 ```
-batlehub-cli admin cache warm  <registry> [--packages pkg1,pkg2]
-batlehub-cli admin cache clear <registry>
+batlehub-cli cache warm      -r <registry> [--packages pkg1,pkg2] [--paths p1,p2]
+batlehub-cli cache delete    -r <registry>
+batlehub-cli cache evict     -r <registry> [--dry-run]
+batlehub-cli cache coherence -r <registry> [--dry-run]
 ```
+
+`delete`, and `evict` and `coherence` without `--dry-run`, are
+[destructive](#confirmation).
 
 ### Import
 
@@ -752,7 +1042,7 @@ Runs a registry's configured `[[release_imports]]` now, whatever their interval
 says ([RFC 0021](/rfc/0021-forge-releases-into-registries)).
 
 ```
-batlehub-cli admin import <registry> [--tag <tag>] [--repo <owner/name>]
+batlehub-cli import <registry> [--tag <tag>] [--repo <owner/name>]
 ```
 
 `--tag` imports that tag instead of what the configuration selects, and is the
@@ -760,7 +1050,7 @@ only way to reach a pre-release deliberately: `latest` will not choose one.
 `--repo` runs one of several imports configured into the same registry.
 
 ```
-$ batlehub-cli admin import vsx-local
+$ batlehub-cli import vsx-local
 Release import on vsx-local: imported 3, skipped 11, errors 1
 
 +--------+-----------------------------+-------------------------------+
@@ -782,19 +1072,9 @@ under a subject that is not yours.
 ### Banner
 
 ```
-batlehub-cli admin banner set   "Maintenance at 22:00 UTC" [--level info|warning|error]
-batlehub-cli admin banner clear
+batlehub-cli banner set    "Maintenance at 22:00 UTC" [--level info|warning|error]
+batlehub-cli banner delete
 ```
-
-### Stats and health
-
-```
-batlehub-cli admin stats     # cache hit rate, bytes served, aggregate counters
-batlehub-cli admin health    # per-registry and per-backend health
-```
-
-Both are read-only and take no arguments. `health` is the one to run when a
-client reports failures against one registry and not the others.
 
 ### Notifications
 
@@ -802,9 +1082,9 @@ Channels are declared in `config.toml` under `[notifications]` and are read-only
 here; subscriptions are rows this command manages.
 
 ```
-batlehub-cli admin notifications channels        # the configured outbound channels
-batlehub-cli admin notifications list            # the subscriptions
-batlehub-cli admin notifications delete <id>
+batlehub-cli notification channels        # the configured outbound channels
+batlehub-cli notification list            # the subscriptions
+batlehub-cli notification delete <id>
 ```
 
 Neither listing prints a webhook URL or a signing secret. See
@@ -817,17 +1097,17 @@ The package and version tiers of the authorization hierarchy — the two a confi
 file cannot enumerate. Registry- and namespace-tier grants stay in `config.toml`.
 
 ```
-batlehub-cli admin grants list <registry> <name>[@<version>]
-batlehub-cli admin grants set  <registry> <name>[@<version>] --subject <s> --actions <a1,a2>
-batlehub-cli admin grants rm   <registry> <name>[@<version>] --subject <s>
+batlehub-cli grant list   <registry>/<name>[@<version>]
+batlehub-cli grant set    <registry>/<name>[@<version>] --subject <s> --actions <a1,a2>
+batlehub-cli grant remove <registry>/<name>[@<version>] --subject <s>
 ```
 
 ```
-$ batlehub-cli admin grants set npm1 @acme/billing \
+$ batlehub-cli grant set npm1/@acme/billing \
       --subject group:oidc1:eng --actions releases:read,releases:list
 Granted releases:read, releases:list on npm1/@acme/billing to group:oidc1:eng
 
-$ batlehub-cli admin grants list npm1 @acme/billing
+$ batlehub-cli grant list npm1/@acme/billing
 +----------------------------------+------------------------------+---------------------------+-----------+
 | Node                             | Subject                      | Actions                   | Source    |
 +----------------------------------+------------------------------+---------------------------+-----------+
@@ -839,14 +1119,14 @@ $ batlehub-cli admin grants list npm1 @acme/billing
 +----------------------------------+------------------------------+---------------------------+-----------+
 ```
 
-- **`name@version` addresses one version**, split on the *last* `@` — so
-  `@acme/billing` is a package and `@acme/billing@2.4.0` is a version.
+- **A coordinate with a version addresses one version**, so
+  `npm1/@acme/billing` is a package and `npm1/@acme/billing@2.4.0` is a version.
 - **What `set` prints is what was stored.** `--actions releases:*` names one verb
   and stores several; the output is the expanded set. It also prints warnings for
   a grant that is legal but inert — one a broader tier already gives, or one on a
   yanked version.
 - **`Source: ownership` rows are not editable here.** They follow the package's
-  owner list; change them with `admin owner`. Editing one earns a `409`.
+  owner list; change them with [`owner`](#commands-owner). Editing one earns a `409`.
 - Needs `grants:write` (`grants:read` for `list`), which `role:admin` holds.
 
 ### Exposure and flags
@@ -855,151 +1135,234 @@ Who pulled a flagged version, and what the configured sources have flagged
 ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)).
 
 ```
-batlehub-cli admin exposure [--registry <r>] [--package <p>] [--source <s>]
-                            [--min-effect inform|warn|gate|hard_block]
-                            [--when any|before-flag|after-flag]
-                            [--from <t>] [--to <t>] [--after <cursor>] [--limit 100]
+batlehub-cli exposure list [-r <registry>] [--package <p>] [--source <s>]
+                           [--min-effect inform|warn|gate|hard_block]
+                           [--when any|before-flag|after-flag]
+                           [--from <t>] [--to <t>] [--after <cursor>] [--limit 100]
 
-batlehub-cli admin flags list [--registry <r>] [--package <p>] [--source <s>]
-                              [--effect inform|warn|gate|hard_block] [--include-dead]
-                              [--page 0] [--per-page 50]
+batlehub-cli flag list [-r <registry>] [--package <p>] [--source <s>]
+                       [--effect inform|warn|gate|hard_block] [--include-dead]
+                       [--page 0] [--per-page 50]
 ```
 
-`exposure` gives one row per consumer, newest pull first, with how many pulls
-preceded the flag — the retroactive case, where the advisory landed after the
-download. It is cursor-paged: `--after` takes the cursor the previous page
+`exposure list` gives one row per consumer, newest pull first, with how many
+pulls preceded the flag — the retroactive case, where the advisory landed after
+the download. It is cursor-paged: `--after` takes the cursor the previous page
 printed. `--min-effect` means "or stronger".
 
-`admin flags list` shows only live flags unless `--include-dead` adds the revoked
-and expired ones.
+`flag list` shows only live flags unless `--include-dead` adds the revoked and
+expired ones.
+
+```
+batlehub-cli flag create <registry>/<name>[@<version>] --source <s> --external-id <id>
+                         --effect inform|warn|gate|hard_block --summary <text>
+                         [--severity <s>] [--kind <k>] [--url <u>] [--expires-at <t>]
+batlehub-cli flag delete <external-id> --source <s>
+```
+
+`flag create` and `flag delete` act as a `[[flag_sources]]` entry, not as you:
+they sign each request with the source's shared secret, read from
+`BATLEHUB_FLAG_SECRET` so it stays out of the shell history. Without a version,
+the flag covers every version. Sending the same `--external-id` again updates
+the flag. `flag delete` revokes it and is [destructive](#confirmation): the
+versions it held are served again.
+
+### Policy and exemptions {#policy}
+
+```
+batlehub-cli policy show   <registry>/<name>[@<version>]
+batlehub-cli policy set    <registry>/<name>[@<version>] -f <policy.json | ->
+batlehub-cli policy set    <registry>/<name>@<version> --gate <g> --until <t> --reason <text>
+batlehub-cli policy delete <registry>/<name>[@<version>] [--gate <g>]
+
+batlehub-cli exemption list   -r <registry>
+batlehub-cli exemption add    <registry>/<name>@<version> --gate <g> --until <t> --reason <text>
+batlehub-cli exemption remove <registry>/<name>@<version> --gate <g>
+```
+
+A coordinate without a version addresses the package's policy, and one with a
+version addresses that version's policy. In the JSON file, a field left out
+inherits from the tier above. `policy set --gate` and `exemption add` are the
+same call: they exempt one version from one gate until `--until` (RFC 3339).
+The server records whether you exempted a version you published yourself, and
+`add` notes it. `policy delete` is [destructive](#confirmation).
+
+### Upstream audit {#upstream}
+
+```
+batlehub-cli upstream status      <registry>/<name>
+batlehub-cli upstream recheck     <registry>/<name>[@<version>]
+batlehub-cli upstream disappeared [-r <registry>] [--state missing|disappeared|restored]
+                                  [--page 0] [--per-page 50]
+```
+
+These show what the upstream no longer lists
+([RFC 0014](/rfc/0014-upstream-disappearance)). `recheck` probes the upstream
+now instead of waiting for the next sweep.
 
 ### Access check
 
 ```
-batlehub-cli admin access-check --registry <r> --package <p> --version <v>
-                                [--resource releases:read] [--user <id>]
-                                [--role anonymous|user|admin] [--groups <g1,g2>]
+batlehub-cli authz check <registry>/<name>@<version>
+                         [--resource releases:read] [--user <id>]
+                         [--role anonymous|user|admin] [--groups <g1,g2>]
 ```
 
-Simulates one decision without making a request as that identity. The three
-coordinate flags are required. See also [`authz explain`](#commands-authz),
-which answers the broader question of what a subject may do and names the tier
-that granted each verb.
+Simulates one decision without making a request as that identity. See also
+[`authz explain`](#commands-authz), which answers the broader question of what a
+subject may do and names the tier that granted each verb.
 
 ### Visibility, namespaces and users
 
 ```
-batlehub-cli admin visibility get <registry> <name>
-batlehub-cli admin visibility set <registry> <name> public|internal|team
+batlehub-cli visibility show <registry>/<name>
+batlehub-cli visibility set  <registry>/<name> public|internal|team
 
-batlehub-cli admin namespace list    <registry>
-batlehub-cli admin namespace claim   <registry> <prefix> <group-id>
-batlehub-cli admin namespace release <registry> <prefix>
+batlehub-cli namespace list   -r <registry>
+batlehub-cli namespace claim  -r <registry> <prefix> <group-id>
+batlehub-cli namespace remove -r <registry> <prefix>
+batlehub-cli namespace signing-key list   -r <registry> <namespace>
+batlehub-cli namespace signing-key set    -r <registry> <namespace> --key-id <id> --armor <key.asc | ->
+batlehub-cli namespace signing-key delete -r <registry> <namespace> <key-id>
 
-batlehub-cli admin users list-blocked
-batlehub-cli admin users block   <user-id> [--reason <text>]
-batlehub-cli admin users unblock <user-id>
+batlehub-cli user list                      # the blocked users
+batlehub-cli user block   <user-id> [--reason <text>]
+batlehub-cli user unblock <user-id>
 ```
 
 All three change who can do what, and take effect immediately.
-`namespace release` reopens a prefix to anyone who can publish in the registry,
+`namespace remove` reopens a prefix to anyone who can publish in the registry,
 which is the one here whose blast radius is larger than it looks.
-
-### Package lifecycle
-
-Two reversible pairs, each over one version:
-
-```
-batlehub-cli admin deprecate   <registry> <name> <version> [--message <text>]
-batlehub-cli admin undeprecate <registry> <name> <version>
-
-batlehub-cli admin unlist <registry> <name> <version>
-batlehub-cli admin relist <registry> <name> <version>
-```
-
-Deprecating warns a consumer and keeps serving; unlisting hides the version from
-search and listings and keeps serving it to anyone who asks by exact version.
-Neither deletes anything — for that, see [`version yank` and
-`version delete`](#commands-version).
-
-### Bulk operations
-
-```
-batlehub-cli admin bulk yank   <registry> <name@version>...
-batlehub-cli admin bulk unyank <registry> <name@version>...
-batlehub-cli admin bulk delete <registry> <name@version>...
-```
-
-::: danger
-`admin bulk delete` is **irreversible and unguarded**. There is no `--dry-run`,
-no confirmation prompt and no `--yes` interlock, and it acts on every coordinate
-on the command line as soon as you press enter. Contrast
-[`admin retention`](#retention), which needs both `--reclaim` and a server-side
-`dry_run = false` before it removes anything. Check the list with
-`admin bulk yank` first if you are not certain.
-:::
-
-Output is `processed=N succeeded=N failed=N`, then one `FAILED name@version:
-error` line each — failures are named, not just counted.
 
 ### SBOM
 
 ```
-batlehub-cli admin sbom get    <registry> <name> <version> [--format cyclonedx]
-batlehub-cli admin sbom export [--registry <r>] [--from <t>] [--to <t>]
-                               [--format cyclonedx] [-o <file>]
+batlehub-cli sbom show   <registry>/<name>@<version> [--sbom-format cyclonedx]
+batlehub-cli sbom export [-r <registry>] [--from <t>] [--to <t>]
+                         [--sbom-format cyclonedx] [-o <file>]
 ```
 
-`get` always prints JSON. `export` writes to the named file, or stdout without
+`show` always prints JSON. `export` writes to the named file, or stdout without
 `-o`. See [`docs/guide/sbom.md`](/guide/sbom) for the formats and what they
 contain.
 
 ### Audit log
 
 ```
-batlehub-cli admin audit-log [--registry <r>] [--user <id>] [--from <date>] [--to <date>] [--denied-only]
+batlehub-cli audit log    [-r <registry>] [--user <id>] [--from <date>] [--to <date>] [--denied-only]
+batlehub-cli audit purge  --before <RFC 3339 instant>
+batlehub-cli audit verify [--from <t>] [--to <t>] [--head <digest>]
 ```
+
+`purge` is [destructive](#confirmation).
 
 #### Export for compliance
 
 ```
-batlehub-cli admin export-audit-log [--from <t>] [--to <t>] [--registry <r>]
-                                    [--action delete,retention_reclaim]
-                                    [--format json|csv] [-o <file>]
+batlehub-cli audit export [--from <t>] [--to <t>] [-r <registry>]
+                          [--action delete,retention_reclaim]
+                          [--format json|csv] [-o <file>]
 ```
 
-Distinct from `admin audit-log` above, which is the interactive paged query.
-This one is the export an auditor keeps: a whole window in one document, written
-to `-o` or to stdout. For the identity-scoped question — what did *this account*
-pull — see [`audit pulls`](#commands-audit), which aggregates rather than listing
-every event.
+Distinct from `audit log` above, which is the interactive paged query. This one
+is the export an auditor keeps: a whole window in one document, written to `-o`
+or to stdout. For the identity-scoped question — what did *this account* pull —
+see [`audit pulls`](#commands-audit), which aggregates rather than listing every
+event.
 
 ### Retention
 
 ```
-batlehub-cli admin retention <registry> [--show-kept] [--reclaim]
+batlehub-cli retention show  <registry> [--show-kept]
+batlehub-cli retention apply <registry> [--show-kept] [--dry-run]
 ```
 
 Reclaims locally published versions the registry's `[registries.retention]`
-policy no longer keeps. **Reports by default** — `--reclaim` is only half the
-interlock, and the registry also needs `dry_run = false`. Two decisions in two
-places, because a reclaimed artifact may exist nowhere else.
+policy no longer keeps. `show` reports and changes nothing. `apply` is only half
+the interlock: the registry also needs `dry_run = false`, and `apply` is
+[destructive](#confirmation). Two decisions in two places, because a reclaimed
+artifact may exist nowhere else.
 
 `--show-kept` prints every surviving version and the condition that saved it,
 which is how you check a policy against what it actually does before arming it.
 
 Pinning a single version against retention is
-[`version pin`](#commands-version).
+[`package pin`](#commands-version).
 
 ### Air gap
 
 ```
-batlehub-cli admin air-gap-missing [--registry <r>] [--kind artifact|document|checksum|ref|unmirrored_host]
-batlehub-cli admin bundles
+batlehub-cli air-gap missing [-r <registry>] [--kind artifact|document|checksum|ref|unmirrored_host]
+batlehub-cli bundle list
 ```
 
 What a disconnected instance was asked for and did not hold, and what came
 across the gap. See [the air-gap runbook](/operations/air-gap).
+
+### Data-subject requests
+
+```
+batlehub-cli gdpr erase  --user <subject> [--ignore-open-decisions]
+batlehub-cli gdpr export --user <subject>
+```
+
+`erase` is [destructive](#confirmation). `--ignore-open-decisions` erases even
+while an open decision names the subject; it is not a way to skip the
+confirmation, which still needs `--yes` in a script.
+
+### Removed spellings {#removed-spellings}
+
+The grammar of RFC 0040 replaced every spelling below. None of them runs any
+more: each one is refused as a usage error (exit 2), so a script that still
+uses one fails loudly instead of doing something else.
+
+| Before | Now |
+| --- | --- |
+| `config init/show/set` | `profile init/show/set` |
+| `registry info <name>` | `registry show <name>` |
+| `version yank/unyank/delete/pin/unpin <reg> <name> <ver>` | `package yank/… <reg>/<name>@<ver>…` |
+| `admin bulk yank/unyank/delete <reg> <name@ver>…` | `package yank/unyank/delete <reg>/<name>@<ver>…` |
+| `admin deprecate/undeprecate/unlist/relist <reg> <name> <ver>` | `package deprecate/… <reg>/<name>@<ver>…` |
+| `package versions <reg> <name>` | `package versions <reg>/<name>` |
+| `owners list/add/remove <reg> <name>` | `owner list/add/remove <reg>/<name>` |
+| `admin visibility get/set <reg> <name>` | `visibility show/set <reg>/<name>` |
+| `admin grants list/set/rm <reg> <target>` | `grant list/set/remove <reg>/<target>` |
+| `admin namespace list/claim/release <reg> …` | `namespace list/claim/remove -r <reg> …` |
+| `admin users list-blocked/block/unblock` | `user list/block/unblock` |
+| `admin quota list/reset` | `quota list/reset` |
+| `admin ip-block …` | `ip-block …` |
+| `admin config reload/changes/view/validate/from-file` | `server config reload/changes/show/validate/from-file` |
+| `admin stats`, `admin health` | `server stats`, `server health` |
+| `admin cache warm/clear/evict/coherence <reg>` | `cache warm/delete/evict/coherence -r <reg>` |
+| `admin import <reg>` | `import <reg>` |
+| `admin banner set/clear` | `banner set/delete` |
+| `admin retention <reg> [--reclaim]` | `retention show <reg>` · `retention apply <reg>` |
+| `admin exposure` | `exposure list` |
+| `admin bundles` | `bundle list` |
+| `admin air-gap-missing` | `air-gap missing` |
+| `admin flags list` | `flag list` |
+| `admin audit-log [--purge-before]` | `audit log` · `audit purge --before` |
+| `admin export-audit-log` | `audit export` |
+| `admin audit verify` | `audit verify` |
+| `admin gdpr erase --force` | `gdpr erase --ignore-open-decisions` |
+| `admin sbom get/export` | `sbom show/export` |
+| `admin notifications …` | `notification …` |
+| `admin access-check --registry --package --version` | `authz check <reg>/<name>@<ver>` |
+| `verdicts …` | `verdict …` |
+| `auth token revoke` | `auth token delete` |
+| `--csv` | `--format csv` |
+| `mise plan/export --out` | `--output` (`-o`) |
+
+One alias stays: `proxy serve --registry` and `vsx verify --registry` (a URL)
+are still accepted for `--registry-url`, because the editor extensions pass
+them. The `registry:name@version` coordinate is accepted for good, with a
+`warning:` naming the `registry/name@version` form.
+
+Two spellings changed with no alias, because the global `--format` took their
+name: `admin sbom get/export --format` is now `--sbom-format`, and
+`admin export-audit-log --format` is now the global `--format`.
+`auth token --output raw|json` still works; `--format raw|json` is the new
+spelling.
 
 ---
 
@@ -1039,17 +1402,24 @@ carried. Importing the same bundle twice writes once and says so.
 
 ---
 
-## 14. Commands — config
+## 14. Commands — profile {#commands-profile}
+
+The local configuration file: which server, which credential, which default
+registry. The server's own configuration is [`server config`](#server).
 
 ```
-batlehub-cli config init           # interactive first-run wizard
-batlehub-cli config show           # print resolved config (token is masked)
-batlehub-cli config set server_url https://batlehub.example.com
-batlehub-cli config set token      my-token [--profile prod]
-batlehub-cli config set registry   internal [--profile prod]
+batlehub-cli profile init                # interactive first-run wizard
+batlehub-cli profile list                # the profiles, `*` on the one in use
+batlehub-cli profile show [<name>] [--key <key>]   # token masked
+batlehub-cli profile set server_url https://batlehub.example.com
+batlehub-cli -P prod profile set registry internal
+batlehub-cli profile use prod            # the profile used when -P is not given
 ```
 
-Valid keys for `config set`: `server_url`, `token`, `registry`.
+Valid keys for `profile set`: `server_url`, `token`, `registry`. `set` writes
+the `-P` profile (or the one in use). `use` writes a top-level `current` key; an
+older CLI ignores it and keeps reading `default`. `profile set token …` stores a
+static token, which `auth login` would refresh and this never does.
 
 ---
 
@@ -1115,10 +1485,21 @@ refuse, and `detect` prints the snippets instead.
 | maven | `~/.m2/settings.xml` | the whole file, a `<mirror>` (only when absent; once you edit it, it is yours) |
 | mise | `$MISE_CONFIG_DIR/conf.d/batlehub.toml` (`~/.config/mise`) | `[settings.url_replacements]` for github, forgejo, npm, cargo and openvsx registries that proxy the public host (`api.github.com`, `codeberg.org`, …; one in front of another forge gets none, and says so); for every generic registry, one rule per upstream it mirrors (`^<upstream>/(.+)` onto the registry), after the others; `node.mirror_url` for a nodedist one. Both kinds of rule need the upstreams, which the registry list only shows to a caller holding [`upstreams:read`](/guide/access-control#verbs); the list is read anonymously, so that grant is to `*` |
 | rustup, node | `~/.config/batlehub/env.sh` | `RUSTUP_DIST_SERVER`, `NODEJS_ORG_MIRROR` and the nvm/fnm/n mirrors, sourced from the **top** of `~/.bashrc` (above its non-interactive `return`) or from `~/.zshenv` (`$ZDOTDIR/.zshenv` when `ZDOTDIR` comes from outside it; a `conf.d` file for fish). On macOS, bash gets the login file it reads — the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`. The shell is `$SHELL`, else the account's in `/etc/passwd`. `bash -c` reads no rc file: use `BASH_ENV` or `setup env` there |
+| conda, mamba, micromamba | `~/.condarc` | `channels:` with the registry, then `nodefaults` |
+| composer | composer's `config.json` (`$COMPOSER_HOME`, else Composer's own XDG or `~/.composer` choice) | the whole file — a `"//"` key marks it — with the registry under `repositories` and packagist turned off; only when `setup` created the file. No credential is written |
+| gem | `~/.gemrc` | `:sources:` |
+| dotnet, nuget | `~/.nuget/NuGet/NuGet.Config` (under `$DOTNET_CLI_HOME` when set) | the whole file: `<clear/>` and one source; only when `setup` created it |
+| terraform, tofu | `~/.terraformrc` | a `provider_installation` block with the registry as `network_mirror` (https only: terraform refuses a plain-HTTP mirror) |
+| ansible-galaxy | `~/.ansible.cfg` | `[galaxy] server_list = batlehub` and `[galaxy_server.batlehub]` |
+| nix | `~/.config/nix/nix.conf` | `extra-substituters`; your user must be in the daemon's `trusted-users`, which `setup` says rather than writes |
+| sdkman | `~/.config/batlehub/env.sh` | `SDKMAN_CANDIDATES_API`, `SDKMAN_BROKER_API` |
+| mise, for gitlab | the mise drop-in above | `url_replacements` for `gitlab.com`, as for github and forgejo |
+| helm | nothing | helm rewrites `repositories.yaml` itself and drops comments, so no block would survive: `status` reads the file and reports `manual` with the `helm repo add` to run, until a repository there has the registry's URL |
+| apt, dnf/yum, pacman, apk, devfile | nothing | `print`: the snippet, because the file is root's (or the cluster's, for a Che devfile registry) |
 
 - **Without `--yes`, nothing is written**: the diff of every file is printed.
 - **Only what is between the markers is ever touched.** A block starts with
-  `# >>> batlehub setup … >>>` and ends with `# <<< batlehub setup <<<`; files
+  `# >>> batlehub-cli setup … >>>` and ends with `# <<< batlehub-cli setup <<<`; files
   managed whole (`settings.xml`, the drop-ins) carry the start marker on their
   first line. `remove` gives every file back byte for byte.
 - **What you edit stops being managed.** The marker records a hash of what was
@@ -1171,7 +1552,7 @@ refuse, and `detect` prints the snippets instead.
   registry whose `public_url` is not on the server's host or a subdomain of it
   (`--allow-foreign-hosts`), or is plain HTTP on an HTTPS server
   (`--insecure-http`), stops only its own clients: they are `conflict`, every
-  other file is written, and the run exits 3. A URL or registry name holding a
+  other file is written, and the run exits 6. A URL or registry name holding a
   character a config file could misread (a newline, a quote, credentials) is
   refused the same way.
 - **One broken file is that file's `conflict`**, not every client's: a
@@ -1196,7 +1577,7 @@ refuse, and `detect` prints the snippets instead.
   password database, not `$HOME`: where the two differ (some containers),
   pass `-Duser.home` or set `HOME` to match.
 
-`status` prints one row per file: `not-installed`, `no-registry`, `ambiguous`,
+`status` prints one row per file: `not-installed`, `no-registry`, `ambiguous`, `manual` (helm: a command to run), `print` (a snippet for a file `setup` never writes),
 `absent`, `up-to-date`, `drifted`, `orphaned` (its registry is gone; the block
 is kept — `--pick` another or `remove` it) or `conflict`. `env` prints the env-only variables for
 `eval "$(batlehub-cli setup env)"`, for a shell `--shell-rc none` leaves alone
@@ -1211,7 +1592,7 @@ server cannot answer (unreachable, an error status, an unreadable or empty
 list — a bad `--pick` is still an error) under the same rules: that server's
 URLs only, nothing over a variable you set, and only the variables `apply`
 writes, as plain URLs. It
-prints nothing, exit 3, when `env.sh` is `conflict` or `ambiguous`: `eval`
+prints nothing, exit 6, when `env.sh` is `conflict` or `ambiguous`: `eval`
 would override the variable `apply` refused to. `status` takes the
 `--shell-rc` given to `apply`.
 
@@ -1266,52 +1647,118 @@ The TUI is a full-screen terminal interface built with [ratatui](https://ratatui
 | `↓` / `j` | Move selection down |
 | `Enter` | Open selected item |
 | `/` | Toggle package search filter |
-| `y` | Yank selected version (version detail screen) |
-| `u` | Unyank selected version |
-| `p` | Open publish wizard |
+| `p` | Open publish wizard (registry list) |
+| `L` | Open the login screen (registry list) |
 | `?` | Toggle help overlay |
 | `Tab` / `Shift-Tab` | Cycle fields in publish wizard |
 
-## 17. Commands — why and wait {#commands-security}
+On the version detail screen, the keys act on the selected version, through
+the same requests as [`package <verb>`](#commands-version) and `why`:
+
+| Key | Action |
+|-----|--------|
+| `w` | **Why** pane: [`why`](#commands-security)'s answer for the version, then your own recent refusals of this package |
+| `o` | The package's owners |
+| `y` / `d` | Yank / delete: a modal names the version and asks first; any key but `y` cancels |
+| `u` | Unyank |
+| `p` / `P` | Pin / unpin against retention |
+| `Esc` | Close the side pane, then go back |
+
+The login screen writes the `-P` profile, as `auth login` does, and the TUI
+uses the new credential at once. The publish wizard shows the name and version
+it read from the file once you press `Enter` on the path, and runs `publish`
+itself: the TUI steps aside while it prints, and comes back on `Enter`.
+
+## 17. Commands — why, wait and check {#commands-security}
 
 The two verbs of a supply-chain quarantine ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)). A registry behind `[registries.security]` refuses a version it has not judged yet, or has judged against; the refusal names the coordinate, the state, the reason codes and this command.
 
-### `why <registry>:<name>@<version>`
+### `why <registry>/<name>@<version>`
 
-The verdict behind a refusal: state, reason codes, when a hold lifts, which scanners answered, and — for a token with `findings:read` — the findings themselves. Needs `quarantine:read` on the registry (`user` and `admin` hold it by default; `anonymous` does not, so a public mirror answers a plain 404 unless the operator grants it).
+Why a version is pullable, not pullable yet, or not pullable ([RFC 0040 §4.8](/rfc/0040-cli-grammar-and-coverage#_4-8-why-a-version-is-not-pullable)). It prints one headline, then every cause the download checks, in the order the server checks them (access, block, lifecycle, policy rules, the verdict, upstream). Every cause is reported, not only the first one that fails. The command asks `GET /api/v1/packages/access` and writes nothing on the server: it queues no scan and records no verdict. Any identity may ask. A package you may not read gets the same `404` as an unknown one.
 
 ```bash
-batlehub why npm:left-pad@1.3.1
-batlehub why npm:left-pad@1.3.1 --json
-batlehub why npm:left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:exempt)
+batlehub-cli why npm/left-pad@1.4.0
+batlehub-cli why npm/left-pad@1.4.0 --format json
+batlehub-cli why npm/left-pad@1.4.0 --rescan     # queue a rescan too (needs gates:exempt)
+batlehub-cli -r npm why left-pad@1.4.0           # a bare name, in the default registry
 ```
 
 ```text
-npm:left-pad@1.3.1
-  state        quarantined
-  reasons      MIN_AGE_NOT_MET
-  docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
-  available    2026-09-05T14:12:00Z
-  policy       npm/default
-  evaluated    2026-09-04T14:12:03Z
-  scanned      2026-09-04T14:12:01Z
-  scanners     osv
-  findings     none
+⏳ npm/left-pad@1.4.0 — pullable from 2026-11-04 14:00 UTC
 
-Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+  ✅ pass  access      you may read npm
+  ✅ pass  block       not blocked
+  ⏳ wait  verdict     MIN_AGE_NOT_MET: quarantined — MIN_AGE_NOT_MET (until 2026-11-04 14:00 UTC)
+                      https://batlehub.dev/use/refused-downloads#min-age-not-met
+  ✅ pass  upstream    metadata resolved
+
+next: `batlehub-cli wait npm/left-pad@1.4.0` returns when it becomes pullable
 ```
 
-The `docs` row links each reason code to its section of [Why a download was refused](/use/refused-downloads), which says what the code means and what to do about it.
+The headline is **✅ pullable now**, **⏳ pullable from \<time\>** (or **when a scanner answers**), or **⛔ not pullable**. Each failing cause carries its reason code, the code's section of [Why a download was refused](/use/refused-downloads), and a `next:` step. A token with `findings:read` also sees the scanners' findings under a held verdict. The exit code is **0** for ✅ and ⏳, since a hold that lifts on its own is still an answer, **4** for ⛔ and **5** for not found. Use `wait` when you want the exit code to wait.
 
-### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
+### `why <registry>/<name>`
 
-The CI contract. Polls the verdict and exits **0** when the version becomes servable, **1 when waiting cannot help** — a `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` — and **2** on timeout. Exit 1 comes back on the first poll with the reason, never after burning the timeout, so a pipeline fails fast on a decision and waits only on a clock. When the hold names an `available_at` the wait sleeps to it rather than polling.
+With no version, `why` explains **resolution**: which version a client asking for the newest one receives, and why that is not the newest version. Below that is a table of the ten newest versions and their state.
+
+```text
+npm/left-pad resolves to 1.3.9 — 1.4.0 is waiting (MIN_AGE_NOT_MET, until 2026-11-04 14:00 UTC)
+
+VERSION  STATE        UNTIL                  CODE
+1.4.0    quarantined  2026-11-04 14:00 UTC   MIN_AGE_NOT_MET
+1.3.9    allowed      —                      —
+1.3.8    yanked       —                      —
+```
+
+### `why --last [--limit 20]`
+
+Your own refusals from the last 30 days, newest first: the coordinate, the time and the reason code. Use it when npm printed a `403` and you do not know which exact version it asked for. Each row is a coordinate you can pass back to `why`. It reads `GET /api/v1/me/downloads?outcome=denied`, which returns only the caller's rows. A refusal recorded before the upgrade shows `—` as its code.
+
+### `wait <registry>/<name>@<version> [--timeout 1h] [--interval 30s]`
+
+The CI contract. Polls the verdict and exits **0** when the version becomes servable, **4 when waiting cannot help** — a `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` — and **8** on timeout ([exit codes](#exit-codes)). Exit 4 comes back on the first poll with the reason, never after burning the timeout, so a pipeline fails fast on a decision and waits only on a clock. When the hold names an `available_at` the wait sleeps to it rather than polling.
 
 ```bash
-batlehub wait npm:left-pad@1.3.1 --timeout 2h && npm ci
+batlehub-cli wait npm/left-pad@1.3.1 --timeout 2h && npm ci
 ```
 
 A version this instance has never been asked for has no verdict to wait on: request the artifact once (the first request is what creates the hold and queues the scan), then wait.
+
+### `check [--lock <file>…] [--strict]` {#check}
+
+Answers whether the pinned dependencies of this project would install. Without
+`--lock`, `check` reads every lockfile it knows in the current directory: the
+**Check** column of [the coverage matrix](#coverage) lists them. Each pin is
+asked about against the registry of its kind (`-r` when it is that kind,
+otherwise the first one you can install from, a proxy before a local one). The
+dependencies that are not ✅ are listed with their reason and the next step:
+
+```
+$ batlehub-cli check
++----+-----------------------------+-------------------+------------------------------------+-----------------------------------------+
+|    | DEPENDENCY                  | LOCKFILE          | WHY                                | NEXT                                    |
++----+-----------------------------+-------------------+------------------------------------+-----------------------------------------+
+| ⏳ | npm/left-pad@1.4.0          | package-lock.json | MIN_AGE_NOT_MET: released 2 days … | batlehub-cli wait npm/left-pad@1.4.0    |
++----+-----------------------------+-------------------+------------------------------------+-----------------------------------------+
+212 dependencies: 211 pullable, 1 waiting, 0 refused
+```
+
+It exits **4** as soon as one dependency is ⛔, or one this instance does not
+have or that you may not see, and with `--strict` on a ⏳ too. Otherwise it
+exits 0. Run it in CI right before the install, so the job fails naming a
+dependency rather than with a `403` in the package manager's log:
+
+```bash
+batlehub-cli check --strict && npm ci
+```
+
+`check` asks `POST /api/v1/packages/access/batch` 50 pins at a time. The server
+answers from the metadata it already holds and never fetches upstream for a
+`check`. A version it has not resolved yet is ⏳ "not yet resolved", and
+`batlehub-cli why <coordinate>` resolves it. Each pin counts against your rate
+limit like a download. A lockfile over 16 MiB is refused with exit 2 before
+anything is sent.
 
 ---
 
@@ -1326,10 +1773,13 @@ serve actually resolves.
 batlehub-cli download <target> [-o <file>]
 ```
 
-`<target>` is one of three things, and the third is the reason `--registry`
-exists:
+`<target>` is a coordinate or a path:
 
 ```sh
+# a coordinate: the version's one artifact, checked against its metadata
+batlehub-cli download npm-local/left-pad@1.3.0
+batlehub-cli -r crates download serde@1.0.200
+
 # a full URL
 batlehub-cli download https://hub.example.dev/proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 
@@ -1340,8 +1790,26 @@ batlehub-cli download /proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 batlehub-cli download -r jb jetbrains/idea/idea-2026.1.3.tar.gz
 ```
 
-`-o` names the output file; it defaults to the path's basename, and `-o -` writes
-to stdout so the file can be piped.
+**By coordinate**, the kind must have one artifact per version: npm, cargo,
+composer, rubygems, goproxy, nuget, openvsx, vscode-marketplace,
+jetbrains-marketplace and galaxy. Any other kind exits 2 and says why (a PyPI
+version is several files, a Maven version a jar and a pom); give its `/proxy/…`
+path instead. The file is named from the coordinate (`left-pad-1.3.0.tgz`),
+never from anything the server sends.
+
+The bytes go to `<file>.part` and are hashed while they stream, against the
+checksum the kind's own metadata advertises (npm's `dist.integrity`, cargo's
+index `cksum`). Only a match is renamed into place; a mismatch, a refusal or a
+Ctrl-C removes the `.part` and exits non-zero. A kind whose metadata carries no
+checksum the CLI reads is written with a `warning:` that says it is unverified.
+
+When the server refuses a coordinate (`403`, or `404`), `download` prints what
+[`why`](#commands-security) prints for it on stderr, then exits 4 or 5.
+
+`-o` names the output file, and an existing one is replaced only after a
+[confirmation](#confirmation). `-o -` writes to stdout so the file can be piped;
+there, a mismatch is reported after the last byte and the exit code (1) is the
+signal.
 
 ---
 
@@ -1375,27 +1843,27 @@ by default; `--detail` prints every entry.
 
 ---
 
-## 20. Commands — verdicts {#commands-verdicts}
+## 20. Commands — verdict {#commands-verdicts}
 
 The administrator's side of a supply-chain verdict
 ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)). Where `why` answers
 *why is my install held*, these answer *what is held, and who already pulled it*.
 
 ```
-batlehub-cli verdicts pullers  <registry>:<name>@<version> [--since <window>] [--csv]
-batlehub-cli verdicts list     --registry <r> [--state <s>] [--limit <n>]
-batlehub-cli verdicts backfill --registry <r>
-batlehub-cli verdicts rescan   --registry <r> [--state <s>]
+batlehub-cli verdict pullers  <registry>/<name>@<version> [--since <window>] [--format csv]
+batlehub-cli verdict list     -r <r> [--state <s>] [--limit <n>]
+batlehub-cli verdict backfill -r <r>
+batlehub-cli verdict rescan   -r <r> [--state <s>]
 ```
 
 `pullers` is the incident question: who pulled this version inside a window,
 from the same access-log query the flip alert carries. `--since` takes `30d`,
 `12h`, `90m` or an RFC 3339 instant, and defaults to the registry's
-`pullers_window_days`. `--csv` prints the CSV the export endpoint renders, for
+`pullers_window_days`. `--format csv` prints the CSV the export endpoint renders, for
 handing to someone who does not have the CLI.
 
 ```sh
-batlehub-cli verdicts pullers npm:left-pad@1.3.1 --since 30d --csv
+batlehub-cli verdict pullers npm/left-pad@1.3.1 --since 30d --format csv
 ```
 
 `list` shows a registry's verdicts by state — `allowed`, `warned`,
@@ -1435,17 +1903,17 @@ batlehub-cli completion fish > ~/.config/fish/completions/batlehub-cli.fish
 ## 22. Commands — audit {#commands-audit}
 
 What one identity pulled ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)
-§4.2). The transpose of [`verdicts pullers`](#commands-verdicts): that one pins a
+§4.2). The transpose of [`verdict pullers`](#commands-verdicts): that one pins a
 version and asks who took it, this one pins an identity and asks what it took.
 
 ```
-batlehub-cli audit pulls --identity <id> [--registry <r>] [--package <p>] [--since <window>] [--csv]
+batlehub-cli audit pulls --identity <id> [-r <r>] [--package <p>] [--since <window>] [--format csv]
 ```
 
 `--identity` is a user id, or `ip:<addr>` for an anonymous caller — often the
 only handle an incident has on a runner that presents no credential. `--since`
 takes `30d`, `12h`, `90m` or an RFC 3339 instant and defaults to 30 days.
-`--csv` prints the CSV the endpoint renders, byte for byte, for handing to
+`--format csv` prints the CSV the endpoint renders, byte for byte, for handing to
 someone who does not have the CLI.
 
 ```
@@ -1456,7 +1924,7 @@ npm-local      demo-pkg                     1.0.0               3  2026-09-08T23
 crates         serde                        1.0.219            11  2026-09-08T21:04:11Z
 ```
 
-Both this and `verdicts pullers` need `audit:read`, and both count **delivered
+Both this and `verdict pullers` need `audit:read`, and both count **delivered
 bytes only**: a refusal transferred nothing and is a different question. Rows are
 grouped by coordinate, newest pull first.
 

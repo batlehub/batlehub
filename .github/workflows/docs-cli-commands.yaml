@@ -1,0 +1,44 @@
+name: Docs CLI commands
+# Every `batlehub-cli` command the published docs show must parse with the CLI
+# as built, and none may use a spelling RFC 0040 deprecated (`task
+# docs:cli-commands`). Its own workflow because it needs both halves: a docs
+# edit can break an example, and a CLI change can break every example of the
+# command it renames. test.yaml does not run on docs, and front-design.yaml has
+# no cargo and does not run on cli/.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/**/*.md"
+      - "cli/**"
+      - ".tasks/scripts/check_doc_commands.py"
+      - ".tasks/scripts/test_check_doc_commands.py"
+      - ".github/workflows/docs-cli-commands.yaml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "docs/**/*.md"
+      - "cli/**"
+      - ".tasks/scripts/check_doc_commands.py"
+      - ".tasks/scripts/test_check_doc_commands.py"
+      - ".github/workflows/docs-cli-commands.yaml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    name: Documented CLI commands parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the CLI
+        run: cargo build --locked --quiet -p batlehub-cli
+      - name: Checker's own tests
+        run: python3 -m unittest -q test_check_doc_commands
+        working-directory: .tasks/scripts
+      - name: Every documented command parses
+        run: python3 .tasks/scripts/check_doc_commands.py target/debug/batlehub-cli docs

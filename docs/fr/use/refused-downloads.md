@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: a66b50f7da813ccf
+sourceHash: 7360757901fe0164
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -9,7 +9,7 @@ sourceHash: a66b50f7da813ccf
 Quand BatleHub refuse un téléchargement, il en donne la raison au gestionnaire
 de paquets, mais la plupart des gestionnaires de paquets n'en affichent qu'une
 partie. Cette page explique ce que signifie chaque refus, comment obtenir la
-raison complète avec `batlehub why`, et ce que vous, ou l'administrateur de
+raison complète avec `batlehub-cli why`, et ce que vous, ou l'administrateur de
 l'instance, pouvez faire dans chaque cas. La configuration de ces contrôles est
 décrite sur la page de l'opérateur, [Contrôles de sécurité](/fr/guide/security-gates).
 
@@ -34,7 +34,7 @@ d'approvisionnement : chaque version est analysée, et le résultat de l'analyse
 son **verdict**, décide :
 
 ```text
-npm-public:left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available 2026-09-05T14:12:00Z). Run `batlehub why npm-public:left-pad@1.3.1` for details.
+npm-public:left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available 2026-09-05T14:12:00Z). Run `batlehub-cli why npm-public:left-pad@1.3.1` for details.
 ```
 
 Les mots en majuscules sont des **codes de motif**, chacun expliqué sous
@@ -53,10 +53,10 @@ source suivante ».
 
 ---
 
-## Demander la raison complète : `batlehub why` {#batlehub-why}
+## Demander la raison complète : `batlehub-cli why` {#batlehub-why}
 
 ```console
-$ batlehub why npm-public:left-pad@1.3.1
+$ batlehub-cli why npm-public:left-pad@1.3.1
 npm-public:left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
@@ -68,7 +68,7 @@ npm-public:left-pad@1.3.1
   scanners     osv
   findings     none
 
-Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
 ```
 
 - **`docs` :** un lien par code de motif, vers sa section de cette page.
@@ -86,7 +86,7 @@ La commande est décrite en entier dans [la CLI](/fr/use/cli#commands-security).
 **Attendre la levée d'une retenue** dans un script ou un pipeline :
 
 ```console
-$ batlehub wait npm-public:left-pad@1.3.1 --timeout 2h
+$ batlehub-cli wait npm-public:left-pad@1.3.1 --timeout 2h
 ```
 
 Elle sort avec `0` dès que la version peut être servie, `1` quand attendre ne
@@ -118,7 +118,7 @@ solution.
 La version a été publiée trop récemment. Le registre attend un délai fixe après
 chaque release (trois jours est courant) pour qu'une release compromise puisse
 être repérée et retirée avant que quiconque ne l'installe. Le verdict porte
-l'heure à laquelle elle devient disponible : attendez-la avec `batlehub wait`,
+l'heure à laquelle elle devient disponible : attendez-la avec `batlehub-cli wait`,
 ou épinglez la version précédente d'ici là.
 
 #### `SCAN_PENDING` {#scan-pending}
@@ -132,7 +132,7 @@ peut-être arrêté : prévenez votre administrateur.
 
 Un scanner requis a échoué sur cette version, après ses nouvelles tentatives.
 La retenue se lève quand une analyse réussit, et votre administrateur peut en
-mettre une en file avec `batlehub why --rescan`. Une version plus ancienne que
+mettre une en file avec `batlehub-cli why --rescan`. Une version plus ancienne que
 l'âge de maturité du registre est servie en `warned` malgré ce code, pour qu'un
 scanner en panne ne bloque pas tout indéfiniment.
 
@@ -159,7 +159,7 @@ version est servie.
 
 #### `VULNERABILITY` {#vulnerability}
 
-Une vulnérabilité connue touche cette version. `batlehub why` nomme l'avis de
+Une vulnérabilité connue touche cette version. `batlehub-cli why` nomme l'avis de
 sécurité si vous pouvez voir les constats. Passez à une version corrigée s'il
 en existe une. Si la vulnérabilité ne peut pas toucher votre usage du paquet,
 votre administrateur peut consigner ce jugement sous forme d'exemption, avec un
@@ -264,7 +264,7 @@ vous en avez besoin.
 
 #### `BLOCK_LIST` {#block-list}
 
-Un administrateur a bloqué cette version, et `batlehub why` affiche son motif
+Un administrateur a bloqué cette version, et `batlehub-cli why` affiche son motif
 si vous pouvez voir les constats. C'est toujours refusé, quel que soit le mode
 du registre. Adressez-vous à l'administrateur, ou utilisez une autre version.
 
@@ -319,7 +319,7 @@ ou refuse. Vérifiez le script, et épinglez-le à un commit.
 ## Les refus à message simple {#plain-messages}
 
 Ils viennent de registres sans profil de chaîne d'approvisionnement. Le message
-est toute la réponse, et `batlehub why` n'a rien à y ajouter.
+est toute la réponse, et `batlehub-cli why` n'a rien à y ajouter.
 
 | Le message commence par… | Signification | Que faire |
 | --- | --- | --- |

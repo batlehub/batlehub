@@ -1,7 +1,7 @@
 //! The verdict endpoint (RFC 0018 §4.2), as `batlehub why` and `batlehub
 //! wait` read it.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -101,20 +101,40 @@ pub struct RescanView {
     pub trigger: String,
 }
 
-/// `<registry>:<name>@<version>`, with the `@` that starts a scoped npm name
-/// left alone: the version is what follows the *last* `@`.
-pub fn parse_coordinate(spec: &str) -> Result<(String, String, String)> {
-    let Some((registry, rest)) = spec.split_once(':') else {
-        bail!("expected <registry>:<name>@<version>, got '{spec}'");
-    };
-    let Some(at) = rest.rfind('@').filter(|i| *i > 0) else {
-        bail!("expected <registry>:<name>@<version>, got '{spec}' (no version)");
-    };
-    let (name, version) = (&rest[..at], &rest[at + 1..]);
-    if registry.is_empty() || name.is_empty() || version.is_empty() {
-        bail!("expected <registry>:<name>@<version>, got '{spec}'");
+impl BatleHubClient {
+    /// `GET /api/v1/packages/access` (RFC 0040 §6.1): the pullability answer,
+    /// as JSON — the spec owns its shape.
+    pub async fn pullability(
+        &self,
+        registry: &str,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        #[derive(Serialize)]
+        struct Q<'a> {
+            registry: &'a str,
+            name: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            version: Option<&'a str>,
+        }
+        self.get_with_params(
+            "/api/v1/packages/access",
+            &Q {
+                registry,
+                name,
+                version,
+            },
+        )
+        .await
     }
-    Ok((registry.to_owned(), name.to_owned(), version.to_owned()))
+
+    /// `GET /api/v1/me/downloads?outcome=denied`: the caller's own refusals.
+    pub async fn my_refusals(&self, limit: u64) -> Result<serde_json::Value> {
+        self.get(&format!(
+            "/api/v1/me/downloads?outcome=denied&limit={limit}"
+        ))
+        .await
+    }
 }
 
 impl BatleHubClient {
@@ -162,7 +182,7 @@ impl BatleHubClient {
         let status = resp.status();
         let body = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("{status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
         Ok(body)
     }
@@ -197,7 +217,7 @@ impl BatleHubClient {
         let status = resp.status();
         let body = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("{status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
         Ok(body)
     }
@@ -252,25 +272,6 @@ impl BatleHubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_coordinate_splits_on_the_last_at() {
-        assert_eq!(
-            parse_coordinate("npm:left-pad@1.3.1").unwrap(),
-            ("npm".into(), "left-pad".into(), "1.3.1".into())
-        );
-        assert_eq!(
-            parse_coordinate("npm:@scope/name@1.0.0").unwrap(),
-            ("npm".into(), "@scope/name".into(), "1.0.0".into())
-        );
-        assert_eq!(
-            parse_coordinate("maven:com.acme:lib@1.0").unwrap(),
-            ("maven".into(), "com.acme:lib".into(), "1.0".into())
-        );
-        assert!(parse_coordinate("left-pad@1.3.1").is_err());
-        assert!(parse_coordinate("npm:left-pad").is_err());
-        assert!(parse_coordinate("npm:@scope/name").is_err());
-    }
 
     fn view(state: &str, codes: &[&str], available: Option<&str>) -> VerdictView {
         VerdictView {

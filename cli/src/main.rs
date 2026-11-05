@@ -1,26 +1,80 @@
 mod api;
 mod cli;
 mod config;
+mod confirm;
 mod contract;
+mod coordinate;
+mod coverage;
+mod exit;
 mod gallery_proxy;
+mod render;
 mod tui;
 
 use anyhow::Result;
 use clap::Parser;
 
+use cli::groups::{self, Group};
 use cli::{
-    admin, auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy,
-    publish, registry, security, setup, version, vsx, Cli, Command,
+    auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy, publish,
+    registry, security, setup, vsx, Cli, Command,
 };
 use config::ConfigFile;
+use exit::{CliError, ExitCode};
+use render::Format;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    let format = if cli.json {
+        Format::Json
+    } else {
+        cli.format.unwrap_or_default()
+    };
+    match run(cli, format).await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            let report = exit::Report::from_error(&e);
+            // A script parses a failure the way it parses a success.
+            if format == Format::Json && !report.reported {
+                println!("{}", report.to_json());
+            }
+            let text = report.to_stderr();
+            if !text.is_empty() {
+                eprintln!("{text}");
+            }
+            std::process::ExitCode::from(report.exit)
+        }
+    }
+}
+
+async fn run(cli: Cli, format: Format) -> Result<()> {
+    // `raw` has no record separator: only a command that prints one value
+    // takes it (§4.11).
+    let prints_one_value = matches!(
+        cli.command,
+        Command::Auth {
+            cmd: cli::auth::AuthCommand::Token { cmd: None, .. }
+        } | Command::Profile {
+            cmd: cli::config_cmd::ProfileCommand::Show { key: Some(_), .. }
+        }
+    );
+    if format == Format::Raw && !prints_one_value {
+        return Err(CliError::new(
+            ExitCode::Usage,
+            "--format raw is only for a command that prints one value (`auth token`)",
+        )
+        .into());
+    }
+    let context = |registry: Option<String>| render::Context {
+        format,
+        registry,
+        yes: cli.yes,
+    };
 
     // Commands that need neither config nor a server connection
-    if let Command::Config { cmd } = cli.command {
-        return config_cmd::run(cmd);
+    if let Command::Profile { cmd } = cli.command {
+        render::init(context(cli.registry.clone()));
+        return config_cmd::run_profile(cmd, cli.profile.as_deref());
     }
     // The Java engine runs locally: no server, no token, no config.
     if let Command::Java(args) = cli.command {
@@ -31,9 +85,22 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let mut cfg = ConfigFile::load()?;
+    // `-P`, else the file's `current` (`profile use`), else `default`.
+    let profile_name: Option<String> = cfg.selected(cli.profile.as_deref()).map(str::to_owned);
+    {
+        let profile = match profile_name.as_deref() {
+            Some(n) => cfg.profiles.get(n),
+            None => Some(&cfg.default),
+        };
+        render::init(context(
+            cli.registry
+                .clone()
+                .or_else(|| profile.and_then(|p| p.registry.clone())),
+        ));
+    }
 
     if let Command::Setup { cmd } = cli.command {
-        let profile = match cli.profile.as_deref() {
+        let profile = match profile_name.as_deref() {
             Some(n) => cfg.profiles.get(n),
             None => Some(&cfg.default),
         };
@@ -52,8 +119,9 @@ async fn main() -> Result<()> {
             match setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await {
                 Ok(code) => code,
                 Err(e) => {
-                    eprintln!("Error: {e:?}");
-                    1
+                    let report = exit::Report::from_error(&e);
+                    eprintln!("{}", report.to_stderr());
+                    i32::from(report.exit)
                 }
             };
         // Exit here rather than return: dropping the runtime waits for its
@@ -70,7 +138,7 @@ async fn main() -> Result<()> {
         .server
         .clone()
         .or_else(|| {
-            cli.profile
+            profile_name
                 .as_deref()
                 .and_then(|n| cfg.profiles.get(n))
                 .or(Some(&cfg.default))
@@ -96,11 +164,11 @@ async fn main() -> Result<()> {
     } else if logging_out {
         None
     } else {
-        api::auth::resolve_token(&base_url_for_refresh, cli.profile.as_deref(), &mut cfg).await?
+        api::auth::resolve_token(&base_url_for_refresh, profile_name.as_deref(), &mut cfg).await?
     };
 
     let resolved = cfg.resolve(
-        cli.profile.as_deref(),
+        profile_name.as_deref(),
         cli.server.clone(),
         effective_token,
         cli.registry.clone(),
@@ -108,26 +176,61 @@ async fn main() -> Result<()> {
 
     let client = api::BatleHubClient::new(&resolved.server_url, resolved.token.as_deref())?;
 
+    let json = render::ctx().structured();
     match cli.command {
-        Command::Registry { cmd } => registry::run(cmd, &client, cli.json).await?,
+        Command::Registry { cmd } => registry::run(cmd, &client, json).await?,
         Command::Package { cmd } => {
-            package::run(cmd, &client, resolved.registry.as_deref(), cli.json).await?
+            package::run(cmd, &client, resolved.registry.as_deref(), json).await?
         }
-        Command::Version { cmd } => version::run(cmd, &client).await?,
-        Command::Owners { cmd } => owner::run(cmd, &client, cli.json).await?,
-        Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
-        Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
+        Command::Owner { cmd } => owner::run(cmd, &client, json).await?,
+        Command::Visibility { cmd } => groups::run(Group::Visibility(cmd), &client, json).await?,
+        Command::Grant { cmd } => groups::run(Group::Grant(cmd), &client, json).await?,
+        Command::Namespace { cmd } => groups::run(Group::Namespace(cmd), &client, json).await?,
+        Command::User { cmd } => groups::run(Group::User(cmd), &client, json).await?,
+        Command::Quota { cmd } => groups::run(Group::Quota(cmd), &client, json).await?,
+        Command::IpBlock { cmd } => groups::run(Group::IpBlock(cmd), &client, json).await?,
+        Command::Server { cmd } => groups::run(Group::Server(cmd), &client, json).await?,
+        Command::Cache { cmd } => groups::run(Group::Cache(cmd), &client, json).await?,
+        Command::Import {
+            registry,
+            tag,
+            repo,
+        } => {
+            groups::run(
+                Group::Import {
+                    registry,
+                    tag,
+                    repo,
+                },
+                &client,
+                json,
+            )
+            .await?
+        }
+        Command::Retention { cmd } => groups::run(Group::Retention(cmd), &client, json).await?,
+        Command::Banner { cmd } => groups::run(Group::Banner(cmd), &client, json).await?,
+        Command::Exposure { cmd } => groups::run(Group::Exposure(cmd), &client, json).await?,
+        Command::Bundle { cmd } => groups::run(Group::Bundle(cmd), &client, json).await?,
+        Command::AirGap { cmd } => groups::run(Group::AirGap(cmd), &client, json).await?,
+        Command::Flag { cmd } => groups::run(Group::Flag(cmd), &client, json).await?,
+        Command::Gdpr { cmd } => groups::run(Group::Gdpr(cmd), &client, json).await?,
+        Command::Sbom { cmd } => groups::run(Group::Sbom(cmd), &client, json).await?,
+        Command::Notification { cmd } => {
+            groups::run(Group::Notification(cmd), &client, json).await?
+        }
+        Command::Audit { cmd } => groups::run(Group::Audit(cmd), &client, json).await?,
+        Command::Verdict { cmd } => security::run_verdicts(cmd, &client, json).await?,
+        Command::Me { cmd } => cli::journeys::run_me(cmd, &client).await?,
+        Command::Check(args) => cli::check::run(args, &client).await?,
+        Command::Policy { cmd } => cli::journeys::run_policy(cmd, &client).await?,
+        Command::Exemption { cmd } => cli::journeys::run_exemption(cmd, &client).await?,
+        Command::Upstream { cmd } => cli::journeys::run_upstream(cmd, &client).await?,
+        Command::Authz { cmd } => authz::run(cmd, &client, json).await?,
+        Command::Mise { cmd } => mise::run(cmd, &client, json).await?,
         Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
-        Command::Why(args) => security::run_why(args, &client, cli.json).await?,
-        Command::Audit { cmd } => security::run_audit(cmd, &client, cli.json).await?,
-        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
-        Command::Wait(args) => {
-            let code = security::run_wait(args, &client, cli.json).await?;
-            if code != 0 {
-                std::process::exit(code);
-            }
-        }
+        Command::Why(args) => cli::why::run(args, &client).await?,
+        Command::Wait(args) => security::run_wait(args, &client, json).await?,
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {
             download::run(args, &client, resolved.registry.as_deref()).await?
@@ -136,15 +239,14 @@ async fn main() -> Result<()> {
             auth::run(
                 cmd,
                 &client,
-                cli.json,
-                cli.profile.as_deref(),
+                json,
+                profile_name.as_deref(),
                 cli.token.as_deref(),
             )
             .await?
         }
-        Command::Admin { cmd } => admin::run(cmd, &client, cli.json).await?,
-        Command::Tui => tui::run(client).await?,
-        Command::Config { .. }
+        Command::Tui => tui::run(client, profile_name).await?,
+        Command::Profile { .. }
         | Command::Completion { .. }
         | Command::Setup { .. }
         | Command::Java(_) => {

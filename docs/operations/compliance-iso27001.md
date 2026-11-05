@@ -25,12 +25,12 @@ development and vulnerability process. The organisational controls (5.1–5.14,
 | 5.15 – Access control | Grants of verbs on the registry → package → version hierarchy; a decision is deny unless a grant allows it | ✅ Implemented | [Access control](../guide/access-control.md), `POST /api/v1/admin/access-check` |
 | 5.16 – Identity management | Identities come from your IdP (OIDC), Kubernetes service accounts, CI OIDC or static tokens; provider names are unique | ✅ Implemented | `[[auth]]` in [configuration](../guide/configuration.md), `crates/adapters/src/auth/` |
 | 5.17 – Authentication information | Personal access tokens stored as SHA-256 hashes, with expiry; the value is shown once | ✅ Implemented | `crates/adapters/src/db/auth/user_tokens.rs`, `crates/adapters/src/auth/user_token.rs` |
-| 5.18 – Access rights | Revoke a token, block a user, list and remove grants | ✅ Implemented | `DELETE /api/v1/auth/tokens/{id}`, `POST /api/v1/admin/users/{user_id}/block`, `batlehub-cli admin grants` |
-| 5.18 – Periodic access review | Reviewing grants and tokens on a schedule | Manual process | `batlehub-cli admin grants`, `GET /api/v1/admin/audit-log?action=sign_in` |
+| 5.18 – Access rights | Revoke a token, block a user, list and remove grants | ✅ Implemented | `DELETE /api/v1/auth/tokens/{id}`, `POST /api/v1/admin/users/{user_id}/block`, `batlehub-cli grant list` |
+| 5.18 – Periodic access review | Reviewing grants and tokens on a schedule | Manual process | `batlehub-cli grant list`, `GET /api/v1/admin/audit-log?action=sign_in` |
 | 5.21 – ICT supply chain | Every proxied artifact can be scanned (SBOM, CVE, verdicts), flagged by your SOC, held by a release-age gate or blocked | ✅ Implemented | [SBOM](../guide/sbom.md), [Scan worker](./scan-worker.md), `crates/core/src/rules/` |
 | 5.21 – BatleHub's own supply chain | `cargo audit`, `cargo deny`, `pnpm audit`, postmortem, Trivy; no suppressions | ✅ Implemented | `.github/workflows/back-dep-audit.yaml`, `.github/workflows/image-scan.yaml`, `deny.toml` |
 | 5.24–5.27 – Incident management | Playbook: severity, detection, containment, eradication, recovery, post-mortem | Documented | [Incident response](./incident-response.md) |
-| 5.28 – Collection of evidence | Audit log export, and a signed seal chain whose `verify` proves the exported window was not altered | ✅ Implemented | `batlehub-cli admin export-audit-log`, `batlehub-cli admin audit verify` |
+| 5.28 – Collection of evidence | Audit log export, and a signed seal chain whose `verify` proves the exported window was not altered | ✅ Implemented | `batlehub-cli audit export`, `batlehub-cli audit verify` |
 | 5.33 – Protection of records | Security-class rows are removed by their retention and by nothing else — a manual purge reaches access rows only, so a purge's own record survives later purges | ✅ Implemented | `DELETE /api/v1/admin/audit-log?before=`, `[audit] security_retention_days` |
 | 5.34 – Privacy and PII | Retention classes, pseudonymisation, erasure and access export | ✅ Implemented | [GDPR mapping](./compliance-gdpr.md) |
 
@@ -45,11 +45,11 @@ development and vulnerability process. The organisational controls (5.1–5.14,
 | 8.8 – Technical vulnerabilities (yours) | CVE scanning of proxied artifacts; exposure report of who pulled a flagged version | ✅ Implemented | [Incident response § who pulled a flagged version](./incident-response.md#who-pulled-a-flagged-version) |
 | 8.8 – Technical vulnerabilities (the project's) | Private reporting, stated targets, advisories with a CVE, VEX | Documented | `SECURITY.md`, [CRA mapping](./compliance-cra.md) |
 | 8.9 – Configuration management | Every applied or rejected reload is recorded with its actor and diff; validation warnings are listed | ✅ Implemented | `GET /api/v1/admin/config/changes`, `GET /api/v1/admin/config/warnings` |
-| 8.10 – Information deletion | Retention expiry by class; erasure of one subject | ✅ Implemented | `[audit]`, `batlehub-cli admin gdpr erase` |
+| 8.10 – Information deletion | Retention expiry by class; erasure of one subject | ✅ Implemented | `[audit]`, `batlehub-cli gdpr erase` |
 | 8.11 – Data masking | Access-class rows pseudonymised after a set age | ✅ Implemented | `[audit] pseudonymise_after_days` |
 | 8.13 – Information backup | Postgres and object-storage backup and restore runbooks | Documented | [Disaster recovery](./disaster-recovery.md) |
 | 8.15 – Logging | Every download, publish, block, grant, purge, config change and authentication event in `access_events`, with user, time, IP and user agent | ✅ Implemented | `GET /api/v1/admin/audit-log` |
-| 8.15 – Logs protected from tampering | Signed hash chain over closed windows; truncation detected against the SIEM's last `audit_seal` line | ✅ Implemented | `[audit] seal_interval_secs`, `batlehub-cli admin audit verify --head <digest>`, `deploy/siem/sigma/audit_chain_gap.yml` |
+| 8.15 – Logs protected from tampering | Signed hash chain over closed windows; truncation detected against the SIEM's last `audit_seal` line | ✅ Implemented | `[audit] seal_interval_secs`, `batlehub-cli audit verify --head <digest>`, `deploy/siem/sigma/audit_chain_gap.yml` |
 | 8.15 – A copy off the host | The JSON audit stream on stdout, for a collector | ✅ Implemented | `[logging] format = "json"`, [SIEM integration](./siem.md) |
 | 8.15 – Write-once storage | Immutable storage for the shipped copy (S3 Object Lock, a WORM bucket) | Manual process | your collector's sink |
 | 8.16 – Monitoring activities | Sigma rules over the stream; Prometheus alerts | ✅ Implemented | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |

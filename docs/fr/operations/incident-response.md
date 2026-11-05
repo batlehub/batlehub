@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/incident-response.md
-sourceHash: f89004ce0f8db3e8
+sourceHash: baf9981d1cbe35dc
 ---
 
 # Procédure de réponse à incident — BatleHub
@@ -47,16 +47,16 @@ Interrogez le journal d'audit à la recherche d'anomalies :
 
 ```bash
 # Tous les événements refusés de la dernière heure
-batlehub admin audit-log --denied-only --from "$(date -u -d '1 hour ago' +%FT%TZ)"
+batlehub-cli audit log --denied-only --from "$(date -u -d '1 hour ago' +%FT%TZ)"
 
 # Les événements d'accès d'une IP précise
-batlehub admin audit-log | jq '[.[] | select(.ip_address == "1.2.3.4")]'
+batlehub-cli audit log | jq '[.[] | select(.ip_address == "1.2.3.4")]'
 
 # Ce qui a disparu, et si c'est une personne ou une politique qui l'a pris
-batlehub admin audit-log --action delete,retention_reclaim --from <start>
+batlehub-cli audit log --action delete,retention_reclaim --from <start>
 
 # Exporter une fenêtre complète de 24 heures pour analyse hors ligne
-batlehub admin export-audit-log --from <start> --to <end> --format csv --output incident-$(date +%Y%m%d).csv
+batlehub-cli audit export --from <start> --to <end> --format csv --output incident-$(date +%Y%m%d).csv
 ```
 
 ---
@@ -69,24 +69,27 @@ l'analyse des causes racines pour confiner.
 ### Bloquer une IP suspecte
 
 ```bash
-batlehub admin ip-blocks add 1.2.3.4
+batlehub-cli ip-block add 1.2.3.4
 ```
 
 Ou depuis la console d'administration → **Blocages d'IP** → Ajouter.
 
 ### Révoquer un token compromis
 
+Un token est révoqué par l'utilisateur qui le possède :
+
 ```bash
-batlehub admin token revoke <token-id>
+batlehub-cli auth token delete <token-id>
 ```
 
-Ou depuis la console → **Utilisateurs** → sélectionner l'utilisateur → Révoquer
-le token.
+Un administrateur ne peut pas révoquer le token d'un autre utilisateur. Bloquez
+plutôt le compte (ci-dessous) : toute requête qui en vient est refusée, quel que
+soit le token qu'elle porte.
 
 ### Bloquer un compte utilisateur
 
 ```bash
-batlehub admin users block <user-id>
+batlehub-cli user block <user-id>
 ```
 
 Bloque toutes les requêtes futures de cet identifiant jusqu'au déblocage.
@@ -94,12 +97,17 @@ Bloque toutes les requêtes futures de cet identifiant jusqu'au déblocage.
 ### Mettre un paquet malveillant en quarantaine
 
 ```bash
-# Bloquer le nom du paquet, toutes versions confondues
-batlehub admin block <registry> <package-name>
+# Refuser ces versions à tous les clients, avec le motif enregistré
+batlehub-cli package block <registry>/<name>@<version>... --reason "<motif>"
 
-# Ou viser une version précise
-batlehub admin packages unlist <registry> <package-name> <version>
+# Ou seulement masquer une version des listes ; une installation épinglée l'obtient encore
+batlehub-cli package unlist <registry>/<name>@<version>
 ```
+
+Un blocage vise des versions, pas un paquet entier : listez-les avec
+`batlehub-cli package versions <registry>/<name>`. Voir
+[Bloquer une version de paquet](/fr/guide/admin-policies#block-a-package-version)
+pour ce qu'un blocage change dans la liste que lit chaque client.
 
 ### Signaler une version depuis l'outillage de votre SOC
 
@@ -132,9 +140,9 @@ consommateur, coordonnée et signalement, et dit combien de récupérations ont
 de mal et détient tout de même l'artefact.
 
 ```bash
-batlehub admin exposure --source soc --min-effect gate --when before-flag
-batlehub admin exposure --registry npm --package left-pad --from 2026-09-01T00:00:00Z
-batlehub admin flags list --include-dead          # ce que chaque source a dit, pierres tombales comprises
+batlehub-cli exposure list --source soc --min-effect gate --when before-flag
+batlehub-cli exposure list --registry npm --package left-pad --from 2026-09-01T00:00:00Z
+batlehub-cli flag list --include-dead          # ce que chaque source a dit, pierres tombales comprises
 ```
 
 `GET /api/v1/admin/exposure/export?format=csv` donne les mêmes lignes sous forme
@@ -210,14 +218,14 @@ preuve à partir desquels elles sont rédigées.
 | Échéance | Ce que demande NIS2 | Où se trouvent les preuves |
 |----------|---------------------|----------------------------|
 | **24 h** après en avoir eu connaissance — alerte précoce | Si l'incident est soupçonné d'être malveillant ou d'avoir un impact transfrontière | Le flux d'audit dans votre SIEM et la règle Sigma qui s'est déclenchée ([Intégration SIEM](./siem.md)) |
-| **72 h** — notification de l'incident | Une première évaluation : gravité, impact, indicateurs de compromission | Le journal d'audit de la fenêtre : `batlehub-cli admin export-audit-log --from <start> --to <end> --format json` |
+| **72 h** — notification de l'incident | Une première évaluation : gravité, impact, indicateurs de compromission | Le journal d'audit de la fenêtre : `batlehub-cli audit export --from <start> --to <end> --format json` |
 | **Un mois** — rapport final | Cause racine, mesures d'atténuation appliquées, impact transfrontière | Le retour d'expérience de la phase 5, le journal exporté et une chaîne vérifiée pour la fenêtre |
 
 Avant de citer le journal exporté, montrez qu'il n'a pas été modifié :
 
 ```bash
 # <digest> est la ligne audit_seal la plus récente que détient votre SIEM
-batlehub-cli admin audit verify --from <start> --to <end> --head <digest>
+batlehub-cli audit verify --from <start> --to <end> --head <digest>
 ```
 
 La commande sort avec `0` lorsque chaque fenêtre scellée se vérifie, et avec
@@ -245,7 +253,7 @@ concernée se traite avec deux commandes.
 **Demande d'accès (RGPD, art. 15) :**
 
 ```bash
-batlehub-cli admin gdpr export --user <id>
+batlehub-cli gdpr export --user <id>
 ```
 
 La commande liste toutes les lignes concernant la personne, y compris les lignes
@@ -256,7 +264,7 @@ comme événement d'audit `gdpr_export`. Elle exige le verbe `audit:read`
 **Demande d'effacement (RGPD, art. 17) :**
 
 ```bash
-batlehub-cli admin gdpr erase --user <id>
+batlehub-cli gdpr erase --user <id>
 ```
 
 La commande remplace l'identifiant par `erased:<hmac>` dans `access_events`, les

@@ -44,10 +44,10 @@ process.
 | I(2)(b) – Secure by default | A missing retention, an unsigned seal chain, sealing without a stream and similar half-configurations are rejected or warned about at start | ✅ Implemented | `GET /api/v1/admin/config/warnings` |
 | I(2)(d) – Protection from unauthorised access | Authentication providers, grants, IP blocking, rate limiting; every refusal is an audit event | ✅ Implemented | [Access control](../guide/access-control.md), [SIEM integration](./siem.md) |
 | I(2)(e) – Confidentiality | TLS terminated at the ingress; tokens stored hashed | Manual process | [Production hardening](./production-hardening.md) |
-| I(2)(f) – Integrity | Artifact checksums verified on cache write; publish signatures; a signed chain over the audit trail | ✅ Implemented | `crates/core/src/services/integrity.rs`, `crates/core/src/services/signature.rs`, `batlehub-cli admin audit verify` |
+| I(2)(f) – Integrity | Artifact checksums verified on cache write; publish signatures; a signed chain over the audit trail | ✅ Implemented | `crates/core/src/services/integrity.rs`, `crates/core/src/services/signature.rs`, `batlehub-cli audit verify` |
 | I(2)(g) – Data minimisation | Audit retention classes and pseudonymisation | ✅ Implemented | [GDPR mapping](./compliance-gdpr.md) |
 | I(2)(l) – Security monitoring | Audit events for every security-relevant action, a JSON stream and Sigma rules | ✅ Implemented | `[logging] format = "json"`, `deploy/siem/sigma/` |
-| I(2)(m) – Secure data removal | Erasure of one data subject; retention expiry | ✅ Implemented | `batlehub-cli admin gdpr erase` |
+| I(2)(m) – Secure data removal | Erasure of one data subject; retention expiry | ✅ Implemented | `batlehub-cli gdpr erase` |
 
 ## Articles 13 and 14 — Manufacturer's obligations
 

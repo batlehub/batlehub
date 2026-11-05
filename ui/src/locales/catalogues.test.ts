@@ -199,6 +199,37 @@ describe("locale catalogues", () => {
     ).toEqual([]);
   });
 
+  /**
+   * The other direction: a literal key the code looks up must exist. vue-i18n
+   * renders a missing one as the key itself, in both locales — the audit log's
+   * outcome badge read `accessCheck.denied` on every row after a catalogue
+   * edit, with every other gate green.
+   */
+  it("defines every literal key the code looks up", () => {
+    const modules = import.meta.glob("../**/*.{vue,ts}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    const known = new Set(enKeys);
+    const missing = Object.entries(modules)
+      // Tests stub `t` with keys of their own.
+      .filter(
+        ([path]) =>
+          !path.startsWith("../client/") &&
+          !path.startsWith("./") &&
+          !path.startsWith("../test/") &&
+          !path.endsWith(".test.ts"),
+      )
+      .flatMap(([path, source]) =>
+        [...source.matchAll(/\bt\(\s*["']([A-Za-z]\w*(?:\.\w+)+)["']/g)]
+          .map((m) => m[1])
+          .filter((key) => !known.has(key))
+          .map((key) => `${path}: ${key}`),
+      );
+    expect(missing, "looked up but defined in no catalogue").toEqual([]);
+  });
+
   /** French runs longer than English; this is the budget the layouts assume. */
   it("keeps French within 60% of the English length", () => {
     const offenders = enKeys.filter((key) => {

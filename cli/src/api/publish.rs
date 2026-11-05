@@ -172,7 +172,7 @@ fn append_entry(
 }
 
 /// What `POST api/stacks` answers.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct DevfilePublished {
     pub stack: String,
     pub version: String,
@@ -285,10 +285,22 @@ impl BatleHubClient {
         let length = bytes.len();
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
+        // What `npm publish` puts in `dist`: the SRI sha512 and the legacy
+        // sha1. The registry serves them back in the packument, so a client —
+        // npm, or `batlehub-cli download` — can verify the tarball.
+        let integrity = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(&bytes))
+        );
+        let shasum = hex::encode(<sha1::Sha1 as sha1::Digest>::digest(&bytes));
         let body = serde_json::json!({
             "name": name,
             "versions": {
-                version: { "name": name, "version": version },
+                version: {
+                    "name": name,
+                    "version": version,
+                    "dist": { "integrity": integrity, "shasum": shasum },
+                },
             },
             "_attachments": {
                 file_name: {
@@ -397,6 +409,256 @@ impl BatleHubClient {
         self.put_bytes(&format!("/proxy/{registry}/rpm/upload"), bytes)
             .await
     }
+}
+
+/// The registry's kind, as `GET /api/v1/registries` lists it (RFC 0040 §6.3):
+/// what `publish` dispatches on, never the file's extension.
+impl BatleHubClient {
+    pub async fn registry_kind(&self, registry: &str) -> Result<String> {
+        self.list_registries()
+            .await?
+            .into_iter()
+            .find(|r| r.name == registry)
+            .map(|r| r.registry_type)
+            .ok_or_else(|| {
+                crate::exit::CliError::new(
+                    crate::exit::ExitCode::NotFound,
+                    format!("no registry named `{registry}` that you can see"),
+                )
+                .into()
+            })
+    }
+
+    /// One `PUT` of `{version}.zip`; the server derives `.mod` and `.info`,
+    /// so the publish is atomic.
+    pub async fn publish_goproxy(
+        &self,
+        registry: &str,
+        module: &str,
+        version: &str,
+        zip: Vec<u8>,
+    ) -> Result<()> {
+        self.put_bytes(&format!("/proxy/{registry}/{module}/@v/{version}.zip"), zip)
+            .await
+    }
+
+    /// Upload Maven files in order, resuming a previous run: a file already
+    /// stored with the same bytes is skipped, and one stored with different
+    /// bytes stops the run before it is overwritten — a rebuilt release must
+    /// not replace the jar consumers already resolved. Compared through the
+    /// `.sha1` sidecar, so a resume never downloads the artifact itself. Each
+    /// file is `(repository path, bytes)`.
+    ///
+    /// Exits 7 only once something was written; a stop before that keeps the
+    /// cause's own exit (3, 4, 6…).
+    pub async fn publish_maven(
+        &self,
+        registry: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<Vec<String>> {
+        let mut sent = Vec::new();
+        let mut written: Vec<String> = Vec::new();
+        for (i, (path, bytes)) in files.iter().enumerate() {
+            let url = format!("/proxy/{registry}/maven2/{path}");
+            // The pom's sidecars go before the pom: a `.sha1` this run just
+            // wrote says nothing about whether the file it describes is stored.
+            let stored = if written.contains(&format!("{url}.sha1")) {
+                Ok(None)
+            } else {
+                self.maven_stored(&url, bytes).await
+            };
+            let step = match stored {
+                Ok(Some(true)) => Ok(()),
+                Ok(Some(false)) => Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Conflict,
+                    format!("{path} is already published with different bytes; not overwritten"),
+                )
+                .into()),
+                Ok(None) => {
+                    written.push(url.clone());
+                    self.put_bytes(&url, bytes.clone()).await
+                }
+                Err(e) => Err(e),
+            };
+            if let Err(e) = step {
+                let missing: Vec<&str> = files[i..].iter().map(|(p, _)| p.as_str()).collect();
+                let e = e.context(format!(
+                    "stopped at {path}; not sent: {}",
+                    missing.join(", ")
+                ));
+                if written.is_empty() {
+                    return Err(e);
+                }
+                // Some files went, some did not: a re-run resumes (§6.3).
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Partial,
+                    format!("{e:#}"),
+                )
+                .into());
+            }
+            sent.push(path.clone());
+        }
+        Ok(sent)
+    }
+
+    /// Whether `url` is already stored, and with these bytes: `None` when it
+    /// is not. A sidecar is compared whole; any other file by its `.sha1`.
+    async fn maven_stored(&self, url: &str, local: &[u8]) -> Result<Option<bool>> {
+        use sha1::{Digest, Sha1};
+        let (probe, expected) = if url.ends_with(".sha1") || url.ends_with(".md5") {
+            (
+                url.to_owned(),
+                String::from_utf8_lossy(local).trim().to_owned(),
+            )
+        } else {
+            (format!("{url}.sha1"), hex::encode(Sha1::digest(local)))
+        };
+        let mut stored = Vec::new();
+        match self.download_to(&probe, &mut stored).await {
+            // A sidecar may carry ` <file name>` after the digest.
+            Ok(_) => Ok(Some(
+                String::from_utf8_lossy(&stored).split_whitespace().next()
+                    == Some(expected.as_str()),
+            )),
+            Err(e)
+                if e.downcast_ref::<crate::exit::ApiError>()
+                    .is_some_and(|a| a.status == 404) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn publish_terraform_module(
+        &self,
+        registry: &str,
+        coordinate: &str,
+        version: &str,
+        file_path: &Path,
+    ) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.post_bytes(
+            &format!("/proxy/{registry}/v1/modules/{coordinate}/{version}"),
+            bytes,
+        )
+        .await
+    }
+
+    /// The version manifest, then one `PUT` per platform. A `409` on the
+    /// manifest is a re-run: the version row exists, and the platforms follow.
+    pub async fn publish_terraform_provider(
+        &self,
+        registry: &str,
+        namespace_type: &str,
+        version: &str,
+        platforms: &[super::publish_input::ProviderPlatform],
+    ) -> Result<()> {
+        let mut entries = Vec::new();
+        let mut archives = Vec::new();
+        for p in platforms {
+            let bytes = tokio::fs::read(&p.path).await?;
+            let filename = p
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entries.push(serde_json::json!({
+                "os": p.os, "arch": p.arch, "filename": filename,
+                "shasum": hex::encode(Sha256::digest(&bytes)),
+            }));
+            archives.push((p, bytes));
+        }
+        let manifest = serde_json::json!({ "version": version, "platforms": entries });
+        let req = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/proxy/{registry}/v1/providers/{namespace_type}/versions"),
+            )
+            .json(&manifest);
+        let resp = self.send(req).await?;
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::CONFLICT {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(crate::exit::ApiError::from_body(status, &body).into());
+        }
+        for (i, (p, bytes)) in archives.into_iter().enumerate() {
+            let url = format!(
+                "/proxy/{registry}/v1/providers/{namespace_type}/{version}/artifact/{}/{}",
+                p.os, p.arch
+            );
+            if let Err(e) = self.put_bytes(&url, bytes).await {
+                let missing: Vec<String> = platforms[i..]
+                    .iter()
+                    .map(|p| format!("{}_{}", p.os, p.arch))
+                    .collect();
+                // The manifest is there, the archives are not all: a re-run
+                // resumes (§6.3). A stop before this keeps its own exit.
+                let e = e.context(format!("not sent: {}", missing.join(", ")));
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Partial,
+                    format!("{e:#}"),
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn publish_galaxy(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        let form = reqwest::multipart::Form::new()
+            .text("sha256", sha256)
+            .part("file", file_part(file_path, bytes)?);
+        self.post_multipart_void(
+            &format!("/proxy/{registry}/galaxy/api/v3/artifacts/collections/"),
+            form,
+        )
+        .await
+    }
+
+    pub async fn publish_helm(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.post_bytes(&format!("/proxy/{registry}/helm/api/charts"), bytes)
+            .await
+    }
+
+    pub async fn publish_apk(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.put_bytes(&format!("/proxy/{registry}/apk/upload"), bytes)
+            .await
+    }
+
+    pub async fn publish_jetbrains_plugin(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        let form = reqwest::multipart::Form::new().part("file", file_part(file_path, bytes)?);
+        self.post_multipart_void(&format!("/proxy/{registry}/api/updates/upload"), form)
+            .await
+    }
+}
+
+fn file_part(path: &Path, bytes: Vec<u8>) -> Result<reqwest::multipart::Part> {
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "upload".to_owned());
+    Ok(reqwest::multipart::Part::bytes(bytes)
+        .file_name(name)
+        .mime_str("application/octet-stream")?)
+}
+
+/// `{path}`, `{path}.sha1`, `{path}.md5` — the sidecars Maven clients ask for.
+pub fn with_maven_checksums(path: &str, bytes: Vec<u8>) -> Vec<(String, Vec<u8>)> {
+    use md5::Md5;
+    use sha1::Sha1;
+    let sha1 = hex::encode(Sha1::digest(&bytes)).into_bytes();
+    let md5 = hex::encode(Md5::digest(&bytes)).into_bytes();
+    vec![
+        (path.to_owned(), bytes),
+        (format!("{path}.sha1"), sha1),
+        (format!("{path}.md5"), md5),
+    ]
 }
 
 #[cfg(test)]

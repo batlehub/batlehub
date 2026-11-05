@@ -88,6 +88,7 @@ async fn record_download(
 ) {
     ctx.repo
         .record_access(AccessEvent {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id: Some(user.to_owned()),
             user_role: Role::User,
@@ -133,7 +134,7 @@ async fn list_own_downloads_returns_no_other_users_rows() {
 
     let rows = ctx
         .repo
-        .list_own_downloads(&alice, Utc::now() - Duration::days(1), 50)
+        .list_own_downloads(&alice, Utc::now() - Duration::days(1), 50, false)
         .await
         .unwrap();
 
@@ -183,7 +184,7 @@ async fn list_own_downloads_excludes_denied_and_non_download_actions() {
 
     let rows = ctx
         .repo
-        .list_own_downloads(&alice, Utc::now() - Duration::days(1), 50)
+        .list_own_downloads(&alice, Utc::now() - Duration::days(1), 50, false)
         .await
         .unwrap();
     let names: Vec<String> = rows
@@ -213,7 +214,7 @@ async fn list_own_downloads_honours_window_and_limit_newest_first() {
     let since = Utc::now() - Duration::days(7);
     let rows = ctx
         .repo
-        .list_own_downloads(&alice, since, 50)
+        .list_own_downloads(&alice, since, 50, false)
         .await
         .unwrap();
     let names: Vec<String> = rows
@@ -222,7 +223,11 @@ async fn list_own_downloads_honours_window_and_limit_newest_first() {
         .collect();
     assert_eq!(names, vec!["newest".to_owned(), "older".to_owned()]);
 
-    let capped = ctx.repo.list_own_downloads(&alice, since, 1).await.unwrap();
+    let capped = ctx
+        .repo
+        .list_own_downloads(&alice, since, 1, false)
+        .await
+        .unwrap();
     assert_eq!(capped.len(), 1);
     assert_eq!(capped[0].package_id.as_ref().unwrap().name, "newest");
 }

@@ -106,6 +106,7 @@ async fn app(
             .proxy_svc
             .repo
             .record_access(AccessEvent {
+                reason_code: None,
                 id: uuid::Uuid::new_v4(),
                 user_id: Some("seed".to_owned()),
                 user_role: batlehub_core::entities::Role::User,

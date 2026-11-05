@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 631aa92fc9b97410
+sourceHash: 5f40ae9ca87e6e21
 ---
 
 # Politiques et paquets
@@ -48,11 +48,11 @@ stratégie. Les stratégies se combinent : un artefact est évincé dès que
 #### Lancer une passe, et la prévisualiser {#cache-eviction-run}
 
 ```sh
-batlehub admin cache evict acme-npm --dry-run   # ce qui partirait, et rien ne part
-batlehub admin cache evict acme-npm             # évincer réellement
+batlehub-cli cache evict -r acme-npm --dry-run   # ce qui partirait, et rien ne part
+batlehub-cli cache evict -r acme-npm             # évincer réellement
 ```
 
-Le mode réel est le défaut ici, à l'inverse d'[`admin retention`](#retention) :
+Le mode réel est le défaut ici, à l'inverse d'[`retention apply`](#retention) :
 ce que l'éviction retire est une copie que la requête suivante récupérera à
 nouveau, de sorte que le verrou à deux clés qui protège une version publiée
 localement serait ici une cérémonie. La prévisualisation existe pour l'autre
@@ -92,10 +92,10 @@ configuration pour les distinguer :
 
 ```sh
 # Tout ce qui a réellement été supprimé, à la main ou par politique
-batlehub admin audit-log --action delete,retention_reclaim
+batlehub-cli audit log --action delete,retention_reclaim
 
 # Tout ce qui a seulement été sorti du cache
-batlehub admin audit-log --action cache_evict,cache_clear,cache_evict_run
+batlehub-cli audit log --action cache_evict,cache_clear,cache_evict_run
 ```
 
 #### Ramasser les blobs orphelins {#cache-coherence}
@@ -108,8 +108,8 @@ chacune lit la table dont il est absent. Supprimer une ligne de la base à la ma
 laisse la même chose.
 
 ```sh
-batlehub admin cache coherence acme-npm --dry-run   # ce qui est orphelin
-batlehub admin cache coherence acme-npm             # le ramasser
+batlehub-cli cache coherence -r acme-npm --dry-run   # ce qui est orphelin
+batlehub-cli cache coherence -r acme-npm             # le ramasser
 ```
 
 **Deux passes avant que quoi que ce soit ne parte.** Un blob n'est supprimé que
@@ -135,7 +135,7 @@ passe planifiée porte `user_id = "system"` dans la piste, ce qui la distingue d
 celle d'un opérateur :
 
 ```sh
-batlehub admin audit-log --action cache_coherence_run
+batlehub-cli audit log --action cache_coherence_run
 ```
 
 ### Le préchauffage du cache {#cache-warming}
@@ -488,7 +488,7 @@ décision à propos d'une chose qui n'existe plus.
 ### Supprimer
 
 ```sh
-batlehub version delete acme-npm my-pkg 1.4.0
+batlehub-cli package delete acme-npm/my-pkg@1.4.0
 ```
 
 La commande demande confirmation, à cause du second effet ci-dessus. `-y` la
@@ -624,9 +624,9 @@ reprise sans lui avertit à chaque rechargement.
 Pour la lancer :
 
 ```sh
-batlehub admin retention acme-npm              # rapport ; ne change rien
-batlehub admin retention acme-npm --show-kept  # …et pourquoi chaque survivante survit
-batlehub admin retention acme-npm --reclaim    # reprendre réellement
+batlehub-cli retention show acme-npm              # rapport ; ne change rien
+batlehub-cli retention show acme-npm --show-kept  # …et pourquoi chaque survivante survit
+batlehub-cli retention apply acme-npm     # reprendre réellement
 ```
 
 `--reclaim` n'est que la moitié du verrou : le registre doit en plus être en
@@ -662,8 +662,8 @@ toujours que la version a disparu :
 
 ```sh
 # Ce que la politique a pris, et ce que quelqu'un a pris à la main
-batlehub admin audit-log --registry acme-npm --action retention_reclaim
-batlehub admin audit-log --registry acme-npm --action delete
+batlehub-cli audit log --registry acme-npm --action retention_reclaim
+batlehub-cli audit log --registry acme-npm --action delete
 ```
 
 Une prévisualisation n'enregistre **qu'elle-même et rien d'autre**. C'est voulu
@@ -680,8 +680,8 @@ client sous support long terme fait tourner, et que les statistiques de pull
 finiront par cesser de défendre :
 
 ```sh
-batlehub version pin   acme-npm my-pkg 2.4.0
-batlehub version unpin acme-npm my-pkg 2.4.0
+batlehub-cli package pin acme-npm/my-pkg@2.4.0
+batlehub-cli package unpin acme-npm/my-pkg@2.4.0
 ```
 
 Une version épinglée n'est jamais reprise, quoi que dise la politique. Cela ne

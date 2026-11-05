@@ -3094,3 +3094,21 @@ async fn a_held_chart_gets_its_index_composed_from_what_is_held() {
         assert_eq!(resp.status(), 200, "{file} is held and named by the index");
     }
 }
+
+/// `why` reads the metadata a bundle seeded under the key the install reads
+/// (`…/tarball`): a held version is pullable, as `npm install` finds it. It
+/// used to ask for the bare coordinate, miss, reach the offline client, and
+/// answer "the upstream could not be read" for a package that installs.
+#[actix_web::test]
+async fn why_finds_a_held_version_under_the_downloads_key() {
+    let (app, _lab) = holding_lab("npm", false, &[("lodash", "1.1.0", Some("tarball"))]).await;
+    assert_eq!(get(&app, &tarball("1.1.0")).await.status(), 200);
+    let resp = get(
+        &app,
+        &format!("/api/v1/packages/access?registry={REG}&name=lodash&version=1.1.0"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    assert_eq!(body["headline"], "pullable", "{body}");
+}

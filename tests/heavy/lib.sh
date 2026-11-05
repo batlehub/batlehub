@@ -470,18 +470,29 @@ heavy_start_tap() {
   heavy_log "Tap listening on $HEAVY_TAP_PORT -> $HEAVY_PORT ($HEAVY_TAP_BASE)"
 }
 
-# heavy_self_signed <hostname> — write a certificate/key pair for <hostname>
-# into the work dir and echo the certificate path. Self-signed and used as its
-# own CA: the client trusts it through SSL_CERT_FILE, so there is no chain to
-# build.
+# heavy_self_signed <hostname> [extra-dns…] — write a certificate/key pair for <hostname>
+# into the work dir and echo the certificate path. The file is a leaf *and* the
+# CA that signed it, so one path serves both ends: the tap presents the chain,
+# and a client handed it through SSL_CERT_FILE or --cacert trusts the CA in it.
+# Not a single self-signed certificate: rustls (batlehub-cli) refuses one as a
+# server's own certificate (`CaUsedAsEndEntity`), where Go, curl and Python
+# accept it.
 heavy_self_signed() {
-  local host="$1"
-  local cert="$HEAVY_WORK/tls-cert.pem" key="$HEAVY_WORK/tls-key.pem"
+  local host="$1" san="" extra
+  shift
+  for extra in "$@"; do san+=",DNS:$extra"; done
+  local cert="$HEAVY_WORK/tls-cert.pem" key="$HEAVY_WORK/tls-key.pem" pki="$HEAVY_WORK/tls-pki"
   heavy_need openssl "openssl"
-  openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
-    -keyout "$key" -out "$cert" -subj "/CN=$host" \
-    -addext "subjectAltName=DNS:$host,DNS:localhost,IP:127.0.0.1" \
-    >"$HEAVY_WORK/openssl.log" 2>&1 \
+  mkdir -p "$pki"
+  { openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 -subj "/CN=heavy test CA" \
+      -keyout "$pki/ca.key" -out "$pki/ca.pem" \
+      -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" \
+    && openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=$host" -keyout "$key" -out "$pki/leaf.csr" \
+    && printf 'subjectAltName=DNS:%s,DNS:localhost,IP:127.0.0.1%s\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' \
+         "$host" "$san" > "$pki/leaf.ext" \
+    && openssl x509 -req -sha256 -days 2 -in "$pki/leaf.csr" -CA "$pki/ca.pem" -CAkey "$pki/ca.key" \
+         -CAcreateserial -extfile "$pki/leaf.ext" -out "$pki/leaf.pem" \
+    && cat "$pki/leaf.pem" "$pki/ca.pem" > "$cert"; } >"$HEAVY_WORK/openssl.log" 2>&1 \
     || { cat "$HEAVY_WORK/openssl.log" >&2; heavy_fail "could not generate a certificate for $host"; }
   echo "$cert"
 }
@@ -754,6 +765,28 @@ heavy_cached_dir() {
     mv "$dest.tmp" "$dest"
   fi
   echo "$dest"
+}
+
+# heavy_cli <token> <args...> — `batlehub-cli` built from this tree, against the
+# tap, as <token>, with a HOME of its own so no profile or config of the
+# machine's leaks in (RFC 0040 §6.P: the CLI is a client under test). Output
+# goes to HEAVY_CLI_OUT and the exit code to HEAVY_CLI_CODE; a non-zero code is
+# a result, not a failure, since several cases assert one.
+heavy_cli() {
+  local token="$1"
+  shift
+  if [[ -z "${HEAVY_CLI:-}" ]]; then
+    heavy_log "Building batlehub-cli" >&2
+    cargo build -p batlehub-cli >"$HEAVY_WORK/cli-build.log" 2>&1 \
+      || { cat "$HEAVY_WORK/cli-build.log" >&2; heavy_fail "batlehub-cli did not build"; }
+    HEAVY_CLI="$HEAVY_ROOT/target/debug/batlehub-cli"
+  fi
+  HEAVY_CLI_OUT="$HEAVY_WORK/cli.out"
+  mkdir -p "$HEAVY_WORK/cli-home"
+  HEAVY_CLI_CODE=0
+  HOME="$HEAVY_WORK/cli-home" XDG_CONFIG_HOME="$HEAVY_WORK/cli-home/.config" \
+    BATLEHUB_SERVER="${HEAVY_CLI_SERVER:-$HEAVY_TAP_BASE}" BATLEHUB_TOKEN="$token" \
+    "$HEAVY_CLI" "$@" >"$HEAVY_CLI_OUT" 2>&1 </dev/null || HEAVY_CLI_CODE=$?
 }
 
 # heavy_devfile_client — set HEAVY_DEVFILE_CLIENT to the `registry-library`

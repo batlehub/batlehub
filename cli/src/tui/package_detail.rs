@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -11,9 +11,16 @@ use crate::api::package::{PackageStatus, PackageSummary};
 use super::list_nav::ListNav;
 use super::App;
 
+/// The text beside the version list: `w`'s Why or `o`'s owners.
+pub struct Pane {
+    pub title: String,
+    pub text: String,
+}
+
 #[derive(Default)]
 pub struct PackageDetailWidget {
     pub nav: ListNav<PackageSummary>,
+    pub pane: Option<Pane>,
 }
 
 impl PackageDetailWidget {
@@ -28,8 +35,27 @@ pub fn render(f: &mut Frame, app: &App, registry: &str, name: &str) {
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(f.area());
 
-    let main_area = chunks[0];
     let help_area = chunks[1];
+    let main_area = match &app.package_detail.pane {
+        Some(pane) => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .split(chunks[0]);
+            f.render_widget(
+                Paragraph::new(pane.text.as_str())
+                    .wrap(Wrap { trim: false })
+                    .block(
+                        Block::default()
+                            .title(pane.title.as_str())
+                            .borders(Borders::ALL),
+                    ),
+                cols[1],
+            );
+            cols[0]
+        }
+        None => chunks[0],
+    };
 
     let items: Vec<ListItem> = app
         .package_detail
@@ -81,7 +107,9 @@ pub fn render(f: &mut Frame, app: &App, registry: &str, name: &str) {
 
     f.render_stateful_widget(list, main_area, &mut app.package_detail.nav.state.clone());
 
-    let help = Paragraph::new(" Esc:back  ↑↓:navigate  y:yank  u:unyank  ?:help")
+    let help = Paragraph::new(
+        " Esc:back  ↑↓:navigate  w:why  o:owners  y:yank  u:unyank  d:delete  p:pin  P:unpin  ?:help",
+    )
         .style(Style::default().fg(Color::DarkGray));
     f.render_widget(help, help_area);
 }

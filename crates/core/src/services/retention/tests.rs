@@ -76,6 +76,7 @@ impl EventRepo {
             AccessAction::Download
         };
         self.events.write().await.push(AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: Some("user-1".to_owned()),
             user_role: Role::User,
@@ -92,6 +93,7 @@ impl EventRepo {
 
     async fn record_denied(&self, pkg: PackageId, at: DateTime<Utc>) {
         self.events.write().await.push(AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: Some("user-1".to_owned()),
             user_role: Role::User,

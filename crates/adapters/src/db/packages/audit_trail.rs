@@ -55,7 +55,7 @@ async fn rows_in<'e>(
         r#"
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
-            package_artifact, action, outcome, deny_reason, created_at,
+            package_artifact, action, outcome, deny_reason, reason_code, created_at,
             ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE created_at >= $1 AND created_at < $2
@@ -113,7 +113,7 @@ impl AuditTrailStore for PgPackageRepository {
             r#"
             SELECT
                 id, user_id, user_role, registry, package_name, package_version,
-                package_artifact, action, outcome, deny_reason, created_at,
+                package_artifact, action, outcome, deny_reason, reason_code, created_at,
                 ip_address, user_agent, throttled_count, detail
             FROM access_events
             WHERE ($1::timestamptz IS NULL OR created_at < $1)
@@ -319,7 +319,7 @@ impl AuditTrailStore for PgPackageRepository {
             r#"
             SELECT
                 id, user_id, user_role, registry, package_name, package_version,
-                package_artifact, action, outcome, deny_reason, created_at,
+                package_artifact, action, outcome, deny_reason, reason_code, created_at,
                 ip_address, user_agent, throttled_count, detail
             FROM access_events WHERE user_id = $1 ORDER BY created_at
             "#,

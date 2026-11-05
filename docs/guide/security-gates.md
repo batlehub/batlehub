@@ -410,7 +410,7 @@ The user-facing side, with what each package manager prints, is on
   `BlockListRule`, `CveGateRule`, `LicenseGateRule` and `FlagsRule`. The
   verdict gate logs at `ERROR` and refuses.
 - **To answer "why was this refused" without reproducing it:**
-  - `batlehub why <registry>:<name>@<version>` (see
+  - `batlehub-cli why <registry>:<name>@<version>` (see
     [the CLI](/use/cli#commands-security));
   - the verdict panel on the package page;
   - the admin *Access Check* page, which runs the same

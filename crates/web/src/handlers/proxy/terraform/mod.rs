@@ -48,5 +48,6 @@ use shared::{
     sign_download_document, DownloadCoords,
 };
 pub(super) use shared::{
-    require_segments, terraform_set_yanked, terraform_versions_response, TerraformYankRequest,
+    require_segments, terraform_set_yanked, terraform_versions_response, upstream_may_answer,
+    TerraformYankRequest,
 };

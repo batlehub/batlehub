@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/disaster-recovery.md
-sourceHash: f884ba5d7c0f48c5
+sourceHash: ed044214d0e4f7bf
 ---
 
 # Reprise après sinistre
@@ -73,9 +73,9 @@ artefacts en cache sont re-récupérés en amont à la requête suivante.
 
 1. Créez un nouveau bucket, mettez à jour `[storage] bucket` dans la
    configuration.
-2. Déclenchez un rechargement : `batlehub-cli admin config reload`.
+2. Déclenchez un rechargement : `batlehub-cli server config reload`.
 3. Éventuellement, préchauffez les paquets critiques :
-   `batlehub-cli admin cache warm <registry> --packages <name>`.
+   `batlehub-cli cache warm -r <registry> --packages <name>`.
 
 ### Scénario 3 — bucket S3 perdu (avec des artefacts en mode local)
 
@@ -99,7 +99,7 @@ le client propre au registre.
    des artefacts.
 3. Déployez BatleHub avec l'URL de base et la configuration de stockage
    restaurées.
-4. Lancez `batlehub-cli admin cache warm` pour chaque registre, afin d'éviter une
+4. Lancez `batlehub-cli cache warm` pour chaque registre, afin d'éviter une
    tempête de défauts de cache au démarrage à froid.
 
 ## Bascule inter-régions

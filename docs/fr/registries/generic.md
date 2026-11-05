@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: b66c2c3365129779
+sourceHash: 557a1aef14f7635b
 ---
 
 # Miroir générique
@@ -61,7 +61,7 @@ export RUSTUP_DIST_SERVER=https://batlehub.example.com/proxy/rust-dist/generic
 
 Des outils comme `mise` les lisent automatiquement, et savent aussi router leurs
 téléchargements directs par un bloc `[settings.url_replacements]`.
-`batlehub registry suggest` analyse un projet (`mise.toml` et `mise.lock`
+`batlehub-cli registry suggest` analyse un projet (`mise.toml` et `mise.lock`
 compris) et imprime à la fois les blocs de configuration de registre et les
 variables d'environnement client correspondantes.
 

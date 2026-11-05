@@ -73,6 +73,9 @@ impl PublishFormWidget {
                 if self.active_field == PublishField::Version {
                     self.submitted = true;
                 } else {
+                    if self.active_field == PublishField::FilePath {
+                        self.prefill_from_file();
+                    }
                     self.next_field();
                 }
             }
@@ -80,6 +83,24 @@ impl PublishFormWidget {
                 use tui_input::backend::crossterm::EventHandler;
                 self.active_input()
                     .handle_event(&crossterm::event::Event::Key(key));
+            }
+        }
+    }
+
+    /// Show the name and version `publish` will read from the file before
+    /// anything is sent (RFC 0040 §4.10); a value already typed stays.
+    fn prefill_from_file(&mut self) {
+        let path = std::path::Path::new(self.value(PublishField::FilePath));
+        let Some(meta) = crate::api::publish::detect_meta(path) else {
+            return;
+        };
+        for (field, read) in [
+            (PublishField::Name, meta.name),
+            (PublishField::Version, meta.version),
+        ] {
+            let input = &mut self.fields[Self::field_idx(field)];
+            if input.value().is_empty() {
+                *input = Input::default().with_value(read);
             }
         }
     }
@@ -201,6 +222,17 @@ mod tests {
         w.active_field = PublishField::Version;
         w.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(w.submitted);
+    }
+
+    #[test]
+    fn enter_on_the_path_shows_the_name_and_version_read_from_it() {
+        let mut w = PublishFormWidget::new();
+        w.fields[0] = Input::default().with_value("dist/serde-1.0.200.crate".into());
+        w.fields[3] = Input::default().with_value("9.9.9".into());
+        w.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(w.value(PublishField::Name), "serde");
+        // A value already typed is an override, as `--version` is.
+        assert_eq!(w.value(PublishField::Version), "9.9.9");
     }
 
     #[test]

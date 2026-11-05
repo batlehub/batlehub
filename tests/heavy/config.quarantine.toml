@@ -66,6 +66,30 @@ scanners = ["osv"]
 required_scanners = ["osv"]
 max_severity = "high"
 
+# ── The young registry: an age gate nothing real is old enough for ───────────
+#
+# RFC 0040 heavy case 8. Twenty years: every version npm has is "too young",
+# so once OSV has answered the hold is `MIN_AGE_NOT_MET` with a real clock
+# (`available_at`), which is the ⏳ answer `why` exits 0 on.
+[[registries]]
+type = "npm"
+name = "npm-young-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 631152000
+mature_age_secs = 0
+scanners = ["osv"]
+required_scanners = ["osv"]
+max_severity = "high"
+
 # ── The egress registry: one binary scanner, in the sandbox ──────────────────
 #
 # Step 6's registry. Its second scanner is the probe the suite writes at

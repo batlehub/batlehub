@@ -41,6 +41,7 @@ survive it.
 | 8 | `core/services/listing_synthesis.rs` — composed listings | SHA-1 | Mandated by the format being imitated |
 | 9 | `web/…/proxy/maven/proxy.rs` — `.md5`/`.sha1` sidecars | MD5, SHA-1 | The algorithm *is* the file extension |
 | 10 | `adapters/repo/apk.rs` — the index's `C:` field | SHA-1 | Mandated by apk-tools, and checked at install |
+| 11 | `cli/src/api/publish.rs` — `with_maven_checksums` | MD5, SHA-1 | The sidecars of entry 9, uploaded by `batlehub-cli publish` |
 
 Entries 4, 5 and 6 are struck through because the code no longer computes them.
 Entry 4 was the one the 2026-08-31 recheck left standing as "a compatibility
@@ -203,6 +204,15 @@ Maven sidecars:
 Resolve it in the scanner, never in the code: a "fix" here is a repository no
 apk can install from.
 
+## 11. The CLI's Maven publish {#cli-maven-publish}
+
+`batlehub-cli publish app.jar --pom pom.xml` uploads each file with its `.sha1`
+and `.md5`, as `mvn deploy` does: they are entry 9's sidecars, written by the
+publisher instead of computed by the server, and a default-configured Maven
+resolver asks for exactly those two names (`SHA-1,MD5`). The CLI computes
+nothing it trusts from them; `maven.sh` checks a real `mvn` resolves what it
+sent. Resolve it in the scanner, as entry 9 is.
+
 ## Rechecked 2026-08-31
 
 The original triage recorded all thirteen as "mandated by a wire format". Three
@@ -293,9 +303,9 @@ pinned to the single file that speaks the protocol, with its reasoning inline.
 They are configured ignores rather than per-issue dashboard resolutions so that
 the justification is version-controlled and reviewable.
 
-Eleven files are pinned: the six of the register that are product code, and the
-five above. The scoping is deliberate — a weak hash *outside* them is a real
-finding. Do not widen a `resourceKey` to a directory, and do not add a twelfth
+Twelve files are pinned: the seven of the register that are product code, and
+the five above. The scoping is deliberate — a weak hash *outside* them is a real
+finding. Do not widen a `resourceKey` to a directory, and do not add a thirteenth
 entry without an argument of the same kind, which, as this page shows, means
 checking the specification rather than repeating what the last comment said.
 

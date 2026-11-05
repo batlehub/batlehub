@@ -120,8 +120,11 @@ impl AdminService {
         user_id: &str,
         since: DateTime<Utc>,
         limit: u64,
+        denied: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
-        self.repo.list_own_downloads(user_id, since, limit).await
+        self.repo
+            .list_own_downloads(user_id, since, limit, denied)
+            .await
     }
 
     /// The `max_coordinates` most recently pulled *coordinates*, each with the
@@ -160,7 +163,7 @@ impl AdminService {
 
         let events = self
             .repo
-            .list_own_downloads(user_id, since, scan_limit)
+            .list_own_downloads(user_id, since, scan_limit, false)
             .await?;
 
         let mut seen: Vec<(String, String, String)> = Vec::with_capacity(max_coordinates);
@@ -240,6 +243,7 @@ impl AdminService {
     ) {
         self.repo
             .record_access(AccessEvent {
+                reason_code: None,
                 id: uuid::Uuid::new_v4(),
                 user_id: by_identity.user_id.clone(),
                 user_role: by_identity.role.clone(),

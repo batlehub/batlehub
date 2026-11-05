@@ -3,22 +3,30 @@ use clap::Subcommand;
 use comfy_table::Table;
 
 use crate::api::{owner::AddOwnerRequest, BatleHubClient};
+use crate::coordinate::Coordinate;
+use crate::render::ctx;
+
+/// `registry/name`, or a bare name in the default registry. Ownership is per
+/// package, so a version is refused rather than silently dropped.
+async fn package(client: &BatleHubClient, raw: &str) -> Result<(String, String)> {
+    let c = Coordinate::resolve(client, raw, ctx().registry.as_deref()).await?;
+    if c.version.is_some() {
+        return Err(crate::exit::CliError::new(
+            crate::exit::ExitCode::Usage,
+            format!("owners are per package; write `{}/{}`", c.registry, c.name),
+        )
+        .into());
+    }
+    Ok((c.registry, c.name))
+}
 
 #[derive(Subcommand)]
 pub enum OwnerCommand {
-    /// List owners of a package
-    List {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
-    },
+    /// The owners of a package: `registry/name`
+    List { coordinate: String },
     /// Add an owner to a package
     Add {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
+        coordinate: String,
         /// Principal ID (user ID or group name)
         principal: String,
         /// Principal type: user or group
@@ -30,10 +38,7 @@ pub enum OwnerCommand {
     },
     /// Remove an owner from a package
     Remove {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
+        coordinate: String,
         /// Principal ID (user ID or group name)
         principal: String,
         /// Principal type: user or group
@@ -44,10 +49,11 @@ pub enum OwnerCommand {
 
 pub async fn run(cmd: OwnerCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
-        OwnerCommand::List { registry, name } => {
+        OwnerCommand::List { coordinate } => {
+            let (registry, name) = package(client, &coordinate).await?;
             let owners = client.list_owners(&registry, &name).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&owners)?);
+                crate::render::data(&owners)?;
             } else {
                 let mut table = Table::new();
                 table.set_header(["Type", "Principal", "Role", "Granted By"]);
@@ -64,12 +70,12 @@ pub async fn run(cmd: OwnerCommand, client: &BatleHubClient, json: bool) -> Resu
             }
         }
         OwnerCommand::Add {
-            registry,
-            name,
+            coordinate,
             principal,
             r#type,
             role,
         } => {
+            let (registry, name) = package(client, &coordinate).await?;
             client
                 .add_owner(
                     &registry,
@@ -85,11 +91,11 @@ pub async fn run(cmd: OwnerCommand, client: &BatleHubClient, json: bool) -> Resu
             println!("Added {type} '{principal}' as {role} on {registry}/{name}");
         }
         OwnerCommand::Remove {
-            registry,
-            name,
+            coordinate,
             principal,
             r#type,
         } => {
+            let (registry, name) = package(client, &coordinate).await?;
             client
                 .remove_owner(&registry, &name, &r#type, &principal)
                 .await?;

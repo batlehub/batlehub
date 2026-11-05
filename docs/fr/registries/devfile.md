@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/devfile.md
-sourceHash: f314861bcad6598e
+sourceHash: ad340d78ae3d5ecc
 ---
 
 # Registre devfile (Che, odo)
@@ -12,7 +12,7 @@ Ce qui est servi, et comment :
 - **Les documents d'index** — `index`, `v2index`, chacun avec `/sample`, `/stack` et `/all` — sans les versions bloquées. Ils décrivent le registre entier, donc un nouveau blocage les atteint dans la durée de vie de 30 secondes de l'instantané des blocages, comme le `repodata.json` de conda.
 - **Le devfile de chaque version de pile**, son **manifeste OCI** et les **couches** que ce manifeste nomme (`devfile.yaml`, `archive.tar`, …), octet pour octet, chacun vérifié contre son empreinte avant qu'un octet ne soit stocké ou servi.
 - **Les projets de démarrage**, les zips que récupère `registry-library download`.
-- **Vos propres piles**, en mode `local` ou `hybrid` : `batlehub publish` téléverse un répertoire de pile, et le serveur en dérive l'entrée d'index et les objets OCI qu'une récupération lit ([Publication](#publication)).
+- **Vos propres piles**, en mode `local` ou `hybrid` : `batlehub-cli publish` téléverse un répertoire de pile, et le serveur en dérive l'entrée d'index et les objets OCI qu'une récupération lit ([Publication](#publication)).
 
 Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est le cluster qui les tire, et ceci n'est pas un registre de conteneurs.
 
@@ -24,7 +24,7 @@ Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est l
 | **Amont par défaut** | `registry.devfile.io` |
 | **Modes** | proxy, local, hybride |
 | **Adressage** | un paquet par pile, une version par version de pile, un artefact par fichier de celle-ci |
-| **Publication privée** | ✅ `batlehub publish <répertoire de pile>` — un paquet défini par ce serveur, l'amont n'ayant pas de protocole de publication |
+| **Publication privée** | ✅ `batlehub-cli publish <répertoire de pile>` — un paquet défini par ce serveur, l'amont n'ayant pas de protocole de publication |
 | **Commutateur client** | Che : `externalDevfileRegistries` ; `registry-library`/`odo` : l'URL du registre |
 
 ## Donnez-lui un hôte dédié
@@ -98,14 +98,14 @@ Le `lastModified` de l'amont est l'heure de la dernière reconstruction du regis
 
 ## Publication
 
-Un registre `local` ou `hybrid` héberge ses propres piles. L'amont n'a pas d'API de téléversement — `registry-support` construit un registre hors ligne dans une image — : le téléversement est donc un paquet que ce serveur définit, et `batlehub publish` le compose à partir d'un répertoire de pile organisé comme `registry-support` en organise un :
+Un registre `local` ou `hybrid` héberge ses propres piles. L'amont n'a pas d'API de téléversement — `registry-support` construit un registre hors ligne dans une image — : le téléversement est donc un paquet que ce serveur définit, et `batlehub-cli publish` le compose à partir d'un répertoire de pile organisé comme `registry-support` en organise un :
 
 ```sh
 # my-stack/devfile.yaml            metadata.name and metadata.version name the stack
 # my-stack/kubernetes/deploy.yaml  anything else goes into archive.tar
 # my-stack/starter-projects/hello.zip   optional, one per starterProjects[*].name
-batlehub publish ./my-stack -r <registry>
-batlehub publish ./my-stack/devfile.yaml -r <registry>     # the same thing
+batlehub-cli publish ./my-stack -r <registry>
+batlehub-cli publish ./my-stack/devfile.yaml -r <registry>     # the same thing
 ```
 
 `--name` et `--version` sont refusés : le serveur lit les deux dans le `metadata` du devfile, et nulle part ailleurs. La composition est déterministe — chemins triés, horodatages et propriétaires à zéro — : le même répertoire donne toujours les mêmes empreintes, et une seconde publication de celui-ci est un `409` qui porte sur la version et non sur un horodatage.

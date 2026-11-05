@@ -87,10 +87,10 @@ The audit log can be exported for auditors via:
 
 ```bash
 # JSON export (last 30 days)
-batlehub admin export-audit-log --from 2026-06-01T00:00:00Z --format json --output audit.json
+batlehub-cli audit export --from 2026-06-01T00:00:00Z --format json --output audit.json
 
 # CSV export (for spreadsheet review)
-batlehub admin export-audit-log --from 2026-06-01T00:00:00Z --format csv --output audit.csv
+batlehub-cli audit export --from 2026-06-01T00:00:00Z --format csv --output audit.csv
 ```
 
 Or via the Admin UI → **Audit Log** → **Export** button.

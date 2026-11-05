@@ -49,8 +49,8 @@ pub(super) async fn record_access_impl(
             INSERT INTO access_events
                 (id, user_id, user_role, registry, package_name, package_version,
                  package_artifact, action, outcome, deny_reason, created_at,
-                 ip_address, user_agent, throttled_count, detail)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $16, $17)
+                 ip_address, user_agent, throttled_count, detail, reason_code)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $16, $17, $18)
         )
         INSERT INTO package_statuses
             (id, registry, package_name, package_version, package_artifact,
@@ -78,6 +78,7 @@ pub(super) async fn record_access_impl(
     .bind(creates_status_row)
     .bind(event.throttled_count.map(|n| n as i32))
     .bind(&event.detail)
+    .bind(&event.reason_code)
     .execute(pool);
     crate::db::timed_query("record_access", query)
         .await

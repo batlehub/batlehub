@@ -33,3 +33,14 @@ mode = "proxy"
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── Local registry: `batlehub-cli publish` of a module directory (RFC 0040 §6.P case 5)
+[[registries]]
+type = "goproxy"
+name = "go-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

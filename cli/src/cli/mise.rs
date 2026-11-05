@@ -53,9 +53,9 @@ pub struct ExportArgs {
     /// A file holding the 32-byte ed25519 signing key, hex-encoded.
     #[arg(long)]
     pub sign_key: PathBuf,
-    /// Where to write the bundle.
-    #[arg(long, short = 'o', default_value = "estate.bhub")]
-    pub out: PathBuf,
+    /// Where to write the bundle (default `estate.bhub`).
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
     /// A name for this bundle. Defaults to the plan's digest, which makes
     /// the same plan produce the same id and an import idempotent.
     #[arg(long)]
@@ -98,7 +98,7 @@ pub struct PlanArgs {
     pub mise_version: Option<String>,
     /// Write the plan here instead of standard output.
     #[arg(long, short = 'o')]
-    pub out: Option<PathBuf>,
+    pub output: Option<PathBuf>,
 }
 
 pub async fn run(cmd: MiseCommand, client: &BatleHubClient, json: bool) -> Result<()> {
@@ -110,18 +110,23 @@ pub async fn run(cmd: MiseCommand, client: &BatleHubClient, json: bool) -> Resul
     }
 }
 
+/// Exit 7 (RFC 0040 §4.6): the command did something, but not all of it.
+fn partial(message: String) -> anyhow::Error {
+    crate::exit::CliError::new(crate::exit::ExitCode::Partial, message).into()
+}
+
 async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let bytes = tokio::fs::read(&args.bundle)
         .await
         .with_context(|| format!("reading {}", args.bundle.display()))?;
     let resp = client.import_bundle(bytes).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
         // The same exit code as the human path: a runbook piping `--json` into
         // `jq` would otherwise go green on a partially failed import, and the
         // missing artifacts surface later as 503s from the disconnected proxy.
         if resp.rejected > 0 {
-            std::process::exit(1);
+            return Err(partial(format!("{} blob(s) rejected", resp.rejected)));
         }
         return Ok(());
     }
@@ -142,7 +147,7 @@ async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Re
         println!("  rejected: {line}");
     }
     if resp.rejected > 0 {
-        std::process::exit(1);
+        return Err(partial(format!("{} blob(s) rejected", resp.rejected)));
     }
     Ok(())
 }
@@ -348,6 +353,10 @@ fn print_export_report(
 }
 
 async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let out = args
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("estate.bhub"));
     use batlehub_core::services::bundle::{BundleEntry, BundleManifest, BUNDLE_VERSION};
     use ed25519_dalek::Signer;
 
@@ -405,9 +414,9 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
     // `std::fs::File`: `write_bundle` is the core crate's synchronous
     // `std::io::Write` sink, shared with the server, and this command is the
     // only task on this runtime, so the blocking write starves nothing.
-    let file = tokio::fs::File::create(&args.out)
+    let file = tokio::fs::File::create(&out)
         .await
-        .with_context(|| format!("creating {}", args.out.display()))?
+        .with_context(|| format!("creating {}", out.display()))?
         .into_std()
         .await;
     let written = batlehub_core::services::bundle::write_bundle(
@@ -417,7 +426,7 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
         |digest| blobs.get(digest).cloned(),
     )?;
 
-    print_export_report(json, &args.out, &manifest, written, &public_key, &skipped)?;
+    print_export_report(json, &out, &manifest, written, &public_key, &skipped)?;
     Ok(())
 }
 
@@ -588,12 +597,16 @@ async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result
     if failed > 0 {
         // A CI gate on the connected side: the run failed, and the lines
         // above say which entries and why.
-        std::process::exit(1);
+        return Err(partial(format!(
+            "{failed} of {} entries failed",
+            outcomes.len()
+        )));
     }
     Ok(())
 }
 
 async fn run_plan(args: PlanArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let out = args.output.clone();
     // An unreachable server costs the registry annotation, not the plan: the
     // lock is the bill of materials, and a plan built against no registries
     // reports every host as unmirrored, which is true of a server with none.
@@ -642,22 +655,22 @@ async fn run_plan(args: PlanArgs, client: &BatleHubClient, json: bool) -> Result
     }
     let rendered = serde_json::to_string_pretty(&plan)?;
 
-    if let Some(path) = &args.out {
+    if let Some(path) = &out {
         tokio::fs::write(path, format!("{rendered}\n"))
             .await
             .with_context(|| format!("writing {}", path.display()))?;
     }
     if json {
-        if args.out.is_none() {
+        if out.is_none() {
             println!("{rendered}");
         }
         return Ok(());
     }
-    if args.out.is_none() {
+    if out.is_none() {
         println!("{rendered}");
         return Ok(());
     }
-    print_summary(&plan, args.out.as_deref());
+    print_summary(&plan, out.as_deref());
     Ok(())
 }
 

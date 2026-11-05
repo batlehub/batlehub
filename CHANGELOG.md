@@ -8,6 +8,230 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`batlehub-cli` has one table of exit codes** (RFC 0040 §4.6). Every error
+  used to be 1. A script can now branch on the code:
+
+  | Case | Before | After |
+  | --- | --- | --- |
+  | HTTP 401 | 1 | 3 |
+  | HTTP 403 | 1 | 4 |
+  | HTTP 404, unknown registry | 1 | 5 |
+  | HTTP 409 | 1 | 6 |
+  | `wait`: waiting cannot help | 1 | 4 |
+  | `wait`: timed out | 2 | 8 |
+  | `setup`: `conflict` / `ambiguous` / `orphaned` | 3 | 6 |
+  | `mise seed` / `mise import` with failures, a bulk operation with failed items | 1 | 7 |
+  | a destructive command without a terminal and without `--yes` | ran | 9 |
+  | a usage error (no registry for a bare name, an artifact to a terminal) | 1 | 2 |
+
+  No switch restores the old codes.
+- **Destructive commands confirm, and refuse without a terminal.** These used
+  to run without asking: `version yank`, `admin bulk yank`/`delete`,
+  `admin unlist`, `admin cache clear`/`evict`/`coherence`,
+  `admin audit-log --purge-before`, `admin users block`, `admin gdpr erase`,
+  `admin retention --reclaim`, `admin notifications delete`,
+  `auth token revoke`, and `download` over an existing file. They now ask on a
+  terminal. In a script they exit 9 and send nothing unless given the new
+  global `-y/--yes`.
+- **Errors have one shape**: `error: <the server's message>`, a `code:` line
+  with its docs link when the server sent a reason code, and an optional
+  `hint:`. Before, an error was `HTTP 403: {json}`. With `--format json` the
+  error is also written to stdout as `{"error": {…, "exit": N}}`.
+- **`-r/--registry` is honoured by every registry filter.** That covers
+  `admin flags list`, `exposure`, `air-gap-missing`, `audit-log`,
+  `access-check`, `export-audit-log`, `quota list` and `sbom export`, plus
+  `verdicts list`/`backfill`/`rescan` and `audit pulls`. They used to declare
+  their own `--registry`, and so ignored `BATLEHUB_REGISTRY` and the profile.
+- **`admin sbom get/export --format` is now `--sbom-format`.** The global
+  `--format` took its name. `admin export-audit-log --format json|csv` is now
+  the global option, with the same spelling.
+- **`why`, `wait`, `verdicts pullers` and `package readme` take
+  `registry/name@version`.** A bare name goes to the default registry.
+  `registry:name@version` is still read, with a warning.
+
+- **The CLI's commands are grouped by object** (RFC 0040 §4.4). The `admin`
+  catch-all is gone: its subcommands now live under `server`, `cache`,
+  `quota`, `ip-block`, `user`, `grant`, `namespace`, `visibility`, `audit`,
+  `gdpr`, `sbom`, `notification`, `retention`, `import`, `banner`,
+  `exposure`, `flag`, `bundle` and `air-gap`. A version's lifecycle
+  (`yank`, `unyank`, `delete`, `pin`, `unpin`, `deprecate`, `undeprecate`,
+  `unlist`, `relist`) is under `package`, and every verb takes one
+  coordinate or several (`registry/name@version`). The local configuration
+  is `profile`.
+- **The server's refusal hint names the real binary and the `/` form:**
+  ``Run `batlehub-cli why npm/left-pad@1.3.1` for details.`` The CLI still
+  reads the `:` form an older server prints.
+
+- **A package's owner can yank and unyank it through the generic lifecycle
+  endpoint** (`POST /api/v1/admin/registries/{r}/bulk-yank|bulk-unyank`, and so
+  `batlehub-cli package yank`), on the kinds whose native client already lets an
+  owner yank: cargo, composer, rubygems, terraform, nuget. The caller must be an
+  explicit owner of **every** package in the request; a package with no owner
+  counts as not owned, and a mixed request is refused whole. `delete` and `pin`
+  stay instance-tier. Rolling the server back removes this permission.
+
+- **`publish` uses the target registry's kind, not the file's extension.** A
+  Helm chart `.tgz` used to be detected as npm and sent to npm's route. It now
+  goes where the registry says. `-t` is checked against the registry and exits
+  2 on a mismatch; it names the kind only for a token that may publish to the
+  registry but not list it.
+
+- **`GET /api/v1/packages/access` returns `404` for a package the caller may
+  not see**, with the body an unknown package gets. It used to answer
+  `200 {can_access: false, reason: "registry not accessible"}`, which confirmed
+  that the registry existed. A registry the caller reads only through
+  `[registries.grants]` (no `[registries.rbac]` role) is now visible to it, as it
+  already was to the download.
+
+### Removed
+
+The old CLI spellings are gone in this release, not kept as aliases for one
+more minor version: each one is now a usage error (exit 2). The full old → new
+table is in the CLI reference, under *Removed spellings*.
+
+- `admin …`, `version …`, `owners …`, `verdicts …` and `config …`;
+- `registry info`, `auth token revoke` and `package versions <registry> <name>`;
+- `--csv` (now `--format csv`), `gdpr erase --force` (now
+  `--ignore-open-decisions`), `mise plan/export --out` (now `--output`);
+- `package list --blocked-only` (now `--blocked`).
+
+Two old spellings stay: `proxy serve --registry` and `vsx verify --registry`
+(a URL) remain aliases of `--registry-url` for the editor extensions, and the
+`registry:name@version` coordinate is still read, with a warning.
+
+### Added
+
+- **The TUI speaks the CLI's grammar** (RFC 0040 §4.10). On a version: `w`
+  opens a Why pane (`why`'s answer and your refusals of the package), `o` lists
+  the owners, `d` deletes, `p`/`P` pin and unpin. `y` and `d` ask first in a
+  modal. The login screen writes the `-P` profile and reconnects at once,
+  where it used to write `default` and ask for a restart, and the publish
+  form runs `publish` itself, after showing the name and version it read.
+- **`batlehub-cli check`** (RFC 0040 §4.8): reads the project's lockfiles
+  (`Cargo.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`,
+  `poetry.lock`, pinned `requirements*.txt`, `go.sum`, `conda-lock.yml`,
+  `composer.lock`, `Gemfile.lock`, `packages.lock.json`, `.terraform.lock.hcl`,
+  `Chart.lock`, `mise.lock`, `.nvmrc`, `.sdkmanrc`, `rust-toolchain.toml`) and
+  lists every pinned dependency that is not pullable, with its reason. It exits
+  4 on a ⛔, or on a ⏳ with `--strict`, so a CI step before the install fails
+  naming the dependency.
+- **`POST /api/v1/packages/access/batch`**: the pullability of up to 50
+  versions, answered from cached metadata only. A version not yet resolved
+  here, or not answered within 10 seconds, is ⏳ "not yet resolved", and each
+  item counts against the caller's rate limit as a download would.
+- **`auth login` signs in through the browser and back** (RFC 0040 §4.9). The
+  CLI listens on `127.0.0.1`, opens the browser at the server's sign-in with
+  `return_to=http://127.0.0.1:<port>/callback`, and saves the token the server
+  redirects back. Pasting a URL is now `--no-browser`. The server accepts that
+  `return_to` and no other (migration 064), and the provider configuration does
+  not change.
+- **The CLI covers the journeys only the console had** (RFC 0040 §4.9):
+  `package block/unblock`, `policy show/set/delete`,
+  `exemption list/add/remove`, `server config pending/apply/discard/warnings`,
+  `flag create/delete` (signed with the source's secret from
+  `BATLEHUB_FLAG_SECRET`), `me show/quota/downloads/advisories/namespaces`,
+  `upstream status/recheck/disappeared` and
+  `namespace signing-key list/set/delete`.
+- **`GET /api/v1/packages?blocked=true`** filters blocked versions on the
+  server, so the page and the total count only include them.
+  `package list --blocked` uses it. Before, the CLI filtered the page it had
+  already fetched.
+
+- **`publish` covers nine more kinds:** goproxy (a module directory, zipped and
+  sent as one atomic `{version}.zip`), maven (jar, pom and checksum sidecars,
+  resumable), terraform (a module tarball, or a provider directory of
+  per-platform archives), galaxy, helm, apk, jetbrains-marketplace and
+  vscode-marketplace. A nix registry is refused with the `nix copy --to`
+  command to run instead.
+- **`download <registry>/<name>@<version>`** fetches a version's one artifact by
+  coordinate (npm, cargo, composer, rubygems, goproxy, nuget, the extension and
+  plugin galleries, galaxy). It writes `<file>.part`, verifies it against the
+  checksum the metadata advertises while it streams, and renames it only on a
+  match. A mismatch, a refusal or Ctrl-C leaves nothing behind.
+- **`package versions` lists every version, the upstream's included**, with the
+  server's state for each, one page at a time (`--limit`, `--page`, `--all`,
+  `--no-upstream`). It used to show only what was cached, and stopped at 200.
+- **`publish` to npm now sends `dist.integrity` and `dist.shasum`**, as
+  `npm publish` does, so the published packument carries a checksum clients can
+  verify.
+- **`setup apply` configures ten more clients:** conda (`~/.condarc`), composer
+  (its `config.json`, managed only when setup created it), gem (`~/.gemrc`),
+  dotnet/nuget (`NuGet.Config`, likewise), terraform/tofu (`~/.terraformrc`
+  `network_mirror`), ansible-galaxy (`~/.ansible.cfg`), nix (`nix.conf`
+  `extra-substituters`), sdkman (`env.sh`), and mise rules for gitlab. helm is
+  reported as `manual`, with the `helm repo add` to run. apt, dnf, pacman, apk
+  and devfile get a `print` snippet, since their files are root's. `setup detect`
+  also recognises `galaxy.yml`/`requirements.yml`, `Chart.yaml`, `flake.nix` and
+  `devfile.yaml`.
+- **The CLI reference carries a per-kind coverage table** (RFC 0040 §4.7),
+  generated from `cli/src/coverage.rs`. The build fails when a kind claims a
+  capability that no test exercises.
+- **`batlehub-cli why` explains every cause, not only the verdict** (RFC 0040
+  §4.8). It prints a headline (✅ pullable now, ⏳ pullable from a given time, or
+  ⛔ not pullable), then access, block, lifecycle, policy rules, the verdict and
+  upstream, each with its reason code, docs link and next step. `why
+  <registry>/<name>` names the version a client asking for the newest receives.
+  `why --last` lists the caller's own recent refusals. A refused coordinate
+  `download` prints the same answer. Exit codes: 0 for ✅/⏳, 4 for ⛔.
+- **`GET /api/v1/packages/access` answers with `headline`, `until`, `causes`,
+  `resolved_version` and `versions`**, and `version` is optional. It writes
+  nothing: no scan is queued and no verdict or shadow evidence is recorded. The
+  console's access-check page renders the causes.
+- **`batlehub-cli package show <registry>/<name>[@<version>]`**: one version's
+  state, source, licence and links, followed by `why`'s answer for it.
+- **`GET /api/v1/registries` lists a registry the caller reads without being
+  able to install from it** — a namespace-only grant (`@team/x`), or
+  `releases:read` without `source:read` — with `installable: false`. `why`,
+  `download` and the other coordinate commands no longer call it an unknown
+  registry; `setup apply` still writes nothing for it.
+- **`GET /api/v1/me/downloads?outcome=denied`** returns the caller's own refused
+  downloads with their `reason_code`, a new nullable column on `access_events`
+  (migration 063) that both funnels write on every refusal.
+- **`profile list` and `profile use`.** `use` writes a top-level `current` key,
+  so `-P` is needed only to leave the profile in use. An older CLI ignores the
+  key.
+- **`--format table|json|csv|raw`** (and `BATLEHUB_FORMAT`) on every command.
+  `--json` is its short form, and is now honoured by `version`, `publish` and
+  `download` too. `csv` works on every listing, with the JSON field names as
+  headers.
+
+### Fixed
+
+- **The docs' CLI commands run as written.** 212 examples called the server
+  binary (`batlehub why …`, `batlehub admin …`) instead of `batlehub-cli`, 172
+  used a spelling RFC 0040 deprecated, and `incident-response` showed four
+  commands that never existed (`admin ip-blocks add`, `admin token revoke`,
+  `admin block`, `admin packages unlist`). Every command the published docs
+  show now parses with the current CLI, in both languages. The console had the
+  same slip: the devfile publish snippet, the version-grant hint and the
+  "held until" note now name `batlehub-cli`, in its current grammar.
+
+- **`--format json` prints one document when some items of a bulk `package`
+  verb fail.** The outcome was followed by a second error document on stdout.
+
+- **A hybrid terraform registry serves its upstream's providers.** The download
+  documents point at this instance's artifact routes for every version, but
+  those routes read local storage only, so `terraform init` got a `404` for any
+  upstream provider archive. They now fall through to the upstream, for a name
+  with no local version only: a provider or module published here is never
+  completed from the upstream, whatever platform or version it lacks. An
+  upstream *module* reaches its tarball the same way, but Terraform still
+  cannot install it, because its archive format is not named in the URL.
+- **A Go module whose path has an upper-case letter is served after a
+  publish.** The upload was stored under the path as typed (`Acme`), and every
+  Go client asks for the case-encoded one (`!acme`); in a hybrid registry the
+  public module of that name answered instead. Both spellings are now stored
+  under the encoded path.
+- **A terraform module published here installs.** `X-Terraform-Get` named the
+  archive route without a format, and Terraform parsed the tarball as an HTML
+  page ("XML syntax error"). It now carries `?archive=tar.gz` for a version
+  published here.
+- **`batlehub-cli --format json` prints one document when a command answers and
+  exits non-zero** (`why` on a refused version, `audit verify` with failures):
+  no error object is appended after the answer.
+
 ## [1.8.3] - 2026-11-02
 
 ### Fixed

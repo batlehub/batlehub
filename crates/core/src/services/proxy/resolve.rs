@@ -89,6 +89,12 @@ impl ProxyService {
                 .await?;
             return Ok(meta);
         }
+        // The batch behind `check` never goes upstream (RFC 0040 T11).
+        if crate::services::pullability::cache_only() {
+            return Err(CoreError::Cache(
+                crate::services::pullability::NOT_YET_RESOLVED.into(),
+            ));
+        }
 
         let meta = match super::time_upstream_call(
             registry_label,
@@ -115,6 +121,10 @@ impl ProxyService {
                     }
                 }
                 metrics::counter!("batlehub_upstream_errors_total", "registry" => Arc::clone(registry_label)).increment(1);
+                // A pullability answer writes nothing the download would.
+                if crate::services::pullability::evaluate_only() {
+                    return Err(e);
+                }
                 super::warn_if_audit_failed(
                     self.repo
                         .record_access(

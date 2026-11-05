@@ -19,7 +19,10 @@
 #   Recover  Same local repository: does the next build see the lifted hold,
 #            and does `-U` change the answer.
 #   Publish  `mvn deploy:deploy-file` to a local registry: the native status,
-#            then the same upload with the tap answering `202 Accepted`.
+#            then the same upload with the tap answering `202 Accepted`. And
+#            RFC 0040 §6.P case 6: `batlehub-cli publish app-2.0.0.jar --pom pom.xml`
+#            PUTs the jar, the pom and their checksums, and `mvn
+#            dependency:get` resolves what it sent.
 #
 # Run via `task test:maven-heavy` or directly. Needs network: repo1.maven.org.
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8104), HEAVY_TAP_PORT
@@ -253,5 +256,35 @@ heavy_wire_after publish-202 "PUT ${DEPLOY_PREFIX}1.1.0/lib-1.1.0.jar -> 201=>20
 heavy_log "Publish/202: mvn $PUBLISH_202 a 202 Accepted"
 heavy_client_said "$RUN_OUT" 'error|build'
 heavy_tap_rewrite_clear
+
+# ── Publish through the CLI (RFC 0040 §6.P case 6) ───────────────────────────
+
+mkdir -p "$HEAVY_WORK/cli-pub"
+cp "$HEAVY_WORK/lib.jar" "$HEAVY_WORK/cli-pub/app-2.0.0.jar"
+cat >"$HEAVY_WORK/cli-pub/pom.xml" <<'EOF'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.heavy</groupId>
+  <artifactId>app</artifactId>
+  <version>2.0.0</version>
+</project>
+EOF
+APP_PREFIX="/proxy/$LOCAL/maven2/com/heavy/app/2.0.0/app-2.0.0"
+heavy_mark publish-cli
+heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/cli-pub/app-2.0.0.jar" --pom "$HEAVY_WORK/cli-pub/pom.xml" -r "$LOCAL"
+[[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "Publish/cli: batlehub-cli publish exited $HEAVY_CLI_CODE"; }
+for f in jar jar.sha1 jar.md5 pom pom.sha1 pom.md5; do
+  heavy_wire_after publish-cli "PUT $APP_PREFIX.$f -> 201" "Publish/cli: the CLI did not PUT app-2.0.0.$f"
+done
+# The local registry is not behind the `*` mirror, so dependency:get can name it.
+sed 's#<mirrorOf>\*</mirrorOf>#<mirrorOf>*,!heavy-local</mirrorOf>#' "$HEAVY_WORK/settings.xml" > "$HEAVY_WORK/settings-local.xml"
+heavy_mark publish-cli-get
+RUN_OUT="$HEAVY_WORK/publish-cli-get.txt"
+(cd "$HEAVY_WORK" && "${HEAVY_RUNNER[@]}" mvn -B -s "$HEAVY_WORK/settings-local.xml" \
+  -Dmaven.repo.local="$(fresh_repo repopcli)" dependency:get -Dtransitive=false \
+  -DremoteRepositories="heavy-local::default::$LOCAL_URL" -Dartifact=com.heavy:app:2.0.0) >"$RUN_OUT" 2>&1 \
+  || { cat "$RUN_OUT" >&2; heavy_fail "Publish/cli: mvn dependency:get did not resolve what the CLI published"; }
+heavy_wire_after publish-cli-get "GET $APP_PREFIX.jar -> 200" "Publish/cli: mvn did not fetch the published jar"
+heavy_log "Publish/cli: com.heavy:app:2.0.0 published by the CLI and resolved by mvn"
 
 heavy_done "maven heavy test passed: hide=omitted/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES)/$OTHER recover=$RECOVER publish-202=$PUBLISH_202"

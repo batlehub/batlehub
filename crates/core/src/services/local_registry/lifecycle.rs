@@ -629,6 +629,7 @@ impl LocalRegistryService {
             return;
         };
         let event = AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: identity.user_id.clone(),
             user_role: identity.role.clone(),

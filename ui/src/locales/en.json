@@ -18,9 +18,22 @@
     "checkAccess": "Check Access",
     "checking": "Checking…",
     "denied": "Denied",
-    "noReasonGiven": "no reason given",
+    "next": "Next:",
     "noResponse": "No response",
-    "versionNeedsPackage": "Choose a registry and name first."
+    "notFound": "No such package, or not one you can see.",
+    "pullable": "Pullable",
+    "pullableFrom": "pullable from {time}",
+    "refused": "Not pullable",
+    "resolvesTo": "A client asking for the newest receives {version}.",
+    "state": {
+      "pass": "pass",
+      "warn": "warn",
+      "wait": "wait",
+      "refuse": "refuse"
+    },
+    "versionNeedsPackage": "Choose a registry and name first.",
+    "waiting": "Waiting",
+    "whenScanned": "pullable when a scanner answers"
   },
   "account": {
     "cli": "CLI",
@@ -1034,7 +1047,7 @@
     "subjectHint": "user:alice, group:oidc1:eng, role:user, or * for everyone.",
     "version": "Version",
     "versionGrants": "Granted on single versions",
-    "versionGrantsCli": "Read-only here. Use the CLI: batlehub admin grants set <registry> <name>{'@'}<version> --subject … --actions …",
+    "versionGrantsCli": "Read-only here. Use the CLI: batlehub-cli grant set <registry>/<name>{'@'}<version> --subject … --actions …",
     "whoCanReachThis": "Who can reach this package"
   },
   "packageVersionsTable": {
@@ -1233,7 +1246,7 @@
     "allowed": "Every required scanner answered and nothing reached the threshold.",
     "warned": "Served, with the reasons on the response: findings under warn mode, or a scan still pending on a version past its maturity age.",
     "denied": "Refused until a rescan or an administrator acts.",
-    "heldUntil": "Held until {when}. `batlehub wait` waits for it.",
+    "heldUntil": "Held until {when}. `batlehub-cli wait` waits for it.",
     "heldOpen": "Held until a scanner answers — or, for TIMESTAMP_MISSING, until the upstream is dated.",
     "policy": "Policy",
     "scanners": "Scanners",

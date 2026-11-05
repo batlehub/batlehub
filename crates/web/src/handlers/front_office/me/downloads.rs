@@ -32,6 +32,20 @@ pub struct MyDownloadsQuery {
     pub limit: Option<u64>,
     /// How many days back to look. Clamped to 1–365; defaults to 30.
     pub days: Option<i64>,
+    /// `success` (the default): what was served. `denied`: what was refused
+    /// — the coordinate, the time and the refusal's code, never the
+    /// operator's free-text reason (RFC 0040 §6.1, T3).
+    #[serde(default)]
+    #[param(inline)]
+    pub outcome: DownloadOutcome,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadOutcome {
+    #[default]
+    Success,
+    Denied,
 }
 
 /// One artifact the caller downloaded.
@@ -57,6 +71,11 @@ pub struct MyDownloadDto {
     /// RFC 0004 §2.2's argument reappearing on the one surface a non-admin
     /// actually opens (RFC 0004-bis §5/A9).
     pub blocked: bool,
+    /// On a refused row (`outcome=denied`): the refusal's stable code
+    /// (`MIN_AGE_NOT_MET`, …), `null` for a row written before codes were
+    /// recorded. Absent on a served row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<Option<String>>,
 }
 
 /// What the caller has downloaded, most recent first.
@@ -94,7 +113,12 @@ pub async fn my_downloads(
     let since = Utc::now() - Duration::days(days);
 
     let events = admin_svc
-        .list_own_downloads(user_id, since, limit)
+        .list_own_downloads(
+            user_id,
+            since,
+            limit,
+            query.outcome == DownloadOutcome::Denied,
+        )
         .await
         .map_err(AppError::from)?;
 
@@ -142,6 +166,7 @@ pub async fn my_downloads(
                 artifact,
                 downloaded_at: e.timestamp,
                 blocked: is_blocked,
+                reason_code: (query.outcome == DownloadOutcome::Denied).then_some(e.reason_code),
             })
         })
         .collect();

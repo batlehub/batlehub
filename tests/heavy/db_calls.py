@@ -197,6 +197,12 @@ def scenarios(run):
         ("proxy-packument-static-token", lambda: ("GET", f"/proxy/{proxy}/left-pad", ADMIN, None), 200),
         ("proxy-packument-pat", lambda: ("GET", f"/proxy/{proxy}/left-pad", pat, None), 200),
         ("proxy-tarball-pat", lambda: ("GET", f"/proxy/{proxy}/left-pad/1.0.0/tarball", pat, None), 200),
+        # RFC 0040 §10.3: `why`, and `check`'s batch of 50, on the version
+        # just downloaded — held to the download's cost in `run`.
+        ("api-pullability", lambda: (
+            "GET", f"/api/v1/packages/access?registry={proxy}&name=left-pad&version=1.0.0", None, None), 200),
+        ("api-pullability-batch", lambda: ("POST", "/api/v1/packages/access/batch", None, json.dumps(
+            {"items": [{"registry": proxy, "name": "left-pad", "version": "1.0.0"}] * 50}).encode()), 200),
         ("local-publish", publish, 200),
         ("local-packument", lambda: ("GET", f"/proxy/{local}/pkg-{run}", None, None), 200),
         ("local-tarball", lambda: ("GET", f"/proxy/{local}/pkg-{run}/1.0.1/tarball", None, None), 200),
@@ -316,6 +322,17 @@ def run(base, log, budget_path, update):
                 failures.append(f"{name} [{phase}]: {got[phase]} statements, budget {want[phase]}")
             elif got[phase] < want[phase]:
                 slack.append(f"{name} [{phase}]: {got[phase]} < budget {want[phase]}")
+
+    # RFC 0040 §10.3: an answer costs no more than the download it explains,
+    # and a batch of 50 no more than 50 single answers.
+    for asked, against, times in (
+        ("api-pullability", "proxy-tarball-anon", 1),
+        ("api-pullability-batch", "api-pullability", 50),
+    ):
+        if asked in measured and against in measured:
+            got, ceiling = measured[asked]["warm"], times * measured[against]["warm"]
+            if got > ceiling:
+                failures.append(f"{asked} [warm]: {got} statements, more than {times}× {against} ({ceiling})")
 
     print("\n── Summary (statements per request)")
     print(f"   {'scenario':32} {'cold':>5} {'warm':>5}   budget")

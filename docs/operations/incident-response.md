@@ -40,16 +40,16 @@ Query the audit log for anomalies:
 
 ```bash
 # All denied events in the last hour
-batlehub admin audit-log --denied-only --from "$(date -u -d '1 hour ago' +%FT%TZ)"
+batlehub-cli audit log --denied-only --from "$(date -u -d '1 hour ago' +%FT%TZ)"
 
 # Access events from a specific IP
-batlehub admin audit-log | jq '[.[] | select(.ip_address == "1.2.3.4")]'
+batlehub-cli audit log | jq '[.[] | select(.ip_address == "1.2.3.4")]'
 
 # What disappeared, and whether a person or a policy took it
-batlehub admin audit-log --action delete,retention_reclaim --from <start>
+batlehub-cli audit log --action delete,retention_reclaim --from <start>
 
 # Export a full 24-hour window for offline analysis
-batlehub admin export-audit-log --from <start> --to <end> --format csv --output incident-$(date +%Y%m%d).csv
+batlehub-cli audit export --from <start> --to <end> --format csv --output incident-$(date +%Y%m%d).csv
 ```
 
 ---
@@ -61,23 +61,26 @@ Act within the first 15 minutes for P0/P1. Do not wait for root-cause analysis b
 ### Block a suspicious IP
 
 ```bash
-batlehub admin ip-blocks add 1.2.3.4
+batlehub-cli ip-block add 1.2.3.4
 ```
 
 Or via the Admin UI → **IP Blocks** → Add.
 
 ### Revoke a compromised token
 
+A token is revoked by the user who owns it:
+
 ```bash
-batlehub admin token revoke <token-id>
+batlehub-cli auth token delete <token-id>
 ```
 
-Or via the Admin UI → **Users** → select user → Revoke token.
+An administrator cannot revoke another user's token. Block the account instead
+(below): every request from it is refused, whatever token it carries.
 
 ### Block a user account
 
 ```bash
-batlehub admin users block <user-id>
+batlehub-cli user block <user-id>
 ```
 
 Blocks all future requests from that user ID until unblocked.
@@ -85,12 +88,17 @@ Blocks all future requests from that user ID until unblocked.
 ### Quarantine a malicious package
 
 ```bash
-# Block the package name across all versions
-batlehub admin block <registry> <package-name>
+# Refuse these versions to every client, with the reason recorded
+batlehub-cli package block <registry>/<name>@<version>... --reason "<why>"
 
-# Or target a specific version
-batlehub admin packages unlist <registry> <package-name> <version>
+# Or only hide a version from listings; a pinned install still gets it
+batlehub-cli package unlist <registry>/<name>@<version>
 ```
+
+A block names versions, not a whole package: list them with
+`batlehub-cli package versions <registry>/<name>`. See
+[Block a package version](/guide/admin-policies#block-a-package-version) for
+what a block changes in each client's listing.
 
 ### Flag a version from your SOC tooling
 
@@ -120,9 +128,9 @@ the retroactive case, where the developer did nothing wrong and still has
 the artifact.
 
 ```bash
-batlehub admin exposure --source soc --min-effect gate --when before-flag
-batlehub admin exposure --registry npm --package left-pad --from 2026-09-01T00:00:00Z
-batlehub admin flags list --include-dead          # what every source has said, tombstones too
+batlehub-cli exposure list --source soc --min-effect gate --when before-flag
+batlehub-cli exposure list --registry npm --package left-pad --from 2026-09-01T00:00:00Z
+batlehub-cli flag list --include-dead          # what every source has said, tombstones too
 ```
 
 `GET /api/v1/admin/exposure/export?format=csv` is the same rows as a file for
@@ -180,14 +188,14 @@ are yours; BatleHub holds the evidence they are written from.
 | Deadline | What NIS2 asks | Where the evidence lives |
 |----------|----------------|--------------------------|
 | **24 h** after becoming aware — early warning | Whether the incident is suspected to be malicious or to have a cross-border impact | The audit stream in your SIEM and the Sigma rule that fired ([SIEM integration](./siem.md)) |
-| **72 h** — incident notification | An initial assessment: severity, impact, indicators of compromise | The audit log for the window: `batlehub-cli admin export-audit-log --from <start> --to <end> --format json` |
+| **72 h** — incident notification | An initial assessment: severity, impact, indicators of compromise | The audit log for the window: `batlehub-cli audit export --from <start> --to <end> --format json` |
 | **One month** — final report | Root cause, mitigation applied, cross-border impact | The post-mortem of Phase 5, the exported log, and a verified chain for the window |
 
 Before you quote the exported log, show it was not altered:
 
 ```bash
 # <digest> is the newest audit_seal line your SIEM holds
-batlehub-cli admin audit verify --from <start> --to <end> --head <digest>
+batlehub-cli audit verify --from <start> --to <end> --head <digest>
 ```
 
 It exits `0` when every sealed window verifies and `1` naming the first that
@@ -212,7 +220,7 @@ request from one data subject is answered with two commands.
 **Access request (GDPR Art. 15):**
 
 ```bash
-batlehub-cli admin gdpr export --user <id>
+batlehub-cli gdpr export --user <id>
 ```
 
 It lists every row about the subject, including the publication and ownership
@@ -222,7 +230,7 @@ needs the `audit:read` verb (`GET /api/v1/admin/gdpr/export?user_id=<id>`).
 **Erasure request (GDPR Art. 17):**
 
 ```bash
-batlehub-cli admin gdpr erase --user <id>
+batlehub-cli gdpr erase --user <id>
 ```
 
 It replaces the id with `erased:<hmac>` in `access_events`, token rows and

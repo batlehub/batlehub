@@ -6,7 +6,7 @@ reference: true
 
 When BatleHub refuses a download, it tells your package manager why, but most
 package managers print only part of that answer. This page explains what each
-refusal means, how to get the full reason with `batlehub why`, and what you, or
+refusal means, how to get the full reason with `batlehub-cli why`, and what you, or
 the administrator of the instance, can do about each one. How these checks are
 configured is on the operator's page, [Security gates](/guide/security-gates).
 
@@ -30,7 +30,7 @@ The messages are listed under [Refusals with a plain message](#plain-messages).
 version is scanned, and the scan's result, its **verdict**, decides:
 
 ```text
-npm-public:left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available 2026-09-05T14:12:00Z). Run `batlehub why npm-public:left-pad@1.3.1` for details.
+npm-public:left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available 2026-09-05T14:12:00Z). Run `batlehub-cli why npm-public:left-pad@1.3.1` for details.
 ```
 
 The uppercase words are **reason codes**, each explained under
@@ -48,10 +48,10 @@ source".
 
 ---
 
-## Ask for the full reason: `batlehub why` {#batlehub-why}
+## Ask for the full reason: `batlehub-cli why` {#batlehub-why}
 
 ```console
-$ batlehub why npm-public:left-pad@1.3.1
+$ batlehub-cli why npm-public:left-pad@1.3.1
 npm-public:left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
@@ -63,7 +63,7 @@ npm-public:left-pad@1.3.1
   scanners     osv
   findings     none
 
-Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
 ```
 
 - **`docs`:** one link per reason code, to its section of this page.
@@ -79,7 +79,7 @@ The command is described in full in [the CLI](/use/cli#commands-security).
 **Wait for a hold to lift** in a script or a pipeline:
 
 ```console
-$ batlehub wait npm-public:left-pad@1.3.1 --timeout 2h
+$ batlehub-cli wait npm-public:left-pad@1.3.1 --timeout 2h
 ```
 
 It exits `0` once the version can be served, `1` when waiting cannot help (the
@@ -110,7 +110,7 @@ These hold a version for a while. Waiting is usually the answer.
 The version was published too recently. The registry waits a set time after
 every release (three days is common) so that a compromised release can be
 noticed and pulled before anyone installs it. The verdict carries the time it
-becomes available: wait for it with `batlehub wait`, or pin the previous
+becomes available: wait for it with `batlehub-cli wait`, or pin the previous
 version until then.
 
 #### `SCAN_PENDING` {#scan-pending}
@@ -124,7 +124,7 @@ administrator.
 
 A required scanner failed on this version, after its retries. The hold lifts
 when a scan succeeds, and your administrator can queue one with
-`batlehub why --rescan`. A version older than
+`batlehub-cli why --rescan`. A version older than
 the registry's maturity age is served `warned` despite this code, so a broken
 scanner does not block everything forever.
 
@@ -151,7 +151,7 @@ served.
 
 #### `VULNERABILITY` {#vulnerability}
 
-A known vulnerability affects this version. `batlehub why` names the advisory
+A known vulnerability affects this version. `batlehub-cli why` names the advisory
 when you can see findings. Upgrade to a fixed version if there is one. If the
 vulnerability cannot affect how you use the package, your administrator can
 record that judgement as an exemption, with a reason and an end date.
@@ -248,7 +248,7 @@ it.
 
 #### `BLOCK_LIST` {#block-list}
 
-An administrator blocked this version, and `batlehub why` shows their reason
+An administrator blocked this version, and `batlehub-cli why` shows their reason
 when you can see findings. This is always refused, whatever the registry's
 mode. Ask the administrator, or use another version.
 
@@ -301,7 +301,7 @@ refuses. Check the script, and pin it to a commit.
 ## Refusals with a plain message {#plain-messages}
 
 These come from registries without a supply-chain profile. The message is the
-whole answer, and `batlehub why` has nothing to add.
+whole answer, and `batlehub-cli why` has nothing to add.
 
 | The message starts with… | Meaning | What to do |
 | --- | --- | --- |

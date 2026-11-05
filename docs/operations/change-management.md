@@ -69,7 +69,7 @@ All configuration changes that affect runtime behavior (new registries, RBAC rul
 3. **Auditable** — config change history is queryable:
 
    ```bash
-   batlehub admin config changes
+   batlehub-cli server config changes
    # or via Admin UI → Config Reload → History
    ```
 
@@ -124,8 +124,7 @@ Changes to per-registry RBAC rules affect what packages users can and cannot dow
 1. Use the RBAC simulator to validate the intended effect:
 
    ```bash
-   batlehub admin access-check --registry npm --package lodash \
-     --version 4.17.21 --resource releases:read --role user
+   batlehub-cli authz check npm/lodash@4.17.21 --resource releases:read --role user
    ```
 
 2. Test with at least one "deny" case and one "allow" case.
@@ -147,7 +146,7 @@ Config changes are logged in the `config_changes` table.
 To export all audit events for a period:
 
 ```bash
-batlehub admin export-audit-log \
+batlehub-cli audit export \
   --from 2026-01-01T00:00:00Z --to 2026-03-31T23:59:59Z \
   --format csv --output q1-2026-audit.csv
 ```

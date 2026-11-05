@@ -7,7 +7,7 @@ What is served, and how:
 - **The index documents** — `index`, `v2index`, each with `/sample`, `/stack` and `/all` — with blocked versions removed. They describe the whole registry, so a new block reaches them within the blocked-set snapshot's 30-second lifetime, as conda's `repodata.json` does.
 - **Each stack version's devfile**, its **OCI manifest** and the **layers** the manifest names (`devfile.yaml`, `archive.tar`, …), byte-exact, each verified against its digest before a byte is stored or served.
 - **Starter projects**, the zips `registry-library download` fetches.
-- **Stacks of your own**, in `local` or `hybrid` mode: `batlehub publish` uploads a stack directory, and the server derives the index entry and the OCI objects a pull reads from it ([Publishing](#publishing)).
+- **Stacks of your own**, in `local` or `hybrid` mode: `batlehub-cli publish` uploads a stack directory, and the server derives the index entry and the OCI objects a pull reads from it ([Publishing](#publishing)).
 
 The container images a devfile names are **not** proxied: the cluster pulls those, and this is not a container registry.
 
@@ -19,7 +19,7 @@ The container images a devfile names are **not** proxied: the cluster pulls thos
 | **Default upstream** | `registry.devfile.io` |
 | **Modes** | proxy, local, hybrid |
 | **Addressing** | one package per stack, one version per stack version, one artifact per file of it |
-| **Private publish** | ✅ `batlehub publish <stack dir>` — a bundle this server defines, since upstream has no publish protocol |
+| **Private publish** | ✅ `batlehub-cli publish <stack dir>` — a bundle this server defines, since upstream has no publish protocol |
 | **Client switch** | Che: `externalDevfileRegistries`; `registry-library`/`odo`: the registry URL |
 
 ## Give it a host of its own
@@ -93,14 +93,14 @@ Upstream's `lastModified` is the time the whole registry was last rebuilt — th
 
 ## Publishing
 
-A `local` or `hybrid` registry hosts stacks of its own. Upstream has no upload API — `registry-support` builds a registry offline into an image — so the upload is a bundle this server defines, and `batlehub publish` packs it from a stack directory laid out as `registry-support` lays one out:
+A `local` or `hybrid` registry hosts stacks of its own. Upstream has no upload API — `registry-support` builds a registry offline into an image — so the upload is a bundle this server defines, and `batlehub-cli publish` packs it from a stack directory laid out as `registry-support` lays one out:
 
 ```sh
 # my-stack/devfile.yaml            metadata.name and metadata.version name the stack
 # my-stack/kubernetes/deploy.yaml  anything else goes into archive.tar
 # my-stack/starter-projects/hello.zip   optional, one per starterProjects[*].name
-batlehub publish ./my-stack -r <registry>
-batlehub publish ./my-stack/devfile.yaml -r <registry>     # the same thing
+batlehub-cli publish ./my-stack -r <registry>
+batlehub-cli publish ./my-stack/devfile.yaml -r <registry>     # the same thing
 ```
 
 `--name` and `--version` are refused: the server reads both from the devfile's `metadata`, and nowhere else. The packing is deterministic — sorted paths, zero timestamps and owners — so the same directory always gives the same digests, and a second publish of it is a `409` about the version rather than about a timestamp.

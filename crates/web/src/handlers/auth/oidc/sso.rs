@@ -146,9 +146,11 @@ pub async fn list_oidc_providers(flows: web::Data<Vec<OidcSsoFlow>>) -> impl Res
     params(
         ("state" = Option<String>, Query, description = "CSRF state (frontend-generated); omit to probe availability"),
         ("provider" = Option<String>, Query, description = "Provider name to log in with; defaults to the first configured provider"),
+        ("return_to" = Option<String>, Query, description = "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with the tokens in the query string"),
     ),
     responses(
         (status = 200, description = "OIDC is configured (probe response when state is absent)", body = OkResponse),
+        (status = 400, description = "`state` too long, or a `return_to` other than the loopback callback"),
         (status = 302, description = "Redirect to OIDC authorization endpoint"),
         (status = 404, description = "Named provider not found"),
         (status = 503, description = "OIDC not configured"),
@@ -164,6 +166,16 @@ pub async fn oidc_login(
         return Err(AppError::service_unavailable(
             "OIDC SSO is not configured on this server",
         ));
+    }
+
+    // Before anything else, the probe included: a link carrying any other
+    // `return_to` is how a code would be sent off the machine (RFC 0040 T6).
+    if let Some(ref to) = query.return_to {
+        if !is_loopback_return_to(to) {
+            return Err(AppError::bad_request(
+                "`return_to` must be exactly http://127.0.0.1:<port>/callback",
+            ));
+        }
     }
 
     let Some(ref spa_state) = query.state else {
@@ -204,6 +216,7 @@ pub async fn oidc_login(
                 code_verifier: pkce.verifier.clone(),
                 nonce: pkce.nonce.clone(),
                 spa_state: spa_state.clone(),
+                return_to: query.return_to.clone(),
             },
             LOGIN_STATE_TTL_SECS,
         )
@@ -216,6 +229,41 @@ pub async fn oidc_login(
         // to an authorization URL whose state has already been redeemed.
         .insert_header(("Cache-Control", "no-store"))
         .finish())
+}
+
+/// The only `return_to` a login accepts: `http://127.0.0.1:<port>/callback`,
+/// the port a plain non-zero number. Not `localhost` (a name the hosts file
+/// decides), not a prefix match (`127.0.0.1.evil.example`), not another path.
+fn is_loopback_return_to(url: &str) -> bool {
+    url.strip_prefix("http://127.0.0.1:")
+        .and_then(|rest| rest.strip_suffix("/callback"))
+        .is_some_and(|port| {
+            !port.starts_with('0')
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u16>().is_ok()
+        })
+}
+
+/// A callback that failed before its code was redeemed: the login is over
+/// either way, and taking its state is how the redirect learns whether a CLI
+/// is waiting on it.
+async fn abandon(
+    login_states: &Arc<dyn LoginStateStore>,
+    query: &CallbackQuery,
+) -> Option<LoginState> {
+    let state = query.state.as_deref().filter(|s| !s.is_empty())?;
+    login_states.take(state).await.ok().flatten()
+}
+
+/// Where a failed callback sends the browser: the CLI that started the login,
+/// when one did, so it stops waiting; the console otherwise.
+fn error_redirect(login: Option<&LoginState>, base: &str, msg: &str) -> HttpResponse {
+    match login.and_then(|l| l.return_to.as_deref()) {
+        Some(to) => HttpResponse::Found()
+            .insert_header(("Location", format!("{to}?oidc_error={}", url_encode(msg))))
+            .finish(),
+        None => spa_error_redirect(base, msg),
+    }
 }
 
 // ── Callback ───────────────────────────────────────────────────────────────────
@@ -342,7 +390,11 @@ async fn callback_response(
     if let Some(ref err) = query.error {
         let desc = query.error_description.as_deref().unwrap_or(err.as_str());
         return (
-            spa_error_redirect(&fallback_base, desc),
+            error_redirect(
+                abandon(login_states, query).await.as_ref(),
+                &fallback_base,
+                desc,
+            ),
             SignInOutcome::failed("provider_error", None),
         );
     }
@@ -351,7 +403,11 @@ async fn callback_response(
         Some(c) => c.to_owned(),
         None => {
             return (
-                spa_error_redirect(&fallback_base, "Authorization code missing from callback."),
+                error_redirect(
+                    abandon(login_states, query).await.as_ref(),
+                    &fallback_base,
+                    "Authorization code missing from callback.",
+                ),
                 SignInOutcome::failed("code_missing", None),
             )
         }
@@ -399,7 +455,7 @@ async fn callback_response(
             "OIDC login state names a provider that is no longer configured"
         );
         return (
-            spa_error_redirect(&fallback_base, "OIDC provider not found."),
+            error_redirect(Some(&login), &fallback_base, "OIDC provider not found."),
             SignInOutcome::failed("provider_unknown", Some(&login.provider)),
         );
     };
@@ -414,7 +470,11 @@ async fn callback_response(
             // generic message so it never leaks upstream connectivity details.
             tracing::warn!(error = %e, "OIDC token exchange failed");
             return (
-                spa_error_redirect(&base, "Failed to complete sign-in. Please try again."),
+                error_redirect(
+                    Some(&login),
+                    &base,
+                    "Failed to complete sign-in. Please try again.",
+                ),
                 SignInOutcome::failed("token_exchange", Some(&sso.name)),
             );
         }
@@ -440,7 +500,8 @@ async fn callback_response(
              (or, on Auth0/Okta, an API audience that yields a JWT access token)"
         );
         return (
-            spa_error_redirect(
+            error_redirect(
+                Some(&login),
                 &base,
                 "This identity provider is not returning a usable token. Ask an administrator \
                  to check the server log.",
@@ -466,7 +527,11 @@ async fn callback_response(
         if let Err(e) = OidcSsoFlow::verify_nonce(&tokens.session_token, &login.nonce) {
             tracing::warn!(error = %e, provider = %login.provider, "OIDC nonce check failed");
             return (
-                spa_error_redirect(&base, "Failed to complete sign-in. Please try again."),
+                error_redirect(
+                    Some(&login),
+                    &base,
+                    "Failed to complete sign-in. Please try again.",
+                ),
                 SignInOutcome::failed("nonce", Some(&sso.name)),
             );
         }
@@ -486,18 +551,25 @@ async fn callback_response(
     // CLI read, and renaming it would break every client mid-upgrade for no
     // security gain. What changed is its *value*: the ID token, when the
     // provider issued one.
-    let mut location = format!(
-        "{base}/#oidc_access_token={}&oidc_state={}&oidc_provider={}",
+    let mut params = format!(
+        "oidc_access_token={}&oidc_state={}&oidc_provider={}",
         url_encode(&tokens.session_token),
         url_encode(&login.spa_state),
         url_encode(&sso.name),
     );
     if let Some(ref rt) = tokens.refresh_token {
-        location.push_str(&format!("&oidc_refresh_token={}", url_encode(rt)));
+        params.push_str(&format!("&oidc_refresh_token={}", url_encode(rt)));
     }
     if let Some(exp) = tokens.expires_in {
-        location.push_str(&format!("&oidc_expires_in={exp}"));
+        params.push_str(&format!("&oidc_expires_in={exp}"));
     }
+    // The CLI's loopback listener reads the query: a fragment never reaches an
+    // HTTP server, and on 127.0.0.1 there is no access log or proxy to keep
+    // it out of.
+    let location = match login.return_to {
+        Some(ref to) => format!("{to}?{params}"),
+        None => format!("{base}/#{params}"),
+    };
     let outcome = SignInOutcome::Succeeded {
         provider: sso.name.clone(),
         user_id: sso.session_subject(&tokens.session_token),

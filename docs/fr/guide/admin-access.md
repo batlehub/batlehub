@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-access.md
-sourceHash: c61923ccaf8ef61a
+sourceHash: 6347746d0c436c8c
 ---
 
 # Accès et audit
@@ -89,16 +89,16 @@ vide, qui se lirait comme « il ne s'est rien passé ».
 
 ```sh
 # Toutes les suppressions d'un registre : à la main et par politique
-batlehub admin audit-log --registry acme-npm --action delete,retention_reclaim
+batlehub-cli audit log --registry acme-npm --action delete,retention_reclaim
 
 # Sortir du cache est une autre question — les octets reviennent à la requête suivante
-batlehub admin audit-log --registry acme-npm --action cache_evict,cache_clear
+batlehub-cli audit log --registry acme-npm --action cache_evict,cache_clear
 
 # Toute l'histoire d'un paquet
-batlehub admin audit-log --registry acme-npm --package internal-tool
+batlehub-cli audit log --registry acme-npm --package internal-tool
 
 # Le même ensemble, exporté pour un auditeur
-batlehub admin export-audit-log --action delete,retention_reclaim --format csv
+batlehub-cli audit export --action delete,retention_reclaim --format csv
 ```
 
 `--action` et `--package` sont aussi des paramètres de requête sur l'endpoint

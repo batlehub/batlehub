@@ -2,31 +2,26 @@ use anyhow::Result;
 use clap::Subcommand;
 use comfy_table::Table;
 
+use crate::confirm::confirm;
+use crate::exit::{CliError, ExitCode};
+use crate::render::ctx;
+
 use crate::api::{
     admin::{
-        AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
-        CoherenceReportDto, DeleteGrantResponse, EvictionReportDto, ExposureQuery,
-        ExposureResponse, FlagsQuery, FlagsResponse, GrantListResponse, ImportReportDto,
-        MissingQuery, NotificationChannelEntry, NotificationSubscriptionEntry, PutGrantResponse,
-        RegistryHealthEntry, SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
+        AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, CoherenceReportDto,
+        DeleteGrantResponse, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
+        FlagsResponse, GrantListResponse, ImportReportDto, MissingQuery, NotificationChannelEntry,
+        NotificationSubscriptionEntry, PutGrantResponse, RegistryHealthEntry,
+        SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
     },
     version::RetentionReport,
     BatleHubClient,
 };
 
-fn parse_pkg_version(s: &str) -> anyhow::Result<(String, String)> {
-    let (name, version) = s
-        .split_once('@')
-        .ok_or_else(|| anyhow::anyhow!("expected name@version, got: {s}"))?;
-    Ok((name.to_string(), version.to_string()))
-}
-
 #[derive(Subcommand)]
 pub enum FlagsCommand {
     /// List the flags pushed by the configured sources
     List {
-        #[arg(long)]
-        registry: Option<String>,
         /// Only this package name
         #[arg(long)]
         package: Option<String>,
@@ -114,8 +109,6 @@ pub enum AdminCommand {
     /// the retroactive rows only. Pages by cursor: pass `--after` the value
     /// the previous page printed.
     Exposure {
-        #[arg(long)]
-        registry: Option<String>,
         /// Only this package name
         #[arg(long)]
         package: Option<String>,
@@ -143,8 +136,6 @@ pub enum AdminCommand {
     Bundles,
     /// What this instance was asked for and did not hold (RFC 0008)
     AirGapMissing {
-        #[arg(long)]
-        registry: Option<String>,
         /// artifact, document, checksum, ref or unmirrored_host
         #[arg(long)]
         kind: Option<String>,
@@ -160,8 +151,6 @@ pub enum AdminCommand {
     },
     /// Query the access audit log
     AuditLog {
-        #[arg(long)]
-        registry: Option<String>,
         /// Only this package name
         #[arg(long)]
         package: Option<String>,
@@ -182,7 +171,7 @@ pub enum AdminCommand {
         #[arg(long, default_value = "50")]
         per_page: u64,
         /// Purge entries older than this ISO-8601 datetime (e.g. 2024-01-01T00:00:00Z)
-        #[arg(long, conflicts_with_all = &["registry","package","action","user","from","to","denied_only"])]
+        #[arg(long, conflicts_with_all = &["package","action","user","from","to","denied_only"])]
         purge_before: Option<String>,
     },
     /// Data-subject requests (RFC 0036): erase or export one person's records
@@ -233,42 +222,10 @@ pub enum AdminCommand {
         #[command(subcommand)]
         cmd: NotificationsCommand,
     },
-    /// Bulk yank / unyank / delete versions across a registry
-    Bulk {
-        #[command(subcommand)]
-        cmd: BulkCommand,
-    },
-    /// Mark a package version as deprecated
-    Deprecate {
-        registry: String,
-        name: String,
-        version: String,
-        #[arg(long)]
-        message: Option<String>,
-    },
-    /// Remove deprecation from a package version
-    Undeprecate {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Hide a package version from search / listings (without deleting)
-    Unlist {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Re-list a previously unlisted package version
-    Relist {
-        registry: String,
-        name: String,
-        version: String,
-    },
-    /// Simulate whether an identity would be allowed to access a registry resource
     AccessCheck {
-        /// Registry to evaluate the policy against
-        #[arg(long, short = 'r')]
-        registry: String,
+        /// Set by `authz check` from its coordinate; the alias reads `-r`.
+        #[arg(skip)]
+        registry: Option<String>,
         /// Package name
         #[arg(long, short = 'p')]
         package: String,
@@ -296,15 +253,9 @@ pub enum AdminCommand {
         /// End datetime (RFC 3339)
         #[arg(long)]
         to: Option<String>,
-        /// Filter by registry
-        #[arg(long)]
-        registry: Option<String>,
         /// Only these actions, comma-separated (e.g. `delete,retention_reclaim`)
         #[arg(long)]
         action: Option<String>,
-        /// Output format: json (default) or csv
-        #[arg(long, default_value = "json")]
-        format: String,
         /// Write output to file instead of stdout
         #[arg(long, short = 'o')]
         output: Option<String>,
@@ -353,11 +304,7 @@ pub enum AuditTrailCommand {
 #[derive(Subcommand)]
 pub enum QuotaCommand {
     /// List quota usage
-    List {
-        /// Filter by registry
-        #[arg(long, short = 'r')]
-        registry: Option<String>,
-    },
+    List,
     /// Reset quota for a specific user in a registry
     Reset { registry: String, user: String },
 }
@@ -533,19 +480,19 @@ pub enum SbomCommand {
         registry: String,
         name: String,
         version: String,
+        /// The SBOM's document format (the global `--format` shapes the output)
         #[arg(long, default_value = "cyclonedx")]
-        format: String,
+        sbom_format: String,
     },
     /// Export SBOMs for a registry or time range
     Export {
         #[arg(long)]
-        registry: Option<String>,
-        #[arg(long)]
         from: Option<String>,
         #[arg(long)]
         to: Option<String>,
+        /// The SBOM's document format (the global `--format` shapes the output)
         #[arg(long, default_value = "cyclonedx")]
-        format: String,
+        sbom_format: String,
         #[arg(long, short = 'o')]
         output: Option<String>,
     },
@@ -561,33 +508,11 @@ pub enum NotificationsCommand {
     Delete { id: String },
 }
 
-#[derive(Subcommand)]
-pub enum BulkCommand {
-    /// Yank multiple versions (format: name@version)
-    Yank {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-    /// Unyank multiple versions (format: name@version)
-    Unyank {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-    /// Delete multiple versions (format: name@version)
-    Delete {
-        registry: String,
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-}
-
 /// RFC 0002 §13's exposure report.
 async fn handle_exposure(q: ExposureQuery, client: &BatleHubClient, json: bool) -> Result<()> {
     let resp = client.exposure(q).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
     } else {
         print_exposure(&resp);
     }
@@ -597,7 +522,6 @@ async fn handle_exposure(q: ExposureQuery, client: &BatleHubClient, json: bool) 
 /// The pushed flags a source has raised.
 async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     let FlagsCommand::List {
-        registry,
         package,
         source,
         effect,
@@ -607,7 +531,7 @@ async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) ->
     } = cmd;
     let resp = client
         .list_flags(FlagsQuery {
-            registry,
+            registry: ctx().registry.clone(),
             package_name: package,
             source,
             effect,
@@ -617,7 +541,7 @@ async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) ->
         })
         .await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
     } else {
         print_flags(&resp);
     }
@@ -628,7 +552,7 @@ async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) ->
 async fn handle_bundles(client: &BatleHubClient, json: bool) -> Result<()> {
     let items = client.list_bundles().await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&items)?);
+        crate::render::data(&items)?;
         return Ok(());
     }
     let mut table = Table::new();
@@ -667,7 +591,7 @@ async fn handle_air_gap_missing(
 ) -> Result<()> {
     let resp = client.air_gap_missing(q).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
         return Ok(());
     }
     let mut table = Table::new();
@@ -716,7 +640,7 @@ fn held_versions_cell(held: &[String]) -> String {
 async fn handle_stats(client: &BatleHubClient, json: bool) -> Result<()> {
     let resp = client.admin_stats().await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
     } else {
         print_stats(&resp);
     }
@@ -726,7 +650,7 @@ async fn handle_stats(client: &BatleHubClient, json: bool) -> Result<()> {
 async fn handle_health(client: &BatleHubClient, json: bool) -> Result<()> {
     let resp = client.registry_health().await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
     } else {
         print_health_table(&resp);
     }
@@ -763,7 +687,6 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             show_kept,
         } => handle_retention(&registry, reclaim, show_kept, client, json).await?,
         AdminCommand::AuditLog {
-            registry,
             package,
             action,
             user,
@@ -778,7 +701,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                 client,
                 json,
                 AuditLogArgs {
-                    registry,
+                    registry: ctx().registry.clone(),
                     package,
                     action,
                     user,
@@ -793,7 +716,6 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             .await?
         }
         AdminCommand::Exposure {
-            registry,
             package,
             source,
             min_effect,
@@ -807,7 +729,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                 ExposureQuery {
                     from,
                     to,
-                    registry,
+                    registry: ctx().registry.clone(),
                     package_name: package,
                     source,
                     min_effect,
@@ -823,14 +745,13 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         AdminCommand::Flags { cmd } => handle_flags(cmd, client, json).await?,
         AdminCommand::Bundles => handle_bundles(client, json).await?,
         AdminCommand::AirGapMissing {
-            registry,
             kind,
             page,
             per_page,
         } => {
             handle_air_gap_missing(
                 MissingQuery {
-                    registry,
+                    registry: ctx().registry.clone(),
                     kind,
                     page,
                     per_page,
@@ -850,44 +771,6 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         AdminCommand::Users { cmd } => handle_users(cmd, client, json).await?,
         AdminCommand::Sbom { cmd } => handle_sbom(cmd, client, json).await?,
         AdminCommand::Notifications { cmd } => handle_notifications(cmd, client, json).await?,
-        AdminCommand::Bulk { cmd } => handle_bulk(cmd, client, json).await?,
-        AdminCommand::Deprecate {
-            registry,
-            name,
-            version,
-            message,
-        } => {
-            client
-                .deprecate_package(&registry, &name, &version, message.as_deref())
-                .await?;
-            println!("Deprecated {registry}/{name}@{version}");
-        }
-        AdminCommand::Undeprecate {
-            registry,
-            name,
-            version,
-        } => {
-            client
-                .undeprecate_package(&registry, &name, &version)
-                .await?;
-            println!("Undeprecated {registry}/{name}@{version}");
-        }
-        AdminCommand::Unlist {
-            registry,
-            name,
-            version,
-        } => {
-            client.unlist_package(&registry, &name, &version).await?;
-            println!("Unlisted {registry}/{name}@{version}");
-        }
-        AdminCommand::Relist {
-            registry,
-            name,
-            version,
-        } => {
-            client.relist_package(&registry, &name, &version).await?;
-            println!("Relisted {registry}/{name}@{version}");
-        }
         AdminCommand::AccessCheck {
             registry,
             package,
@@ -899,7 +782,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         } => {
             let resp = client
                 .simulate_access(&SimulateAccessRequest {
-                    registry,
+                    registry: ctx().require_registry(registry)?,
                     package_name: package,
                     version,
                     resource_type: resource,
@@ -913,18 +796,22 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         AdminCommand::ExportAuditLog {
             from,
             to,
-            registry,
             action,
-            format,
             output,
         } => {
+            // The global `--format` picks the document: json (also the
+            // default) or csv (RFC 0040 §13).
+            let format = match ctx().format {
+                crate::render::Format::Csv => "csv",
+                _ => "json",
+            };
             let text = client
                 .export_audit_log(
-                    registry.as_deref(),
+                    ctx().registry.as_deref(),
                     from.as_deref(),
                     to.as_deref(),
                     action.as_deref(),
-                    &format,
+                    format,
                 )
                 .await?;
             write_or_print(output.as_deref(), &text)?;
@@ -949,9 +836,14 @@ struct AuditLogArgs {
 async fn handle_gdpr(cmd: GdprCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         GdprCommand::Erase { user, force } => {
+            confirm(
+                "erase",
+                &[format!("every record of {user}")],
+                Some("the subject is pseudonymised in the audit trail and their tokens revoked"),
+            )?;
             let r = client.gdpr_erase(&user, force).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&r)?);
+                crate::render::data(&r)?;
             } else {
                 println!(
                     "Erased: now {} — {} audit row(s), {} token(s) revoked, {} block row(s)",
@@ -965,7 +857,7 @@ async fn handle_gdpr(cmd: GdprCommand, client: &BatleHubClient, json: bool) -> R
         // Always JSON: the answer to an access request is a document.
         GdprCommand::Export { user } => {
             let r = client.gdpr_export(&user).await?;
-            println!("{}", serde_json::to_string_pretty(&r)?);
+            crate::render::data(&r)?;
         }
     }
     Ok(())
@@ -979,7 +871,7 @@ async fn handle_audit_trail(
     let AuditTrailCommand::Verify { from, to, head } = cmd;
     let r = client.audit_verify(from, to, head).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&r)?);
+        crate::render::data(&r)?;
     } else {
         println!(
             "{} record(s), {} window(s) checked, {} expired by retention",
@@ -1004,6 +896,10 @@ async fn handle_audit_trail(
         }
     }
     if r["ok"] != serde_json::Value::Bool(true) {
+        // Under --json the report above is the answer, failures included.
+        if json {
+            return Err(crate::exit::CliError::reported(crate::exit::ExitCode::Failure).into());
+        }
         anyhow::bail!("the audit trail does not verify");
     }
     if !json {
@@ -1014,9 +910,23 @@ async fn handle_audit_trail(
 
 async fn handle_audit_log(client: &BatleHubClient, json: bool, args: AuditLogArgs) -> Result<()> {
     if let Some(before) = args.purge_before {
+        // The server's purge has no registry filter: a `-r` here would read
+        // as "this registry's rows" and delete every registry's.
+        if let Some(registry) = &args.registry {
+            return Err(CliError::new(
+                ExitCode::Usage,
+                format!("the purge covers every registry; -r {registry} cannot narrow it"),
+            )
+            .into());
+        }
+        confirm(
+            "purge",
+            &[format!("every audit-log row older than {before}")],
+            None,
+        )?;
         let resp = client.purge_audit_log(&before).await?;
         if json {
-            println!("{}", serde_json::to_string_pretty(&resp)?);
+            crate::render::data(&resp)?;
         } else {
             println!(
                 "Deleted {} audit-log row(s) older than {before}",
@@ -1040,7 +950,7 @@ async fn handle_audit_log(client: &BatleHubClient, json: bool, args: AuditLogArg
         })
         .await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
     } else {
         print_audit_log_table(&resp.items);
     }
@@ -1049,7 +959,7 @@ async fn handle_audit_log(client: &BatleHubClient, json: bool, args: AuditLogArg
 
 fn print_access_check(json: bool, resp: &AccessSimulationResponse) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(resp)?);
+        crate::render::data(resp)?;
         return Ok(());
     }
     if resp.decision == "allow" {
@@ -1068,10 +978,10 @@ fn print_access_check(json: bool, resp: &AccessSimulationResponse) -> Result<()>
 
 async fn handle_quota(cmd: QuotaCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
-        QuotaCommand::List { registry } => {
-            let entries = client.list_quota(registry.as_deref()).await?;
+        QuotaCommand::List => {
+            let entries = client.list_quota(ctx().registry.as_deref()).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&entries)?);
+                crate::render::data(&entries)?;
             } else {
                 let mut table = Table::new();
                 table.set_header(["Registry", "User", "Storage (bytes)", "Packages"]);
@@ -1099,7 +1009,7 @@ async fn handle_ip_block(cmd: IpBlockCommand, client: &BatleHubClient, json: boo
         IpBlockCommand::List => {
             let blocks = client.list_ip_blocks().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&blocks)?);
+                crate::render::data(&blocks)?;
             } else {
                 let mut table = Table::new();
                 table.set_header(["IP", "Reason", "Blocked At"]);
@@ -1135,7 +1045,7 @@ async fn handle_config_admin(
         ConfigAdminCommand::Changes => {
             let changes = client.config_changes().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&changes)?);
+                crate::render::data(&changes)?;
             } else {
                 print_config_changes_table(&changes);
             }
@@ -1143,7 +1053,7 @@ async fn handle_config_admin(
         ConfigAdminCommand::View => {
             let resp = client.config_content().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 println!("{}", resp.content);
             }
@@ -1154,7 +1064,7 @@ async fn handle_config_admin(
                 .map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?;
             let resp = client.config_validate(&content).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 println!("{file}: valid");
                 print_reload_lists(&resp.diff);
@@ -1166,7 +1076,7 @@ async fn handle_config_admin(
                 .map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?;
             let resp = client.config_from_content(&content).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 // Staged, not applied: the server waits for an approval this
                 // command does not give, and drops the reload after 10 minutes.
@@ -1243,14 +1153,33 @@ async fn handle_cache(cmd: CacheCommand, client: &BatleHubClient) -> Result<()> 
             println!("Cache warming started for {registry}");
         }
         CacheCommand::Clear { registry } => {
+            confirm(
+                "clear",
+                &[format!("the metadata cache of {registry}")],
+                None,
+            )?;
             client.cache_clear(&registry).await?;
             println!("Cache cleared for {registry}");
         }
         CacheCommand::Evict { registry, dry_run } => {
+            if !dry_run {
+                confirm(
+                    "evict",
+                    &[format!("what {registry}'s eviction strategies select")],
+                    None,
+                )?;
+            }
             let report = client.evict_registry(&registry, dry_run).await?;
             print_eviction_report(&registry, &report);
         }
         CacheCommand::Coherence { registry, dry_run } => {
+            if !dry_run {
+                confirm(
+                    "delete",
+                    &[format!("the orphaned blobs of {registry}")],
+                    None,
+                )?;
+            }
             let report = client.coherence_sweep(&registry, dry_run).await?;
             print_coherence_report(&registry, &report);
         }
@@ -1323,7 +1252,7 @@ async fn handle_import(
 ) -> Result<()> {
     let report = client.import_registry(registry, tag, repo).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        crate::render::data(&report)?;
     } else {
         print_import_report(registry, &report);
     }
@@ -1410,9 +1339,18 @@ async fn handle_retention(
     client: &BatleHubClient,
     json: bool,
 ) -> Result<()> {
+    if reclaim {
+        confirm(
+            "reclaim",
+            &[format!(
+                "the versions {registry}'s retention policy selects"
+            )],
+            None,
+        )?;
+    }
     let report = client.run_retention(registry, !reclaim).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        crate::render::data(&report)?;
         return Ok(());
     }
 
@@ -1504,7 +1442,7 @@ async fn handle_visibility(
         VisibilityCommand::Get { registry, name } => {
             let resp = client.get_visibility(&registry, &name).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 println!("{registry}/{name}: {}", resp.visibility);
             }
@@ -1540,7 +1478,7 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
             let (package, version) = split_target(&target);
             let resp = client.list_grants(&registry, package, version).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_grants_table(&registry, &target, &resp);
             }
@@ -1556,7 +1494,7 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
                 .put_grant(&registry, package, version, &subject, &actions)
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_grant_set(&registry, &target, &subject, &resp);
             }
@@ -1571,7 +1509,7 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
                 .delete_grant(&registry, package, version, &subject)
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_grant_removed(&registry, &target, &subject, &resp);
             }
@@ -1633,7 +1571,7 @@ async fn handle_namespace(
         NamespaceCommand::List { registry } => {
             let resp = client.list_namespaces(&registry).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_namespaces_table(&resp);
             }
@@ -1661,12 +1599,13 @@ async fn handle_users(cmd: UsersCommand, client: &BatleHubClient, json: bool) ->
         UsersCommand::ListBlocked => {
             let resp = client.list_blocked_users().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_blocked_users_table(&resp);
             }
         }
         UsersCommand::Block { user_id, reason } => {
+            confirm("block", std::slice::from_ref(&user_id), None)?;
             client.block_user(&user_id, reason.as_deref()).await?;
             println!("Blocked user {user_id}");
         }
@@ -1684,20 +1623,26 @@ async fn handle_sbom(cmd: SbomCommand, client: &BatleHubClient, _json: bool) -> 
             registry,
             name,
             version,
-            format,
+            sbom_format,
         } => {
-            let resp = client.get_sbom(&registry, &name, &version, &format).await?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
+            let resp = client
+                .get_sbom(&registry, &name, &version, &sbom_format)
+                .await?;
+            crate::render::data(&resp)?;
         }
         SbomCommand::Export {
-            registry,
             from,
             to,
-            format,
+            sbom_format,
             output,
         } => {
             let resp = client
-                .export_sbom(registry.as_deref(), from.as_deref(), to.as_deref(), &format)
+                .export_sbom(
+                    ctx().registry.as_deref(),
+                    from.as_deref(),
+                    to.as_deref(),
+                    &sbom_format,
+                )
                 .await?;
             let content = serde_json::to_string_pretty(&resp)?;
             if let Some(path) = output {
@@ -1720,7 +1665,7 @@ async fn handle_notifications(
         NotificationsCommand::Channels => {
             let resp = client.list_notification_channels().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_notification_channels_table(&resp);
             }
@@ -1728,61 +1673,15 @@ async fn handle_notifications(
         NotificationsCommand::List => {
             let resp = client.list_notification_subscriptions().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_notification_subscriptions_table(&resp);
             }
         }
         NotificationsCommand::Delete { id } => {
+            confirm("delete", &[format!("notification subscription {id}")], None)?;
             client.delete_notification_subscription(&id).await?;
             println!("Deleted subscription {id}");
-        }
-    }
-    Ok(())
-}
-
-async fn handle_bulk(cmd: BulkCommand, client: &BatleHubClient, json: bool) -> Result<()> {
-    match cmd {
-        BulkCommand::Yank { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let resp = client.bulk_yank(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-        BulkCommand::Unyank { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let resp = client.bulk_unyank(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-        BulkCommand::Delete { registry, packages } => {
-            let pkgs = packages
-                .iter()
-                .map(|s| parse_pkg_version(s))
-                .collect::<Result<Vec<_>>>()?;
-            let resp = client.bulk_delete(&registry, pkgs).await?;
-            print_bulk_result(json, &resp)?;
-        }
-    }
-    Ok(())
-}
-
-fn print_bulk_result(json: bool, resp: &BulkPackageResult) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(resp)?);
-    } else {
-        println!(
-            "processed={} succeeded={} failed={}",
-            resp.processed,
-            resp.succeeded,
-            resp.failed.len()
-        );
-        for f in &resp.failed {
-            println!("  FAILED {}@{}: {}", f.name, f.version, f.error);
         }
     }
     Ok(())

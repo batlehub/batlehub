@@ -42,9 +42,10 @@ impl LoginWidget {
         }
     }
 
-    /// Save the current input to the default profile in the config file.
-    /// Returns `true` on success (caller should navigate back).
-    pub fn save_to_config(&mut self) -> bool {
+    /// Save the current input to the `-P` profile (`default` when none), as
+    /// `auth login` does (RFC 0040 §4.10). Returns `true` on success (caller
+    /// should navigate back).
+    pub fn save_to_config(&mut self, profile: Option<&str>) -> bool {
         let mut cfg = match ConfigFile::load() {
             Ok(c) => c,
             Err(e) => {
@@ -52,7 +53,25 @@ impl LoginWidget {
                 return false;
             }
         };
+        if !self.apply_to(&mut cfg, profile) {
+            return false;
+        }
+        match cfg.save() {
+            Ok(()) => true,
+            Err(e) => {
+                self.status = Some(format!("Failed to save config: {e}"));
+                false
+            }
+        }
+    }
 
+    /// Write the input into `profile`'s entry of `cfg`; `false` with a status
+    /// when the input is empty.
+    fn apply_to(&mut self, cfg: &mut ConfigFile, profile: Option<&str>) -> bool {
+        let target = match profile {
+            Some(n) => cfg.profiles.entry(n.to_owned()).or_default(),
+            None => &mut cfg.default,
+        };
         match self.method {
             LoginMethod::StaticToken => {
                 let token = self.token_input.value().to_string();
@@ -60,10 +79,10 @@ impl LoginWidget {
                     self.status = Some("Token cannot be empty.".into());
                     return false;
                 }
-                cfg.default.token = Some(token);
-                cfg.default.oidc_refresh_token = None;
-                cfg.default.oidc_expires_at = None;
-                cfg.default.kubernetes_token_path = None;
+                target.token = Some(token);
+                target.oidc_refresh_token = None;
+                target.oidc_expires_at = None;
+                target.kubernetes_token_path = None;
             }
             LoginMethod::Oidc => {
                 let raw = self.token_input.value().trim().to_string();
@@ -77,13 +96,13 @@ impl LoginWidget {
                 // `oidc_state` against. The server still refuses a state it did
                 // not issue or has already redeemed.
                 let paste = parse_oidc_paste(&raw);
-                cfg.default.token = Some(paste.access_token);
-                cfg.default.oidc_refresh_token = paste.refresh_token;
-                cfg.default.oidc_expires_at = paste.expires_at;
+                target.token = Some(paste.access_token);
+                target.oidc_refresh_token = paste.refresh_token;
+                target.oidc_expires_at = paste.expires_at;
                 // The provider the redirect names, so refreshes go back to the
                 // endpoint that issued this token rather than to `flows.first()`.
-                cfg.default.oidc_provider = paste.provider;
-                cfg.default.kubernetes_token_path = None;
+                target.oidc_provider = paste.provider;
+                target.kubernetes_token_path = None;
             }
             LoginMethod::Kubernetes => {
                 let path = self.path_input.value().trim().to_string();
@@ -91,20 +110,13 @@ impl LoginWidget {
                     self.status = Some("Token path cannot be empty.".into());
                     return false;
                 }
-                cfg.default.kubernetes_token_path = Some(path);
-                cfg.default.token = None;
-                cfg.default.oidc_refresh_token = None;
-                cfg.default.oidc_expires_at = None;
+                target.kubernetes_token_path = Some(path);
+                target.token = None;
+                target.oidc_refresh_token = None;
+                target.oidc_expires_at = None;
             }
         }
-
-        match cfg.save() {
-            Ok(()) => true,
-            Err(e) => {
-                self.status = Some(format!("Failed to save config: {e}"));
-                false
-            }
-        }
+        true
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -286,7 +298,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<ShouldGoBack> {
             app.login.path_input = Input::default();
         }
         KeyCode::Enter => {
-            if app.login.save_to_config() {
+            if app.login.save_to_config(app.profile.as_deref()) {
                 return Some(ShouldGoBack);
             }
         }
@@ -327,9 +339,21 @@ mod tests {
     }
 
     #[test]
+    fn a_token_lands_in_the_selected_profile_and_leaves_default_alone() {
+        let mut cfg = ConfigFile::default();
+        cfg.default.token = Some("default-token".into());
+        let mut w = LoginWidget::new();
+        w.token_input = Input::default().with_value("work-token".into());
+
+        assert!(w.apply_to(&mut cfg, Some("work")));
+        assert_eq!(cfg.profiles["work"].token.as_deref(), Some("work-token"));
+        assert_eq!(cfg.default.token.as_deref(), Some("default-token"));
+    }
+
+    #[test]
     fn save_to_config_empty_static_token_fails_with_message() {
         let mut w = LoginWidget::new();
-        assert!(!w.save_to_config());
+        assert!(!w.apply_to(&mut ConfigFile::default(), None));
         assert_eq!(w.status.as_deref(), Some("Token cannot be empty."));
     }
 
@@ -337,7 +361,7 @@ mod tests {
     fn save_to_config_empty_oidc_paste_fails_with_message() {
         let mut w = LoginWidget::new();
         w.method = LoginMethod::Oidc;
-        assert!(!w.save_to_config());
+        assert!(!w.apply_to(&mut ConfigFile::default(), None));
         assert_eq!(
             w.status.as_deref(),
             Some("Paste the token or the full redirect URL.")
@@ -348,7 +372,7 @@ mod tests {
     fn save_to_config_empty_kubernetes_path_fails_with_message() {
         let mut w = LoginWidget::new();
         w.method = LoginMethod::Kubernetes;
-        assert!(!w.save_to_config());
+        assert!(!w.apply_to(&mut ConfigFile::default(), None));
         assert_eq!(w.status.as_deref(), Some("Token path cannot be empty."));
     }
 

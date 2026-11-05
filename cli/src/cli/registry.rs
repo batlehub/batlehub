@@ -12,7 +12,7 @@ pub enum RegistryCommand {
     /// List all accessible registries
     List,
     /// Show details for a single registry
-    Info {
+    Show {
         /// Registry name
         name: String,
     },
@@ -56,7 +56,7 @@ pub enum RegistryCommand {
 pub async fn run(cmd: RegistryCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         RegistryCommand::List => run_list(client, json).await,
-        RegistryCommand::Info { name } => run_info(client, json, &name).await,
+        RegistryCommand::Show { name } => run_info(client, json, &name).await,
         RegistryCommand::Suggest {
             dir,
             depth,
@@ -87,7 +87,7 @@ pub async fn run(cmd: RegistryCommand, client: &BatleHubClient, json: bool) -> R
 async fn run_list(client: &BatleHubClient, json: bool) -> Result<()> {
     let registries = client.list_registries().await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&registries)?);
+        crate::render::data(&registries)?;
         return Ok(());
     }
     let mut table = Table::new();
@@ -107,7 +107,7 @@ async fn run_info(client: &BatleHubClient, json: bool, name: &str) -> Result<()>
         .find(|r| r.name == name)
         .ok_or_else(|| anyhow::anyhow!("registry '{name}' not found"))?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&reg)?);
+        crate::render::data(&reg)?;
         return Ok(());
     }
     let mut table = Table::new();
@@ -210,7 +210,7 @@ fn print_json(
             mise_catch_all,
         ),
     });
-    println!("{}", serde_json::to_string_pretty(&out)?);
+    crate::render::data(&out)?;
     Ok(())
 }
 

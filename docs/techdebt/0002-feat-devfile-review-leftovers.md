@@ -18,7 +18,7 @@ the code. Each one says where to look and what would retire it.
 `crates/core/src/services/audit_trail.rs`, the purge path. It now always goes
 through `rewrite()`: it reads full rows 5 000 at a time and deletes them by id
 list. Before, one `DELETE … WHERE created_at < $1 AND action IN (…)` did it.
-`batlehub admin audit-log --purge-before` on a table with tens of millions of
+`batlehub-cli audit purge --before` on a table with tens of millions of
 rows becomes thousands of round trips inside one HTTP request. It can outlive
 the client or ingress timeout and leave the purge half done.
 

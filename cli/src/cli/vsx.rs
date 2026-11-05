@@ -34,7 +34,7 @@ pub struct VerifyArgs {
     /// The `.vsix` file, as downloaded.
     pub vsix: PathBuf,
     /// The signature archive (`Microsoft.VisualStudio.Services.VsixSignature`).
-    /// Fetched from `--registry` when absent.
+    /// Fetched from `--registry-url` when absent.
     #[arg(long)]
     pub signature: Option<PathBuf>,
     /// The public key, PEM or 64 hex characters, or a file holding either.
@@ -42,13 +42,14 @@ pub struct VerifyArgs {
     #[arg(long)]
     pub public_key: Option<String>,
     /// The registry base (`https://hub/proxy/vsx`) to fetch the archive and
-    /// the key from, for the extension `--id` at `--version`.
-    #[arg(long)]
+    /// the key from, for the extension `--id` at `--version`. A URL, so not
+    /// the global `-r`; `--registry` stays a hidden alias.
+    #[arg(long = "registry-url", alias = "registry")]
     pub registry: Option<String>,
-    /// `publisher.name`, with `--registry`.
+    /// `publisher.name`, with `--registry-url`.
     #[arg(long)]
     pub id: Option<String>,
-    /// The version, with `--registry`.
+    /// The version, with `--registry-url`.
     #[arg(long)]
     pub version: Option<String>,
 }

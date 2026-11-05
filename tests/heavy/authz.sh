@@ -157,6 +157,7 @@ T_ADMIN="$ADMIN_TOKEN"
 T_READER="authz-reader-token"
 T_DENIED="authz-denied-token"
 T_LISTER="authz-lister-token"
+T_CARGO_PEER="authz-cargo-peer-token"
 T_BROWSER="authz-browser-token"
 T_SRE="authz-sre-token"
 T_AUDITOR="authz-auditor-token"
@@ -1194,6 +1195,63 @@ for some other reason, which is a denial that proves nothing"
   [[ $nsx_rc -ne 0 ]] || heavy_fail \
     "the denied user resolved $PKG, which no grant covers — the namespace grant is reaching \
 outside its own subtree"
+
+  # ── `why` is no oracle (RFC 0040 heavy case 12) ──
+  #
+  # The denied user may pull `@team/*` and not `$PKG`. They ask about `$PKG`
+  # and about a name that does not exist, twice: through the CLI, and straight
+  # at `GET /api/v1/packages/access`. Each pair must be the same not-found —
+  # the same exit code or status, the same bytes with the name swapped — and
+  # neither may name a grant, a rule or the namespace that lets them in (T1, T2).
+  #
+  # Both halves are the namespace-tier branch: their `@team` grant makes the
+  # registry visible (`/api/v1/registries` lists it, `installable: false`), so
+  # the refusal is the coordinate's grant, asked of the server (RFC 0040 §17.1).
+  heavy_mark "npm-why-oracle"
+  cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+  local cli
+  cli="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli"
+  local nope="authz-nope-$HEAVY_RUN" name rc stream code
+  for name in "$PKG" "$nope"; do
+    set +e
+    BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$T_DENIED" \
+      "$cli" why "$NPM/$name@1.0.0" >"$HEAVY_WORK/why-$name.out" 2>"$HEAVY_WORK/why-$name.err"
+    rc=$?
+    set -e
+    [[ $rc -eq 5 ]] || { cat "$HEAVY_WORK/why-$name.err" >&2; heavy_fail \
+      "why $NPM/$name@1.0.0 as the denied user exited $rc; expected 5 (not found), for a package that exists and one that does not alike"; }
+    code="$(curl -s -o "$HEAVY_WORK/why-$name.api" -w '%{http_code}' -H "Authorization: Bearer $T_DENIED" \
+      "$HEAVY_TAP_BASE/api/v1/packages/access?registry=$NPM&name=$name&version=1.0.0")"
+    [[ "$code" == 404 ]] || { cat "$HEAVY_WORK/why-$name.api" >&2; heavy_fail \
+      "/api/v1/packages/access answered the denied user $code for $name; expected 404 for a package that exists and one that does not alike"; }
+  done
+  for stream in out err api; do
+    sed "s/$nope/NAME/g" "$HEAVY_WORK/why-$nope.$stream" >"$HEAVY_WORK/why-nope-norm.$stream"
+    sed "s/$PKG/NAME/g" "$HEAVY_WORK/why-$PKG.$stream" >"$HEAVY_WORK/why-pkg-norm.$stream"
+    cmp -s "$HEAVY_WORK/why-pkg-norm.$stream" "$HEAVY_WORK/why-nope-norm.$stream" \
+      || { diff "$HEAVY_WORK/why-pkg-norm.$stream" "$HEAVY_WORK/why-nope-norm.$stream" >&2; heavy_fail \
+        "the $stream answer tells a package the denied user may not read from one that does not exist"; }
+  done
+  if grep -qiE "grant|rule|@team|releases:read" "$HEAVY_WORK/why-$PKG.out" "$HEAVY_WORK/why-$PKG.err" "$HEAVY_WORK/why-$PKG.api"; then
+    cat "$HEAVY_WORK/why-$PKG.out" "$HEAVY_WORK/why-$PKG.err" "$HEAVY_WORK/why-$PKG.api" >&2
+    heavy_fail "a refusal names a grant, a rule or a namespace to a caller who may not read the package"
+  fi
+  heavy_wire_re_after "npm-why-oracle" "GET /api/v1/packages/access.* -> 404" \
+    "the pullability endpoint was never asked — the not-found proves nothing"
+
+  # ── RFC 0040 §6.P case 13: a destructive command with no TTY and no --yes ──
+  #
+  # The administrator could delete it; the CLI must not, because nobody said
+  # yes. Exit 9, and no DELETE or bulk-delete crosses the tap — the refusal is
+  # the CLI's own, before any request that could act.
+  heavy_mark "npm-delete-unconfirmed"
+  heavy_cli "$T_ADMIN" package delete "$NPM/$PKG@1.0.0"
+  [[ "$HEAVY_CLI_CODE" == 9 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "package delete with no TTY and no --yes exited $HEAVY_CLI_CODE, expected 9"; }
+  ! heavy_wire_re_seen_after "npm-delete-unconfirmed" "^DELETE |bulk-delete" \
+    || heavy_fail "an unconfirmed package delete reached the server"
 
   heavy_log "NPM-AUTHZ-OK (refused, served, and the namespace grant visible to the client)"
   return 0
@@ -2655,6 +2713,83 @@ EOF
   return $?
 }
 
+# ── RFC 0040 §6.P case 11: an owner yanks through the generic endpoint ──────
+#
+# The owner arm of §6.4, against cargo itself. Three callers, none holding
+# `releases:yank`: the owner (exit 0, and cargo then refuses the version as
+# yanked), a non-owner (exit 4, the version still resolves), and the same
+# non-owner, who owns nothing, asking about a crate nobody owns (exit 4:
+# ownership is never vacuously true). The non-owner reads the registry
+# (`authz-cargo-peer`): one who cannot see it gets 5 from the CLI before any
+# request. Ordered so the non-owner runs before the owner yanks.
+#
+# The yanked check resolves from scratch rather than `cargo update --precise`:
+# current cargo lets `--precise` pick a yanked version on purpose, so that
+# would succeed for the wrong reason. A fresh lockfile is what a new consumer
+# gets, and cargo skips a yanked version there.
+phase_cargo_owner_yank() {
+  local work="$1"
+  local owners="/api/v1/admin/registries/$CARGO_R/packages/$AUTHZ_CARGO_CRATE/owners"
+  authz_body POST "$T_ADMIN" "$owners" -H "$HDR_JSON" \
+    --data '{"principal_type":"user","principal_id":"authz-reader"}' >/dev/null
+  grep -q '"authz-reader"' <<<"$(authz_body GET "$T_ADMIN" "$owners")" \
+    || heavy_fail "cargo: could not make authz-reader an owner of $AUTHZ_CARGO_CRATE"
+
+  # A resolve from scratch in the reader's consumer: what a new user gets.
+  fresh_resolve() {
+    rm -f "$work/consumer-allow/Cargo.lock"
+    (cd "$work/consumer-allow" && CARGO_HOME="$work/home-allow" CARGO_TERM_COLOR=never \
+      CARGO_NET_RETRY=1 cargo generate-lockfile)
+  }
+
+  heavy_mark "cargo-yank-nonowner"
+  heavy_cli "$T_CARGO_PEER" package yank --yes "$CARGO_R/$AUTHZ_CARGO_CRATE@$AUTHZ_CARGO_VERSION"
+  [[ "$HEAVY_CLI_CODE" == 4 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "a non-owner's yank exited $HEAVY_CLI_CODE, expected 4"; }
+  heavy_wire_re_after "cargo-yank-nonowner" "POST [^ ]*/registries/$CARGO_R/bulk-yank -> 403" \
+    "the non-owner's yank was not refused by the server"
+  fresh_resolve >"$work/resolve-before.log" 2>&1 \
+    || { cat "$work/resolve-before.log" >&2; heavy_fail "the version stopped resolving after a refused yank"; }
+
+  heavy_mark "cargo-yank-owner"
+  heavy_cli "$T_READER" package yank --yes "$CARGO_R/$AUTHZ_CARGO_CRATE@$AUTHZ_CARGO_VERSION"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "the owner's yank exited $HEAVY_CLI_CODE, expected 0 — the owner arm of §6.4 refused an owner"; }
+  heavy_wire_re_after "cargo-yank-owner" "POST [^ ]*/registries/$CARGO_R/bulk-yank -> 200" \
+    "the owner's yank did not succeed on the wire"
+  if fresh_resolve >"$work/resolve-after.log" 2>&1; then
+    heavy_fail "cargo still resolved $AUTHZ_CARGO_CRATE $AUTHZ_CARGO_VERSION after its owner yanked it"
+  fi
+  heavy_client_must_say "$work/resolve-after.log" "yanked" \
+    "cargo failed after the yank, but not on the version being yanked"
+
+  # A crate nobody owns: published by the administrator, its one owner removed.
+  local orphan="authz-orphan" seed="$work/orphan"
+  mkdir -p "$seed/src" "$seed/.cargo"
+  sed "s/^name = .*/name = \"$orphan\"/" "$work/seed/Cargo.toml" >"$seed/Cargo.toml"
+  echo 'pub fn probe() {}' >"$seed/src/lib.rs"
+  cp "$work/home-admin/config.toml" "$seed/.cargo/config.toml"
+  (cd "$seed" && CARGO_HOME="$work/home-admin" CARGO_TERM_COLOR=never \
+    cargo publish --registry authz --allow-dirty --no-verify) >"$work/orphan.log" 2>&1 \
+    || { tail -30 "$work/orphan.log" >&2; heavy_fail "cargo: publishing the unowned fixture failed"; }
+  local who
+  for who in $(authz_body GET "$T_ADMIN" "/api/v1/admin/registries/$CARGO_R/packages/$orphan/owners" \
+    | python3 -c 'import json,sys;print(" ".join(o["principal_type"] + "/" + o["principal_id"] for o in json.load(sys.stdin)))'); do
+    authz_body DELETE "$T_ADMIN" "/api/v1/admin/registries/$CARGO_R/packages/$orphan/owners/$who" >/dev/null
+  done
+  local left
+  left="$(authz_body GET "$T_ADMIN" "/api/v1/admin/registries/$CARGO_R/packages/$orphan/owners")"
+  grep -q '"principal_id"' <<<"$left" && { echo "$left" >&2; heavy_fail "$orphan still has an owner"; }
+
+  heavy_mark "cargo-yank-unowned"
+  heavy_cli "$T_CARGO_PEER" package yank --yes "$CARGO_R/$orphan@$AUTHZ_CARGO_VERSION"
+  [[ "$HEAVY_CLI_CODE" == 4 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "a yank of an unowned crate exited $HEAVY_CLI_CODE, expected 4 — ownership was vacuously true"; }
+  heavy_wire_re_after "cargo-yank-unowned" "POST [^ ]*/registries/$CARGO_R/bulk-yank -> 403" \
+    "the yank of an unowned crate was not refused by the server"
+  return 0
+}
+
 phase_cargo() {
   heavy_need cargo "the Rust toolchain"
   local work="$HEAVY_WORK/cargo"
@@ -2748,9 +2883,11 @@ answered but the download did not, the bare-token normalisation is not reaching 
     "GET /proxy/$CARGO_R/$AUTHZ_CARGO_CRATE/$AUTHZ_CARGO_VERSION/download -> 200" \
     "the reader's fetch never pulled the crate itself"
 
+  phase_cargo_owner_yank "$work"
+
   AUTHZ_KIND_SEEN["cargo"]=1
-  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
-  heavy_log "AUTHZ-CARGO-OK (auth-required advertised, one refusal and one fetch)"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 5))
+  heavy_log "AUTHZ-CARGO-OK (auth-required advertised, one refusal and one fetch; the owner arm of §6.4)"
 }
 
 # ── Maven — the pull boundary, hermetically ──────────────────────────────────
@@ -3722,7 +3859,7 @@ only looks covered."
 #      closed registry's `403` — and leaves one `credential_rejected` line;
 #      twenty more in the same minute leave none, and the next row after the
 #      minute carries the count it held back;
-#   4. once the run's windows are sealed, `batlehub-cli admin audit verify`
+#   4. once the run's windows are sealed, `batlehub-cli audit verify`
 #      exits 0; one row altered with SQL makes it exit 1 naming the window
 #      that holds it, and putting the row back makes it pass again;
 #   5. a purge removes the access rows and nothing else — the purge's own row
@@ -3801,13 +3938,13 @@ sys.exit(0 if any(e > t for e in ends) else 1)' "$t"; then
   heavy_fail "no window ending after $t was sealed within 60 s — the sealer is not running"
 }
 
-# audit_verify <out> [flag]... — `batlehub-cli admin audit verify` over this
+# audit_verify <out> [flag]... — `batlehub-cli audit verify` over this
 # run's windows; returns the CLI's exit code, output in <out>.
 audit_verify() {
   local out="$1"
   shift
   set +e
-  "$AUDIT_CLI" --json admin audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
+  "$AUDIT_CLI" --json audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
   local rc=$?
   set -e
   return $rc

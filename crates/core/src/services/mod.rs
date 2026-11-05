@@ -27,6 +27,7 @@ pub mod nix;
 pub mod nodedist;
 pub mod ownership_grants;
 pub mod proxy;
+pub mod pullability;
 pub mod pullers;
 pub mod pulls;
 pub mod quota;

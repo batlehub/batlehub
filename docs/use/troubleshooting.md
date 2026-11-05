@@ -11,7 +11,7 @@ Common failure modes, their symptoms, and how to fix them.
 **Fix:**
 1. Check current pool usage: `SELECT count(*) FROM pg_stat_activity WHERE datname = 'batlehub';`
 2. Identify slow queries: `SELECT query, wait_event, state FROM pg_stat_activity WHERE state != 'idle' ORDER BY duration DESC LIMIT 20;`
-3. Increase `[database] max_connections` in config and trigger a reload: `batlehub-cli admin config reload`.
+3. Increase `[database] max_connections` in config and trigger a reload: `batlehub-cli server config reload`.
 4. If queries are slow, check for missing indexes on `local_packages(registry, name)` and `access_events(created_at)`.
 
 ## S3 credential expiry
@@ -61,7 +61,7 @@ DELETE FROM local_packages WHERE registry = 'my-reg' AND name = 'my-pkg' AND ver
 
 ## In-memory cache with multiple replicas (rate limits / quota not enforced globally)
 
-**Symptom:** Users exceed their quota or rate limit on one replica but not another; the `batlehub-cli admin quota` command shows different values per instance.
+**Symptom:** Users exceed their quota or rate limit on one replica but not another; the `batlehub-cli quota list` command shows different values per instance.
 
 **Cause:** `[cache] type = "memory"` stores rate-limit counters and quota in process memory, so each replica has an independent view.
 
@@ -84,7 +84,7 @@ BatleHub logs a warning on startup when in-memory cache is used:
 2. **Lower warm concurrency**: `[cache] warm_concurrency = 1` (if supported) to slow the refill rate.
 3. **Pre-warm** before cutting traffic:
    ```bash
-   batlehub-cli admin cache warm my-registry --packages "react,lodash,typescript"
+   batlehub-cli cache warm -r my-registry --packages "react,lodash,typescript"
    ```
 4. For path-addressed registries (JetBrains, Debian, RPM), pass `--paths` instead of `--packages`.
 
@@ -96,7 +96,7 @@ BatleHub logs a warning on startup when in-memory cache is used:
 
 **Fix:** Clear the metadata cache for the affected registry:
 ```bash
-batlehub-cli admin cache clear <registry>
+batlehub-cli cache delete -r <registry>
 ```
 Or wait for the TTL to expire (default: 300 seconds).
 
@@ -120,7 +120,7 @@ type = "cargo"
 max_artifact_size_bytes = 524288000  # 500 MiB
 ```
 
-Trigger a config reload: `batlehub-cli admin config reload`.
+Trigger a config reload: `batlehub-cli server config reload`.
 
 ## API key not recognized
 
@@ -153,11 +153,11 @@ runs where an operator asked for it.
 RUST_LOG=batlehub=debug cargo run -p batlehub-server -- --config config.toml
 
 # Check audit log for recent errors
-batlehub-cli admin audit-log --denied-only --per-page 50
+batlehub-cli audit log --denied-only --per-page 50
 
 # Current stats
-batlehub-cli admin stats
+batlehub-cli server stats
 
 # Per-registry health
-batlehub-cli admin health
+batlehub-cli server health
 ```

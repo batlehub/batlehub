@@ -43,9 +43,12 @@ path = "./tmp/heavy-terraform-storage"
 [[registries]]
 type = "terraform"
 name = "tf-${HEAVY_RUN}"
-mode = "proxy"
+# hybrid: hashicorp/null still comes from upstream, and RFC 0040 §6.P case 7
+# publishes a module and a provider here through batlehub-cli.
+mode = "hybrid"
 upstreams = ["https://registry.terraform.io"]
-hosts = ["localhost"]
+# `tf.localhost` for modules: Terraform refuses a module host with no dot.
+hosts = ["localhost", "tf.localhost"]
 
 [registries.rbac]
 # Terraform sends its `credentials` token to the two metadata documents and

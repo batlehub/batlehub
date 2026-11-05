@@ -1059,7 +1059,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap()
-            .contains("batlehub why"));
+            .contains("batlehub-cli why"));
         let retry: u64 = h
             .get("Retry-After")
             .unwrap()

@@ -42,8 +42,8 @@
 #      installed `gh --version` answers.
 #  10. `mise install github:cli/cli@2.59.0` — a tag the instance does not
 #      hold — is refused at the release by tag, filed as a *document* miss
-#      naming v2.59.0 as requested and v2.60.0 as held, which `admin
-#      air-gap-missing` prints as two columns (0008-bis §4.4, phase 2).
+#      naming v2.59.0 as requested and v2.60.0 as held, which `air-gap
+#      missing` prints as two columns (0008-bis §4.4, phase 2).
 #  11. The miss log after the second half names none of the served listings
 #      and nothing the bundle carried. What it does name: that one unheld tag;
 #      `go get`'s probes of the parent module paths; Maven's `.sha1`/`.md5`
@@ -930,7 +930,7 @@ heavy_log "MISE-SYNTH-OK ($MISE_INSTALLED, with no lock and no route off the hos
 
 # A tag the instance does not hold (RFC 0008-bis §4.4, phase 2): the release
 # by tag is a 503 filed as a *document* miss that names the tag asked for and
-# the tags held — the next plan's diff — and `admin air-gap-missing` prints
+# the tags held — the next plan's diff — and `air-gap missing` prints
 # both columns. mise then pages the listing, which names only what is held,
 # and stops.
 heavy_mark "mise-unheld"
@@ -949,9 +949,9 @@ heavy_wire_re_after "mise-unheld" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/
 if heavy_wire_seen_after "mise-unheld" "/releases/download/v$TOOL_UNHELD_VERSION/"; then
   heavy_fail "mise asked for an asset of the unheld tag — something named it"
 fi
-BATLEHUB_SERVER="$AG_BASE" "$CLI" admin air-gap-missing --registry "$GH_REG" \
+BATLEHUB_SERVER="$AG_BASE" "$CLI" air-gap missing --registry "$GH_REG" \
   >"$HEAVY_WORK/missing-cli.txt" 2>&1 \
-  || { cat "$HEAVY_WORK/missing-cli.txt" >&2; heavy_fail "admin air-gap-missing failed"; }
+  || { cat "$HEAVY_WORK/missing-cli.txt" >&2; heavy_fail "air-gap missing failed"; }
 grep -q "v$TOOL_UNHELD_VERSION" "$HEAVY_WORK/missing-cli.txt" \
   || { cat "$HEAVY_WORK/missing-cli.txt" >&2; heavy_fail "the CLI listing does not name the tag that was asked for"; }
 grep -q "v$TOOL_VERSION" "$HEAVY_WORK/missing-cli.txt" \

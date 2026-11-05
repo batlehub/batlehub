@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/terraform.md
-sourceHash: f45cb8ea10f0abed
+sourceHash: d04f0cd24a6d5c1f
 ---
 
 # Terraform
@@ -19,7 +19,7 @@ modules, sous contrôle du RBAC et du garde-fou d'âge de publication.
 | **Amont par défaut** | `registry.terraform.io` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi de modules et de providers |
+| **Publication privée** | ✅ modules · ⚠️ envoi de providers, que `terraform init` ne sait pas encore installer ([ci-dessous](#publishing-providers)) |
 | **Coupure réseau** | hors ligne, les `versions` de providers et de modules sont composées à partir de l'ensemble détenu, ainsi que le document `download` d'un provider pour une plateforme dont l'archive, les `shasums` et la `shasums.sig` sont toutes détenues — le plan doit nommer les trois chemins — les clés de signature du publieur étant portées par le manifeste du lot que produit `mise export` ; `terraform init` vérifie la signature du publieur comme il le ferait connecté, et cette instance ne signe rien. Une plateforme à laquelle il manque l'un des trois donne un `503` |
 
 ## Mise en place du proxy
@@ -308,7 +308,17 @@ module "consul" {
 }
 ```
 
-### Publier des providers
+### Publier des providers {#publishing-providers}
+
+::: warning Un provider publié ici n'est pas encore installable
+Terraform vérifie un provider grâce à un `SHA256SUMS` signé, et cette instance
+n'a aucun moyen d'en recevoir un : l'envoi ci-dessous stocke les archives, mais
+le document de téléchargement ne nomme aucune liste de sommes de contrôle, et
+`terraform init` refuse l'archive avec *« checksum list has no SHA-256 hash
+for … »*. Les modules ne sont pas concernés. La correction prévue est la
+publication du `SHA256SUMS` signé par l'éditeur et de son `.sig` (RFC 0040
+§17.1, [#281](https://github.com/batlehub/batlehub/issues/281)).
+:::
 
 **Étape 1 — envoyer le manifeste de version** (un JSON décrivant la version et
 ses plateformes) :

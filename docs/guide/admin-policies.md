@@ -41,11 +41,11 @@ All eviction fields are optional. Omitting a field disables that eviction strate
 #### Running it, and previewing it {#cache-eviction-run}
 
 ```sh
-batlehub admin cache evict acme-npm --dry-run   # what would go, and nothing goes
-batlehub admin cache evict acme-npm             # actually evict
+batlehub-cli cache evict -r acme-npm --dry-run   # what would go, and nothing goes
+batlehub-cli cache evict -r acme-npm             # actually evict
 ```
 
-Live is the default here, the opposite of [`admin retention`](#retention): what
+Live is the default here, the opposite of [`retention apply`](#retention): what
 eviction drops is a copy the next request re-fetches, so the two-key interlock
 that protects a locally published version would be ceremony. The preview exists
 for the other question — *how much would this new size cap actually take?* — and
@@ -83,10 +83,10 @@ must not have to read a registry's mode out of a config file to tell them apart:
 
 ```sh
 # Everything that was actually deleted, by hand or by policy
-batlehub admin audit-log --action delete,retention_reclaim
+batlehub-cli audit log --action delete,retention_reclaim
 
 # Everything that was merely un-cached
-batlehub admin audit-log --action cache_evict,cache_clear,cache_evict_run
+batlehub-cli audit log --action cache_evict,cache_clear,cache_evict_run
 ```
 
 #### Collecting orphaned blobs {#cache-coherence}
@@ -99,8 +99,8 @@ it is missing from. Deleting a row from the database by hand leaves the same
 thing.
 
 ```sh
-batlehub admin cache coherence acme-npm --dry-run   # what is orphaned
-batlehub admin cache coherence acme-npm             # collect it
+batlehub-cli cache coherence -r acme-npm --dry-run   # what is orphaned
+batlehub-cli cache coherence -r acme-npm             # collect it
 ```
 
 **Two passes before anything goes.** A blob is deleted only if the *previous*
@@ -123,7 +123,7 @@ sweeps carry `user_id = "system"` in the trail, which is what tells them apart
 from an operator's:
 
 ```sh
-batlehub admin audit-log --action cache_coherence_run
+batlehub-cli audit log --action cache_coherence_run
 ```
 
 ### Cache warming {#cache-warming}
@@ -435,7 +435,7 @@ that no longer exists.
 ### Deleting
 
 ```sh
-batlehub version delete acme-npm my-pkg 1.4.0
+batlehub-cli package delete acme-npm/my-pkg@1.4.0
 ```
 
 It prompts, because of the second effect above. `-y` skips the prompt. The same
@@ -564,9 +564,9 @@ of age or count — and configuring reclamation without it warns on every reload
 Run it:
 
 ```sh
-batlehub admin retention acme-npm              # report; changes nothing
-batlehub admin retention acme-npm --show-kept  # …and why each survivor survived
-batlehub admin retention acme-npm --reclaim    # actually reclaim
+batlehub-cli retention show acme-npm              # report; changes nothing
+batlehub-cli retention show acme-npm --show-kept  # …and why each survivor survived
+batlehub-cli retention apply acme-npm     # actually reclaim
 ```
 
 `--reclaim` is only half the interlock: the registry also needs `dry_run = false`.
@@ -599,8 +599,8 @@ is never `delete`, and it always means the version is gone:
 
 ```sh
 # What the policy took, and what somebody took by hand
-batlehub admin audit-log --registry acme-npm --action retention_reclaim
-batlehub admin audit-log --registry acme-npm --action delete
+batlehub-cli audit log --registry acme-npm --action retention_reclaim
+batlehub-cli audit log --registry acme-npm --action delete
 ```
 
 A dry run records **itself and nothing else**. That is on purpose in both
@@ -615,8 +615,8 @@ The escape every automatic policy needs — the release an LTS customer runs, wh
 the pull statistics will eventually stop defending:
 
 ```sh
-batlehub version pin   acme-npm my-pkg 2.4.0
-batlehub version unpin acme-npm my-pkg 2.4.0
+batlehub-cli package pin acme-npm/my-pkg@2.4.0
+batlehub-cli package unpin acme-npm/my-pkg@2.4.0
 ```
 
 A pinned version is never reclaimed, whatever the policy says. It changes nothing

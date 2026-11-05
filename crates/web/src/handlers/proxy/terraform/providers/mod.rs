@@ -3,11 +3,11 @@ use super::{
     identity_for_artifact, mark_uncacheable_if_signed, off_origin_checksum_urls, post,
     proxy_stream, put, registry_public_base, require_local_mode, require_registry_type,
     require_segments, sign_download_document, terraform_provider_binary_storage_key,
-    terraform_set_yanked, terraform_versions_response, web, AppError, Arc, ArtifactSignature,
-    AuthIdentity, Digest, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService,
-    NotificationService, PackageId, ProxyService, PublishPolicyRequest, PublishRequest,
-    RegistryMap, RegistryMode, RegistryModeMap, Responder, Sha256, StorageMeta, TerraformPlatform,
-    TerraformYankRequest,
+    terraform_set_yanked, terraform_versions_response, upstream_may_answer, web, AppError, Arc,
+    ArtifactSignature, AuthIdentity, Digest, DownloadCoords, HttpRequest, HttpResponse,
+    LocalRegistryService, NotificationService, PackageId, ProxyService, PublishPolicyRequest,
+    PublishRequest, RegistryMap, RegistryMode, RegistryModeMap, Responder, Sha256, StorageMeta,
+    TerraformPlatform, TerraformYankRequest,
 };
 
 pub mod read;

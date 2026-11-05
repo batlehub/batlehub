@@ -1,7 +1,8 @@
 use super::{
     append_signature_headers, get, proxy_stream, registry_public_base, require_registry_type,
-    terraform_versions_response, web, AppError, Arc, AuthIdentity, HttpRequest, HttpResponse,
-    LocalRegistryService, ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder,
+    terraform_versions_response, upstream_may_answer, web, AppError, Arc, AuthIdentity,
+    HttpRequest, HttpResponse, LocalRegistryService, ProxyService, RegistryMap, RegistryMode,
+    RegistryModeMap, Responder,
 };
 use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
 use batlehub_core::entities::Action;
@@ -78,7 +79,10 @@ pub async fn terraform_module_versions(
 pub async fn terraform_module_download(
     path: web::Path<(String, String, String, String, String)>,
     req: HttpRequest,
+    identity: AuthIdentity,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
     map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, namespace, name, provider, version) = path.into_inner();
     require_registry_type(&registry, "terraform", &map)?;
@@ -96,8 +100,30 @@ pub async fn terraform_module_download(
     // client never learns where upstream keeps the tarball and never reaches it
     // unmediated.
     let base_url = registry_public_base(&req, &registry);
-    let artifact_url =
+    let mut artifact_url =
         format!("{base_url}/v1/modules/{namespace}/{name}/{provider}/{version}/artifact");
+    // go-getter downloads an HTTP archive only when the URL names its format;
+    // without it, it parses the body as HTML for a `terraform-get` meta tag and
+    // fails on the gzip ("XML syntax error … U+001F"). A module published here
+    // is always a tarball; an upstream one's format is the upstream's, unknown
+    // until the artifact is fetched (found by `terraform init`, RFC 0040 §6.P
+    // case 7).
+    let pkg_name = format!("modules/{namespace}/{name}/{provider}");
+    let local = match mode_map.get(&registry) {
+        RegistryMode::Local => true,
+        RegistryMode::Hybrid => local_svc
+            .get_terraform_module_versions_response(&registry, &pkg_name, &identity)
+            .await
+            .is_ok_and(|doc| {
+                doc["modules"][0]["versions"]
+                    .as_array()
+                    .is_some_and(|vs| vs.iter().any(|v| v["version"] == version.as_str()))
+            }),
+        RegistryMode::Proxy => false,
+    };
+    if local {
+        artifact_url.push_str("?archive=tar.gz");
+    }
     Ok(HttpResponse::NoContent()
         .insert_header(("X-Terraform-Get", artifact_url))
         .finish())
@@ -245,15 +271,14 @@ pub async fn terraform_module_artifact(
         )
         .await;
     }
-    // Terraform is local-only (no proxy fall-through), so the registry rule
-    // chain would otherwise never run for these reads. `get_artifact` runs it
-    // against the resource type named here.
+    // The local read: the registry rule chain would otherwise never run for
+    // it. `get_artifact` runs it against the resource type named here.
     local_svc
         .check_prerelease_access(&registry, &version, &identity)
         .await
         .map_err(AppError::from)?;
 
-    let bytes = local_svc
+    let bytes = match local_svc
         .get_artifact(
             &registry,
             &pkg_name,
@@ -263,7 +288,32 @@ pub async fn terraform_module_artifact(
             &identity.1,
         )
         .await
-        .map_err(AppError::from)?;
+    {
+        Ok(bytes) => bytes,
+        // Hybrid serves the upstream's modules too, and their download answer
+        // points `X-Terraform-Get` here: fall through, as the provider archive
+        // does (RFC 0040 §6.P case 7). Only for a module with no local version.
+        Err(batlehub_core::error::CoreError::NotFound(_))
+            if mode == RegistryMode::Hybrid
+                && upstream_may_answer(
+                    local_svc
+                        .get_terraform_module_versions_response(&registry, &pkg_name, &identity)
+                        .await,
+                )? =>
+        {
+            let pkg = batlehub_core::entities::PackageId::new(&registry, &pkg_name, &version)
+                .with_artifact("download");
+            return proxy_stream(
+                svc,
+                pkg,
+                identity,
+                Action::ReleasesRead,
+                Some("application/octet-stream"),
+            )
+            .await;
+        }
+        Err(e) => return Err(AppError::from(e)),
+    };
 
     let mut resp = HttpResponse::Ok();
     append_signature_headers(&mut resp, &local_svc, &registry, &pkg_name, &version).await;

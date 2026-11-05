@@ -1,9 +1,10 @@
 use super::{
     append_signature_headers, get, identity_for_artifact, mark_uncacheable_if_signed, proxy_stream,
     registry_public_base, require_registry_type, sign_download_document,
-    terraform_provider_binary_storage_key, terraform_versions_response, web, AppError, Arc,
-    AuthIdentity, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService, PackageId,
-    ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder, TerraformPlatform,
+    terraform_provider_binary_storage_key, terraform_versions_response, upstream_may_answer, web,
+    AppError, Arc, AuthIdentity, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService,
+    PackageId, ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder,
+    TerraformPlatform,
 };
 use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
 use batlehub_core::entities::Action;
@@ -323,10 +324,16 @@ pub(super) async fn try_local_provider_download(
             append_signature_headers(&mut resp, local_svc, registry, name, version).await;
             Ok(Some(resp.json(json)))
         }
-        Err(batlehub_core::error::CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {
-            Ok(None)
+        Err(batlehub_core::error::CoreError::NotFound(msg)) => {
+            let listing = local_svc
+                .get_terraform_provider_versions_response(registry, name, identity)
+                .await;
+            if mode == RegistryMode::Hybrid && upstream_may_answer(listing)? {
+                Ok(None)
+            } else {
+                Err(AppError::not_found(msg))
+            }
         }
-        Err(batlehub_core::error::CoreError::NotFound(msg)) => Err(AppError::not_found(msg)),
         Err(e) => Err(AppError::from(e)),
     }
 }
@@ -508,12 +515,12 @@ pub async fn terraform_provider_artifact(
         .await;
     }
 
-    // Local/hybrid: no proxy fall-through, so the gate `get_artifact_at_key`
-    // applies is the only one this read ever gets. One archive per platform
-    // means the key is built here, but reading `local_svc.storage` directly —
-    // as this did — skipped `check_visibility` entirely, so a caller refused
-    // both the version list and the download *document* could still fetch the
-    // binary by constructing its URL (survey finding 7).
+    // Local/hybrid: the local archive first, through `get_artifact_at_key`'s
+    // gate. One archive per platform means the key is built here, but reading
+    // `local_svc.storage` directly — as this did — skipped `check_visibility`
+    // entirely, so a caller refused both the version list and the download
+    // *document* could still fetch the binary by constructing its URL (survey
+    // finding 7).
     let key =
         terraform_provider_binary_storage_key(&registry, &namespace, &ptype, &version, &os, &arch);
     // The same `{os}/{arch}` artifact the proxy branch above puts in its
@@ -521,17 +528,37 @@ pub async fn terraform_provider_artifact(
     // audit trail identically on both paths. Not a sidecar — this is the archive
     // Terraform installs.
     let pkg = PackageId::new(&registry, &auth_name, &version).with_artifact(format!("{os}/{arch}"));
-    let buf = local_svc
+    match local_svc
         .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity, &identity.1)
         .await
         .map_err(AppError::from)?
-        .ok_or_else(|| {
-            AppError::not_found(format!(
-                "provider {namespace}/{ptype}@{version} platform {os}/{arch} not found"
-            ))
-        })?;
-
-    Ok(HttpResponse::Ok().content_type("application/zip").body(buf))
+    {
+        Some(buf) => Ok(HttpResponse::Ok().content_type("application/zip").body(buf)),
+        // Hybrid serves the upstream's providers too, and their download
+        // document points `download_url` here: without this fall-through no
+        // upstream provider installed through a hybrid registry (found by
+        // `terraform init`, RFC 0040 §6.P case 7). Only for a provider with no
+        // local version — a local one lacking this platform is a 404.
+        None if mode_map.get(&registry) == RegistryMode::Hybrid
+            && upstream_may_answer(
+                local_svc
+                    .get_terraform_provider_versions_response(&registry, &auth_name, &identity)
+                    .await,
+            )? =>
+        {
+            proxy_stream(
+                svc,
+                pkg,
+                identity,
+                Action::ReleasesRead,
+                Some("application/zip"),
+            )
+            .await
+        }
+        None => Err(AppError::not_found(format!(
+            "provider {namespace}/{ptype}@{version} platform {os}/{arch} not found"
+        ))),
+    }
 }
 
 /// Whether a versions listing still offers `version`.

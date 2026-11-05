@@ -224,6 +224,27 @@ async fn the_chain_survives_the_lifecycle_and_catches_an_sql_edit() {
         "the edit is undone"
     );
 
+    // `reason_code` is sealed too: rewriting why a download was refused is
+    // the same tampering as rewriting who asked (RFC 0040 decision 39).
+    let forge =
+        "UPDATE access_events SET reason_code = $3 WHERE created_at >= $1 AND created_at < $2";
+    sqlx::query(forge)
+        .bind(at(3 * STEP))
+        .bind(at(4 * STEP))
+        .bind("BLOCK_LIST")
+        .execute(&repo.pool())
+        .await
+        .unwrap();
+    assert!(!svc.verify(None, None, Some(&head)).await.unwrap().ok);
+    sqlx::query(forge)
+        .bind(at(3 * STEP))
+        .bind(at(4 * STEP))
+        .bind(None::<String>)
+        .execute(&repo.pool())
+        .await
+        .unwrap();
+    assert!(svc.verify(None, None, Some(&head)).await.unwrap().ok);
+
     // A truncated tail. Deleting a lifecycle record is caught without help —
     // its window's rows then match no record — so the case §5.3 is about is a
     // tail of plain seals: two more (empty) windows, and the newest dropped.

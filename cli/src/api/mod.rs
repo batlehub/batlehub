@@ -1,19 +1,22 @@
 pub mod admin;
+pub mod artifact;
 pub mod auth;
 pub mod authz;
 pub mod client_setup;
 pub mod ide;
+pub mod journeys;
 pub mod mise_plan;
 pub mod owner;
 pub mod package;
 pub mod publish;
+pub mod publish_input;
 pub mod registry;
 pub mod security;
 pub mod setup;
 pub mod suggest;
 pub mod version;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -344,7 +347,7 @@ impl BatleHubClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("HTTP {status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
         let header = |name: &str| {
             resp.headers()
@@ -402,7 +405,7 @@ impl BatleHubClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            bail!("HTTP {status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
 
         let mut total: u64 = 0;
@@ -443,7 +446,7 @@ pub(crate) async fn expect_ok<T: DeserializeOwned>(resp: reqwest::Response) -> R
         Ok(resp.json::<T>().await?)
     } else {
         let body = resp.text().await.unwrap_or_default();
-        bail!("HTTP {status}: {body}")
+        Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into())
     }
 }
 
@@ -453,6 +456,6 @@ async fn expect_no_content(resp: reqwest::Response) -> Result<()> {
         Ok(())
     } else {
         let body = resp.text().await.unwrap_or_default();
-        bail!("HTTP {status}: {body}")
+        Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into())
     }
 }

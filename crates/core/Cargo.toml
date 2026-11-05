@@ -57,6 +57,9 @@ tar = "0.4"
 # `serde-saphyr` is safe Rust over `granit-parser` — its fork of
 # `saphyr-parser`, despite the name; that fork is what Cargo.lock carries.
 serde-saphyr = { version = "2.0", default-features = false, features = ["serialize", "deserialize"] }
+# RFC 0040 §6.5 — the TOML lockfiles `check` reads (`Cargo.lock`, `uv.lock`,
+# `poetry.lock`, `rust-toolchain.toml`); already in the tree through config.
+toml.workspace = true
 
 [dev-dependencies]
 # Only in tests, and only to assert that a *filtered* channel manifest still

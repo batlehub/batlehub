@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: e4f58eb6c48ff93e
+sourceHash: 3810efe0f860a89b
 ---
 
 # Contrôles de sécurité
@@ -433,7 +433,7 @@ Le côté utilisateur, avec ce qu'affiche chaque gestionnaire de paquets, est su
   store est illisible : `BlockListRule`, `CveGateRule`, `LicenseGateRule` et
   `FlagsRule`. Le garde-fou du verdict écrit en `ERROR` et refuse.
 - **Pour répondre à « pourquoi est-ce refusé » sans le reproduire :**
-  - `batlehub why <registry>:<name>@<version>` (voir
+  - `batlehub-cli why <registry>:<name>@<version>` (voir
     [la CLI](/fr/use/cli#commands-security)) ;
   - le panneau de verdict sur la page du paquet ;
   - la page admin *Access Check*, qui exécute la même chaîne qu'un vrai

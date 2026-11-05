@@ -1,6 +1,6 @@
 ---
 sourcePath: use/troubleshooting.md
-sourceHash: 96347395794ee6c2
+sourceHash: 6af28fe4ffc34bcc
 ---
 
 # Dépannage
@@ -18,7 +18,7 @@ des requêtes, ou une requête lente monopolise des connexions.
 **Correction :**
 1. Regardez l'usage courant du pool : `SELECT count(*) FROM pg_stat_activity WHERE datname = 'batlehub';`
 2. Repérez les requêtes lentes : `SELECT query, wait_event, state FROM pg_stat_activity WHERE state != 'idle' ORDER BY duration DESC LIMIT 20;`
-3. Augmentez `[database] max_connections` dans la configuration et déclenchez un rechargement : `batlehub-cli admin config reload`.
+3. Augmentez `[database] max_connections` dans la configuration et déclenchez un rechargement : `batlehub-cli server config reload`.
 4. Si les requêtes sont lentes, cherchez des index manquants sur `local_packages(registry, name)` et `access_events(created_at)`.
 
 ## Expiration des identifiants S3
@@ -79,7 +79,7 @@ en rechargeant, puis remettez-la.
 ## Cache en mémoire avec plusieurs réplicas (limites et quotas non globaux)
 
 **Symptôme :** un utilisateur dépasse son quota ou sa limite de débit sur un
-réplica mais pas sur un autre ; la commande `batlehub-cli admin quota` affiche
+réplica mais pas sur un autre ; la commande `batlehub-cli quota list` affiche
 des valeurs différentes selon l'instance.
 
 **Cause :** `[cache] type = "memory"` garde les compteurs de limitation de débit
@@ -109,7 +109,7 @@ pendant des secondes ou des minutes.
 2. **Réduisez le parallélisme du préchauffage** : `[cache] warm_concurrency = 1` (si l'option existe) pour ralentir le remplissage.
 3. **Préchauffez** avant de basculer le trafic :
    ```bash
-   batlehub-cli admin cache warm my-registry --packages "react,lodash,typescript"
+   batlehub-cli cache warm -r my-registry --packages "react,lodash,typescript"
    ```
 4. Pour les registres adressés par chemin (JetBrains, Debian, RPM), utilisez `--paths` au lieu de `--packages`.
 
@@ -122,7 +122,7 @@ anciennes métadonnées.
 
 **Correction :** videz le cache de métadonnées du registre concerné :
 ```bash
-batlehub-cli admin cache clear <registry>
+batlehub-cli cache delete -r <registry>
 ```
 Ou attendez l'expiration du TTL (300 secondes par défaut).
 
@@ -149,7 +149,7 @@ type = "cargo"
 max_artifact_size_bytes = 524288000  # 500 MiB
 ```
 
-Déclenchez un rechargement : `batlehub-cli admin config reload`.
+Déclenchez un rechargement : `batlehub-cli server config reload`.
 
 ## La clé d'API n'est pas reconnue
 
@@ -185,11 +185,11 @@ périodique ne tourne que là où un opérateur l'a demandée.
 RUST_LOG=batlehub=debug cargo run -p batlehub-server -- --config config.toml
 
 # Consulter le journal d'audit pour les erreurs récentes
-batlehub-cli admin audit-log --denied-only --per-page 50
+batlehub-cli audit log --denied-only --per-page 50
 
 # Statistiques courantes
-batlehub-cli admin stats
+batlehub-cli server stats
 
 # Santé par registre
-batlehub-cli admin health
+batlehub-cli server health
 ```

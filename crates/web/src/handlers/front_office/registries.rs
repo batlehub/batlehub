@@ -116,6 +116,26 @@ pub async fn list_registries(
             upstreams: true,
         },
     };
+    // A registry the caller reads releases of without being able to install
+    // from it — a namespace-only grant (`@team/x`) or `releases:read` without
+    // `source:read`: listed, `installable: false`, so a coordinate command can
+    // resolve it and `setup apply` still writes nothing for it (RFC 0040 §17.1).
+    let mut via_namespace = std::collections::HashSet::new();
+    if let (Some(svc), Some(granted)) = (svc.as_ref(), granted.as_ref()) {
+        for (name, a) in granted {
+            if !a.installable
+                && batlehub_core::services::authz::holds_anywhere_in_registry(
+                    &svc.hot,
+                    name,
+                    &identity,
+                    batlehub_core::entities::Action::ReleasesRead,
+                )
+                .await
+            {
+                via_namespace.insert(name.clone());
+            }
+        }
+    }
     let mut registries: Vec<RegistryInfo> = map
         .entries()
         .into_iter()
@@ -128,6 +148,7 @@ pub async fn list_registries(
                 || granted
                     .as_ref()
                     .is_some_and(|g| g.get(name).is_some_and(|a| a.installable))
+                || via_namespace.contains(name.as_str())
         })
         .map(|(name, registry_type)| {
             let access = access(&name);

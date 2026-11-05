@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: 5e5ddcd7c131c1aa
+sourceHash: 07d139f9312b4acc
 ---
 
 # Le worker d'analyse
@@ -43,8 +43,8 @@ une première requête passe avant une passe de fond.
 | --- | --- | --- |
 | `first_seen` | le proxy, à la première requête d'une version sans verdict | 0 |
 | `webhook` | un signalement du SOC, ou un administrateur qui marque un paquet | 1 |
-| `rescan` | l'ordonnanceur de réanalyse, et `verdicts rescan` | 2 |
-| `backfill` | `verdicts backfill` — toutes les versions en cache d'un registre | 3 |
+| `rescan` | l'ordonnanceur de réanalyse, et `verdict rescan` | 2 |
+| `backfill` | `verdict backfill` — toutes les versions en cache d'un registre | 3 |
 
 La mise en file est **idempotente sur la coordonnée** : un index unique partiel
 n'autorise qu'un seul travail *ouvert* par version, si bien qu'une rafale de
@@ -154,11 +154,11 @@ horloge — `TIMESTAMP_MISSING`, quand l'amont n'a donné aucune date de
 publication — ne se lève pas, et attendre n'y changera rien.
 
 Les utilisateurs ont deux commandes pour cela, documentées dans la
-[référence CLI](/fr/use/cli#commands-security) : `batlehub why` explique un
-refus, `batlehub wait` attend qu'une version retenue devienne servable et sort
+[référence CLI](/fr/use/cli#commands-security) : `batlehub-cli why` explique un
+refus, `batlehub-cli wait` attend qu'une version retenue devienne servable et sort
 immédiatement en erreur quand attendre ne sert à rien. Le côté administrateur —
 lister les verdicts par état, réanalyser, rattraper, et demander qui a déjà
-récupéré une version — est [`batlehub verdicts`](/fr/use/cli#commands-verdicts).
+récupéré une version — est [`batlehub-cli verdict`](/fr/use/cli#commands-verdicts).
 
 ## Quand quelque chose ne va pas
 
@@ -166,7 +166,7 @@ récupéré une version — est [`batlehub verdicts`](/fr/use/cli#commands-verdi
 | --- | --- | --- |
 | Toutes les installations d'un registre `[security]` sont refusées `SCAN_PENDING` | `batlehub_workers_live`, et l'avertissement au démarrage qui nomme les registres | Rien n'analyse. Démarrez un processus avec `--roles worker`, ou activez `worker.enabled` dans le chart |
 | La profondeur de file monte, mais les travaux finissent par aboutir | `batlehub_scan_jobs_queued` par registre et par déclencheur | Augmentez `max_concurrent`, ou ajoutez des réplicas — l'autoscaler se règle sur cette métrique |
-| Une version bloquée, les autres passent | `batlehub why <coordonnée>`, puis les `attempts` et le `last_error` du travail | Laissez les tentatives s'épuiser, ou relancez avec `batlehub why --rescan` une fois la cause corrigée |
+| Une version bloquée, les autres passent | `batlehub-cli why <coordonnée>`, puis les `attempts` et le `last_error` du travail | Laissez les tentatives s'épuiser, ou relancez avec `batlehub-cli why --rescan` une fois la cause corrigée |
 | Des versions reviennent en masse en `SCANNER_ERROR` | `batlehub_scanner_errors_total` par analyseur et par classe | Un analyseur est en panne ou injoignable. Vérifiez ses flux sortants et son entrée `[scanners.<nom>]` |
 | Les travaux retournent dans la file sans aboutir | `batlehub_scan_jobs_expired_total`, et la mémoire du pod | Une location expire. En général le `memory_limit_mb` du bac à sable face à une archive grosse ou hostile, ou le `job_timeout` face à un analyseur lent |
 | Deux instances, une base, des travaux qui disparaissent de l'une | le `worker_id` des deux processus dans `worker_heartbeats` | La file est à l'échelle du parc, par conception. Cloisonnez chaque worker avec les registres de `[worker]` s'ils ne doivent pas la partager |
@@ -193,7 +193,7 @@ C'est sur la transition qu'il faut alerter. Une version qui était `allowed` et
 qui devient `quarantined` signifie que quelque chose est arrivé après que des
 gens l'avaient déjà installée, et l'alerte de bascule porte la liste de qui l'a
 récupérée — la requête même à laquelle répond
-[`batlehub verdicts pullers`](/fr/use/cli#commands-verdicts), et le point de
+[`batlehub-cli verdict pullers`](/fr/use/cli#commands-verdicts), et le point de
 départ du chemin de [réponse à incident](/fr/operations/incident-response).
 
 ## Les deux images

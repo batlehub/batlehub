@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/capacity-planning.md
-sourceHash: cb209dd6de3e62ba
+sourceHash: 2f71f7c4d8649fa5
 ---
 
 # Dimensionnement
@@ -70,7 +70,7 @@ Recommandé : **2 à 4 vCPU** pour la plupart des déploiements.
 - **Disque :** la table `access_events` grossit d'environ 1 Ko par événement. À
   1 000 événements par jour, cela fait environ 365 Mo par an. Planifiez des
   purges régulières :
-  `batlehub-cli admin audit-log --purge-before 2024-01-01T00:00:00Z`.
+  `batlehub-cli audit purge --before 2024-01-01T00:00:00Z`.
 - **IOPS :** les lectures de métadonnées et les écritures de `record_access` sont
   les chemins les plus chauds. Un SSD à 3 000 IOPS suffit à la plupart des
   équipes.

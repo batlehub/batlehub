@@ -5,7 +5,7 @@
  * The version tier is deliberately absent. §11 open question 3: the package tier
  * is a table of subjects, the version tier is that table *per version*, and a
  * package with four hundred versions is a different design problem. The CLI
- * carries the version tier (`batlehub admin grants set reg pkg@1.2.3 …`) until
+ * carries the version tier (`batlehub-cli grant set reg/pkg@1.2.3 …`) until
  * someone asks for the panel.
  *
  * Version-tier rows are still *shown* here, read-only, because an operator

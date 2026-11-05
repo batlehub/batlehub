@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-cra.md
-sourceHash: 003e0f0699098e56
+sourceHash: bf9bfeeb00246fa8
 ---
 
 # Cyber Resilience Act — les contrôles de BatleHub
@@ -51,10 +51,10 @@ des vulnérabilités.
 | I(2)(b) – Sécurisé par défaut | Une conservation absente, une chaîne de scellement non signée, un scellement sans flux et d'autres configurations à moitié faites sont refusés ou signalés au démarrage | ✅ Implémenté | `GET /api/v1/admin/config/warnings` |
 | I(2)(d) – Protection contre les accès non autorisés | Fournisseurs d'authentification, droits, blocage d'IP, limitation de débit ; chaque refus est un événement d'audit | ✅ Implémenté | [Contrôle d'accès](../guide/access-control.md), [Intégration SIEM](./siem.md) |
 | I(2)(e) – Confidentialité | TLS terminé à l'ingress ; tokens stockés sous forme d'empreinte | Processus manuel | [Durcissement en production](./production-hardening.md) |
-| I(2)(f) – Intégrité | Sommes de contrôle des artefacts vérifiées à l'écriture en cache ; signatures de publication ; chaîne signée sur la piste d'audit | ✅ Implémenté | `crates/core/src/services/integrity.rs`, `crates/core/src/services/signature.rs`, `batlehub-cli admin audit verify` |
+| I(2)(f) – Intégrité | Sommes de contrôle des artefacts vérifiées à l'écriture en cache ; signatures de publication ; chaîne signée sur la piste d'audit | ✅ Implémenté | `crates/core/src/services/integrity.rs`, `crates/core/src/services/signature.rs`, `batlehub-cli audit verify` |
 | I(2)(g) – Minimisation des données | Classes de conservation de l'audit et pseudonymisation | ✅ Implémenté | [Correspondance RGPD](./compliance-gdpr.md) |
 | I(2)(l) – Surveillance de sécurité | Événements d'audit pour chaque action touchant la sécurité, un flux JSON et des règles Sigma | ✅ Implémenté | `[logging] format = "json"`, `deploy/siem/sigma/` |
-| I(2)(m) – Suppression sûre des données | Effacement d'une personne concernée ; expiration par conservation | ✅ Implémenté | `batlehub-cli admin gdpr erase` |
+| I(2)(m) – Suppression sûre des données | Effacement d'une personne concernée ; expiration par conservation | ✅ Implémenté | `batlehub-cli gdpr erase` |
 
 ## Articles 13 et 14 — Obligations du fabricant
 

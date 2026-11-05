@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/change-management.md
-sourceHash: 407cd7c996ed8d98
+sourceHash: 9bd84f1f1c84e93e
 ---
 
 # Politique de gestion du changement — BatleHub
@@ -90,7 +90,7 @@ débit, ajouts de blocages d'IP) doit être :
 3. **Auditable** — l'historique des changements de configuration s'interroge :
 
    ```bash
-   batlehub admin config changes
+   batlehub-cli server config changes
    # ou depuis la console → Rechargement de la configuration → Historique
    ```
 
@@ -158,8 +158,7 @@ utilisateurs peuvent ou ne peuvent pas télécharger. Avant de l'appliquer :
 1. Servez-vous du simulateur RBAC pour valider l'effet voulu :
 
    ```bash
-   batlehub admin access-check --registry npm --package lodash \
-     --version 4.17.21 --resource releases:read --role user
+   batlehub-cli authz check npm/lodash@4.17.21 --resource releases:read --role user
    ```
 
 2. Testez au moins un cas « refusé » et un cas « autorisé ».
@@ -186,7 +185,7 @@ Les changements de configuration sont journalisés dans la table
 Pour exporter tous les événements d'audit d'une période :
 
 ```bash
-batlehub admin export-audit-log \
+batlehub-cli audit export \
   --from 2026-01-01T00:00:00Z --to 2026-03-31T23:59:59Z \
   --format csv --output q1-2026-audit.csv
 ```

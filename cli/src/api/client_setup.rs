@@ -46,10 +46,26 @@ pub enum ClientId {
     Mise,
     Rustup,
     Node,
+    Conda,
+    Composer,
+    Gem,
+    Nuget,
+    Terraform,
+    Galaxy,
+    Helm,
+    Nix,
+    Sdkman,
+    /// The print arms (RFC 0040 §4.7): their files are root's or a
+    /// cluster's, so setup only renders the snippet.
+    Apt,
+    Dnf,
+    Pacman,
+    Apk,
+    Devfile,
 }
 
 impl ClientId {
-    pub const ALL: [ClientId; 12] = [
+    pub const ALL: [ClientId; 26] = [
         ClientId::Cargo,
         ClientId::Npm,
         ClientId::Pnpm,
@@ -62,10 +78,24 @@ impl ClientId {
         ClientId::Mise,
         ClientId::Rustup,
         ClientId::Node,
+        ClientId::Conda,
+        ClientId::Composer,
+        ClientId::Gem,
+        ClientId::Nuget,
+        ClientId::Terraform,
+        ClientId::Galaxy,
+        ClientId::Helm,
+        ClientId::Nix,
+        ClientId::Sdkman,
+        ClientId::Apt,
+        ClientId::Dnf,
+        ClientId::Pacman,
+        ClientId::Apk,
+        ClientId::Devfile,
     ];
 
     /// The clients configured only through their environment (`env.sh`).
-    pub const ENV_ONLY: [ClientId; 2] = [ClientId::Rustup, ClientId::Node];
+    pub const ENV_ONLY: [ClientId; 3] = [ClientId::Rustup, ClientId::Node, ClientId::Sdkman];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -81,12 +111,29 @@ impl ClientId {
             ClientId::Mise => "mise",
             ClientId::Rustup => "rustup",
             ClientId::Node => "node",
+            ClientId::Conda => "conda",
+            ClientId::Composer => "composer",
+            ClientId::Gem => "gem",
+            ClientId::Nuget => "nuget",
+            ClientId::Terraform => "terraform",
+            ClientId::Galaxy => "galaxy",
+            ClientId::Helm => "helm",
+            ClientId::Nix => "nix",
+            ClientId::Sdkman => "sdkman",
+            ClientId::Apt => "apt",
+            ClientId::Dnf => "dnf",
+            ClientId::Pacman => "pacman",
+            ClientId::Apk => "apk",
+            ClientId::Devfile => "devfile",
         }
     }
 
     /// The executables whose presence on `PATH` means the client is installed.
     /// `node` has none: `NODEJS_ORG_MIRROR` is read by nvm, fnm, n and
-    /// node-gyp, any of which may be installed later.
+    /// node-gyp, any of which may be installed later. `sdk` is a shell
+    /// function, found by its init script instead ([`Env::from_process`]);
+    /// `devfile` names a cluster's configuration, printed whatever is
+    /// installed.
     fn binaries(self) -> &'static [&'static str] {
         match self {
             ClientId::Cargo => &["cargo"],
@@ -100,7 +147,19 @@ impl ClientId {
             ClientId::Maven => &["mvn"],
             ClientId::Mise => &["mise"],
             ClientId::Rustup => &["rustup"],
-            ClientId::Node => &[],
+            ClientId::Conda => &["conda", "mamba", "micromamba"],
+            ClientId::Composer => &["composer"],
+            ClientId::Gem => &["gem"],
+            ClientId::Nuget => &["dotnet", "nuget"],
+            ClientId::Terraform => &["terraform", "tofu"],
+            ClientId::Galaxy => &["ansible-galaxy"],
+            ClientId::Helm => &["helm"],
+            ClientId::Nix => &["nix"],
+            ClientId::Apt => &["apt-get"],
+            ClientId::Dnf => &["dnf", "yum"],
+            ClientId::Pacman => &["pacman"],
+            ClientId::Apk => &["apk"],
+            ClientId::Node | ClientId::Sdkman | ClientId::Devfile => &[],
         }
     }
 }
@@ -172,6 +231,10 @@ impl Env {
             .filter(|c| c.binaries().iter().any(|b| on_path(b, &path_var)))
             .collect();
         installed.insert(ClientId::Node);
+        let sdkman = absolute_var(&vars, "SDKMAN_DIR").unwrap_or_else(|| home.join(".sdkman"));
+        if sdkman.join("bin/sdkman-init.sh").is_file() {
+            installed.insert(ClientId::Sdkman);
+        }
 
         // corepack's shim prompts to download yarn, or fetches it, on first
         // call: in a hook that is a hang. A yarn that cannot say its version
@@ -319,6 +382,22 @@ pub enum TargetId {
     EnvSh,
     Fish,
     ShellRc,
+    Condarc,
+    Composer,
+    Gemrc,
+    Nuget,
+    Terraformrc,
+    Ansible,
+    /// helm's `repositories.yaml`: read, never written ([`State::Manual`]).
+    Helm,
+    Nix,
+    /// The print arms: no file of the user's, only a snippet
+    /// ([`State::Print`]).
+    Apt,
+    Dnf,
+    Pacman,
+    Apk,
+    Devfile,
 }
 
 /// A delimited block inside a file the user owns, or a file managed whole.
@@ -332,6 +411,10 @@ enum Shape {
 enum Comment {
     Hash,
     Xml,
+    /// JSON has no comments: the marker is a `"//"` key, the first of the
+    /// object, which Composer ignores (`Config::merge` reads only `config`
+    /// and `repositories`). Only ever a drop-in's first line.
+    Json,
 }
 
 // ASCII only: a block spliced into a file that is not UTF-8 (a latin-1
@@ -344,6 +427,7 @@ impl Comment {
         match self {
             Comment::Hash => format!("# {text}"),
             Comment::Xml => format!("<!-- {text} -->"),
+            Comment::Json => format!("{{\"//\": \"{text}\","),
         }
     }
 
@@ -353,6 +437,12 @@ impl Comment {
         match self {
             Comment::Hash => line.strip_prefix("# "),
             Comment::Xml => line.strip_prefix("<!-- ")?.strip_suffix(" -->"),
+            // Indented too: `composer config -g` reformats the file, and the
+            // marker then still says the file was ours.
+            Comment::Json => line
+                .trim_start_matches(['{', ' ', '\t'])
+                .strip_prefix("\"//\": \"")?
+                .strip_suffix("\","),
         }
     }
 }
@@ -397,6 +487,33 @@ impl TargetId {
                 Comment::Hash,
             ),
             TargetId::ShellRc => (rc_path(env)?, Shape::Block, Comment::Hash),
+            TargetId::Condarc => (env.home.join(".condarc"), Shape::Block, Comment::Hash),
+            TargetId::Composer => (
+                composer_home(env).join("config.json"),
+                Shape::DropIn,
+                Comment::Json,
+            ),
+            TargetId::Gemrc => (env.home.join(".gemrc"), Shape::Block, Comment::Hash),
+            TargetId::Nuget => (
+                absolute_var(&env.vars, "DOTNET_CLI_HOME")
+                    .unwrap_or_else(|| env.home.clone())
+                    .join(".nuget/NuGet/NuGet.Config"),
+                Shape::DropIn,
+                Comment::Xml,
+            ),
+            TargetId::Terraformrc => (env.home.join(".terraformrc"), Shape::Block, Comment::Hash),
+            TargetId::Ansible => (env.home.join(".ansible.cfg"), Shape::Block, Comment::Hash),
+            TargetId::Helm => (helm_repo_config(env), Shape::DropIn, Comment::Hash),
+            TargetId::Nix => (
+                env.config_dir.join("nix/nix.conf"),
+                Shape::Block,
+                Comment::Hash,
+            ),
+            TargetId::Apt
+            | TargetId::Dnf
+            | TargetId::Pacman
+            | TargetId::Apk
+            | TargetId::Devfile => return None,
         };
         Some(Target {
             path,
@@ -427,6 +544,19 @@ impl TargetId {
             TargetId::Maven => vec![ClientId::Maven],
             TargetId::Mise => vec![ClientId::Mise],
             TargetId::EnvSh | TargetId::Fish | TargetId::ShellRc => ClientId::ENV_ONLY.to_vec(),
+            TargetId::Condarc => vec![ClientId::Conda],
+            TargetId::Composer => vec![ClientId::Composer],
+            TargetId::Gemrc => vec![ClientId::Gem],
+            TargetId::Nuget => vec![ClientId::Nuget],
+            TargetId::Terraformrc => vec![ClientId::Terraform],
+            TargetId::Ansible => vec![ClientId::Galaxy],
+            TargetId::Helm => vec![ClientId::Helm],
+            TargetId::Nix => vec![ClientId::Nix],
+            TargetId::Apt => vec![ClientId::Apt],
+            TargetId::Dnf => vec![ClientId::Dnf],
+            TargetId::Pacman => vec![ClientId::Pacman],
+            TargetId::Apk => vec![ClientId::Apk],
+            TargetId::Devfile => vec![ClientId::Devfile],
         }
     }
 
@@ -512,6 +642,40 @@ fn zshenv(env: &Env) -> PathBuf {
         return home;
     }
     absolute_var(&env.vars, "ZDOTDIR").map_or(home, |d| d.join(".zshenv"))
+}
+
+/// Composer's home, as `Factory::getHomeDir` finds it on Unix: `$COMPOSER_HOME`;
+/// else, when any `XDG_*` variable is set or `/etc/xdg` exists, the XDG
+/// directory — or `~/.composer` if only that one exists; else `~/.composer`.
+fn composer_home(env: &Env) -> PathBuf {
+    if let Some(h) = absolute_var(&env.vars, "COMPOSER_HOME") {
+        return h;
+    }
+    let legacy = env.home.join(".composer");
+    let use_xdg = env.vars.keys().any(|k| k.starts_with("XDG_")) || Path::new("/etc/xdg").is_dir();
+    let xdg = env.config_dir.join("composer");
+    match use_xdg {
+        true if !xdg.is_dir() && legacy.is_dir() => legacy,
+        true => xdg,
+        false => legacy,
+    }
+}
+
+/// The file `helm repo add` writes: `$HELM_REPOSITORY_CONFIG`, else
+/// `repositories.yaml` under `$HELM_CONFIG_HOME`, else under the XDG config
+/// directory (`~/Library/Preferences` on macOS without `XDG_CONFIG_HOME`).
+fn helm_repo_config(env: &Env) -> PathBuf {
+    if let Some(f) = absolute_var(&env.vars, "HELM_REPOSITORY_CONFIG") {
+        return f;
+    }
+    let dir = absolute_var(&env.vars, "HELM_CONFIG_HOME").unwrap_or_else(|| {
+        if cfg!(target_os = "macos") && absolute_var(&env.vars, "XDG_CONFIG_HOME").is_none() {
+            env.home.join("Library/Preferences/helm")
+        } else {
+            env.config_dir.join("helm")
+        }
+    });
+    dir.join("repositories.yaml")
 }
 
 /// mise's config directory: `$MISE_CONFIG_DIR`, else `~/.config/mise`.
@@ -1037,6 +1201,7 @@ fn foreign_upstream(ty: &str, r: &RegistryInfo) -> Option<String> {
     let public = match ty {
         "github" => "api.github.com",
         "forgejo" => "codeberg.org",
+        "gitlab" => "gitlab.com",
         "npm" => "registry.npmjs.org",
         "cargo" => "crates.io",
         "openvsx" => "open-vsx.org",
@@ -1187,6 +1352,12 @@ pub enum State {
     Drifted,
     Orphaned,
     Conflict,
+    /// Setup does not write this client's file; the snippet is the command to
+    /// run, and status says whether it was (helm).
+    Manual,
+    /// Root's or a cluster's file: the snippet is printed, nothing is
+    /// checked (deb, rpm, pacman, apk, devfile).
+    Print,
 }
 
 impl State {
@@ -1200,15 +1371,17 @@ impl State {
             State::Drifted => "drifted",
             State::Orphaned => "orphaned",
             State::Conflict => "conflict",
+            State::Manual => "manual",
+            State::Print => "print",
         }
     }
 
     /// Whether `status` reports this as settled (exit 0) or as something to do
-    /// or look at (exit 3).
+    /// or look at (exit 6).
     pub fn settled(self) -> bool {
         matches!(
             self,
-            State::NotInstalled | State::NoRegistry | State::UpToDate
+            State::NotInstalled | State::NoRegistry | State::UpToDate | State::Print
         )
     }
 }
@@ -1316,7 +1489,7 @@ fn marked_registries(env: &Env) -> BTreeSet<(String, String)> {
     out
 }
 
-const ALL_TARGETS: [TargetId; 11] = [
+const ALL_TARGETS: [TargetId; 19] = [
     TargetId::Cargo,
     TargetId::Npmrc,
     TargetId::Yarnrc,
@@ -1325,6 +1498,14 @@ const ALL_TARGETS: [TargetId; 11] = [
     TargetId::Go,
     TargetId::Maven,
     TargetId::Mise,
+    TargetId::Condarc,
+    TargetId::Composer,
+    TargetId::Gemrc,
+    TargetId::Nuget,
+    TargetId::Terraformrc,
+    TargetId::Ansible,
+    TargetId::Helm,
+    TargetId::Nix,
     TargetId::EnvSh,
     TargetId::Fish,
     TargetId::ShellRc,
@@ -1335,9 +1516,19 @@ const ALL_TARGETS: [TargetId; 11] = [
 /// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules.
-const MISE_TYPES: [&str; 7] = [
-    "github", "forgejo", "npm", "cargo", "openvsx", "nodedist", "generic",
+const MISE_TYPES: [&str; 8] = [
+    "github", "forgejo", "gitlab", "npm", "cargo", "openvsx", "nodedist", "generic",
 ];
+
+/// mise's `gitlab:` backend, sent at the typed `{project}/-/releases` route,
+/// whose document repoints every asset at the instance — not at the `api/v4`
+/// passthrough, which relays gitlab.com's own URLs (the closed-world suite's
+/// `phase_gitlab` rule). The backend percent-encodes the project, so `$1` is
+/// one segment.
+const GITLAB_MISE_RULES: &[(&str, &str)] = &[(
+    r"^https://gitlab\.com/api/v4/projects/([^/]+)/releases(.*)",
+    "{proxy}/$1/-/releases$2",
+)];
 
 /// The plan for every file, from the registry list and the machine. Fails only
 /// on a `--pick` the server does not list (used or not): everything else that goes
@@ -1364,7 +1555,62 @@ pub fn plan(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Result<Ve
             out.extend(ctx.plan_target(id, &t)?);
         }
     }
+    out.extend(print_arms(registries, opts, env));
     Ok(out)
+}
+
+/// The print arms: one entry per registry of a kind whose configuration is
+/// root's (`/etc/apt`, `/etc/yum.repos.d`, `/etc/pacman.conf`,
+/// `/etc/apk/repositories`) or a cluster's (Che's `CheCluster`). Never
+/// written, never checked: the snippet is the console's, rendered for the
+/// registry. Every registry of the kind, not one pick: a second apt source
+/// adds to the first instead of replacing it.
+fn print_arms(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Vec<TargetPlan> {
+    let arms = [
+        (TargetId::Apt, "deb"),
+        (TargetId::Dnf, "rpm"),
+        (TargetId::Pacman, "pacman"),
+        (TargetId::Apk, "apk"),
+        (TargetId::Devfile, "devfile"),
+    ];
+    let mut out = Vec::new();
+    for (id, ty) in arms {
+        let clients = id.clients(env);
+        let installed =
+            id == TargetId::Devfile || clients.iter().any(|c| env.installed.contains(c));
+        if !installed || !touches(&opts.only, &opts.skip, &clients) {
+            continue;
+        }
+        for r in registries
+            .iter()
+            .filter(|r| r.registry_type == ty && r.installable != Some(false))
+        {
+            let mut p = TargetPlan {
+                target: id,
+                path: PathBuf::new(),
+                clients: clients.clone(),
+                state: State::Print,
+                registries: vec![r.name.clone()],
+                detail: None,
+                snippet: None,
+                current: None,
+                next: None,
+                env: Vec::new(),
+                latin1: false,
+            };
+            match base_url(r, opts) {
+                Ok(base) => {
+                    let (path, why, snippet) = render_print(id, &r.name, &base, &r.mode);
+                    p.path = PathBuf::from(path);
+                    p.detail = Some(why.to_owned());
+                    p.snippet = Some(snippet);
+                }
+                Err(e) => p.conflict(format!("{e:#}")),
+            }
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// What `env.sh` resolved, for the fish drop-in and the rc block planned after
@@ -1478,7 +1724,11 @@ fn read_target(t: &Target) -> Result<ReadTarget> {
 /// The targets a client rewrites without comments, whose bare block
 /// [`find_run`] recognises (and leaves alone).
 fn client_rewrites(id: TargetId) -> bool {
-    matches!(id, TargetId::Npmrc | TargetId::Pip | TargetId::Yarnrc)
+    // `gem sources --add` and `conda config --add` rewrite theirs too.
+    matches!(
+        id,
+        TargetId::Npmrc | TargetId::Pip | TargetId::Yarnrc | TargetId::Gemrc | TargetId::Condarc
+    )
 }
 
 /// The registry types a target needs: one for most, every type mise has
@@ -1495,9 +1745,23 @@ fn target_types(id: TargetId, installed: &[ClientId]) -> Vec<&'static str> {
             .iter()
             .map(|c| match c {
                 ClientId::Rustup => "rustup",
+                ClientId::Sdkman => "sdkman",
                 _ => "nodedist",
             })
             .collect(),
+        TargetId::Condarc => vec!["conda"],
+        TargetId::Composer => vec!["composer"],
+        TargetId::Gemrc => vec!["rubygems"],
+        TargetId::Nuget => vec!["nuget"],
+        TargetId::Terraformrc => vec!["terraform"],
+        TargetId::Ansible => vec!["galaxy"],
+        TargetId::Helm => vec!["helm"],
+        TargetId::Nix => vec!["nix"],
+        TargetId::Apt => vec!["deb"],
+        TargetId::Dnf => vec!["rpm"],
+        TargetId::Pacman => vec!["pacman"],
+        TargetId::Apk => vec!["apk"],
+        TargetId::Devfile => vec!["devfile"],
     }
 }
 
@@ -1591,6 +1855,9 @@ impl<'a> PlanCtx<'a> {
             self.record_env(&p, marker.registries);
             return Ok(Some(p));
         }
+        if id == TargetId::Helm {
+            return Ok(Some(self.plan_helm(p, &chosen, &read)));
+        }
 
         let body = match self.body(id, &chosen, &read, &mut marker, &mut p) {
             Ok(b) => b,
@@ -1603,6 +1870,56 @@ impl<'a> PlanCtx<'a> {
         let p = self.finish(p, t, &read, marker.clone(), body);
         self.record_env(&p, marker.registries);
         Ok(Some(p))
+    }
+
+    /// helm is driven, not written: `helm repo add` rewrites
+    /// `repositories.yaml` whole, through its YAML marshaller, so a marker
+    /// block in it would not survive the user's next `helm repo add` — and
+    /// rewriting a file helm owns would make setup race helm's own lock.
+    /// Status reads the file for the repository instead: there with the
+    /// registry's URL is up to date, anything else is the command to run
+    /// (`manual`). `remove` has nothing of its own to take out.
+    fn plan_helm(&self, mut p: TargetPlan, chosen: &Chosen<'_>, read: &ReadTarget) -> TargetPlan {
+        let Some(&(_, r)) = chosen.first() else {
+            p.state = State::NoRegistry;
+            return p;
+        };
+        let url = match self.base(r) {
+            Ok(base) => format!("{base}/helm"),
+            Err(e) => {
+                p.conflict(format!("{e:#}"));
+                return p;
+            }
+        };
+        // helm writes one `key: value` per line, list items under `- `.
+        let content = read.current.as_deref().unwrap_or("");
+        let has = |key: &str, value: &str| {
+            content.lines().any(|l| {
+                l.trim()
+                    .trim_start_matches("- ")
+                    .split_once(':')
+                    .is_some_and(|(k, v)| {
+                        k.trim() == key && v.trim().trim_matches(['"', '\'']) == value
+                    })
+            })
+        };
+        if has("url", &url) {
+            p.state = State::UpToDate;
+            return p;
+        }
+        p.state = State::Manual;
+        p.detail = Some(if has("name", "batlehub") {
+            format!(
+                "{} has a helm repository named batlehub on another URL; this repoints it",
+                p.path.display()
+            )
+        } else {
+            "helm rewrites its repositories file itself, so setup does not write it; run".to_owned()
+        });
+        p.snippet = Some(format!(
+            "helm repo add --force-update batlehub {url}\nhelm repo update batlehub"
+        ));
+        p
     }
 
     /// Keep what `env.sh` resolved for the two shell targets after it.
@@ -1784,7 +2101,11 @@ impl<'a> PlanCtx<'a> {
                         skipped.push(why);
                         continue;
                     }
-                    for (pattern, replacement) in typed_url_replacements(ty) {
+                    let typed = match *ty {
+                        "gitlab" => GITLAB_MISE_RULES,
+                        _ => typed_url_replacements(ty),
+                    };
+                    for (pattern, replacement) in typed {
                         push_replacement(
                             &mut rules,
                             pattern,
@@ -1819,8 +2140,38 @@ impl<'a> PlanCtx<'a> {
                     return Ok(None);
                 };
                 let base = self.base(r)?;
-                if id != TargetId::Maven {
-                    return Ok(Some(render_body(id, &base)));
+                let http = base.starts_with("http://");
+                match id {
+                    TargetId::Maven | TargetId::Nuget => {}
+                    // Terraform refuses a network mirror that is not https.
+                    TargetId::Terraformrc if http => bail!(
+                        "terraform takes only an https:// network mirror, and {base} is plain HTTP"
+                    ),
+                    // Composer refuses plain HTTP unless `secure-http` is off,
+                    // which it can only be for every host at once.
+                    TargetId::Composer if http => bail!(
+                        "composer refuses the plain-HTTP {base} unless `secure-http` is turned off \
+                         for every host; set it yourself if you mean to"
+                    ),
+                    TargetId::Nix => {
+                        let mut note = "nix uses a user nix.conf's extra-substituters only for a \
+                             user in the daemon's trusted-users (or a URL in its \
+                             trusted-substituters): add yourself to trusted-users in /etc/nix/nix.conf"
+                            .to_owned();
+                        if r.mode == "hybrid" {
+                            note.push_str(&format!(
+                                "; what is published to {} is signed with its own key: add \
+                                 `curl {base}/nix/public-key` to extra-trusted-public-keys",
+                                r.name
+                            ));
+                        }
+                        p.detail = Some(match p.detail.take() {
+                            Some(d) => format!("{d}; {note}"),
+                            None => note,
+                        });
+                        return Ok(Some(render_body(id, &base)));
+                    }
+                    _ => return Ok(Some(render_body(id, &base))),
                 }
                 // An XML comment may not contain `--`, and the name goes in
                 // the marker comment.
@@ -1829,6 +2180,9 @@ impl<'a> PlanCtx<'a> {
                         "registry name {:?} contains `--`, which an XML comment cannot hold",
                         r.name
                     );
+                }
+                if id == TargetId::Nuget {
+                    return Ok(Some(render_nuget(&r.name, &base)));
                 }
                 let mirror_of = self
                     .opts
@@ -1994,6 +2348,33 @@ fn yaml_key_clash(path: &Path, user: &str, body: &str) -> Option<String> {
         .map(|key| format!("{} already sets {key}", path.display()))
 }
 
+/// `line` sets `key` (`key = value`, spaces optional).
+fn is_key(line: &str, key: &str) -> bool {
+    line.split_once('=').is_some_and(|(k, _)| k.trim() == key)
+}
+
+/// The first of `files`, other than `own`, whose content `pred` accepts.
+fn first_file_with<'f>(
+    files: &'f [PathBuf],
+    own: &Path,
+    pred: impl Fn(&str) -> bool,
+) -> Option<&'f PathBuf> {
+    files
+        .iter()
+        .find(|f| !same_file(f, own) && std::fs::read_to_string(f).is_ok_and(|c| pred(&c)))
+}
+
+/// A value a client's own init script exports when it found none: not the
+/// user's choice. `sdkman-init.sh` sets both of its API variables only when
+/// they are empty, so a shell started before `apply` carries its defaults.
+fn is_client_default(name: &str, value: &str) -> bool {
+    matches!(
+        (name, value.trim_end_matches('/')),
+        ("SDKMAN_CANDIDATES_API", "https://api.sdkman.io/2")
+            | ("SDKMAN_BROKER_API", "https://broker.sdkman.io")
+    )
+}
+
 /// The rc file's own lines, for the `export VAR=` override scan. An rc file
 /// that cannot be read or whose block is broken has no lines to scan; the rc
 /// target reports the breakage itself.
@@ -2044,7 +2425,7 @@ pub enum Cached {
     /// Print these.
     Usable(Vec<(String, String)>),
     /// The process already holds another value for one of the names — an
-    /// override the planned path refuses (exit 3) too: print nothing.
+    /// override the planned path refuses (exit 6) too: print nothing.
     Overridden(String),
     /// No trusted file, or one for another server.
     Unusable,
@@ -2063,7 +2444,7 @@ pub fn cached_env_for(env: &Env, server: Option<&str>) -> Cached {
     let overridden = vars.iter().find_map(|(k, v)| {
         env.vars
             .get(k)
-            .filter(|cur| !cur.is_empty() && *cur != v)
+            .filter(|cur| !cur.is_empty() && *cur != v && !is_client_default(k, cur))
             .map(|cur| format!("${k} is already set to {cur}"))
     });
     match overridden {
@@ -2078,6 +2459,8 @@ pub fn env_var_client(name: &str) -> Option<ClientId> {
         Some(ClientId::Rustup)
     } else if NODEDIST_VARS.contains(&name) {
         Some(ClientId::Node)
+    } else if SDKMAN_VARS.contains(&name) {
+        Some(ClientId::Sdkman)
     } else {
         None
     }
@@ -2275,9 +2658,48 @@ impl PlanCtx<'_> {
             TargetId::Go => lines()
                 .any(|l| l.starts_with("GOPROXY="))
                 .then(|| format!("{path} already sets GOPROXY")),
-            TargetId::Maven | TargetId::Mise | TargetId::EnvSh | TargetId::Fish => unmanaged_file
+            // A whole file, so ours only when apply created it: JSON holds no
+            // comment a block could be delimited by, and a NuGet.Config is one
+            // XML document — a block appended after its root would not parse.
+            TargetId::Maven
+            | TargetId::Mise
+            | TargetId::EnvSh
+            | TargetId::Fish
+            | TargetId::Composer
+            | TargetId::Nuget => unmanaged_file
                 .then(|| format!("{path} exists and was not written by batlehub setup")),
-            TargetId::ShellRc => None,
+            // A top-level YAML key twice does not parse.
+            TargetId::Condarc => user
+                .lines()
+                .any(|l| l.starts_with("channels:"))
+                .then(|| format!("{path} already sets channels")),
+            TargetId::Gemrc => user
+                .lines()
+                .any(|l| l.starts_with(":sources:"))
+                .then(|| format!("{path} already sets :sources:")),
+            TargetId::Terraformrc => lines()
+                .any(|l| l.starts_with("provider_installation"))
+                .then(|| {
+                    format!("{path} already has a provider_installation block, and terraform takes one")
+                }),
+            // configparser refuses a section twice.
+            TargetId::Ansible => lines()
+                .any(|l| {
+                    let h = l.split(['#', ';']).next().unwrap_or("").trim();
+                    h == "[galaxy]" || h == "[galaxy_server.batlehub]"
+                })
+                .then(|| format!("{path} already has a [galaxy] or [galaxy_server.batlehub] section")),
+            // `substituters =` replaces the list `extra-substituters` adds to.
+            TargetId::Nix => lines()
+                .any(|l| is_key(l, "substituters"))
+                .then(|| format!("{path} sets substituters, which replaces what the block adds")),
+            TargetId::ShellRc
+            | TargetId::Helm
+            | TargetId::Apt
+            | TargetId::Dnf
+            | TargetId::Pacman
+            | TargetId::Apk
+            | TargetId::Devfile => None,
         };
         if in_file.is_some() {
             return Ok(in_file);
@@ -2416,6 +2838,113 @@ impl PlanCtx<'_> {
                     None
                 }
             }
+            TargetId::Condarc => var(&["CONDA_CHANNELS"]).or_else(|| {
+                let mut files = vec![
+                    env.config_dir.join("conda/.condarc"),
+                    env.config_dir.join("conda/condarc"),
+                    env.home.join(".conda/.condarc"),
+                    env.home.join(".conda/condarc"),
+                    env.home.join(".mambarc"),
+                ];
+                files.extend(
+                    ["CONDARC", "MAMBARC"]
+                        .iter()
+                        .filter_map(|k| absolute_var(&env.vars, k)),
+                );
+                first_file_with(&files, &t.path, |c| {
+                    c.lines().any(|l| l.starts_with("channels:"))
+                })
+                .map(|f| {
+                    format!(
+                        "{} also sets channels, which conda merges with {path}",
+                        f.display()
+                    )
+                })
+            }),
+            // gem reads `$XDG_CONFIG_HOME/gem/gemrc` only while ~/.gemrc does
+            // not exist, and the `$GEMRC` files over ~/.gemrc.
+            TargetId::Gemrc => {
+                let xdg = env.config_dir.join("gem/gemrc");
+                if read.current.is_none() && xdg.is_file() {
+                    Some(format!(
+                        "{} exists, and creating {path} would hide it from gem",
+                        xdg.display()
+                    ))
+                } else {
+                    let files: Vec<PathBuf> = env
+                        .vars
+                        .get("GEMRC")
+                        .map(|v| std::env::split_paths(v).collect())
+                        .unwrap_or_default();
+                    first_file_with(&files, &t.path, |c| {
+                        c.lines().any(|l| l.starts_with(":sources:"))
+                    })
+                    .map(|f| {
+                        format!(
+                            "$GEMRC names {}, whose :sources: gem reads over {path}",
+                            f.display()
+                        )
+                    })
+                }
+            }
+            TargetId::Terraformrc => {
+                var(&["TF_CLI_CONFIG_FILE", "TERRAFORM_CONFIG"]).or_else(|| {
+                    let tofu = env.home.join(".tofurc");
+                    tofu.is_file().then(|| {
+                        format!(
+                            "{} exists and OpenTofu reads it instead of {path}",
+                            tofu.display()
+                        )
+                    })
+                })
+            }
+            TargetId::Ansible => var(&[
+                "ANSIBLE_CONFIG",
+                "ANSIBLE_GALAXY_SERVER_LIST",
+                "ANSIBLE_GALAXY_SERVER",
+            ]),
+            TargetId::Nix => var(&["NIX_USER_CONF_FILES"]).or_else(|| {
+                env.vars
+                    .get("NIX_CONFIG")
+                    .filter(|c| c.lines().any(|l| is_key(l, "substituters")))
+                    .map(|_| format!("$NIX_CONFIG sets substituters, read over {path}"))
+            }),
+            // NuGet adds every `~/.nuget/config/*.config` to the user file,
+            // and on a case-sensitive file system reads a `nuget.config` it
+            // finds first: either would keep another source beside ours.
+            TargetId::Nuget => {
+                let dir = t.path.parent().unwrap_or(Path::new(""));
+                let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("../config"))
+                    .map(|d| {
+                        d.filter_map(|e| Some(e.ok()?.path()))
+                            .filter(|p| {
+                                p.extension()
+                                    .is_some_and(|e| e.eq_ignore_ascii_case("config"))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                files.sort();
+                first_file_with(&files, &t.path, |c| c.contains("<packageSources"))
+                    .map(|f| {
+                        format!(
+                            "{} adds package sources NuGet reads with {path}",
+                            f.display()
+                        )
+                    })
+                    .or_else(|| {
+                        ["nuget.config", "NuGet.config"]
+                            .iter()
+                            .map(|n| dir.join(n))
+                            .find(|f| read.current.is_none() && f.is_file())
+                            .map(|f| {
+                                format!(
+                                    "{} exists and NuGet may read it instead of {path}",
+                                    f.display()
+                                )
+                            })
+                    })
+            }
             // A registry URL of this instance is its own, whoever exported it —
             // typically a shell that sourced the env.sh of a registry since
             // renamed, which only a new shell forgets. An empty value is unset.
@@ -2426,6 +2955,7 @@ impl PlanCtx<'_> {
                             && have != want
                             && ours.get(k) != Some(have)
                             && !is_instance_url(have, self.opts.server)
+                            && !is_client_default(k, have)
                     })
                     .map(|have| format!("${k} is already set to {have}"))
             }),
@@ -2476,7 +3006,127 @@ pub(crate) fn render_body(id: TargetId, base: &str) -> String {
         // around it. No GOSUMDB: go proxies the checksum database through
         // GOPROXY on its own (`$GOPROXY/sumdb/sum.golang.org/supported`).
         TargetId::Go => format!("GOPROXY={base}"),
+        // `nodefaults` as the console writes it: no `defaults` channel to
+        // fall back to for what the instance withholds.
+        TargetId::Condarc => format!("channels:\n  - {base}\n  - nodefaults"),
+        TargetId::Gemrc => format!(":sources:\n- {base}/"),
+        // No `direct {}`: a provider the instance refuses must fail, not be
+        // fetched around it.
+        TargetId::Terraformrc => format!(
+            "provider_installation {{\n  network_mirror {{\n    url = \"{base}/\"\n  }}\n}}"
+        ),
+        // `server_list` names the servers used, in order: this one alone
+        // keeps every resolve on the instance.
+        TargetId::Ansible => format!(
+            "[galaxy]\nserver_list = batlehub\n\n[galaxy_server.batlehub]\nurl = {base}/galaxy/api/"
+        ),
+        // Sorted before cache.nixos.org (40; lower wins).
+        TargetId::Nix => format!("extra-substituters = {base}/nix?priority=30"),
+        // The rest of the object the marker's `"//"` key opens. Packagist
+        // off: a package the instance withholds must not resolve from it.
+        TargetId::Composer => format!(
+            "  \"repositories\": {{\n    \"batlehub\": {{\n      \"type\": \"composer\",\n      \
+             \"url\": \"{base}/\"\n    }},\n    \"packagist.org\": false\n  }}\n}}"
+        ),
         _ => String::new(),
+    }
+}
+
+/// The user NuGet.Config: `<clear />` removes nuget.org, else the instance
+/// would only be first in a list that still holds it. NuGet refuses a
+/// plain-HTTP source unless that source allows it.
+fn render_nuget(name: &str, base: &str) -> String {
+    let insecure = if base.starts_with("http://") {
+        " allowInsecureConnections=\"true\""
+    } else {
+        ""
+    };
+    format!(
+        "<configuration>\n\
+         \x20 <packageSources>\n\
+         \x20   <clear />\n\
+         \x20   <add key=\"{name}\" value=\"{base}/nuget/v3/index.json\" protocolVersion=\"3\"{insecure} />\n\
+         \x20 </packageSources>\n\
+         </configuration>"
+    )
+}
+
+/// A print arm's display path, why it is printed, and the snippet: the
+/// console's (`ui/src/config/registryTypes.ts`), anonymous, for `mode`.
+fn render_print(
+    id: TargetId,
+    name: &str,
+    base: &str,
+    mode: &str,
+) -> (String, &'static str, String) {
+    let publish = matches!(mode, "local" | "hybrid");
+    match id {
+        TargetId::Apt => {
+            let reg = format!("{base}/deb");
+            let list = format!("/etc/apt/sources.list.d/{name}.list");
+            let snippet = if publish {
+                format!(
+                    "curl -fsSL {reg}/key.gpg | sudo tee /usr/share/keyrings/{name}.asc >/dev/null\n\
+                     echo \"deb [signed-by=/usr/share/keyrings/{name}.asc] {reg} stable main\" \\\n  \
+                     | sudo tee {list}\n\
+                     sudo apt update"
+                )
+            } else {
+                format!(
+                    "KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg   # ubuntu: ubuntu-archive-keyring.gpg\n\
+                     echo \"deb [signed-by=$KEYRING] {reg} stable main\" \\\n  \
+                     | sudo tee {list}\n\
+                     sudo apt update"
+                )
+            };
+            (list, "/etc/apt is root's, so setup prints the source to add", snippet)
+        }
+        TargetId::Dnf => {
+            let reg = format!("{base}/rpm");
+            let file = format!("/etc/yum.repos.d/{name}.repo");
+            let gpg = if publish {
+                format!("repo_gpgcheck=1\ngpgcheck=0\ngpgkey={reg}/repodata/repomd.xml.key")
+            } else {
+                "repo_gpgcheck=0\ngpgcheck=0".to_owned()
+            };
+            let snippet = format!(
+                "sudo tee {file} >/dev/null <<'EOF'\n[{name}]\nname={name}\nbaseurl={reg}\nenabled=1\n{gpg}\nEOF"
+            );
+            (file, "/etc/yum.repos.d is root's, so setup prints the repository to add", snippet)
+        }
+        TargetId::Pacman => {
+            let sig = if publish {
+                "SigLevel = Required DatabaseOptional\n# Unsigned local repo (no repo_signing key): use instead:\n# SigLevel = Optional TrustAll"
+            } else {
+                "SigLevel = Required DatabaseOptional  # verify with the upstream's keyring"
+            };
+            (
+                "/etc/pacman.conf".to_owned(),
+                "/etc/pacman.conf is root's: add this section to it (the name must match the registry)",
+                format!("[{name}]\nServer = {base}/pacman/$arch\n{sig}"),
+            )
+        }
+        TargetId::Apk => {
+            let reg = format!("{base}/apk");
+            let snippet = if publish {
+                format!("echo {reg} >> /etc/apk/repositories")
+            } else {
+                format!("{reg}/v3.22/main\n{reg}/v3.22/community")
+            };
+            (
+                "/etc/apk/repositories".to_owned(),
+                "/etc/apk/repositories is root's: add these lines to it",
+                snippet,
+            )
+        }
+        _ => (
+            "CheCluster".to_owned(),
+            "Che's CheCluster is cluster configuration, for its admin; odo takes the preference",
+            format!(
+                "spec:\n  components:\n    devfileRegistry:\n      externalDevfileRegistries:\n        \
+                 - url: {base}/\n\nodo preference add registry batlehub {base}/"
+            ),
+        ),
     }
 }
 
@@ -2496,6 +3146,8 @@ fn render_maven(name: &str, base: &str, mirror_of: &str) -> String {
 }
 
 const RUSTUP_VARS: [&str; 2] = ["RUSTUP_DIST_SERVER", "RUSTUP_UPDATE_ROOT"];
+
+const SDKMAN_VARS: [&str; 2] = ["SDKMAN_CANDIDATES_API", "SDKMAN_BROKER_API"];
 
 /// The variables nvm, fnm, n and node-gyp read for a node mirror, in that
 /// order — the one list `setup env` and `registry suggest --client-env` share.
@@ -2520,6 +3172,15 @@ fn env_vars_for(registry_type: &str, base: &str) -> Vec<(String, String)> {
             .iter()
             .map(|k| ((*k).to_owned(), format!("{base}/nodedist")))
             .collect(),
+        // Read by `sdkman-init.sh` only when already set, so the rc block —
+        // put above the line sourcing it — must export them first.
+        "sdkman" => vec![
+            ("SDKMAN_CANDIDATES_API".to_owned(), format!("{base}/sdkman")),
+            (
+                "SDKMAN_BROKER_API".to_owned(),
+                format!("{base}/sdkman/broker"),
+            ),
+        ],
         _ => vec![],
     }
 }
@@ -4682,5 +5343,364 @@ mod tests {
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert!(write_atomic(&f, b"a=2\n").is_err());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "a=1\n");
+    }
+
+    // ── RFC 0040 §6.5 clients ──
+
+    /// One RFC 0040 client: what apply writes, a user setting it must not
+    /// fight, a user file it can share (block targets), and an override.
+    struct Rfc40 {
+        client: ClientId,
+        target: TargetId,
+        ty: &'static str,
+        writes: &'static str,
+        clash: &'static str,
+        shares: Option<&'static str>,
+        var: Option<(&'static str, &'static str)>,
+    }
+
+    const RFC40: &[Rfc40] = &[
+        Rfc40 {
+            client: ClientId::Conda,
+            target: TargetId::Condarc,
+            ty: "conda",
+            writes: "channels:\n  - https://hub.example.com/proxy/r\n  - nodefaults\n",
+            clash: "channels:\n  - defaults\n",
+            shares: Some("ssl_verify: true\n"),
+            var: Some(("CONDA_CHANNELS", "conda-forge")),
+        },
+        Rfc40 {
+            client: ClientId::Composer,
+            target: TargetId::Composer,
+            ty: "composer",
+            writes: "\"url\": \"https://hub.example.com/proxy/r/\"",
+            clash: "{}\n",
+            shares: None,
+            var: None,
+        },
+        Rfc40 {
+            client: ClientId::Gem,
+            target: TargetId::Gemrc,
+            ty: "rubygems",
+            writes: ":sources:\n- https://hub.example.com/proxy/r/\n",
+            clash: ":sources:\n- https://rubygems.org/\n",
+            shares: Some("gem: --no-document\n"),
+            var: None,
+        },
+        Rfc40 {
+            client: ClientId::Nuget,
+            target: TargetId::Nuget,
+            ty: "nuget",
+            writes: "<add key=\"r\" value=\"https://hub.example.com/proxy/r/nuget/v3/index.json\" protocolVersion=\"3\" />",
+            clash: "<configuration/>\n",
+            shares: None,
+            var: None,
+        },
+        Rfc40 {
+            client: ClientId::Terraform,
+            target: TargetId::Terraformrc,
+            ty: "terraform",
+            writes: "network_mirror {\n    url = \"https://hub.example.com/proxy/r/\"",
+            clash: "provider_installation {\n  direct {}\n}\n",
+            shares: Some("disable_checkpoint = true\n"),
+            var: Some(("TF_CLI_CONFIG_FILE", "/elsewhere/terraformrc")),
+        },
+        Rfc40 {
+            client: ClientId::Galaxy,
+            target: TargetId::Ansible,
+            ty: "galaxy",
+            writes: "[galaxy_server.batlehub]\nurl = https://hub.example.com/proxy/r/galaxy/api/\n",
+            clash: "[galaxy]\nserver_list = release_galaxy\n",
+            shares: Some("[defaults]\nforks = 10\n"),
+            var: Some(("ANSIBLE_CONFIG", "/etc/ansible/other.cfg")),
+        },
+        Rfc40 {
+            client: ClientId::Nix,
+            target: TargetId::Nix,
+            ty: "nix",
+            writes: "extra-substituters = https://hub.example.com/proxy/r/nix?priority=30\n",
+            clash: "substituters = https://cache.nixos.org\n",
+            shares: Some("experimental-features = nix-command flakes\n"),
+            var: Some(("NIX_USER_CONF_FILES", "/elsewhere/nix.conf")),
+        },
+    ];
+
+    #[test]
+    fn rfc_0040_clients_apply_settle_conflict_and_remove() {
+        for c in RFC40 {
+            let regs = vec![reg("r", c.ty, "proxy")];
+            let dir = TempDir::new().unwrap();
+            let env = env_in(dir.path(), &[c.client]);
+            let p = find(&plan(&regs, &opts(), &env).unwrap(), c.target).clone();
+            assert_eq!(p.state, State::Absent, "{:?}: {:?}", c.client, p.detail);
+            let path = p.path.clone();
+            apply_all(std::slice::from_ref(&p));
+            let written = std::fs::read_to_string(&path).unwrap();
+            assert!(written.contains(c.writes), "{:?}: {written}", c.client);
+            if c.target == TargetId::Composer {
+                serde_json::from_str::<serde_json::Value>(&written).unwrap();
+            }
+            assert_eq!(
+                find(&plan(&regs, &opts(), &env).unwrap(), c.target).state,
+                State::UpToDate,
+                "{:?}: a second apply moves nothing",
+                c.client
+            );
+            for r in removals(&env, &[c.client], &[], None).0 {
+                remove_one(&r).unwrap();
+            }
+            assert!(
+                !path.exists(),
+                "{:?}: remove deletes the file it created",
+                c.client
+            );
+
+            // A user setting the block would fight: conflict, file untouched.
+            std::fs::write(&path, c.clash).unwrap();
+            let plans = plan(&regs, &opts(), &env).unwrap();
+            let p = find(&plans, c.target);
+            assert_eq!(p.state, State::Conflict, "{:?}", c.client);
+            assert!(p.snippet.as_deref().unwrap().contains(c.writes.trim_end()));
+            apply_all(&plans);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), c.clash);
+
+            // A user file the block can share: apply then remove gives it back.
+            if let Some(shares) = c.shares {
+                std::fs::write(&path, shares).unwrap();
+                apply_all(&plan(&regs, &opts(), &env).unwrap());
+                assert!(std::fs::read_to_string(&path).unwrap().contains(c.writes));
+                for r in removals(&env, &[c.client], &[], None).0 {
+                    remove_one(&r).unwrap();
+                }
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    shares,
+                    "{:?}",
+                    c.client
+                );
+                std::fs::remove_file(&path).unwrap();
+            }
+
+            if let Some((k, v)) = c.var {
+                let mut env = env.clone();
+                env.vars.insert(k.to_owned(), v.to_owned());
+                let p = find(&plan(&regs, &opts(), &env).unwrap(), c.target).clone();
+                assert_eq!(p.state, State::Conflict, "{:?}", c.client);
+                assert!(p.detail.unwrap().contains(&format!("${k}")));
+            }
+        }
+    }
+
+    /// gem reads `$XDG_CONFIG_HOME/gem/gemrc` only while ~/.gemrc does not
+    /// exist, and the `$GEMRC` files over it.
+    #[test]
+    fn gem_conflicts_with_the_files_it_reads_instead() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Gem]);
+        let regs = vec![reg("g", "rubygems", "proxy")];
+        let xdg = dir.path().join(".config/gem/gemrc");
+        std::fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        std::fs::write(&xdg, "gem: --no-document\n").unwrap();
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Gemrc).clone();
+        assert_eq!(p.state, State::Conflict);
+        assert!(p.detail.unwrap().contains("hide it"));
+        std::fs::remove_file(&xdg).unwrap();
+
+        let extra = dir.path().join("extra.gemrc");
+        std::fs::write(&extra, ":sources:\n- https://rubygems.org/\n").unwrap();
+        let mut env = env;
+        env.vars
+            .insert("GEMRC".into(), extra.to_string_lossy().into_owned());
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Gemrc).clone();
+        assert_eq!(p.state, State::Conflict);
+        assert!(p.detail.unwrap().contains("$GEMRC"));
+    }
+
+    /// Terraform and Composer refuse plain HTTP; NuGet is told to allow it
+    /// for that source alone.
+    #[test]
+    fn plain_http_where_the_client_refuses_it() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(
+            dir.path(),
+            &[ClientId::Terraform, ClientId::Composer, ClientId::Nuget],
+        );
+        let mut o = opts();
+        o.server = "http://127.0.0.1:8181";
+        let regs = vec![
+            reg("t", "terraform", "proxy"),
+            reg("c", "composer", "proxy"),
+            reg("n", "nuget", "proxy"),
+        ];
+        let plans = plan(&regs, &o, &env).unwrap();
+        assert_eq!(find(&plans, TargetId::Terraformrc).state, State::Conflict);
+        assert_eq!(find(&plans, TargetId::Composer).state, State::Conflict);
+        let nuget = find(&plans, TargetId::Nuget).next.clone().unwrap();
+        assert!(
+            nuget.contains("allowInsecureConnections=\"true\""),
+            "{nuget}"
+        );
+    }
+
+    /// A composer config.json reformatted by `composer config -g` keeps a
+    /// marker below its first line: remove says so instead of skipping it.
+    #[test]
+    fn a_reformatted_composer_config_is_reported_by_remove() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Composer]);
+        let plans = plan(&[reg("c", "composer", "proxy")], &opts(), &env).unwrap();
+        let path = find(&plans, TargetId::Composer).path.clone();
+        apply_all(&plans);
+        let doc = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, doc.replacen("{\"//\"", "{\n    \"//\"", 1)).unwrap();
+        let (removals, warnings) = removals(&env, &[ClientId::Composer], &[], None);
+        assert!(removals.is_empty());
+        assert!(
+            warnings.iter().any(|w| w.contains("below its first line")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn helm_is_driven_never_written() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Helm]);
+        let regs = vec![reg("h", "helm", "proxy")];
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Helm).clone();
+        assert_eq!(p.state, State::Manual);
+        assert!(!p.writes() && !p.state.settled());
+        assert_eq!(
+            p.snippet.as_deref().unwrap().lines().next(),
+            Some("helm repo add --force-update batlehub https://hub.example.com/proxy/h/helm")
+        );
+
+        // Another repository named batlehub: said, and the command repoints it.
+        std::fs::create_dir_all(p.path.parent().unwrap()).unwrap();
+        let other = "apiVersion: \"\"\nrepositories:\n- name: batlehub\n  url: https://charts.example.org\n";
+        std::fs::write(&p.path, other).unwrap();
+        let q = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Helm).clone();
+        assert_eq!(q.state, State::Manual);
+        assert!(q.detail.unwrap().contains("another URL"));
+
+        // After `helm repo add`, as helm writes the file: up to date.
+        let added = "apiVersion: \"\"\nrepositories:\n- caFile: \"\"\n  name: batlehub\n  url: https://hub.example.com/proxy/h/helm\n";
+        std::fs::write(&p.path, added).unwrap();
+        let mut env = env;
+        env.vars.insert(
+            "HELM_REPOSITORY_CONFIG".into(),
+            p.path.to_string_lossy().into_owned(),
+        );
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        assert_eq!(find(&plans, TargetId::Helm).state, State::UpToDate);
+        assert!(removals(&env, &[ClientId::Helm], &[], None).0.is_empty());
+        assert_eq!(std::fs::read_to_string(&p.path).unwrap(), added);
+    }
+
+    #[test]
+    fn sdkman_goes_in_env_sh_and_its_own_defaults_are_not_overrides() {
+        let dir = TempDir::new().unwrap();
+        let mut env = env_in(dir.path(), &[ClientId::Sdkman]);
+        let regs = vec![reg("s", "sdkman", "proxy")];
+        // A shell that already ran sdkman-init.sh carries its defaults.
+        env.vars.insert(
+            "SDKMAN_CANDIDATES_API".into(),
+            "https://api.sdkman.io/2".into(),
+        );
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        let sh = find(&plans, TargetId::EnvSh);
+        assert_eq!(sh.state, State::Absent, "{:?}", sh.detail);
+        let body = sh.next.as_deref().unwrap();
+        assert!(
+            body.contains("export SDKMAN_CANDIDATES_API='https://hub.example.com/proxy/s/sdkman'")
+        );
+        assert!(body
+            .contains("export SDKMAN_BROKER_API='https://hub.example.com/proxy/s/sdkman/broker'"));
+        apply_all(&plans);
+        assert_eq!(
+            cached_env_for(&env, Some(SERVER)),
+            Cached::Usable(exports_of(body))
+        );
+
+        env.vars.insert(
+            "SDKMAN_CANDIDATES_API".into(),
+            "https://sdkman.corp.example/2".into(),
+        );
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        assert_eq!(find(&plans, TargetId::EnvSh).state, State::Conflict);
+    }
+
+    #[test]
+    fn gitlab_gets_a_mise_rule_for_its_releases() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let mut gl = reg("gl", "gitlab", "proxy");
+        gl.upstream = Some("https://gitlab.com".to_owned());
+        let p = find(&plan(&[gl], &opts(), &env).unwrap(), TargetId::Mise).clone();
+        let next = p.next.unwrap();
+        assert!(
+            next.contains(r#""regex:^https://gitlab\\.com/api/v4/projects/([^/]+)/releases(.*)" = "https://hub.example.com/proxy/gl/$1/-/releases$2""#),
+            "{next}"
+        );
+        toml::from_str::<toml::Table>(&next).unwrap();
+
+        // In front of another instance: no rule (it would take gitlab.com over).
+        let mut corp = reg("gl", "gitlab", "proxy");
+        corp.upstream = Some("https://git.corp.example".to_owned());
+        let p = find(&plan(&[corp], &opts(), &env).unwrap(), TargetId::Mise).clone();
+        assert!(!p.writes());
+    }
+
+    #[test]
+    fn root_and_cluster_kinds_are_printed_never_written() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Apt, ClientId::Dnf]);
+        let regs = vec![
+            reg("debs", "deb", "proxy"),
+            reg("mine", "deb", "local"),
+            reg("rpms", "rpm", "hybrid"),
+            reg("arch", "pacman", "proxy"),
+            reg("stacks", "devfile", "proxy"),
+        ];
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        let printed: Vec<&TargetPlan> = plans.iter().filter(|p| p.state == State::Print).collect();
+        // Both deb registries (an apt source adds, it does not replace), the
+        // rpm one, devfile whatever is installed; pacman is not installed.
+        let names: Vec<&str> = printed.iter().map(|p| p.registries[0].as_str()).collect();
+        assert_eq!(names, ["debs", "mine", "rpms", "stacks"]);
+        assert!(printed.iter().all(|p| !p.writes() && p.state.settled()));
+        let snippet = |n: &str| {
+            printed
+                .iter()
+                .find(|p| p.registries[0] == n)
+                .and_then(|p| p.snippet.clone())
+                .unwrap()
+        };
+        assert!(snippet("debs")
+            .contains("[signed-by=$KEYRING] https://hub.example.com/proxy/debs/deb stable main"));
+        assert!(snippet("mine").contains("https://hub.example.com/proxy/mine/deb/key.gpg"));
+        assert!(snippet("rpms").contains("baseurl=https://hub.example.com/proxy/rpms/rpm\n"));
+        assert!(snippet("stacks").contains("- url: https://hub.example.com/proxy/stacks/\n"));
+
+        let mut only = opts();
+        only.skip = vec![ClientId::Apt, ClientId::Devfile];
+        let plans = plan(&regs, &only, &env).unwrap();
+        assert!(plans
+            .iter()
+            .filter(|p| p.state == State::Print)
+            .all(|p| p.target == TargetId::Dnf));
+    }
+
+    #[test]
+    fn nix_says_trusted_users_is_needed() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Nix]);
+        let p = find(
+            &plan(&[reg("n", "nix", "hybrid")], &opts(), &env).unwrap(),
+            TargetId::Nix,
+        )
+        .clone();
+        let detail = p.detail.unwrap();
+        assert!(detail.contains("trusted-users"), "{detail}");
+        assert!(detail.contains("/proxy/n/nix/public-key"), "{detail}");
     }
 }

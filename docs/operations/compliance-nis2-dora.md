@@ -23,7 +23,7 @@ the Evidence column. See [Compliance](./compliance.md).
 |---------|------------------|--------|----------|
 | (b) – Incident handling | Incident playbook; audit stream and Sigma rules for detection | Documented | [Incident response](./incident-response.md), [SIEM integration](./siem.md) |
 | (c) – Business continuity, backup | Backup and restore runbooks; stateless replicas | Documented | [Disaster recovery](./disaster-recovery.md), [High availability](../guide/high-availability.md) |
-| (d) – Supply-chain security | Scanning, SOC flags, verdicts and release-age gates on every proxied artifact; an exposure report of who pulled a flagged version | ✅ Implemented | [Scan worker](./scan-worker.md), `batlehub-cli admin exposure` |
+| (d) – Supply-chain security | Scanning, SOC flags, verdicts and release-age gates on every proxied artifact; an exposure report of who pulled a flagged version | ✅ Implemented | [Scan worker](./scan-worker.md), `batlehub-cli exposure list` |
 | (e) – Vulnerability handling and disclosure | The project's private reporting, targets and advisories | Documented | `SECURITY.md`, [CRA mapping](./compliance-cra.md) |
 | (h) – Cryptography | Ed25519 signatures on publishes and on the audit seal chain | ✅ Implemented | `crates/core/src/services/signature.rs`, `[audit] seal_signing_key` |
 | (i) – Access control | Grants and verbs; every authentication event audited | ✅ Implemented | [Access control](../guide/access-control.md), [ISO 27001 mapping](./compliance-iso27001.md) |
@@ -39,8 +39,8 @@ the evidence the reports are written from.
 | Obligation | BatleHub control | Status | Evidence |
 |------------|------------------|--------|----------|
 | Becoming aware | Sigma rules over the audit stream; Prometheus alerts | ✅ Implemented | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |
-| The facts of the incident | Audit log for the window, exported | ✅ Implemented | `batlehub-cli admin export-audit-log --from <start> --to <end>` |
-| The facts were not altered | The seal chain verifies for the window, and its head matches the SIEM's copy | ✅ Implemented | `batlehub-cli admin audit verify --from <start> --to <end> --head <digest>` |
+| The facts of the incident | Audit log for the window, exported | ✅ Implemented | `batlehub-cli audit export --from <start> --to <end>` |
+| The facts were not altered | The seal chain verifies for the window, and its head matches the SIEM's copy | ✅ Implemented | `batlehub-cli audit verify --from <start> --to <end> --head <digest>` |
 | The reports themselves | 24 h / 72 h / one month | Manual process | [Incident response § NIS2 Art. 23](./incident-response.md#nis2-reporting) |
 
 ## DORA — Art. 9–12, 18, 30

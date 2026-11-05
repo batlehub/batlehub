@@ -206,6 +206,9 @@ async fn access_check_returns_proxy_url_for_npm_tarball() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=npm&name=lodash&version=4.17.21&artifact=tarball")
+        // A tarball/crate download asks `source:read`, which this fixture
+        // grants to users and not to anonymous callers.
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
@@ -220,6 +223,9 @@ async fn access_check_returns_proxy_url_for_cargo_download() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=cargo&name=serde&version=1.0.0&artifact=download")
+        // A tarball/crate download asks `source:read`, which this fixture
+        // grants to users and not to anonymous callers.
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);

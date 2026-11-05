@@ -330,7 +330,7 @@ async fn first_request_is_held_pending_then_served_after_the_worker_scans() {
     let (code, body) = status(&app, &tarball("1.1.0")).await;
     assert_eq!(code, 403, "{body}");
     assert!(body.contains("SCAN_PENDING"), "{body}");
-    assert!(body.contains("batlehub why"), "{body}");
+    assert!(body.contains("batlehub-cli why"), "{body}");
     assert_eq!(lab.queue.open_jobs().await.len(), 1, "one FirstSeen job");
     assert_eq!(
         lab.queue.open_jobs().await[0].trigger,
@@ -682,7 +682,7 @@ async fn a_hold_is_npms_error_shape_with_headers_and_a_404_for_anonymous() {
     assert_eq!(header(&resp, HEADER_REASON), Some("SCAN_PENDING"));
     assert!(header(&resp, HEADER_DETAILS)
         .unwrap()
-        .contains("batlehub why"));
+        .contains("batlehub-cli why"));
     assert!(
         header(&resp, "retry-after").is_none(),
         "a pending scan names no clock"
@@ -1255,4 +1255,82 @@ async fn a_pushed_hard_block_denies_a_judged_version_and_a_revoke_lifts_it() {
             .any(|f| f.reference.as_deref() == Some("soc:NOTE-1")),
         "{stored:?}"
     );
+}
+
+// ── RFC 0040 §6.1: the pullability answer agrees, and writes nothing ────────
+
+async fn pullability<S: TestService>(app: &S, version: &str) -> serde_json::Value {
+    let resp = call_service(
+        app,
+        admin_get(&format!(
+            "/api/v1/packages/access?registry={REG}&name=pkg&version={version}"
+        )),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    actix_web::test::read_body_json(resp).await
+}
+
+fn verdict_cause(answer: &serde_json::Value) -> serde_json::Value {
+    answer["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "verdict")
+        .cloned()
+        .unwrap_or_else(|| panic!("no verdict cause: {answer}"))
+}
+
+/// T2b: `why` on a version the gate has never seen says it waits on a scan,
+/// and queues nothing and persists nothing — the download is what does that.
+#[actix_web::test]
+async fn why_on_a_first_sight_version_waits_and_queues_nothing() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let answer = pullability(&app, "1.1.0").await;
+    assert_eq!(answer["headline"], "waiting", "{answer}");
+    let verdict = verdict_cause(&answer);
+    assert_eq!(verdict["state"], "wait");
+    assert_eq!(verdict["reason_code"], "SCAN_PENDING");
+    assert!(lab.queue.open_jobs().await.is_empty(), "why queued a scan");
+
+    // The download agrees — refused for now — and it is the one that queues.
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(body.contains("SCAN_PENDING"), "{body}");
+    assert_eq!(lab.queue.open_jobs().await.len(), 1);
+
+    // Decision 39 / T3: the refusal is in the caller's own history with its
+    // code, and without the free-text reason or the network facts.
+    let resp = call_service(&app, admin_get("/api/v1/me/downloads?outcome=denied")).await;
+    assert_eq!(resp.status(), 200);
+    let rows: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["version"] == "1.1.0")
+        .unwrap_or_else(|| panic!("the refusal is not listed: {rows}"));
+    assert_eq!(row["reason_code"], "SCAN_PENDING", "{rows}");
+    for leak in ["deny_reason", "ip_address", "user_agent"] {
+        assert!(row.get(leak).is_none(), "{leak} in {row}");
+    }
+}
+
+/// A young version, scanned clean: both say the release-age hold, with the
+/// same code, and `why` names when it lifts.
+#[actix_web::test]
+async fn why_and_the_download_name_the_same_age_hold() {
+    let (app, lab) = lab(SecurityMode::Block, HashMap::from([("1.1.0", Some(60))])).await;
+    let (code, _) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403);
+    lab.worker.run_once().await.unwrap();
+
+    let answer = pullability(&app, "1.1.0").await;
+    let verdict = verdict_cause(&answer);
+    assert_eq!(answer["headline"], "waiting", "{answer}");
+    assert_eq!(verdict["reason_code"], "MIN_AGE_NOT_MET", "{answer}");
+    assert!(answer["until"].is_string(), "a clock lifts it: {answer}");
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403);
+    assert!(body.contains("MIN_AGE_NOT_MET"), "{body}");
 }

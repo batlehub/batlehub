@@ -57,8 +57,8 @@ rclone sync /var/lib/batlehub/artifacts s3:my-backup-bucket/batlehub-artifacts \
 This is survivable with no data loss for proxy-mode registries. Cached artifacts are re-fetched from upstream on the next request.
 
 1. Create a new bucket, update `[storage] bucket` in config.
-2. Trigger a config reload: `batlehub-cli admin config reload`.
-3. Optionally pre-warm critical packages: `batlehub-cli admin cache warm <registry> --packages <name>`.
+2. Trigger a config reload: `batlehub-cli server config reload`.
+3. Optionally pre-warm critical packages: `batlehub-cli cache warm -r <registry> --packages <name>`.
 
 ### Scenario 3 — S3 bucket lost (local-mode artifacts present)
 
@@ -75,7 +75,7 @@ Without a backup, re-publish the affected artifacts using `batlehub-cli publish`
 1. Provision a new Postgres instance and restore from the latest `pg_dump`.
 2. Provision a new storage backend and restore from the artifact backup.
 3. Deploy BatleHub with the restored DB URL and storage config.
-4. Run `batlehub-cli admin cache warm` for each registry to avoid a cold-start miss storm.
+4. Run `batlehub-cli cache warm` for each registry to avoid a cold-start miss storm.
 
 ## Cross-region failover
 

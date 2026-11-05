@@ -60,7 +60,7 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 uv = "latest"
 python = "latest"
 pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
-"github:batleforc/weebo-skillsagent" = "latest"
+"github:batleforc/weebo-skillsagent" = "0.17.0"
 
 #"github:batleforc/batlehub" = { version = "latest", asset_pattern = "batlehub-cli-*" }
 

@@ -84,7 +84,7 @@ by default).
 
 On a registry with [`[registries.security]`](/guide/configuration#security)
 these facts ride the version's verdict, so a warned branch answers with
-`X-BatleHub-Verdict: warned` and `batlehub why` explains it. Without that
+`X-BatleHub-Verdict: warned` and `batlehub-cli why` explains it. Without that
 section there is no verdict to carry them: a `deny` is a plain `403` naming
 the code, and a `warn` is the headers above. That is the honest degradation,
 and it is the reason `X-BatleHub-Ref-Previous-Commit` exists.
