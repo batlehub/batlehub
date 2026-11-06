@@ -20,6 +20,9 @@ fuzz_target!(|data: &[u8]| {
     let Ok(pins) = read(format, body) else {
         return;
     };
+    // `read` decodes lossily, and each invalid byte becomes a 3-byte U+FFFD,
+    // so the bound is the decoded text, not the raw bytes.
+    let text_len = String::from_utf8_lossy(body).len();
     let mut seen = std::collections::HashSet::new();
     for pin in &pins {
         assert_eq!(pin.kind, format.kind());
@@ -27,6 +30,6 @@ fuzz_target!(|data: &[u8]| {
         assert!(seen.insert((pin.name.as_str(), pin.version.as_str())), "a pin twice");
         // `.nvmrc` adds the `v` the dist tree spells; `.terraform.lock.hcl`
         // the `providers/` prefix. Nothing else is invented.
-        assert!(pin.version.len() <= body.len() + 1);
+        assert!(pin.version.len() <= text_len + 1);
     }
 });
