@@ -568,21 +568,21 @@ jobs:
       # image through any registry that understands referrers — no release page,
       # no GitHub API, and nothing to keep in step by hand.
       - name: Generate image SBOM (Syft)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
           output-file: sbom-image.cdx.json
           artifact-name: sbom-image.cdx.json
       - name: Generate worker image SBOM (Syft)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker@${{ needs.image-worker.outputs.worker }}
           format: cyclonedx-json
           output-file: sbom-image-worker.cdx.json
           artifact-name: sbom-image-worker.cdx.json
       - name: Generate GuardDog worker image SBOM (Syft)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker-guarddog@${{ needs.image-worker.outputs.guarddog }}
           format: cyclonedx-json
