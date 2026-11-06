@@ -373,7 +373,7 @@ the rendered TOML under a `toml` key.
 batlehub-cli package list   [-r <r>] [--search <q>] [--blocked] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
 batlehub-cli package show     <registry>/<name>[@<version>]
-batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
+batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream] [--url]
 ```
 
 ### `package list`
@@ -487,6 +487,23 @@ and `truncated` rather than parsing the notes:
 
 ```bash
 batlehub-cli --json package readme internal/mylib@1.4.2 | jq -r .source_text
+```
+
+To read it rendered in the terminal, pipe it to a markdown viewer such as
+[glow](https://github.com/charmbracelet/glow); the notes stay on stderr, so the
+viewer gets the document alone:
+
+```bash
+batlehub-cli package readme internal/mylib@1.4.2 | glow -
+```
+
+`--url` prints the console page that renders it — images, relative links and
+all — and fetches nothing, so it composes with an opener:
+
+```
+$ batlehub-cli package readme npm-local/@scope/pkg@1.0.0 --url
+https://batlehub.example.com/packages/npm-local/%40scope%2Fpkg?version=1.0.0
+$ xdg-open "$(batlehub-cli package readme internal/mylib --url)"
 ```
 
 Which registries carry a README at all, and where each one's comes from, is in
