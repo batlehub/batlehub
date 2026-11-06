@@ -191,7 +191,7 @@ jobs:
       # way.
       - name: Scan the lockfiles
         id: scan-lockfiles
-        uses: mlab-sh/vuln-scan-action@f0ce1a13b82ff83273678db36af3a2d459f74a34 # v1.0.0
+        uses: mlab-sh/vuln-scan-action@c5b7f77c1805ee23478b651e1ce8df835f516c38 # v1.1.0
         env:
           GITHUB_STEP_SUMMARY: ${{ github.workspace }}/report-lockfiles.html
         with:
@@ -214,7 +214,7 @@ jobs:
         # quota for the privilege. An empty output means the step before failed,
         # and the comment says so.
         if: steps.sbom.outputs.files != ''
-        uses: mlab-sh/vuln-scan-action@f0ce1a13b82ff83273678db36af3a2d459f74a34 # v1.0.0
+        uses: mlab-sh/vuln-scan-action@c5b7f77c1805ee23478b651e1ce8df835f516c38 # v1.1.0
         env:
           GITHUB_STEP_SUMMARY: ${{ github.workspace }}/report-sboms.html
         with:
