@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **actix stack**: `actix-http` 3.20.3, `actix-web` 4.18.2 and `actix-files`
+  0.7.4 fix RUSTSEC-2026-0443, -0446, -0447, -0448 and -0455 (request
+  smuggling through chunked trailers, unbounded request decompression,
+  hidden-file disclosure through Windows short names).
+- **Worker images**: Trivy moves to v0.76.2, which carries `golang.org/x/net`
+  v0.62.0 (CVE-2026-78661, HTML parser denial of service) and go-jose 4.1.6
+  (CVE-2026-116587, whose `.trivyignore.yaml` entry is gone).
+
 ## [1.9.0] - 2026-11-05
 
 ### Changed

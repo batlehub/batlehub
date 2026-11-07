@@ -3,8 +3,8 @@
   "@id": "https://batleforc.git.batleforc.fr/batlehub/vex/batlehub",
   "author": "BatleHub maintainers",
   "role": "Project maintainers",
-  "timestamp": "2026-10-30T00:00:00Z",
-  "version": 4,
+  "timestamp": "2026-11-07T00:00:00Z",
+  "version": 5,
   "tooling": "hand-maintained; validated and rendered by .github/scripts/vex.py",
   "statements": [
     {
@@ -136,7 +136,7 @@
         "name": "CVE-2026-116587",
         "description": "go-jose: denial of service via crafted RSA parameters in JWKs"
       },
-      "timestamp": "2026-10-30T00:00:00Z",
+      "timestamp": "2026-11-07T00:00:00Z",
       "products": [
         {
           "@id": "pkg:oci/batlehub-worker",
@@ -151,11 +151,8 @@
           ]
         }
       ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The vulnerable go-jose is an indirect dependency of the upstream Trivy release binary the worker image carries (/usr/local/bin/trivy, pinned by TRIVY_VERSION in Containerfile.worker), not of any BatleHub code. Trivy reaches JWK parsing only through its sigstore/Rekor attestation paths (`--sbom-sources rekor`, attestation verification), which are opt-in; the worker runs it as `trivy ... --server <endpoint>` (crates/adapters/src/scanners/trivy.rs) and never passes those flags, so no JWK from an untrusted source is parsed.",
-      "action_statement": "Bump TRIVY_VERSION to the first Trivy release whose go.mod carries go-jose/v4 >= 4.1.6 (Trivy main already does; v0.76.1 does not), and delete this statement together with its .trivyignore.yaml entry.",
-      "action_statement_timestamp": "2026-10-30T00:00:00Z"
+      "status": "fixed",
+      "status_notes": "Fixed after 1.9.0: Trivy v0.76.2 (TRIVY_VERSION in Containerfile.worker) carries go-jose/v4 4.1.6. Until then it was not_affected: the worker runs Trivy as `trivy ... --server <endpoint>` and never takes the opt-in sigstore/Rekor paths that parse JWKs."
     }
   ]
 }
