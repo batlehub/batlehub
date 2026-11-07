@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: b63b4b86c2ceaf61
+sourceHash: 90d5ebd1eb8ebbd9
 ---
 
 # batlehub-cli
@@ -391,7 +391,7 @@ suggestions structurées, plus le TOML rendu sous une clé `toml`.
 batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
 batlehub-cli package show     <registry>/<name>[@<version>]
-batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
+batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream] [--url]
 ```
 
 ### `package list`
@@ -511,6 +511,23 @@ un hôte sans route vers l'extérieur. Voir
 
 ```bash
 batlehub-cli --json package readme internal/mylib@1.4.2 | jq -r .source_text
+```
+
+Pour le lire rendu dans le terminal, passez-le à un lecteur markdown comme
+[glow](https://github.com/charmbracelet/glow) ; les notes restent sur stderr, le
+lecteur ne reçoit donc que le document :
+
+```bash
+batlehub-cli package readme internal/mylib@1.4.2 | glow -
+```
+
+`--url` imprime la page de la console qui en fait le rendu — images, liens
+relatifs et le reste — sans rien télécharger, ce qui le combine avec un ouvreur :
+
+```
+$ batlehub-cli package readme npm-local/@scope/pkg@1.0.0 --url
+https://batlehub.example.com/packages/npm-local/%40scope%2Fpkg?version=1.0.0
+$ xdg-open "$(batlehub-cli package readme internal/mylib --url)"
 ```
 
 Quels registres portent un README, et d'où vient celui de chacun, est dans la

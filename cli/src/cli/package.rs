@@ -73,6 +73,10 @@ pub enum PackageCommand {
         /// asks for the local answer.
         #[arg(long)]
         no_upstream: bool,
+        /// Print the console page that renders it — images and all — and fetch
+        /// nothing.
+        #[arg(long, conflicts_with = "no_upstream")]
+        url: bool,
     },
     /// Yank versions: kept, but no longer resolved (destructive: asks first)
     Yank {
@@ -201,8 +205,18 @@ async fn consult(
         PackageCommand::Readme {
             coordinate,
             no_upstream,
+            url,
         } => {
             let c = Coordinate::resolve(client, &coordinate, default_registry).await?;
+            if url {
+                let url = console_url(&client.base_url, &c);
+                if json {
+                    crate::render::data(&serde_json::json!({ "url": url }))?;
+                } else {
+                    println!("{url}");
+                }
+                return Ok(());
+            }
             let (registry, name, version) = (c.registry, c.name, c.version);
             let resp = client
                 .package_readme(
@@ -394,6 +408,21 @@ fn print_version_rows(rows: &[serde_json::Value]) {
     println!("{table}");
 }
 
+/// The console's package page, which renders the README this command prints
+/// as source. The console is served on the API's own origin (`spa.rs`).
+fn console_url(base_url: &str, c: &Coordinate) -> String {
+    use crate::api::auth::percent_encode;
+    let mut url = format!(
+        "{base_url}/packages/{}/{}",
+        percent_encode(&c.registry),
+        percent_encode(&c.name)
+    );
+    if let Some(v) = &c.version {
+        url.push_str(&format!("?version={}", percent_encode(v)));
+    }
+    url
+}
+
 /// The README, with everything that qualifies it said *before* the text.
 ///
 /// On stderr rather than stdout, so `batlehub package readme x/y > README.md`
@@ -432,6 +461,23 @@ fn print_readme(resp: &crate::api::package::ReadmeResponse) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn console_url_encodes_a_scoped_name_and_the_version() {
+        let c = |name: &str, version: Option<&str>| Coordinate {
+            registry: "npm-local".into(),
+            name: name.into(),
+            version: version.map(str::to_string),
+        };
+        assert_eq!(
+            console_url("https://hub.example", &c("@scope/pkg", Some("1.0.0+b"))),
+            "https://hub.example/packages/npm-local/%40scope%2Fpkg?version=1.0.0%2Bb"
+        );
+        assert_eq!(
+            console_url("https://hub.example", &c("lodash", None)),
+            "https://hub.example/packages/npm-local/lodash"
+        );
+    }
 
     #[test]
     fn show_prints_the_servers_state_and_dashes_for_the_unknown() {

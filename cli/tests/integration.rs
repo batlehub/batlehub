@@ -3418,6 +3418,50 @@ fn package_readme_puts_the_fallback_note_on_stderr_and_the_text_on_stdout() {
     assert!(stderr.contains("2.0.0-rc1"), "{stderr}");
 }
 
+/// `--url` prints the console page that renders it, and fetches nothing: the
+/// package need not exist for the address to be printed.
+#[test]
+fn package_readme_url_prints_the_console_page() {
+    let srv = TestServer::start();
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "package",
+            "readme",
+            &format!("{REGISTRY}/@scope/pkg@1.0.0"),
+            "--url",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "package readme --url should succeed: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        format!(
+            "{}/packages/{REGISTRY}/%40scope%2Fpkg?version=1.0.0",
+            srv.base_url()
+        )
+    );
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "package",
+            "readme",
+            &format!("{REGISTRY}/mylib"),
+            "--url",
+            "--json",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "package readme --url --json should succeed: {stderr}");
+    let body: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(
+        body["url"],
+        format!("{}/packages/{REGISTRY}/mylib", srv.base_url())
+    );
+}
+
 /// An unknown coordinate exits non-zero with something a person can act on.
 #[test]
 fn package_readme_for_an_unknown_package_fails_readably() {
