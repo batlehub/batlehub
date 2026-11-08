@@ -61,6 +61,8 @@ ui/eslint-results.sarif
 # Generated SBOMs (task sbom:rust / task security)
 /sbom-rust.cdx.json
 *.cdx.json
+# A recorded syft SBOM the gate-script tests replay is a fixture, not output.
+!.github/scripts/tests/fixtures/**/*.cdx.json
 .env
 
 # Local working notes (release trackers, scratch checklists). Kept out of the
