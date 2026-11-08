@@ -172,7 +172,7 @@ For **local/hybrid mode**, additionally implement `get_<name>_versions` (and rel
 
 Consequence: packages published via the local-registry HTTP endpoint do **not** appear in `GET /api/v1/packages` (which queries `AdminService`). Use `TestServer::seed_package()` to inject entries directly into `InMemoryPackageRepository` when testing commands like `package list`. To verify yank/unyank/delete state, query the registry-specific endpoints (e.g. the NuGet flat-index at `/proxy/{reg}/nuget/v3/flat/{id}/index.json`) rather than `package list`.
 
-Coverage is enforced at 80% lines. Excluded paths (DB adapters, some registry clients, auth/OIDC handlers, server main) are listed in the `COVERAGE_EXCLUDE` variable in `.tasks/coverage.yaml`.
+Coverage is checked at 80% lines by `task coverage-check`, locally only: no CI job enforces it yet (RFC 0041 phase 3 adds the floor to `test.yaml`'s `coverage-report`). Excluded paths (DB adapters, some registry clients, auth/OIDC handlers, server main) are listed in the `COVERAGE_EXCLUDE` variable in `.tasks/coverage.yaml`.
 
 ### Storage keys
 

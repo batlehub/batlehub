@@ -378,6 +378,10 @@ export const sidebar = {
           text: "0034 — full-ICU node",
           link: "/rfc/0034-full-icu-node",
         },
+        {
+          text: "0041 — Test depth and gate scale",
+          link: "/rfc/0041-test-depth-and-security-gate-scale",
+        },
       ],
     },
     {

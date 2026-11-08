@@ -1,0 +1,4573 @@
+{
+ "purl": "pkg:golang/golang.org/x/net@0.22.0",
+ "recorded": "2026-11-07",
+ "answer": {
+  "vulns": [
+   {
+    "id": "GHSA-4v7x-pqxf-cx7m",
+    "summary": "net/http, x/net/http2: close connections when receiving too many headers",
+    "details": "An attacker may cause an HTTP/2 endpoint to read arbitrary amounts of header data by sending an excessive number of CONTINUATION frames. Maintaining HPACK state requires parsing and processing all HEADERS and CONTINUATION frames on a connection. When a request's headers exceed MaxHeaderBytes, no memory is allocated to store the excess headers, but they are still parsed. This permits an attacker to cause an HTTP/2 endpoint to read arbitrary amounts of header data, all associated with a request which is going to be rejected. These headers can include Huffman-encoded data which is significantly more expensive for the receiver to decode than for an attacker to send. The fix sets a limit on the amount of excess header frames we will process before closing a connection.",
+    "aliases": [
+     "BIT-golang-2023-45288",
+     "CVE-2023-45288",
+     "GO-2024-2687"
+    ],
+    "modified": "2026-09-10T03:50:11.106451165Z",
+    "published": "2024-04-04T21:30:32Z",
+    "database_specific": {
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2024-04-04T23:02:57Z",
+     "nvd_published_at": "2024-04-04T21:15:16Z",
+     "cwe_ids": [
+      "CWE-400"
+     ]
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-45288"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/576155"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/65051"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/YgW0sx8mN3M"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/QRYFHIQ6XRKRYBI2F5UESH67BJBQXUPT"
+     },
+     {
+      "type": "WEB",
+      "url": "https://nowotarski.info/http2-continuation-flood-technical-details"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2024-2687"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20240419-0009"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.kb.cert.org/vuls/id/421644"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2024/04/03/16"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2024/04/05/4"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "net/http",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/net/http"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.21.9"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/04/GHSA-4v7x-pqxf-cx7m/GHSA-4v7x-pqxf-cx7m.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net/http2",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net/http2"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.23.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/04/GHSA-4v7x-pqxf-cx7m/GHSA-4v7x-pqxf-cx7m.json"
+      }
+     },
+     {
+      "package": {
+       "name": "net/http",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/net/http"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.22.0-0"
+         },
+         {
+          "fixed": "1.22.2"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/04/GHSA-4v7x-pqxf-cx7m/GHSA-4v7x-pqxf-cx7m.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.23.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/04/GHSA-4v7x-pqxf-cx7m/GHSA-4v7x-pqxf-cx7m.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-5cv4-jp36-h3mw",
+    "summary": "Go Net HTML parser is vulnerable to denial of service",
+    "details": "In Go Net (`golang.org/x/net`) before verion 0.55.0, parsing arbitrary HTML can consume excessive CPU time, possibly leading to denial of service.",
+    "aliases": [
+     "CVE-2026-25680",
+     "GO-2026-5028"
+    ],
+    "modified": "2026-09-10T03:50:45.494180024Z",
+    "published": "2026-05-26T13:30:17Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-07-01T17:58:07Z",
+     "nvd_published_at": "2026-05-22T16:16:19Z",
+     "cwe_ids": [
+      "CWE-400"
+     ],
+     "severity": "MODERATE"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-25680"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781702"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79573"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.googlesource.com/net/+/08be507abce89191d78cd49da60f4501fc910472"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.googlesource.com/net/+/refs/tags/v0.55.0"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5028"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "cs.opensource.google/go/x/net"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/05/GHSA-5cv4-jp36-h3mw/GHSA-5cv4-jp36-h3mw.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-qxp5-gwg8-xv66",
+    "summary": "HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net",
+    "details": "Matching of hosts against proxy patterns can improperly treat an IPv6 zone ID as a hostname component. For example, when the NO_PROXY environment variable is set to \"*.example.com\", a request to \"[::1%25.example.com]:80` will incorrectly match and not be proxied.",
+    "aliases": [
+     "CVE-2025-22870",
+     "GO-2025-3503"
+    ],
+    "modified": "2026-09-10T03:50:23.280114085Z",
+    "published": "2025-03-12T22:06:40Z",
+    "database_specific": {
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2025-03-12T22:06:40Z",
+     "nvd_published_at": "2025-03-12T19:15:38Z",
+     "cwe_ids": [
+      "CWE-115",
+      "CWE-20"
+     ]
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-22870"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://go-review.googlesource.com/q/project:net"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/654697"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/71984"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/4t3lzH3I0eI/m/b42ImqrBAQAJ"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2025-3503"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20250509-0007"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2025/03/07/2"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.36.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/03/GHSA-qxp5-gwg8-xv66/GHSA-qxp5-gwg8-xv66.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-vvgc-356p-c3xw",
+    "summary": "golang.org/x/net vulnerable to Cross-site Scripting",
+    "details": "The tokenizer incorrectly interprets tags with unquoted attribute values that end with a solidus character (/) as self-closing. When directly using Tokenizer, this can result in such tags incorrectly being marked as self-closing, and when using the Parse functions, this can result in content following such tags as being placed in the wrong scope during DOM construction, but only when tags are in foreign content (e.g. <math>, <svg>, etc contexts).",
+    "aliases": [
+     "CVE-2025-22872",
+     "GO-2025-3595"
+    ],
+    "modified": "2026-09-10T03:50:24.031676301Z",
+    "published": "2025-04-16T19:22:51Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2025-04-16T19:22:51Z",
+     "nvd_published_at": "2025-04-16T18:16:04Z",
+     "cwe_ids": [
+      "CWE-79"
+     ],
+     "severity": "MODERATE"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-22872"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/662715"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/73070"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ezSKR9vqbqA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2025-3595"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20250516-0007"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.38.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/04/GHSA-vvgc-356p-c3xw/GHSA-vvgc-356p-c3xw.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V4",
+      "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N"
+     }
+    ]
+   },
+   {
+    "id": "GO-2024-2687",
+    "summary": "HTTP/2 CONTINUATION flood in net/http",
+    "details": "An attacker may cause an HTTP/2 endpoint to read arbitrary amounts of header data by sending an excessive number of CONTINUATION frames.\n\nMaintaining HPACK state requires parsing and processing all HEADERS and CONTINUATION frames on a connection. When a request's headers exceed MaxHeaderBytes, no memory is allocated to store the excess headers, but they are still parsed.\n\nThis permits an attacker to cause an HTTP/2 endpoint to read arbitrary amounts of header data, all associated with a request which is going to be rejected. These headers can include Huffman-encoded data which is significantly more expensive for the receiver to decode than for an attacker to send.\n\nThe fix sets a limit on the amount of excess header frames we will process before closing a connection.",
+    "aliases": [
+     "BIT-golang-2023-45288",
+     "CVE-2023-45288",
+     "GHSA-4v7x-pqxf-cx7m"
+    ],
+    "modified": "2026-02-04T04:09:31.762399Z",
+    "published": "2024-04-03T21:12:01Z",
+    "related": [
+     "CGA-cp2m-4m66-fgvg",
+     "RHEA-2024:4022",
+     "RHSA-2024:1892",
+     "RHSA-2024:1897",
+     "RHSA-2024:1899",
+     "RHSA-2024:1962",
+     "RHSA-2024:1963",
+     "RHSA-2024:2049",
+     "RHSA-2024:2079",
+     "RHSA-2024:2562",
+     "RHSA-2024:2625",
+     "RHSA-2024:2667",
+     "RHSA-2024:2671",
+     "RHSA-2024:2672",
+     "RHSA-2024:2699",
+     "RHSA-2024:2724",
+     "RHSA-2024:2729",
+     "RHSA-2024:2892",
+     "RHSA-2024:2935",
+     "RHSA-2024:2936",
+     "RHSA-2024:3259",
+     "RHSA-2024:3346",
+     "RHSA-2024:3352",
+     "RHSA-2024:3467",
+     "RHSA-2024:3781",
+     "RHSA-2024:4023",
+     "RHSA-2024:4125",
+     "RHSA-2024:4146",
+     "RHSA-2024:4543",
+     "RHSA-2024:4545",
+     "RHSA-2024:4546",
+     "RHSA-2024:4933",
+     "RHSA-2024:4934"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2024-2687"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/65051"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/576155"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/YgW0sx8mN3M"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.21.9"
+         },
+         {
+          "introduced": "1.22.0-0"
+         },
+         {
+          "fixed": "1.22.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http",
+         "symbols": [
+          "CanonicalHeaderKey",
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "Cookie.String",
+          "Cookie.Valid",
+          "Dir.Open",
+          "Error",
+          "Get",
+          "HandlerFunc.ServeHTTP",
+          "Head",
+          "Header.Add",
+          "Header.Del",
+          "Header.Get",
+          "Header.Set",
+          "Header.Values",
+          "Header.Write",
+          "Header.WriteSubset",
+          "ListenAndServe",
+          "ListenAndServeTLS",
+          "NewRequest",
+          "NewRequestWithContext",
+          "NotFound",
+          "ParseTime",
+          "Post",
+          "PostForm",
+          "ProxyFromEnvironment",
+          "ReadRequest",
+          "ReadResponse",
+          "Redirect",
+          "Request.AddCookie",
+          "Request.BasicAuth",
+          "Request.FormFile",
+          "Request.FormValue",
+          "Request.MultipartReader",
+          "Request.ParseForm",
+          "Request.ParseMultipartForm",
+          "Request.PostFormValue",
+          "Request.Referer",
+          "Request.SetBasicAuth",
+          "Request.UserAgent",
+          "Request.Write",
+          "Request.WriteProxy",
+          "Response.Cookies",
+          "Response.Location",
+          "Response.Write",
+          "ResponseController.EnableFullDuplex",
+          "ResponseController.Flush",
+          "ResponseController.Hijack",
+          "ResponseController.SetReadDeadline",
+          "ResponseController.SetWriteDeadline",
+          "Serve",
+          "ServeContent",
+          "ServeFile",
+          "ServeMux.ServeHTTP",
+          "ServeTLS",
+          "Server.Close",
+          "Server.ListenAndServe",
+          "Server.ListenAndServeTLS",
+          "Server.Serve",
+          "Server.ServeTLS",
+          "Server.SetKeepAlivesEnabled",
+          "Server.Shutdown",
+          "SetCookie",
+          "Transport.CancelRequest",
+          "Transport.Clone",
+          "Transport.CloseIdleConnections",
+          "Transport.RoundTrip",
+          "body.Close",
+          "body.Read",
+          "bodyEOFSignal.Close",
+          "bodyEOFSignal.Read",
+          "bodyLocked.Read",
+          "bufioFlushWriter.Write",
+          "cancelTimerBody.Close",
+          "cancelTimerBody.Read",
+          "checkConnErrorWriter.Write",
+          "chunkWriter.Write",
+          "connReader.Read",
+          "connectMethodKey.String",
+          "expectContinueReader.Close",
+          "expectContinueReader.Read",
+          "extraHeader.Write",
+          "fileHandler.ServeHTTP",
+          "fileTransport.RoundTrip",
+          "globalOptionsHandler.ServeHTTP",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "http2ClientConn.Close",
+          "http2ClientConn.Ping",
+          "http2ClientConn.RoundTrip",
+          "http2ClientConn.Shutdown",
+          "http2ConnectionError.Error",
+          "http2ErrCode.String",
+          "http2FrameHeader.String",
+          "http2FrameType.String",
+          "http2FrameWriteRequest.String",
+          "http2Framer.ReadFrame",
+          "http2Framer.WriteContinuation",
+          "http2Framer.WriteData",
+          "http2Framer.WriteDataPadded",
+          "http2Framer.WriteGoAway",
+          "http2Framer.WriteHeaders",
+          "http2Framer.WritePing",
+          "http2Framer.WritePriority",
+          "http2Framer.WritePushPromise",
+          "http2Framer.WriteRSTStream",
+          "http2Framer.WriteRawFrame",
+          "http2Framer.WriteSettings",
+          "http2Framer.WriteSettingsAck",
+          "http2Framer.WriteWindowUpdate",
+          "http2Framer.readMetaFrame",
+          "http2GoAwayError.Error",
+          "http2Server.ServeConn",
+          "http2Setting.String",
+          "http2SettingID.String",
+          "http2SettingsFrame.ForeachSetting",
+          "http2StreamError.Error",
+          "http2Transport.CloseIdleConnections",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2bufferedWriter.Flush",
+          "http2bufferedWriter.Write",
+          "http2chunkWriter.Write",
+          "http2clientConnPool.GetClientConn",
+          "http2connError.Error",
+          "http2dataBuffer.Read",
+          "http2duplicatePseudoHeaderError.Error",
+          "http2gzipReader.Close",
+          "http2gzipReader.Read",
+          "http2headerFieldNameError.Error",
+          "http2headerFieldValueError.Error",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2pipe.Read",
+          "http2priorityWriteScheduler.CloseStream",
+          "http2priorityWriteScheduler.OpenStream",
+          "http2pseudoHeaderError.Error",
+          "http2requestBody.Close",
+          "http2requestBody.Read",
+          "http2responseWriter.Flush",
+          "http2responseWriter.FlushError",
+          "http2responseWriter.Push",
+          "http2responseWriter.SetReadDeadline",
+          "http2responseWriter.SetWriteDeadline",
+          "http2responseWriter.Write",
+          "http2responseWriter.WriteHeader",
+          "http2responseWriter.WriteString",
+          "http2roundRobinWriteScheduler.OpenStream",
+          "http2serverConn.CloseConn",
+          "http2serverConn.Flush",
+          "http2stickyErrWriter.Write",
+          "http2transportResponseBody.Close",
+          "http2transportResponseBody.Read",
+          "http2writeData.String",
+          "initALPNRequest.ServeHTTP",
+          "loggingConn.Close",
+          "loggingConn.Read",
+          "loggingConn.Write",
+          "maxBytesReader.Close",
+          "maxBytesReader.Read",
+          "onceCloseListener.Close",
+          "persistConn.Read",
+          "persistConnWriter.ReadFrom",
+          "persistConnWriter.Write",
+          "populateResponse.Write",
+          "populateResponse.WriteHeader",
+          "readTrackingBody.Close",
+          "readTrackingBody.Read",
+          "readWriteCloserBody.Read",
+          "redirectHandler.ServeHTTP",
+          "response.Flush",
+          "response.FlushError",
+          "response.Hijack",
+          "response.ReadFrom",
+          "response.Write",
+          "response.WriteHeader",
+          "response.WriteString",
+          "serverHandler.ServeHTTP",
+          "socksDialer.DialWithConn",
+          "socksUsernamePassword.Authenticate",
+          "stringWriter.WriteString",
+          "timeoutHandler.ServeHTTP",
+          "timeoutWriter.Write",
+          "timeoutWriter.WriteHeader",
+          "transportReadFromServerError.Error"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2024-2687.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.23.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ConfigureServer",
+          "ConfigureTransport",
+          "ConfigureTransports",
+          "ConnectionError.Error",
+          "ErrCode.String",
+          "FrameHeader.String",
+          "FrameType.String",
+          "FrameWriteRequest.String",
+          "Framer.ReadFrame",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "Framer.readMetaFrame",
+          "GoAwayError.Error",
+          "ReadFrameHeader",
+          "Server.ServeConn",
+          "Setting.String",
+          "SettingID.String",
+          "SettingsFrame.ForeachSetting",
+          "StreamError.Error",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "connError.Error",
+          "dataBuffer.Read",
+          "duplicatePseudoHeaderError.Error",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "headerFieldNameError.Error",
+          "headerFieldValueError.Error",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "pipe.Read",
+          "priorityWriteScheduler.CloseStream",
+          "priorityWriteScheduler.OpenStream",
+          "pseudoHeaderError.Error",
+          "requestBody.Close",
+          "requestBody.Read",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.SetReadDeadline",
+          "responseWriter.SetWriteDeadline",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.OpenStream",
+          "serverConn.CloseConn",
+          "serverConn.Flush",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read",
+          "writeData.String"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2024-2687.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Bartek Nowotarski (https://nowotarski.info/)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2024-3333",
+    "summary": "Non-linear parsing of case-insensitive content in golang.org/x/net/html",
+    "details": "An attacker can craft an input to the Parse functions that would be processed non-linearly with respect to its length, resulting in extremely slow parsing. This could cause a denial of service.",
+    "aliases": [
+     "CVE-2024-45338",
+     "GHSA-w32m-9786-jp63"
+    ],
+    "modified": "2026-03-24T23:55:17.997380Z",
+    "published": "2024-12-18T20:22:06Z",
+    "related": [
+     "CGA-jv42-72qq-9w5c"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2024-3333"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/637536"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/70906"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/wSCRmFnNmPA/m/Lvcd0mRMAwAJ"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.33.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "htmlIntegrationPoint",
+          "inBodyIM",
+          "inTableIM",
+          "parseDoctype"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2024-3333.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Guido Vranken"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-3503",
+    "summary": "HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net",
+    "details": "Matching of hosts against proxy patterns can improperly treat an IPv6 zone ID as a hostname component. For example, when the NO_PROXY environment variable is set to \"*.example.com\", a request to \"[::1%25.example.com]:80` will incorrectly match and not be proxied.",
+    "aliases": [
+     "CVE-2025-22870",
+     "GHSA-qxp5-gwg8-xv66"
+    ],
+    "modified": "2026-04-16T22:45:11.580296Z",
+    "published": "2025-03-12T18:17:07Z",
+    "related": [
+     "CGA-cfr8-97rg-xjpc"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2025-3503"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/654697"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/71984"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/4t3lzH3I0eI/m/b42ImqrBAQAJ"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.23.7"
+         },
+         {
+          "introduced": "1.24.0-0"
+         },
+         {
+          "fixed": "1.24.1"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http",
+         "symbols": [
+          "ProxyFromEnvironment",
+          "envProxyFunc"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-3503.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.36.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http/httpproxy",
+         "symbols": [
+          "config.useProxy",
+          "domainMatch.match"
+         ]
+        },
+        {
+         "path": "golang.org/x/net/proxy",
+         "symbols": [
+          "Dial",
+          "FromEnvironment",
+          "FromEnvironmentUsing",
+          "PerHost.AddFromString",
+          "PerHost.Dial",
+          "PerHost.DialContext",
+          "PerHost.dialerForRequest"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-3503.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Juho Fors\u00e9n of Mattermost"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-3595",
+    "summary": "Incorrect Neutralization of Input During Web Page Generation in x/net in golang.org/x/net",
+    "details": "The tokenizer incorrectly interprets tags with unquoted attribute values that end with a solidus character (/) as self-closing. When directly using Tokenizer, this can result in such tags incorrectly being marked as self-closing, and when using the Parse functions, this can result in content following such tags as being placed in the wrong scope during DOM construction, but only when tags are in foreign content (e.g. <math>, <svg>, etc contexts).",
+    "aliases": [
+     "CVE-2025-22872",
+     "GHSA-vvgc-356p-c3xw"
+    ],
+    "modified": "2026-02-05T02:43:52.511643Z",
+    "published": "2025-04-16T16:54:55Z",
+    "related": [
+     "CGA-662r-g5jm-fgx2"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2025-3595"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/662715"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/73070"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ezSKR9vqbqA"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.38.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "Tokenizer.Next",
+          "Tokenizer.readStartTag"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-3595.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Sean Ng (https://ensy.zip)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-4440",
+    "summary": "Quadratic parsing complexity in golang.org/x/net/html",
+    "details": "The html.Parse function in golang.org/x/net/html has quadratic parsing complexity when processing certain inputs, which can lead to denial of service (DoS) if an attacker provides specially crafted HTML content.",
+    "aliases": [
+     "CVE-2025-47911",
+     "GHSA-w4gw-w5jq-g9jh"
+    ],
+    "modified": "2026-05-15T10:59:23.883331519Z",
+    "published": "2026-02-05T17:23:14Z",
+    "related": [
+     "CGA-mhf2-24x8-jgh8",
+     "RHSA-2026:7291",
+     "RHSA-2026:7385"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-4440"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/709876"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://github.com/golang/vulndb/issues/4440"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/jnQcOYpiR2c"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-4440.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Guido Vranken"
+     },
+     {
+      "name": "Jakub Ciolek"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-4441",
+    "summary": "Infinite parsing loop in golang.org/x/net",
+    "details": "The html.Parse function in golang.org/x/net/html has an infinite parsing loop when processing certain inputs, which can lead to denial of service (DoS) if an attacker provides specially crafted HTML content.",
+    "aliases": [
+     "CVE-2025-58190"
+    ],
+    "modified": "2026-05-15T10:59:23.510056268Z",
+    "published": "2026-02-05T17:23:17Z",
+    "related": [
+     "CGA-676m-cmwh-7rgc",
+     "RHSA-2026:7291",
+     "RHSA-2026:7385"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-4441"
+    },
+    "references": [
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/jnQcOYpiR2c"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://github.com/golang/vulndb/issues/4441"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/709875"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "inRowIM"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-4441.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Guido Vranken"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-4918",
+    "summary": "Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in net/http/internal/http2 in golang.org/x/net",
+    "details": "When processing HTTP/2 SETTINGS frames, transport will enter an infinite loop of writing CONTINUATION frames if it receives a SETTINGS_MAX_FRAME_SIZE with a value of 0.",
+    "aliases": [
+     "BIT-golang-2026-33814",
+     "CVE-2026-33814"
+    ],
+    "modified": "2026-10-16T10:42:05.228443950Z",
+    "published": "2026-05-07T19:21:40Z",
+    "related": [
+     "RHSA-2026:22112",
+     "RHSA-2026:22120",
+     "RHSA-2026:22121",
+     "RHSA-2026:23262",
+     "RHSA-2026:23264",
+     "RHSA-2026:49702",
+     "RHSA-2026:49712",
+     "RHSA-2026:57649",
+     "RHSA-2026:57845",
+     "RHSA-2026:60668",
+     "RHSA-2026:61253",
+     "RHSA-2026:63091",
+     "RHSA-2026:63636",
+     "RHSA-2026:63637",
+     "RHSA-2026:63639",
+     "RHSA-2026:66350",
+     "RHSA-2026:71443",
+     "RHSA-2026:74376",
+     "RHSA-2026:74427",
+     "RHSA-2026:74581",
+     "RHSA-2026:77547",
+     "RHSA-2026:79034",
+     "RHSA-2026:79166",
+     "RHSA-2026:80167"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-4918",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/761581"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/761640"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/78476"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/qcCIEXso47M"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.53.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "clientConnPool.GetClientConn",
+          "clientConnReadLoop.processSettingsNoWrite",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "unencryptedTransport.RoundTrip"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-4918.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.25.10"
+         },
+         {
+          "introduced": "1.26.0-0"
+         },
+         {
+          "fixed": "1.26.3"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http",
+         "symbols": [
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Get",
+          "Head",
+          "Post",
+          "PostForm",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2clientConnPool.GetClientConn",
+          "http2clientConnReadLoop.processSettingsNoWrite",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2unencryptedTransport.RoundTrip"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-4918.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Marwan Atia (marwansamir688@gmail.com)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5025",
+    "summary": "Invoking incorrect handling of namespaced elements in foreign content in golang.org/x/net/html",
+    "details": "Parsing arbitrary HTML which is then rendered using Render can result in an unexpected HTML tree. This can be leveraged to execute XSS attacks in applications that attempt to sanitize input HTML before rendering.",
+    "aliases": [
+     "CVE-2026-42506"
+    ],
+    "modified": "2026-05-30T05:14:17.563517047Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "CGA-c62r-25jr-fmqg"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5025",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79571"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781700"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ],
+         "path": "golang.org/x/net/html"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5025.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "ensy"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5026",
+    "summary": "Invoking failure to reject ASCII-only Punycode-encoded labels in golang.org/x/net/idna",
+    "details": "The ToASCII and ToUnicode functions incorrectly accept Punycode-encoded labels that decode to an ASCII-only label. For example, ToUnicode(\"xn--example-.com\") incorrectly returns the name \"example.com\" rather than an error.\n\nThis behavior can lead to privilege escalation in programs using the idna package. For example, a program which performs privilege checks on the ASCII hostname may reject \"example.com\" but permit \"xn--example-.com\". If that program subsequently converts the ASCII hostname to Unicode, it will inadvertently permits access to the Unicode name \"example.com\".",
+    "aliases": [
+     "CVE-2026-39821"
+    ],
+    "modified": "2026-10-16T10:42:05.164302476Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "RHSA-2026:23262",
+     "RHSA-2026:23264",
+     "RHSA-2026:30853",
+     "RHSA-2026:30854",
+     "RHSA-2026:30855",
+     "RHSA-2026:34357",
+     "RHSA-2026:34359",
+     "RHSA-2026:34789",
+     "RHSA-2026:35826",
+     "RHSA-2026:35827",
+     "RHSA-2026:35828",
+     "RHSA-2026:35829",
+     "RHSA-2026:35830",
+     "RHSA-2026:35831",
+     "RHSA-2026:36796",
+     "RHSA-2026:37435",
+     "RHSA-2026:37436",
+     "RHSA-2026:38995",
+     "RHSA-2026:39005",
+     "RHSA-2026:39573",
+     "RHSA-2026:39879",
+     "RHSA-2026:41019",
+     "RHSA-2026:41930",
+     "RHSA-2026:42078",
+     "RHSA-2026:42079",
+     "RHSA-2026:42080",
+     "RHSA-2026:42082",
+     "RHSA-2026:42150",
+     "RHSA-2026:42151",
+     "RHSA-2026:42240",
+     "RHSA-2026:46395",
+     "RHSA-2026:49702",
+     "RHSA-2026:49712",
+     "RHSA-2026:51112",
+     "RHSA-2026:51187",
+     "RHSA-2026:52826",
+     "RHSA-2026:53374",
+     "RHSA-2026:53412",
+     "RHSA-2026:53413",
+     "RHSA-2026:53415",
+     "RHSA-2026:54191",
+     "RHSA-2026:54401",
+     "RHSA-2026:54580",
+     "RHSA-2026:54757",
+     "RHSA-2026:56143",
+     "RHSA-2026:56223",
+     "RHSA-2026:57541",
+     "RHSA-2026:57649",
+     "RHSA-2026:57845",
+     "RHSA-2026:59546",
+     "RHSA-2026:59549",
+     "RHSA-2026:59562",
+     "RHSA-2026:60315",
+     "RHSA-2026:60354",
+     "RHSA-2026:61245",
+     "RHSA-2026:61253",
+     "RHSA-2026:63134",
+     "RHSA-2026:65153",
+     "RHSA-2026:65359",
+     "RHSA-2026:65534",
+     "RHSA-2026:65886",
+     "RHSA-2026:66016",
+     "RHSA-2026:66350",
+     "RHSA-2026:66432",
+     "RHSA-2026:67149",
+     "RHSA-2026:67159",
+     "RHSA-2026:67160",
+     "RHSA-2026:67287",
+     "RHSA-2026:67319",
+     "RHSA-2026:67517",
+     "RHSA-2026:68504",
+     "RHSA-2026:68534",
+     "RHSA-2026:69235",
+     "RHSA-2026:70585",
+     "RHSA-2026:70614",
+     "RHSA-2026:70645",
+     "RHSA-2026:72276",
+     "RHSA-2026:72737",
+     "RHSA-2026:72805",
+     "RHSA-2026:76795",
+     "RHSA-2026:76809",
+     "RHSA-2026:77611"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5026"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/767220"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/78760"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/94pEornpRlI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.25.13"
+         },
+         {
+          "introduced": "1.26.0-0"
+         },
+         {
+          "fixed": "1.26.6"
+         },
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.0-rc.3"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Get",
+          "Head",
+          "Post",
+          "PostForm",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2ClientConn.RoundTrip",
+          "http2RoundTripper.RoundTrip",
+          "idnaASCII"
+         ],
+         "path": "net/http"
+        },
+        {
+         "symbols": [
+          "Transport.AddConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "authorityAddr"
+         ],
+         "path": "net/http/internal/http2"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5026.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Profile.ToASCII",
+          "Profile.ToUnicode",
+          "Profile.process",
+          "ToASCII",
+          "ToUnicode"
+         ],
+         "path": "golang.org/x/net/idna"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5026.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "KC1zs4 (https://github.com/KC1zs4)"
+     },
+     {
+      "name": "Longwei Wang (https://github.com/gn00295120)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5027",
+    "summary": "Invoking incorrect handling of HTML elements in foreign content in golang.org/x/net/html",
+    "details": "Parsing arbitrary HTML which is then rendered using Render can result in an unexpected HTML tree. This can be leveraged to execute XSS attacks in applications that attempt to sanitize input HTML before rendering.",
+    "aliases": [
+     "CVE-2026-42502"
+    ],
+    "modified": "2026-09-22T10:41:48.597564594Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "RHSA-2026:51112",
+     "RHSA-2026:59560",
+     "RHSA-2026:59562",
+     "RHSA-2026:61585",
+     "RHSA-2026:62391",
+     "RHSA-2026:63134",
+     "RHSA-2026:66432",
+     "RHSA-2026:66561",
+     "RHSA-2026:67138",
+     "RHSA-2026:67139",
+     "RHSA-2026:67517",
+     "RHSA-2026:69293"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5027",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79572"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781701"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ],
+         "path": "golang.org/x/net/html"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5027.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Tristan Madani"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5028",
+    "summary": "Invoking denial of service when parsing arbitrary HTML in golang.org/x/net/html",
+    "details": "Parsing arbitrary HTML can consume excessive CPU time, possibly leading to denial of service.",
+    "aliases": [
+     "CVE-2026-25680",
+     "GHSA-5cv4-jp36-h3mw"
+    ],
+    "modified": "2026-07-01T18:26:19.971496251Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "CGA-fp3f-hxh6-cgf5"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5028",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781702"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79573"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ],
+         "path": "golang.org/x/net/html"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5028.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "IPC Labs"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5029",
+    "summary": "Invoking incorrect handling of character references in DOCTYPE nodes in golang.org/x/net/html",
+    "details": "Parsing arbitrary HTML which is then rendered using Render can result in an unexpected HTML tree. This can be leveraged to execute XSS attacks in applications that attempt to sanitize input HTML before rendering.",
+    "aliases": [
+     "CVE-2026-25681"
+    ],
+    "modified": "2026-09-22T10:41:48.499970547Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "RHSA-2026:34357",
+     "RHSA-2026:34359",
+     "RHSA-2026:35827",
+     "RHSA-2026:35828",
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:42078",
+     "RHSA-2026:42079",
+     "RHSA-2026:51112",
+     "RHSA-2026:53412",
+     "RHSA-2026:53413",
+     "RHSA-2026:53415",
+     "RHSA-2026:59560",
+     "RHSA-2026:59562",
+     "RHSA-2026:61585",
+     "RHSA-2026:63134",
+     "RHSA-2026:66432",
+     "RHSA-2026:67138",
+     "RHSA-2026:67139",
+     "RHSA-2026:67517",
+     "RHSA-2026:68334",
+     "RHSA-2026:69293"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5029"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79574"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781703"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ],
+         "path": "golang.org/x/net/html"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5029.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "ensy"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5030",
+    "summary": "Invoking duplicate attributes can cause XSS in golang.org/x/net/html",
+    "details": "Parsing arbitrary HTML which is then rendered using Render can result in an unexpected HTML tree. This can be leveraged to execute XSS attacks in applications that attempt to sanitize input HTML before rendering.",
+    "aliases": [
+     "CVE-2026-27136"
+    ],
+    "modified": "2026-09-22T10:41:47.813482433Z",
+    "published": "2026-05-22T02:46:43Z",
+    "related": [
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:42078",
+     "RHSA-2026:42079",
+     "RHSA-2026:42080",
+     "RHSA-2026:51112",
+     "RHSA-2026:53412",
+     "RHSA-2026:53413",
+     "RHSA-2026:53415",
+     "RHSA-2026:59560",
+     "RHSA-2026:59562",
+     "RHSA-2026:61585",
+     "RHSA-2026:62391",
+     "RHSA-2026:63134",
+     "RHSA-2026:66432",
+     "RHSA-2026:66561",
+     "RHSA-2026:67138",
+     "RHSA-2026:67139",
+     "RHSA-2026:67517",
+     "RHSA-2026:68334",
+     "RHSA-2026:69293"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5030",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79575"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/iI-mYSI0lu8"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781685"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.parse"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5030.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "ensy"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5942",
+    "summary": "Parsing an invalid SVCB or HTTPS RR can panic in golang.org/x/net/dns/dnsmessage",
+    "details": "Parsing an invalid SVCB or HTTPS RR can panic when the size of a parameter value overflows the message buffer.",
+    "aliases": [
+     "BIT-golang-2026-46600",
+     "CVE-2026-46600"
+    ],
+    "modified": "2026-08-17T12:25:32.471119200Z",
+    "published": "2026-07-14T17:29:16Z",
+    "related": [
+     "CGA-6835-7pr2-x4gw"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5942"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/786345"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/94pEornpRlI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.26.0-0"
+         },
+         {
+          "fixed": "1.26.6"
+         },
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.0-rc.3"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "LookupCNAME",
+          "Resolver.LookupCNAME",
+          "cgoResSearch"
+         ],
+         "path": "net"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5942.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.56.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/dns/dnsmessage",
+         "symbols": [
+          "Message.Unpack",
+          "Parser.Additional",
+          "Parser.AllAdditionals",
+          "Parser.AllAnswers",
+          "Parser.AllAuthorities",
+          "Parser.Answer",
+          "Parser.Authority",
+          "Parser.HTTPSResource",
+          "Parser.SVCBResource",
+          "unpackSVCBResource"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5942.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Mundur (https://github.com/M0nd0R)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6603",
+    "summary": "HTTP/2 server memory exhaustion due to Trailer headers in net/http",
+    "details": "When \"Trailer\" headers are sent by a client, the HTTP server internally uses the header values to populate the Request.Trailer map passed to the server handler. Because Request.Trailer is a map, each entry incurs memory overhead. For HTTP/2 servers, a malicious client can exploit this by sending a \"Trailer\" header that declares a large number of fields, causing the server to allocate a disproportionate amount of memory while bypassing Server.MaxHeaderValueCount and Server.MaxHeaderBytes limits. This exploit is not applicable for HTTP/1 servers, which do not support multiplexing a large number of requests over one TCP connection, and whose Server.MaxHeaderBytes are calculated differently.",
+    "aliases": [
+     "BIT-golang-2026-78659",
+     "CVE-2026-78659"
+    ],
+    "modified": "2026-10-16T09:55:47.068117441Z",
+    "published": "2026-10-08T22:31:09Z",
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6603",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847185"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847314"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81857"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/U2fTuyDJznI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ZPwCyRUuGBs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.26.9"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http",
+         "symbols": [
+          "CanonicalHeaderKey",
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Cookie.String",
+          "Cookie.Valid",
+          "CrossOriginProtection.AddInsecureBypassPattern",
+          "CrossOriginProtection.AddTrustedOrigin",
+          "CrossOriginProtection.Check",
+          "Dir.Open",
+          "Error",
+          "Get",
+          "Handle",
+          "HandleFunc",
+          "HandlerFunc.ServeHTTP",
+          "Head",
+          "Header.Add",
+          "Header.Del",
+          "Header.Get",
+          "Header.Set",
+          "Header.Values",
+          "Header.Write",
+          "Header.WriteSubset",
+          "ListenAndServe",
+          "ListenAndServeTLS",
+          "NewRequest",
+          "NewRequestWithContext",
+          "NotFound",
+          "ParseCookie",
+          "ParseSetCookie",
+          "ParseTime",
+          "Post",
+          "PostForm",
+          "ProxyFromEnvironment",
+          "ReadRequest",
+          "ReadResponse",
+          "Redirect",
+          "Request.AddCookie",
+          "Request.BasicAuth",
+          "Request.Cookie",
+          "Request.Cookies",
+          "Request.CookiesNamed",
+          "Request.FormFile",
+          "Request.FormValue",
+          "Request.MultipartReader",
+          "Request.ParseForm",
+          "Request.ParseMultipartForm",
+          "Request.PostFormValue",
+          "Request.Referer",
+          "Request.SetBasicAuth",
+          "Request.UserAgent",
+          "Request.Write",
+          "Request.WriteProxy",
+          "Response.Cookies",
+          "Response.Location",
+          "Response.Write",
+          "ResponseController.EnableFullDuplex",
+          "ResponseController.Flush",
+          "ResponseController.Hijack",
+          "ResponseController.SetReadDeadline",
+          "ResponseController.SetWriteDeadline",
+          "Serve",
+          "ServeContent",
+          "ServeFile",
+          "ServeFileFS",
+          "ServeMux.Handle",
+          "ServeMux.HandleFunc",
+          "ServeMux.ServeHTTP",
+          "ServeTLS",
+          "Server.Close",
+          "Server.ListenAndServe",
+          "Server.ListenAndServeTLS",
+          "Server.Serve",
+          "Server.ServeTLS",
+          "Server.SetKeepAlivesEnabled",
+          "Server.Shutdown",
+          "SetCookie",
+          "Transport.CancelRequest",
+          "Transport.Clone",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "body.Close",
+          "body.Read",
+          "bodyEOFSignal.Close",
+          "bodyEOFSignal.Read",
+          "bodyLocked.Read",
+          "bufioFlushWriter.Write",
+          "cancelTimerBody.Close",
+          "cancelTimerBody.Read",
+          "checkConnErrorWriter.Write",
+          "chunkWriter.Write",
+          "connReader.Read",
+          "connectMethodKey.String",
+          "expectContinueReader.Close",
+          "expectContinueReader.Read",
+          "extraHeader.Write",
+          "fileHandler.ServeHTTP",
+          "fileTransport.RoundTrip",
+          "globalOptionsHandler.ServeHTTP",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2ClientConn.Close",
+          "http2ClientConn.Ping",
+          "http2ClientConn.RoundTrip",
+          "http2ClientConn.Shutdown",
+          "http2ConnectionError.Error",
+          "http2ErrCode.String",
+          "http2FrameHeader.String",
+          "http2FrameType.String",
+          "http2FrameWriteRequest.String",
+          "http2Framer.ReadFrame",
+          "http2Framer.ReadFrameForHeader",
+          "http2Framer.ReadFrameHeader",
+          "http2Framer.WriteContinuation",
+          "http2Framer.WriteData",
+          "http2Framer.WriteDataPadded",
+          "http2Framer.WriteGoAway",
+          "http2Framer.WriteHeaders",
+          "http2Framer.WritePing",
+          "http2Framer.WritePriority",
+          "http2Framer.WritePushPromise",
+          "http2Framer.WriteRSTStream",
+          "http2Framer.WriteRawFrame",
+          "http2Framer.WriteSettings",
+          "http2Framer.WriteSettingsAck",
+          "http2Framer.WriteWindowUpdate",
+          "http2Framer.readMetaFrame",
+          "http2GoAwayError.Error",
+          "http2Server.ServeConn",
+          "http2Setting.String",
+          "http2SettingID.String",
+          "http2SettingsFrame.ForeachSetting",
+          "http2StreamError.Error",
+          "http2Transport.CloseIdleConnections",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2bufferedWriter.Flush",
+          "http2bufferedWriter.Write",
+          "http2bufferedWriterTimeoutWriter.Write",
+          "http2chunkWriter.Write",
+          "http2clientConnPool.GetClientConn",
+          "http2connError.Error",
+          "http2dataBuffer.Read",
+          "http2duplicatePseudoHeaderError.Error",
+          "http2gzipReader.Close",
+          "http2gzipReader.Read",
+          "http2headerFieldNameError.Error",
+          "http2headerFieldValueError.Error",
+          "http2netHTTPClientConn.Close",
+          "http2netHTTPClientConn.RoundTrip",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2pipe.Read",
+          "http2priorityWriteSchedulerRFC7540.CloseStream",
+          "http2priorityWriteSchedulerRFC7540.OpenStream",
+          "http2priorityWriteSchedulerRFC9218.OpenStream",
+          "http2pseudoHeaderError.Error",
+          "http2requestBody.Close",
+          "http2requestBody.Read",
+          "http2responseWriter.Flush",
+          "http2responseWriter.FlushError",
+          "http2responseWriter.Push",
+          "http2responseWriter.SetReadDeadline",
+          "http2responseWriter.SetWriteDeadline",
+          "http2responseWriter.Write",
+          "http2responseWriter.WriteHeader",
+          "http2responseWriter.WriteString",
+          "http2roundRobinWriteScheduler.OpenStream",
+          "http2serverConn.CloseConn",
+          "http2serverConn.Flush",
+          "http2stickyErrWriter.Write",
+          "http2transportResponseBody.Close",
+          "http2transportResponseBody.Read",
+          "http2unencryptedTransport.RoundTrip",
+          "http2writeData.String",
+          "initALPNRequest.ServeHTTP",
+          "loggingConn.Close",
+          "loggingConn.Read",
+          "loggingConn.Write",
+          "maxBytesReader.Close",
+          "maxBytesReader.Read",
+          "onceCloseListener.Close",
+          "persistConn.Read",
+          "persistConnWriter.ReadFrom",
+          "persistConnWriter.Write",
+          "populateResponse.Write",
+          "populateResponse.WriteHeader",
+          "readTrackingBody.Close",
+          "readTrackingBody.Read",
+          "readWriteCloserBody.CloseWrite",
+          "readWriteCloserBody.Read",
+          "redirectHandler.ServeHTTP",
+          "response.Flush",
+          "response.FlushError",
+          "response.Hijack",
+          "response.ReadFrom",
+          "response.Write",
+          "response.WriteHeader",
+          "response.WriteString",
+          "serverHandler.ServeHTTP",
+          "socksDialer.DialWithConn",
+          "socksUsernamePassword.Authenticate",
+          "stringWriter.WriteString",
+          "timeoutHandler.ServeHTTP",
+          "timeoutWriter.Write",
+          "timeoutWriter.WriteHeader",
+          "transportReadFromServerError.Error",
+          "unencryptedHTTP2Request.ServeHTTP"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6603.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "Framer.readMetaFrame",
+          "NetHTTPClientConn.Close",
+          "NetHTTPClientConn.Ping",
+          "NetHTTPClientConn.RoundTrip",
+          "ReadFrameHeader",
+          "Server.GracefulShutdown",
+          "Server.ServeConn",
+          "SettingsFrame.ForeachSetting",
+          "Transport.AddConn",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "noDialClientConnPool.GetClientConn",
+          "requestBody.Close",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "serve400Handler.ServeHTTP",
+          "serverConn.Flush",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read"
+         ],
+         "path": "net/http/internal/http2"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6603.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.60.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ConfigureServer",
+          "ConfigureTransport",
+          "ConfigureTransports",
+          "ConnectionError.Error",
+          "ErrCode.String",
+          "FrameHeader.String",
+          "FrameType.String",
+          "FrameWriteRequest.String",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "Framer.readMetaFrame",
+          "GoAwayError.Error",
+          "ReadFrameHeader",
+          "Server.ServeConn",
+          "Setting.String",
+          "SettingID.String",
+          "SettingsFrame.ForeachSetting",
+          "StreamError.Error",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "connError.Error",
+          "dataBuffer.Read",
+          "duplicatePseudoHeaderError.Error",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "headerFieldNameError.Error",
+          "headerFieldValueError.Error",
+          "netHTTPClientConn.Close",
+          "netHTTPClientConn.RoundTrip",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "pipe.Read",
+          "priorityWriteSchedulerRFC7540.CloseStream",
+          "priorityWriteSchedulerRFC7540.OpenStream",
+          "priorityWriteSchedulerRFC9218.OpenStream",
+          "pseudoHeaderError.Error",
+          "requestBody.Close",
+          "requestBody.Read",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.SetReadDeadline",
+          "responseWriter.SetWriteDeadline",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.OpenStream",
+          "serverConn.CloseConn",
+          "serverConn.Flush",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read",
+          "unencryptedTransport.RoundTrip",
+          "writeData.String"
+         ],
+         "path": "golang.org/x/net/http2"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6603.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "RyotaK (https://ryotak.net) of GMO Flatt Security Inc."
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6610",
+    "summary": "HTTP/2 transport accepts malformed framing-related headers in net/http",
+    "details": "Historically, we have been rather lax about malformed framing-related headers in our HTTP/2 implementation, as they cannot interfere with HTTP/2 framing. However, this makes it possible for our HTTP/2 implementation to forward responses containing such headers to an HTTP/1 client when acting as a reverse proxy. If the HTTP/1 client also does not behave strictly enough, this can result in response smuggling.",
+    "aliases": [
+     "BIT-golang-2026-78660",
+     "CVE-2026-78660"
+    ],
+    "modified": "2026-10-16T09:56:04.364467528Z",
+    "published": "2026-10-08T22:31:09Z",
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6610",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/835145"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/836385"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81115"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/U2fTuyDJznI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.26.9"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Get",
+          "Head",
+          "Post",
+          "PostForm",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2clientConnPool.GetClientConn",
+          "http2clientConnReadLoop.handleResponse",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2unencryptedTransport.RoundTrip"
+         ],
+         "path": "net/http"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6610.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http/internal/http2",
+         "symbols": [
+          "Transport.AddConn",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "clientConnPool.GetClientConn",
+          "clientConnReadLoop.handleResponse",
+          "noDialClientConnPool.GetClientConn"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6610.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.60.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "clientConnPool.GetClientConn",
+          "clientConnReadLoop.handleResponse",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "unencryptedTransport.RoundTrip"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6610.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "TJ Barton"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6611",
+    "summary": "Excessive CPU consumption from repeated initial window changes in net/http",
+    "details": "A malicious HTTP/2 peer can cause excessive CPU consumption in the client or server by opening a large number of streams and then sending many small SETTINGS frames containing SETTINGS_INITIAL_WINDOW_SIZE values.",
+    "aliases": [
+     "BIT-golang-2026-78669",
+     "CVE-2026-78669"
+    ],
+    "modified": "2026-10-16T09:55:38.952277866Z",
+    "published": "2026-10-08T22:31:09Z",
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6611",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847186"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847308"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81742"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/U2fTuyDJznI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ZPwCyRUuGBs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.26.9"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "CanonicalHeaderKey",
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Cookie.String",
+          "Cookie.Valid",
+          "CrossOriginProtection.AddInsecureBypassPattern",
+          "CrossOriginProtection.AddTrustedOrigin",
+          "CrossOriginProtection.Check",
+          "Dir.Open",
+          "Error",
+          "Get",
+          "Handle",
+          "HandleFunc",
+          "HandlerFunc.ServeHTTP",
+          "Head",
+          "Header.Add",
+          "Header.Del",
+          "Header.Get",
+          "Header.Set",
+          "Header.Values",
+          "Header.Write",
+          "Header.WriteSubset",
+          "ListenAndServe",
+          "ListenAndServeTLS",
+          "NewRequest",
+          "NewRequestWithContext",
+          "NotFound",
+          "ParseCookie",
+          "ParseSetCookie",
+          "ParseTime",
+          "Post",
+          "PostForm",
+          "ProxyFromEnvironment",
+          "ReadRequest",
+          "ReadResponse",
+          "Redirect",
+          "Request.AddCookie",
+          "Request.BasicAuth",
+          "Request.Cookie",
+          "Request.Cookies",
+          "Request.CookiesNamed",
+          "Request.FormFile",
+          "Request.FormValue",
+          "Request.MultipartReader",
+          "Request.ParseForm",
+          "Request.ParseMultipartForm",
+          "Request.PostFormValue",
+          "Request.Referer",
+          "Request.SetBasicAuth",
+          "Request.UserAgent",
+          "Request.Write",
+          "Request.WriteProxy",
+          "Response.Cookies",
+          "Response.Location",
+          "Response.Write",
+          "ResponseController.EnableFullDuplex",
+          "ResponseController.Flush",
+          "ResponseController.Hijack",
+          "ResponseController.SetReadDeadline",
+          "ResponseController.SetWriteDeadline",
+          "Serve",
+          "ServeContent",
+          "ServeFile",
+          "ServeFileFS",
+          "ServeMux.Handle",
+          "ServeMux.HandleFunc",
+          "ServeMux.ServeHTTP",
+          "ServeTLS",
+          "Server.Close",
+          "Server.ListenAndServe",
+          "Server.ListenAndServeTLS",
+          "Server.Serve",
+          "Server.ServeTLS",
+          "Server.SetKeepAlivesEnabled",
+          "Server.Shutdown",
+          "SetCookie",
+          "Transport.CancelRequest",
+          "Transport.Clone",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "body.Close",
+          "body.Read",
+          "bodyEOFSignal.Close",
+          "bodyEOFSignal.Read",
+          "bodyLocked.Read",
+          "bufioFlushWriter.Write",
+          "cancelTimerBody.Close",
+          "cancelTimerBody.Read",
+          "checkConnErrorWriter.Write",
+          "chunkWriter.Write",
+          "connReader.Read",
+          "connectMethodKey.String",
+          "expectContinueReader.Close",
+          "expectContinueReader.Read",
+          "extraHeader.Write",
+          "fileHandler.ServeHTTP",
+          "fileTransport.RoundTrip",
+          "globalOptionsHandler.ServeHTTP",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2ClientConn.Close",
+          "http2ClientConn.Ping",
+          "http2ClientConn.RoundTrip",
+          "http2ClientConn.Shutdown",
+          "http2ClientConn.addStreamLocked",
+          "http2ConnectionError.Error",
+          "http2ErrCode.String",
+          "http2FrameHeader.String",
+          "http2FrameType.String",
+          "http2FrameWriteRequest.Consume",
+          "http2FrameWriteRequest.String",
+          "http2Framer.ReadFrame",
+          "http2Framer.ReadFrameForHeader",
+          "http2Framer.ReadFrameHeader",
+          "http2Framer.WriteContinuation",
+          "http2Framer.WriteData",
+          "http2Framer.WriteDataPadded",
+          "http2Framer.WriteGoAway",
+          "http2Framer.WriteHeaders",
+          "http2Framer.WritePing",
+          "http2Framer.WritePriority",
+          "http2Framer.WritePushPromise",
+          "http2Framer.WriteRSTStream",
+          "http2Framer.WriteRawFrame",
+          "http2Framer.WriteSettings",
+          "http2Framer.WriteSettingsAck",
+          "http2Framer.WriteWindowUpdate",
+          "http2GoAwayError.Error",
+          "http2Server.ServeConn",
+          "http2Server.serveConn",
+          "http2Setting.String",
+          "http2SettingID.String",
+          "http2SettingsFrame.ForeachSetting",
+          "http2StreamError.Error",
+          "http2Transport.CloseIdleConnections",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2Transport.newClientConn",
+          "http2bufferedWriter.Flush",
+          "http2bufferedWriter.Write",
+          "http2bufferedWriterTimeoutWriter.Write",
+          "http2chunkWriter.Write",
+          "http2clientConnPool.GetClientConn",
+          "http2clientConnReadLoop.processSettingsNoWrite",
+          "http2clientConnReadLoop.processWindowUpdate",
+          "http2clientConnReadLoop.streamByID",
+          "http2clientStream.awaitFlowControl",
+          "http2clientStream.cleanupWriteRequest",
+          "http2connError.Error",
+          "http2dataBuffer.Read",
+          "http2duplicatePseudoHeaderError.Error",
+          "http2gzipReader.Close",
+          "http2gzipReader.Read",
+          "http2headerFieldNameError.Error",
+          "http2headerFieldValueError.Error",
+          "http2netHTTPClientConn.Close",
+          "http2netHTTPClientConn.RoundTrip",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2outflow.add",
+          "http2outflow.available",
+          "http2outflow.setConnFlow",
+          "http2outflow.take",
+          "http2pipe.Read",
+          "http2priorityWriteSchedulerRFC7540.CloseStream",
+          "http2priorityWriteSchedulerRFC7540.OpenStream",
+          "http2priorityWriteSchedulerRFC7540.Pop",
+          "http2priorityWriteSchedulerRFC9218.OpenStream",
+          "http2priorityWriteSchedulerRFC9218.Pop",
+          "http2pseudoHeaderError.Error",
+          "http2randomWriteScheduler.Pop",
+          "http2requestBody.Close",
+          "http2requestBody.Read",
+          "http2responseWriter.Flush",
+          "http2responseWriter.FlushError",
+          "http2responseWriter.Push",
+          "http2responseWriter.SetReadDeadline",
+          "http2responseWriter.SetWriteDeadline",
+          "http2responseWriter.Write",
+          "http2responseWriter.WriteHeader",
+          "http2responseWriter.WriteString",
+          "http2roundRobinWriteScheduler.OpenStream",
+          "http2roundRobinWriteScheduler.Pop",
+          "http2serverConn.CloseConn",
+          "http2serverConn.Flush",
+          "http2serverConn.newStream",
+          "http2serverConn.processSettingInitialWindowSize",
+          "http2serverConn.processWindowUpdate",
+          "http2serverConn.scheduleFrameWrite",
+          "http2stickyErrWriter.Write",
+          "http2transportResponseBody.Close",
+          "http2transportResponseBody.Read",
+          "http2unencryptedTransport.RoundTrip",
+          "http2writeData.String",
+          "initALPNRequest.ServeHTTP",
+          "loggingConn.Close",
+          "loggingConn.Read",
+          "loggingConn.Write",
+          "maxBytesReader.Close",
+          "maxBytesReader.Read",
+          "onceCloseListener.Close",
+          "persistConn.Read",
+          "persistConnWriter.ReadFrom",
+          "persistConnWriter.Write",
+          "populateResponse.Write",
+          "populateResponse.WriteHeader",
+          "readTrackingBody.Close",
+          "readTrackingBody.Read",
+          "readWriteCloserBody.CloseWrite",
+          "readWriteCloserBody.Read",
+          "redirectHandler.ServeHTTP",
+          "response.Flush",
+          "response.FlushError",
+          "response.Hijack",
+          "response.ReadFrom",
+          "response.Write",
+          "response.WriteHeader",
+          "response.WriteString",
+          "serverHandler.ServeHTTP",
+          "socksDialer.DialWithConn",
+          "socksUsernamePassword.Authenticate",
+          "stringWriter.WriteString",
+          "timeoutHandler.ServeHTTP",
+          "timeoutWriter.Write",
+          "timeoutWriter.WriteHeader",
+          "transportReadFromServerError.Error",
+          "unencryptedHTTP2Request.ServeHTTP"
+         ],
+         "path": "net/http"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6611.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http/internal/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ClientConn.addStreamLocked",
+          "FrameWriteRequest.Consume",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "NetHTTPClientConn.Close",
+          "NetHTTPClientConn.Ping",
+          "NetHTTPClientConn.RoundTrip",
+          "ReadFrameHeader",
+          "Server.GracefulShutdown",
+          "Server.ServeConn",
+          "Server.serveConn",
+          "SettingsFrame.ForeachSetting",
+          "Transport.AddConn",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "Transport.newClientConn",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "clientConnReadLoop.processSettingsNoWrite",
+          "clientConnReadLoop.processWindowUpdate",
+          "clientConnReadLoop.streamByID",
+          "clientStream.awaitFlowControl",
+          "clientStream.cleanupWriteRequest",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "noDialClientConnPool.GetClientConn",
+          "outflow.add",
+          "outflow.available",
+          "outflow.setConnFlow",
+          "outflow.take",
+          "priorityWriteSchedulerRFC9218.Pop",
+          "requestBody.Close",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.Pop",
+          "serve400Handler.ServeHTTP",
+          "serverConn.Flush",
+          "serverConn.newStream",
+          "serverConn.processSettingInitialWindowSize",
+          "serverConn.processWindowUpdate",
+          "serverConn.scheduleFrameWrite",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6611.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.60.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ClientConn.addStreamLocked",
+          "ConfigureServer",
+          "ConfigureTransport",
+          "ConfigureTransports",
+          "ConnectionError.Error",
+          "ErrCode.String",
+          "FrameHeader.String",
+          "FrameType.String",
+          "FrameWriteRequest.Consume",
+          "FrameWriteRequest.String",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "GoAwayError.Error",
+          "ReadFrameHeader",
+          "Server.ServeConn",
+          "Server.serveConn",
+          "Setting.String",
+          "SettingID.String",
+          "SettingsFrame.ForeachSetting",
+          "StreamError.Error",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "Transport.newClientConn",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "clientConnReadLoop.processSettingsNoWrite",
+          "clientConnReadLoop.processWindowUpdate",
+          "clientConnReadLoop.streamByID",
+          "clientStream.awaitFlowControl",
+          "clientStream.cleanupWriteRequest",
+          "connError.Error",
+          "dataBuffer.Read",
+          "duplicatePseudoHeaderError.Error",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "headerFieldNameError.Error",
+          "headerFieldValueError.Error",
+          "netHTTPClientConn.Close",
+          "netHTTPClientConn.RoundTrip",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "outflow.add",
+          "outflow.available",
+          "outflow.setConnFlow",
+          "outflow.take",
+          "pipe.Read",
+          "priorityWriteSchedulerRFC7540.CloseStream",
+          "priorityWriteSchedulerRFC7540.OpenStream",
+          "priorityWriteSchedulerRFC7540.Pop",
+          "priorityWriteSchedulerRFC9218.OpenStream",
+          "priorityWriteSchedulerRFC9218.Pop",
+          "pseudoHeaderError.Error",
+          "randomWriteScheduler.Pop",
+          "requestBody.Close",
+          "requestBody.Read",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.SetReadDeadline",
+          "responseWriter.SetWriteDeadline",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.OpenStream",
+          "roundRobinWriteScheduler.Pop",
+          "serverConn.CloseConn",
+          "serverConn.Flush",
+          "serverConn.newStream",
+          "serverConn.processSettingInitialWindowSize",
+          "serverConn.processWindowUpdate",
+          "serverConn.scheduleFrameWrite",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read",
+          "unencryptedTransport.RoundTrip",
+          "writeData.String"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6611.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Jakub Ciolek (https://ciolek.dev)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6612",
+    "summary": "Double flow control refund on HTTP/2 server streams in net/http",
+    "details": "The HTTP/2 server can refund connection-level flow control twice for the same data: Once when a client resets a stream (refunding data for any sent-but-unread portion of the stream), and again when a request handler reads the buffered data. A malicious client can exploit this to bypass the configured connection-level flow control limit (MaxReceiveBufferPerConnection). Total buffered data is still limited by the concurrent stream limit and stream-level flow control.",
+    "aliases": [
+     "BIT-golang-2026-78663",
+     "CVE-2026-78663"
+    ],
+    "modified": "2026-10-16T09:55:54.129082194Z",
+    "published": "2026-10-08T22:31:09Z",
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-6612"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847187"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847310"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81743"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/U2fTuyDJznI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ZPwCyRUuGBs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.26.9"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http",
+         "symbols": [
+          "CanonicalHeaderKey",
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Cookie.String",
+          "Cookie.Valid",
+          "CrossOriginProtection.AddInsecureBypassPattern",
+          "CrossOriginProtection.AddTrustedOrigin",
+          "CrossOriginProtection.Check",
+          "Dir.Open",
+          "Error",
+          "Get",
+          "Handle",
+          "HandleFunc",
+          "HandlerFunc.ServeHTTP",
+          "Head",
+          "Header.Add",
+          "Header.Del",
+          "Header.Get",
+          "Header.Set",
+          "Header.Values",
+          "Header.Write",
+          "Header.WriteSubset",
+          "ListenAndServe",
+          "ListenAndServeTLS",
+          "NewRequest",
+          "NewRequestWithContext",
+          "NotFound",
+          "ParseCookie",
+          "ParseSetCookie",
+          "ParseTime",
+          "Post",
+          "PostForm",
+          "ProxyFromEnvironment",
+          "ReadRequest",
+          "ReadResponse",
+          "Redirect",
+          "Request.AddCookie",
+          "Request.BasicAuth",
+          "Request.Cookie",
+          "Request.Cookies",
+          "Request.CookiesNamed",
+          "Request.FormFile",
+          "Request.FormValue",
+          "Request.MultipartReader",
+          "Request.ParseForm",
+          "Request.ParseMultipartForm",
+          "Request.PostFormValue",
+          "Request.Referer",
+          "Request.SetBasicAuth",
+          "Request.UserAgent",
+          "Request.Write",
+          "Request.WriteProxy",
+          "Response.Cookies",
+          "Response.Location",
+          "Response.Write",
+          "ResponseController.EnableFullDuplex",
+          "ResponseController.Flush",
+          "ResponseController.Hijack",
+          "ResponseController.SetReadDeadline",
+          "ResponseController.SetWriteDeadline",
+          "Serve",
+          "ServeContent",
+          "ServeFile",
+          "ServeFileFS",
+          "ServeMux.Handle",
+          "ServeMux.HandleFunc",
+          "ServeMux.ServeHTTP",
+          "ServeTLS",
+          "Server.Close",
+          "Server.ListenAndServe",
+          "Server.ListenAndServeTLS",
+          "Server.Serve",
+          "Server.ServeTLS",
+          "Server.SetKeepAlivesEnabled",
+          "Server.Shutdown",
+          "SetCookie",
+          "Transport.CancelRequest",
+          "Transport.Clone",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "body.Close",
+          "body.Read",
+          "bodyEOFSignal.Close",
+          "bodyEOFSignal.Read",
+          "bodyLocked.Read",
+          "bufioFlushWriter.Write",
+          "cancelTimerBody.Close",
+          "cancelTimerBody.Read",
+          "checkConnErrorWriter.Write",
+          "chunkWriter.Write",
+          "connReader.Read",
+          "connectMethodKey.String",
+          "expectContinueReader.Close",
+          "expectContinueReader.Read",
+          "extraHeader.Write",
+          "fileHandler.ServeHTTP",
+          "fileTransport.RoundTrip",
+          "globalOptionsHandler.ServeHTTP",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2ClientConn.Close",
+          "http2ClientConn.Ping",
+          "http2ClientConn.RoundTrip",
+          "http2ClientConn.Shutdown",
+          "http2ConnectionError.Error",
+          "http2ErrCode.String",
+          "http2FrameHeader.String",
+          "http2FrameType.String",
+          "http2FrameWriteRequest.String",
+          "http2Framer.ReadFrame",
+          "http2Framer.ReadFrameForHeader",
+          "http2Framer.ReadFrameHeader",
+          "http2Framer.WriteContinuation",
+          "http2Framer.WriteData",
+          "http2Framer.WriteDataPadded",
+          "http2Framer.WriteGoAway",
+          "http2Framer.WriteHeaders",
+          "http2Framer.WritePing",
+          "http2Framer.WritePriority",
+          "http2Framer.WritePushPromise",
+          "http2Framer.WriteRSTStream",
+          "http2Framer.WriteRawFrame",
+          "http2Framer.WriteSettings",
+          "http2Framer.WriteSettingsAck",
+          "http2Framer.WriteWindowUpdate",
+          "http2GoAwayError.Error",
+          "http2Server.ServeConn",
+          "http2Setting.String",
+          "http2SettingID.String",
+          "http2SettingsFrame.ForeachSetting",
+          "http2StreamError.Error",
+          "http2Transport.CloseIdleConnections",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2bufferedWriter.Flush",
+          "http2bufferedWriter.Write",
+          "http2bufferedWriterTimeoutWriter.Write",
+          "http2chunkWriter.Write",
+          "http2clientConnPool.GetClientConn",
+          "http2connError.Error",
+          "http2dataBuffer.Read",
+          "http2duplicatePseudoHeaderError.Error",
+          "http2gzipReader.Close",
+          "http2gzipReader.Read",
+          "http2headerFieldNameError.Error",
+          "http2headerFieldValueError.Error",
+          "http2netHTTPClientConn.Close",
+          "http2netHTTPClientConn.RoundTrip",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2pipe.Read",
+          "http2priorityWriteSchedulerRFC7540.CloseStream",
+          "http2priorityWriteSchedulerRFC7540.OpenStream",
+          "http2priorityWriteSchedulerRFC9218.OpenStream",
+          "http2pseudoHeaderError.Error",
+          "http2requestBody.Close",
+          "http2requestBody.Read",
+          "http2responseWriter.Flush",
+          "http2responseWriter.FlushError",
+          "http2responseWriter.Push",
+          "http2responseWriter.SetReadDeadline",
+          "http2responseWriter.SetWriteDeadline",
+          "http2responseWriter.Write",
+          "http2responseWriter.WriteHeader",
+          "http2responseWriter.WriteString",
+          "http2roundRobinWriteScheduler.OpenStream",
+          "http2serverConn.CloseConn",
+          "http2serverConn.Flush",
+          "http2serverConn.closeStream",
+          "http2serverConn.handlerDone",
+          "http2serverConn.newWriterAndRequest",
+          "http2serverConn.newWriterAndRequestNoBody",
+          "http2serverConn.noteBodyRead",
+          "http2serverConn.processHeaders",
+          "http2serverConn.runHandler",
+          "http2serverConn.scheduleHandler",
+          "http2stickyErrWriter.Write",
+          "http2transportResponseBody.Close",
+          "http2transportResponseBody.Read",
+          "http2unencryptedTransport.RoundTrip",
+          "http2writeData.String",
+          "initALPNRequest.ServeHTTP",
+          "loggingConn.Close",
+          "loggingConn.Read",
+          "loggingConn.Write",
+          "maxBytesReader.Close",
+          "maxBytesReader.Read",
+          "onceCloseListener.Close",
+          "persistConn.Read",
+          "persistConnWriter.ReadFrom",
+          "persistConnWriter.Write",
+          "populateResponse.Write",
+          "populateResponse.WriteHeader",
+          "readTrackingBody.Close",
+          "readTrackingBody.Read",
+          "readWriteCloserBody.CloseWrite",
+          "readWriteCloserBody.Read",
+          "redirectHandler.ServeHTTP",
+          "response.Flush",
+          "response.FlushError",
+          "response.Hijack",
+          "response.ReadFrom",
+          "response.Write",
+          "response.WriteHeader",
+          "response.WriteString",
+          "serverHandler.ServeHTTP",
+          "socksDialer.DialWithConn",
+          "socksUsernamePassword.Authenticate",
+          "stringWriter.WriteString",
+          "timeoutHandler.ServeHTTP",
+          "timeoutWriter.Write",
+          "timeoutWriter.WriteHeader",
+          "transportReadFromServerError.Error",
+          "unencryptedHTTP2Request.ServeHTTP"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6612.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http/internal/http2",
+         "symbols": [
+          "Server.ServeConn",
+          "requestBody.Close",
+          "requestBody.Read",
+          "serverConn.closeStream",
+          "serverConn.handlerDone",
+          "serverConn.newWriterAndRequest",
+          "serverConn.newWriterAndRequestNoBody",
+          "serverConn.noteBodyRead",
+          "serverConn.processHeaders",
+          "serverConn.runHandler",
+          "serverConn.scheduleHandler"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6612.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.60.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ConfigureServer",
+          "ConfigureTransport",
+          "ConfigureTransports",
+          "ConnectionError.Error",
+          "ErrCode.String",
+          "FrameHeader.String",
+          "FrameType.String",
+          "FrameWriteRequest.String",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "GoAwayError.Error",
+          "ReadFrameHeader",
+          "Server.ServeConn",
+          "Setting.String",
+          "SettingID.String",
+          "SettingsFrame.ForeachSetting",
+          "StreamError.Error",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "connError.Error",
+          "dataBuffer.Read",
+          "duplicatePseudoHeaderError.Error",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "headerFieldNameError.Error",
+          "headerFieldValueError.Error",
+          "netHTTPClientConn.Close",
+          "netHTTPClientConn.RoundTrip",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "pipe.Read",
+          "priorityWriteSchedulerRFC7540.CloseStream",
+          "priorityWriteSchedulerRFC7540.OpenStream",
+          "priorityWriteSchedulerRFC9218.OpenStream",
+          "pseudoHeaderError.Error",
+          "requestBody.Close",
+          "requestBody.Read",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.SetReadDeadline",
+          "responseWriter.SetWriteDeadline",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.OpenStream",
+          "serverConn.CloseConn",
+          "serverConn.Flush",
+          "serverConn.closeStream",
+          "serverConn.handlerDone",
+          "serverConn.newWriterAndRequest",
+          "serverConn.newWriterAndRequestNoBody",
+          "serverConn.noteBodyRead",
+          "serverConn.processHeaders",
+          "serverConn.runHandler",
+          "serverConn.scheduleHandler",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read",
+          "unencryptedTransport.RoundTrip",
+          "writeData.String"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6612.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Ali Sherif (https://www.linkedin.com/in/ali-sherif-13812b276/)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6617",
+    "summary": "HTTP/2 server crash due to HPACK encoder race in net/http",
+    "details": "HTTP/2 servers could end up crashing due to inadvertently modifying its HPACK encoder concurrently. This happens because the server modifies the HPACK encoder from two goroutines without synchronization: one uses the encoder to encode a HEADERS frame as part of a response sent to a client and the other modifies the encoder's table size when handling a SETTINGS frame containing SETTINGS_HEADER_TABLE_SIZE that a client sends. A malicious client can repeatedly send a request while changing the header table size to crash the server.",
+    "aliases": [
+     "BIT-golang-2026-97032",
+     "CVE-2026-97032"
+    ],
+    "modified": "2026-10-16T09:55:57.350751224Z",
+    "published": "2026-10-08T22:31:09Z",
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-6617"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847188"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/847313"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81867"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/U2fTuyDJznI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/ZPwCyRUuGBs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "1.26.9"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "CanonicalHeaderKey",
+          "Client.CloseIdleConnections",
+          "Client.Do",
+          "Client.Get",
+          "Client.Head",
+          "Client.Post",
+          "Client.PostForm",
+          "ClientConn.Close",
+          "ClientConn.RoundTrip",
+          "Cookie.String",
+          "Cookie.Valid",
+          "CrossOriginProtection.AddInsecureBypassPattern",
+          "CrossOriginProtection.AddTrustedOrigin",
+          "CrossOriginProtection.Check",
+          "Dir.Open",
+          "Error",
+          "Get",
+          "Handle",
+          "HandleFunc",
+          "HandlerFunc.ServeHTTP",
+          "Head",
+          "Header.Add",
+          "Header.Del",
+          "Header.Get",
+          "Header.Set",
+          "Header.Values",
+          "Header.Write",
+          "Header.WriteSubset",
+          "ListenAndServe",
+          "ListenAndServeTLS",
+          "NewRequest",
+          "NewRequestWithContext",
+          "NotFound",
+          "ParseCookie",
+          "ParseSetCookie",
+          "ParseTime",
+          "Post",
+          "PostForm",
+          "ProxyFromEnvironment",
+          "ReadRequest",
+          "ReadResponse",
+          "Redirect",
+          "Request.AddCookie",
+          "Request.BasicAuth",
+          "Request.Cookie",
+          "Request.Cookies",
+          "Request.CookiesNamed",
+          "Request.FormFile",
+          "Request.FormValue",
+          "Request.MultipartReader",
+          "Request.ParseForm",
+          "Request.ParseMultipartForm",
+          "Request.PostFormValue",
+          "Request.Referer",
+          "Request.SetBasicAuth",
+          "Request.UserAgent",
+          "Request.Write",
+          "Request.WriteProxy",
+          "Response.Cookies",
+          "Response.Location",
+          "Response.Write",
+          "ResponseController.EnableFullDuplex",
+          "ResponseController.Flush",
+          "ResponseController.Hijack",
+          "ResponseController.SetReadDeadline",
+          "ResponseController.SetWriteDeadline",
+          "Serve",
+          "ServeContent",
+          "ServeFile",
+          "ServeFileFS",
+          "ServeMux.Handle",
+          "ServeMux.HandleFunc",
+          "ServeMux.ServeHTTP",
+          "ServeTLS",
+          "Server.Close",
+          "Server.ListenAndServe",
+          "Server.ListenAndServeTLS",
+          "Server.Serve",
+          "Server.ServeTLS",
+          "Server.SetKeepAlivesEnabled",
+          "Server.Shutdown",
+          "SetCookie",
+          "Transport.CancelRequest",
+          "Transport.Clone",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "body.Close",
+          "body.Read",
+          "bodyEOFSignal.Close",
+          "bodyEOFSignal.Read",
+          "bodyLocked.Read",
+          "bufioFlushWriter.Write",
+          "cancelTimerBody.Close",
+          "cancelTimerBody.Read",
+          "checkConnErrorWriter.Write",
+          "chunkWriter.Write",
+          "connReader.Read",
+          "connectMethodKey.String",
+          "expectContinueReader.Close",
+          "expectContinueReader.Read",
+          "extraHeader.Write",
+          "fileHandler.ServeHTTP",
+          "fileTransport.RoundTrip",
+          "globalOptionsHandler.ServeHTTP",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "http1ClientConn.Close",
+          "http1ClientConn.RoundTrip",
+          "http2ClientConn.Close",
+          "http2ClientConn.Ping",
+          "http2ClientConn.RoundTrip",
+          "http2ClientConn.Shutdown",
+          "http2ConnectionError.Error",
+          "http2ErrCode.String",
+          "http2FrameHeader.String",
+          "http2FrameType.String",
+          "http2FrameWriteRequest.String",
+          "http2Framer.ReadFrame",
+          "http2Framer.ReadFrameForHeader",
+          "http2Framer.ReadFrameHeader",
+          "http2Framer.WriteContinuation",
+          "http2Framer.WriteData",
+          "http2Framer.WriteDataPadded",
+          "http2Framer.WriteGoAway",
+          "http2Framer.WriteHeaders",
+          "http2Framer.WritePing",
+          "http2Framer.WritePriority",
+          "http2Framer.WritePushPromise",
+          "http2Framer.WriteRSTStream",
+          "http2Framer.WriteRawFrame",
+          "http2Framer.WriteSettings",
+          "http2Framer.WriteSettingsAck",
+          "http2Framer.WriteWindowUpdate",
+          "http2GoAwayError.Error",
+          "http2Server.ServeConn",
+          "http2Setting.String",
+          "http2SettingID.String",
+          "http2SettingsFrame.ForeachSetting",
+          "http2StreamError.Error",
+          "http2Transport.CloseIdleConnections",
+          "http2Transport.NewClientConn",
+          "http2Transport.RoundTrip",
+          "http2Transport.RoundTripOpt",
+          "http2bufferedWriter.Flush",
+          "http2bufferedWriter.Write",
+          "http2bufferedWriterTimeoutWriter.Write",
+          "http2chunkWriter.Write",
+          "http2clientConnPool.GetClientConn",
+          "http2connError.Error",
+          "http2dataBuffer.Read",
+          "http2duplicatePseudoHeaderError.Error",
+          "http2gzipReader.Close",
+          "http2gzipReader.Read",
+          "http2headerFieldNameError.Error",
+          "http2headerFieldValueError.Error",
+          "http2netHTTPClientConn.Close",
+          "http2netHTTPClientConn.RoundTrip",
+          "http2noDialClientConnPool.GetClientConn",
+          "http2noDialH2RoundTripper.NewClientConn",
+          "http2noDialH2RoundTripper.RoundTrip",
+          "http2pipe.Read",
+          "http2priorityWriteSchedulerRFC7540.CloseStream",
+          "http2priorityWriteSchedulerRFC7540.OpenStream",
+          "http2priorityWriteSchedulerRFC9218.OpenStream",
+          "http2pseudoHeaderError.Error",
+          "http2requestBody.Close",
+          "http2requestBody.Read",
+          "http2responseWriter.Flush",
+          "http2responseWriter.FlushError",
+          "http2responseWriter.Push",
+          "http2responseWriter.SetReadDeadline",
+          "http2responseWriter.SetWriteDeadline",
+          "http2responseWriter.Write",
+          "http2responseWriter.WriteHeader",
+          "http2responseWriter.WriteString",
+          "http2roundRobinWriteScheduler.OpenStream",
+          "http2serverConn.CloseConn",
+          "http2serverConn.Flush",
+          "http2serverConn.processSetting",
+          "http2serverConn.startFrameWrite",
+          "http2stickyErrWriter.Write",
+          "http2transportResponseBody.Close",
+          "http2transportResponseBody.Read",
+          "http2unencryptedTransport.RoundTrip",
+          "http2writeData.String",
+          "initALPNRequest.ServeHTTP",
+          "loggingConn.Close",
+          "loggingConn.Read",
+          "loggingConn.Write",
+          "maxBytesReader.Close",
+          "maxBytesReader.Read",
+          "onceCloseListener.Close",
+          "persistConn.Read",
+          "persistConnWriter.ReadFrom",
+          "persistConnWriter.Write",
+          "populateResponse.Write",
+          "populateResponse.WriteHeader",
+          "readTrackingBody.Close",
+          "readTrackingBody.Read",
+          "readWriteCloserBody.CloseWrite",
+          "readWriteCloserBody.Read",
+          "redirectHandler.ServeHTTP",
+          "response.Flush",
+          "response.FlushError",
+          "response.Hijack",
+          "response.ReadFrom",
+          "response.Write",
+          "response.WriteHeader",
+          "response.WriteString",
+          "serverHandler.ServeHTTP",
+          "socksDialer.DialWithConn",
+          "socksUsernamePassword.Authenticate",
+          "stringWriter.WriteString",
+          "timeoutHandler.ServeHTTP",
+          "timeoutWriter.Write",
+          "timeoutWriter.WriteHeader",
+          "transportReadFromServerError.Error",
+          "unencryptedHTTP2Request.ServeHTTP"
+         ],
+         "path": "net/http"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6617.json"
+      }
+     },
+     {
+      "package": {
+       "name": "stdlib",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/stdlib"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "1.27.0-0"
+         },
+         {
+          "fixed": "1.27.2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "net/http/internal/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "NetHTTPClientConn.Close",
+          "NetHTTPClientConn.Ping",
+          "NetHTTPClientConn.RoundTrip",
+          "ReadFrameHeader",
+          "Server.GracefulShutdown",
+          "Server.ServeConn",
+          "SettingsFrame.ForeachSetting",
+          "Transport.AddConn",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "noDialClientConnPool.GetClientConn",
+          "requestBody.Close",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "serve400Handler.ServeHTTP",
+          "serverConn.Flush",
+          "serverConn.processSetting",
+          "serverConn.startFrameWrite",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6617.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.60.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/http2",
+         "symbols": [
+          "ClientConn.Close",
+          "ClientConn.Ping",
+          "ClientConn.RoundTrip",
+          "ClientConn.Shutdown",
+          "ConfigureServer",
+          "ConfigureTransport",
+          "ConfigureTransports",
+          "ConnectionError.Error",
+          "ErrCode.String",
+          "FrameHeader.String",
+          "FrameType.String",
+          "FrameWriteRequest.String",
+          "Framer.ReadFrame",
+          "Framer.ReadFrameForHeader",
+          "Framer.ReadFrameHeader",
+          "Framer.WriteContinuation",
+          "Framer.WriteData",
+          "Framer.WriteDataPadded",
+          "Framer.WriteGoAway",
+          "Framer.WriteHeaders",
+          "Framer.WritePing",
+          "Framer.WritePriority",
+          "Framer.WritePriorityUpdate",
+          "Framer.WritePushPromise",
+          "Framer.WriteRSTStream",
+          "Framer.WriteRawFrame",
+          "Framer.WriteSettings",
+          "Framer.WriteSettingsAck",
+          "Framer.WriteWindowUpdate",
+          "GoAwayError.Error",
+          "ReadFrameHeader",
+          "Server.ServeConn",
+          "Setting.String",
+          "SettingID.String",
+          "SettingsFrame.ForeachSetting",
+          "StreamError.Error",
+          "Transport.CloseIdleConnections",
+          "Transport.NewClientConn",
+          "Transport.RoundTrip",
+          "Transport.RoundTripOpt",
+          "bufferedWriter.Flush",
+          "bufferedWriter.Write",
+          "bufferedWriterTimeoutWriter.Write",
+          "chunkWriter.Write",
+          "clientConnPool.GetClientConn",
+          "connError.Error",
+          "dataBuffer.Read",
+          "duplicatePseudoHeaderError.Error",
+          "gzipReader.Close",
+          "gzipReader.Read",
+          "headerFieldNameError.Error",
+          "headerFieldValueError.Error",
+          "netHTTPClientConn.Close",
+          "netHTTPClientConn.RoundTrip",
+          "noDialClientConnPool.GetClientConn",
+          "noDialH2RoundTripper.NewClientConn",
+          "noDialH2RoundTripper.RoundTrip",
+          "pipe.Read",
+          "priorityWriteSchedulerRFC7540.CloseStream",
+          "priorityWriteSchedulerRFC7540.OpenStream",
+          "priorityWriteSchedulerRFC9218.OpenStream",
+          "pseudoHeaderError.Error",
+          "requestBody.Close",
+          "requestBody.Read",
+          "responseWriter.Flush",
+          "responseWriter.FlushError",
+          "responseWriter.Push",
+          "responseWriter.SetReadDeadline",
+          "responseWriter.SetWriteDeadline",
+          "responseWriter.Write",
+          "responseWriter.WriteHeader",
+          "responseWriter.WriteString",
+          "roundRobinWriteScheduler.OpenStream",
+          "serverConn.CloseConn",
+          "serverConn.Flush",
+          "serverConn.processSetting",
+          "serverConn.startFrameWrite",
+          "stickyErrWriter.Write",
+          "transportResponseBody.Close",
+          "transportResponseBody.Read",
+          "unencryptedTransport.RoundTrip",
+          "writeData.String"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6617.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "RyotaK (https://ryotak.net) of GMO Flatt Security Inc."
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6860",
+    "summary": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
+    "details": "When coalescing adjacent text nodes in addText and fosterParent, appending to an existing TextNode's Data via string concatenation (n.Data += text) reallocated and copied the accumulated string on every token. Inputs containing many short text runs separated by ignored end tags (such as \"a</x>\") caused O(n^2) allocations and byte copies.\n\nAccumulate coalesced text in per-node byte slices during parsing and materialize Data strings once at the end of parse.",
+    "aliases": [
+     "CVE-2026-78661"
+    ],
+    "modified": "2026-10-27T21:30:04.890809062Z",
+    "published": "2026-10-27T21:16:18Z",
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6860",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/849365"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/82224"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/sqrs2vTx_Xs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.62.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Parse",
+          "ParseFragment",
+          "ParseFragmentWithOptions",
+          "ParseWithOptions",
+          "parser.addText",
+          "parser.fosterParent",
+          "parser.parse"
+         ],
+         "path": "golang.org/x/net/html"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6860.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.2",
+    "credits": [
+     {
+      "name": "Markus Magnuson"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6866",
+    "summary": "Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net",
+    "details": "In childTextNodesAreLiteral, walking up the tree previously stopped at the nearest foreign ancestor once an HTML integration point was found. However, that integration point may itself be a descendant of an element that was foster-parented into a foreign namespace (such as <mglyph> or <malignmark> fostered under <mtext>), causing a parser to resolve the subtree in a different foreign namespace upon re-parsing the rendered output.\n\nContinue walking the full ancestor chain and verify that every transition from a non-empty namespace occurs at an HTML integration point before emitting literal text.",
+    "aliases": [
+     "CVE-2026-97045"
+    ],
+    "modified": "2026-10-27T21:45:08.978077289Z",
+    "published": "2026-10-27T21:16:18Z",
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-6866"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/855121"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/82622"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/sqrs2vTx_Xs"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/net",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/net"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.62.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/net/html",
+         "symbols": [
+          "Render",
+          "childTextNodesAreLiteral"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6866.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.2",
+    "credits": [
+     {
+      "name": "Ali Sherif (https://www.linkedin.com/in/ali-sherif-13812b276)"
+     }
+    ]
+   }
+  ]
+ }
+}
