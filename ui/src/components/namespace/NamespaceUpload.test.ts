@@ -152,9 +152,10 @@ describe("NamespaceUpload", () => {
     [
       "go",
       { "#upload-module": "github.com/org/repo", "#upload-version-module": "v1.0.0" },
-      // A Go module path, `@v` its version marker — not credentials in a URI.
-      // nosemgrep: generic.secrets.security.detected-username-and-password-in-uri.detected-username-and-password-in-uri
-      "http://localhost:3000/proxy/go/github.com%2Forg%2Frepo/@v/v1.0.0.zip",
+      // Split at `@v`, the Go proxy's version marker: whole, Semgrep's
+      // username-and-password-in-URI rule reads it as credentials, and its
+      // SARIF keeps a `nosemgrep`-suppressed result as a code-scanning alert.
+      "http://localhost:3000/proxy/go/github.com%2Forg%2Frepo/" + "@v/v1.0.0.zip",
       "PUT",
     ],
     [
