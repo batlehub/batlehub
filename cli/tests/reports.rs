@@ -482,7 +482,7 @@ fn bundle_list_prints_the_signer_prefix_and_the_count() {
     s.mock("GET", "/api/v1/admin/bundle")
         .with_body(
             json!({"items": [{
-                "bundle_id": "estate-1", "signer_key": "abcdef0123456789",
+                "bundle_id": "estate-1", "signer_key": "aaaaaaaabbbbbbbb",
                 "imported_at": "2026-10-01T09:00:00Z", "imported_by": "ops",
                 "entries": 3, "blobs": 2, "rejected": 0,
             }]})
@@ -492,8 +492,8 @@ fn bundle_list_prints_the_signer_prefix_and_the_count() {
     let (code, stdout, stderr) = cli(&["bundle", "list"], &s.url());
     assert_eq!(code, 0, "{stderr}");
     assert!(
-        stdout.contains("abcdef01")
-            && !stdout.contains("abcdef0123")
+        stdout.contains("aaaaaaaa")
+            && !stdout.contains("aaaaaaaab")
             && stdout.contains("1 bundle(s)"),
         "{stdout}"
     );
@@ -1181,7 +1181,7 @@ fn mise_import_lists_each_rejection_and_exits_seven() {
     let mut s = server();
     s.mock("POST", "/api/v1/admin/bundle/import")
         .with_body(
-            r#"{"bundle_id":"b","signer_key":"0123456789abcdef","imported":2,"entries":3,
+            r#"{"bundle_id":"b","signer_key":"1111111122222222","imported":2,"entries":3,
                 "rejected":1,"rejections":["r/x: digest mismatch"]}"#,
         )
         .create();
@@ -1189,7 +1189,7 @@ fn mise_import_lists_each_rejection_and_exits_seven() {
     let (code, stdout, stderr) = cli(&["mise", "import", &bundle_file(&dir)], &s.url());
     assert_eq!(code, 7, "{stderr}");
     assert!(
-        stdout.contains("signature ok (01234567) · 2 blob(s) · 1 rejected")
+        stdout.contains("signature ok (11111111) · 2 blob(s) · 1 rejected")
             && stdout.contains("rejected: r/x: digest mismatch"),
         "{stdout}"
     );

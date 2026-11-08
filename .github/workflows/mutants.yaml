@@ -196,18 +196,29 @@ jobs:
           workspaces: head
           shared-key: mutants
           save-if: false
-      # From the base only: a head mise.toml cannot repoint the binaries, set
-      # `[env]` or add a postinstall. mise.lock's checksum is verified.
+      # The pull request that introduces the pins (decision 39's bootstrap):
+      # base has none, so the head's are used, with a warning, as for the config.
+      - id: pins
+        run: |
+          if grep -q 'github:sourcefrog/cargo-mutants' base/mise.toml && grep -q 'github:VirusTotal/yara-x' base/mise.toml; then
+            echo "dir=base" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::base pins neither cargo-mutants nor yr; using the head's mise.toml"
+            echo "dir=head" >> "$GITHUB_OUTPUT"
+          fi
+      # From the base only (bootstrap aside): a head mise.toml cannot repoint
+      # the binaries, set `[env]` or add a postinstall. mise.lock's checksum is
+      # verified.
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.9.5
-          working_directory: base
+          working_directory: ${{ steps.pins.outputs.dir }}
           install: true
           install_args: github:sourcefrog/cargo-mutants github:VirusTotal/yara-x
           add_shims_to_path: false
           cache: false
         env:
-          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/base
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/${{ steps.pins.outputs.dir }}
           MISE_CEILING_PATHS: ${{ github.workspace }}
       - name: Install build dependencies
         run: |
@@ -216,12 +227,13 @@ jobs:
       - name: Mutants on the changed lines
         shell: bash --noprofile --norc {0}
         env:
-          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/base
+          PINS: ${{ steps.pins.outputs.dir }}
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/${{ steps.pins.outputs.dir }}
           MISE_CEILING_PATHS: ${{ github.workspace }}
         run: |
           set -uo pipefail
-          cm="$(cd base && mise which cargo-mutants)"
-          yr_dir="$(dirname "$(cd base && mise which yr)")"
+          cm="$(cd "$PINS" && mise which cargo-mutants)"
+          yr_dir="$(dirname "$(cd "$PINS" && mise which yr)")"
           export PATH="$yr_dir:$PATH"
           cfg="$GITHUB_WORKSPACE/base/.cargo/mutants.toml"
           if [ ! -f "$cfg" ]; then

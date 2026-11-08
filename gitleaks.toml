@@ -45,6 +45,12 @@ paths = [
 # commit that introduced the line flagged forever. Same reason the two
 # pre-RFC-0005 `website/` paths are still listed above.
 regexes = [
+    # Two fake bundle signer keys `cli/tests/reports.rs` once mocked, since
+    # replaced by low-entropy values; listed so the commits that introduced
+    # them stop failing the history walk. Anchored: a
+    # real key merely containing either run of hex is still a finding.
+    '''^abcdef0123456789$''',
+    '''^0123456789abcdef$''',
     # base64 of "extension.vsixmanifest" — the entry key vsce-sign writes into
     # a `.signature.manifest`, asserted literally in `vsx_signature.rs` so the
     # shape stays measured off the real signer. `generic-api-key` reads the
