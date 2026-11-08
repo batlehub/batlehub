@@ -275,6 +275,29 @@ mod tests {
         );
     }
 
+    /// A bare-hex SHA-512 is read by its length; without it, a registry that
+    /// publishes one would silently disable cache-write verification (M10).
+    #[test]
+    fn bare_hex_sha512_verifies_and_a_wrong_one_mismatches() {
+        let hex512 = hex::encode(Sha512::digest(HELLO));
+        assert_eq!(
+            verify(&hex512, HELLO),
+            IntegrityOutcome::Verified {
+                algo: ChecksumAlgo::Sha512
+            }
+        );
+        assert!(matches!(
+            verify(&hex512, b"other"),
+            IntegrityOutcome::Mismatch { .. }
+        ));
+    }
+
+    /// Composer compares this against its own SHA-1 of the zip (M10).
+    #[test]
+    fn sha1_hex_is_the_bare_sha1_digest() {
+        assert_eq!(sha1_hex(HELLO), HELLO_SHA1_HEX);
+    }
+
     #[test]
     fn npm_sri_sha512_verifies() {
         let sri = hello_sri(ChecksumAlgo::Sha512);

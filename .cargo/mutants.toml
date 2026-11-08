@@ -1,0 +1,55 @@
+# cargo-mutants on tier 1 (RFC 0041 §4.3, §6.4). Read from the base on a pull
+# request, like the coverage floors: a PR cannot shrink what is mutated.
+#
+# `task mutants` runs it locally (one file: `task mutants FILE=…`);
+# .github/workflows/mutants.yaml runs it nightly in 8 shards and on the changed
+# lines of a pull request.
+#
+# The tier-1 paths, in full. The scanner adapters are tier 1 for mutation only,
+# and only their severity/kind mapping (`examine_re` below): the rest of those
+# files is subprocess and sandbox plumbing that needs the real binaries.
+examine_globs = [
+  "crates/core/src/rules/**/*.rs",
+  "crates/web/src/middleware/**/*.rs",
+  "crates/adapters/src/auth/**/*.rs",
+  "crates/web/src/extractors.rs",
+  "crates/web/src/handlers/auth/**/*.rs",
+  "crates/core/src/services/integrity.rs",
+  "crates/core/src/services/local_registry/mod.rs",
+  "crates/adapters/src/storage/mod.rs",
+  "crates/core/src/services/verdict.rs",
+  "crates/adapters/src/vulnerability/osv.rs",
+  "crates/adapters/src/scanners/*.rs",
+]
+
+# Tier 1 is "outside COVERAGE_EXCLUDE" (.tasks/coverage.yaml): the SSO
+# handlers need a live identity provider and are proved by the heavy suites.
+exclude_globs = [
+  "crates/web/src/handlers/auth/oidc.rs",
+  "crates/web/src/handlers/auth/oidc/**",
+]
+
+# Within crates/adapters/src/scanners/, only the mapping functions; every other
+# tier-1 path matches the first alternative whole.
+examine_re = [
+  '^crates/(core|web|adapters/src/(auth|storage|vulnerability))/',
+  '^crates/adapters/src/scanners/[a-z]+\.rs:\d+:\d+: .*\b(classify|map|map_scan|map_timeline|map_artifact|apply|worst_failure)\b',
+]
+
+# Equivalent or unobservable mutants. Each entry says why, and is reviewed like
+# code (RFC 0041 §10.2).
+exclude_re = [
+  # Rendering: a Display/Debug impl decides nothing.
+  'impl (std::fmt::|fmt::)?(Display|Debug) for ',
+  # `Rule::name` is the label in a deny reason and in logs; the gates that key
+  # on it (`EXEMPTIBLE_GATES`) compare the constant, not the method.
+  '<impl Rule for [A-Za-z]+>::name',
+  # The streaming chunk size is a memory tuning, not a decision: any size
+  # serves the same bytes (M11, the one survivor in storage/mod.rs).
+  '^crates/adapters/src/storage/mod\.rs:\d+:\d+: replace \* with \+$',
+]
+
+# A refusal in tier 1 is often proved by the web suites, not by the mutated
+# file's own crate; the core paths are run with `--test-workspace=true` by
+# `task mutants` and the workflow (two invocations, §6.4).
+test_workspace = false

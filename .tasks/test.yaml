@@ -122,6 +122,35 @@ tasks:
     cmds:
       - python3 -I -m unittest discover -s .github/scripts/tests
 
+  mutants:
+    desc: "cargo-mutants on tier 1 (.cargo/mutants.toml, RFC 0041 §6.4); one file: task mutants FILE=crates/core/src/rules/rbac.rs"
+    vars:
+      FILE: '{{.FILE | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        # By `mise which` (the install path), never the shims: a shim for `yr` passes
+        # `command_exists` and fails inside cargo-mutants' scratch copy (M11).
+        cm="$(mise which cargo-mutants)"
+        yr_dir="$(dirname "$(mise which yr)")"
+        export PATH="$yr_dir:$PATH"
+        if [ -n "{{.FILE}}" ]; then
+          # The config's examine_globs win over --file, so one file runs on a
+          # copy of the config narrowed to it, exclusions kept.
+          cfg="$(mktemp --suffix=.toml)"
+          python3 -I -c 'import json,sys,tomllib
+        c = tomllib.load(open(".cargo/mutants.toml", "rb"))
+        c["examine_globs"] = [sys.argv[1]]
+        print("\n".join(f"{k} = {json.dumps(v)}" for k, v in c.items()))' "{{.FILE}}" >"$cfg"
+          case "{{.FILE}}" in crates/core/*) tw=true ;; *) tw=false ;; esac
+          "$cm" mutants --config "$cfg" --test-workspace="$tw" {{.CLI_ARGS}}
+        else
+          # Two invocations: the core paths are also proved by crates/web's
+          # suites, so their mutants run the whole workspace's tests.
+          "$cm" mutants --test-workspace=true --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o mutants.out/core {{.CLI_ARGS}}
+          "$cm" mutants --exclude 'crates/core/**' -o mutants.out/rest {{.CLI_ARGS}}
+        fi
+
   test:pg-vulnerability:
     desc: Run PgVulnerabilityRepository integration tests (starts a temporary Postgres container via Podman)
     cmds:

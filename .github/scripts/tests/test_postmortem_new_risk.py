@@ -263,3 +263,205 @@ class Gate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Reputation(unittest.TestCase):
+    """Phase 4: `diff --online` and the approval of decision 46.
+
+    `diff-online.json` was written by postmortem 2.9.2 on 2026-11-08 over a
+    base pinning tslib 2.8.1, left-pad 1.3.0 and typescript 7.0.2 and a head
+    moving tslib to 2.9.1 (`new-publisher`, as M9 saw on PR #270) and
+    typescript to the 3-hour-old 7.1.0-dev.20261108.1 (`fresh-release`), and
+    adding esbuild 0.25.0 (an install script `diff` does not report;
+    `scripts-head.json` does) and lodahs (`typosquat of lodash`).
+    `diff-online-stats-failed.json` is the same diff with GitHub refusing the
+    token: exit 0, and `stats-failed` on each package as the only trace
+    (§17 M20). The `gh-*.json` files are api.github.com's answers for PR #243.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "batlehub/batlehub", "GITHUB_TOKEN": "t"})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("VULN_MLAB_TOKEN", None)
+        self.pull = fixture("gh-pull-243.json")
+        self.head = self.pull["head"]["sha"]
+        self.reviews = []
+        self.roles = {}
+        self.calls = []
+        api = mock.patch.object(gate, "api_get", side_effect=self.fake_api)
+        api.start()
+        self.addCleanup(api.stop)
+
+    def review(self, login, state="APPROVED", commit=None):
+        r = fixture("gh-reviews-243.json")[0]
+        r = {**r, "user": {**r["user"], "login": login}, "state": state, "commit_id": commit or self.head}
+        self.reviews.append(r)
+
+    def fake_api(self, url, token, timeout):
+        self.calls.append(url)
+        path = url.split("/repos/batlehub/batlehub/", 1)[-1]
+        if path == "pulls/243":
+            return self.pull
+        if path.startswith("pulls/243/reviews"):
+            page = int(path.rsplit("page=", 1)[1])
+            return self.reviews[(page - 1) * 100 : page * 100]
+        if path.startswith("collaborators/"):
+            login = path.split("/")[1]
+            base = fixture("gh-permission-admin.json" if self.roles.get(login) == "admin" else "gh-permission-read.json")
+            return {**base, "role_name": self.roles.get(login, "read")}
+        if url.endswith("/rate_limit"):
+            return {"resources": {"core": {"remaining": 0, "reset": 1_800_000_000}}}
+        raise AssertionError(f"unexpected call {url}")
+
+    def write(self, name, doc):
+        path = Path(self.tmp.name) / name
+        path.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+        return str(path)
+
+    def online(self, doc=None, head_scripts=None, *extra):
+        out = io.StringIO()
+        args = [
+            "--root", "ui", "--tree", str(FIX / "clean-tree.json"),
+            "--online-diff", self.write("o.json", doc) if doc is not None else str(FIX / "diff-online.json"),
+            "--scripts-base", str(FIX / "scripts-base.json"),
+            "--scripts-head", self.write("h.json", head_scripts) if head_scripts is not None else str(FIX / "scripts-head.json"),
+            *extra,
+        ]
+        with contextlib.redirect_stdout(out):
+            code = gate.main(args)
+        return code, out.getvalue()
+
+    def only(self, kind, pkg):
+        doc = fixture("diff-online.json")
+        doc["added"] = [p for p in doc["added"] if kind == "added" and p["name"] == pkg]
+        doc["changed"] = [p for p in doc["changed"] if kind == "changed" and p["name"] == pkg]
+        return doc
+
+    def no_scripts(self):
+        return {**fixture("scripts-head.json"), "packages": []}
+
+    def test_the_recorded_change_blocks_on_each_rule(self):
+        code, out = self.online()
+        self.assertEqual(code, 1)
+        self.assertIn("lodahs@0.0.1 — typosquat of lodash (transposed)", out)
+        self.assertIn("esbuild@0.25.0 — install script", out)
+        self.assertIn("tslib@2.9.1 — new-publisher", out)
+        self.assertIn("typescript@7.1.0-dev.20261108.1 — fresh-release (3h old)", out)
+        self.assertIn("tslib@2.9.1: reported, not blocking — dormant-release (728d gap)", out)
+        self.assertIn("lodahs@0.0.1: reported, not blocking — no-repository", out)
+
+    def test_signals_outside_the_blocking_set_are_reported_only(self):
+        doc = self.only("added", "lodahs")
+        doc["added"][0]["assessment"]["signals"] = ["no-repository", "newborn-package (21d old)", "low-stars (3)"]
+        code, out = self.online(doc, self.no_scripts())
+        self.assertEqual(code, 0, out)
+        self.assertIn("reported, not blocking — no-repository, newborn-package (21d old), low-stars (3)", out)
+
+    def test_a_newborn_package_under_seven_days_blocks(self):
+        doc = self.only("added", "lodahs")
+        doc["added"][0]["assessment"]["signals"] = ["newborn-package (3d old)"]
+        code, out = self.online(doc, self.no_scripts())
+        self.assertEqual(code, 1)
+        self.assertIn("lodahs@0.0.1 — newborn-package (3d old)", out)
+
+    def test_an_age_it_cannot_read_counts_as_young(self):
+        doc = self.only("changed", "typescript")
+        doc["changed"][0]["assessment"]["signals"] = ["fresh-release (soon)"]
+        self.assertEqual(self.online(doc, self.no_scripts())[0], 1)
+
+    def test_a_version_change_without_a_takeover_signal_passes(self):
+        doc = self.only("changed", "typescript")
+        doc["changed"][0]["assessment"]["signals"] = ["fresh-release (9d old)"]
+        code, out = self.online(doc, self.no_scripts())
+        self.assertEqual(code, 0, out)
+
+    def test_a_version_change_that_gains_an_install_script_blocks(self):
+        doc = self.only("changed", "tslib")
+        doc["changed"][0]["assessment"]["signals"] = []
+        head = {**fixture("scripts-head.json"), "packages": [{**fixture("scripts-head.json")["packages"][0], "name": "tslib"}]}
+        code, out = self.online(doc, head)
+        self.assertEqual(code, 1)
+        self.assertIn("tslib@2.9.1 — install script the old version did not have", out)
+
+    def test_cargo_build_scripts_are_not_install_scripts(self):
+        doc = self.only("added", "lodahs")
+        doc["added"][0]["assessment"]["signals"] = []
+        head = {**fixture("scripts-head.json"), "packages": [{**fixture("scripts-head.json")["packages"][0], "name": "lodahs", "ecosystem": "rust"}]}
+        self.assertEqual(self.online(doc, head)[0], 0)
+
+    def test_stats_failed_fails_closed_with_the_reset_time_and_no_approval_lifts_it(self):
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        code, out = self.online(fixture("diff-online-stats-failed.json"), None, "--pr", "243")
+        self.assertEqual(code, 1)
+        self.assertIn("the reputation lookup did not complete for 3 package(s)", out)
+        self.assertIn("rate limit resets at", out)
+        self.assertNotIn("::error::approved", out)
+
+    def test_an_approval_of_the_head_by_a_maintainer_turns_it_report_only(self):
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        code, out = self.online(None, None, "--pr", "243")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::notice::approved on this head by maint", out)
+        self.assertIn("::warning::lodahs@0.0.1 — typosquat of lodash (transposed)", out)
+
+    def test_an_approval_of_an_earlier_head_does_not(self):
+        self.roles["maint"] = "admin"
+        self.review("maint", commit="0" * 40)
+        code, out = self.online(None, None, "--pr", "243")
+        self.assertEqual(code, 1)
+        self.assertIn(f"no approving review of head {self.head}", out)
+
+    def test_the_authors_own_approval_or_a_triage_account_does_not(self):
+        self.roles[self.pull["user"]["login"]] = "admin"
+        self.review(self.pull["user"]["login"])
+        self.roles["helper"] = "triage"
+        self.review("helper")
+        self.review("other", state="COMMENTED")
+        self.assertEqual(self.online(None, None, "--pr", "243")[0], 1)
+
+    def test_a_review_list_longer_than_a_page_is_read_to_its_end(self):
+        for i in range(150):
+            self.review(f"drive-by-{i}", state="COMMENTED")
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        self.assertEqual(self.online(None, None, "--pr", "243")[0], 0)
+        self.assertTrue(any("page=2" in c for c in self.calls))
+
+    def test_an_api_error_or_a_timeout_is_red(self):
+        for exc in (gate.urllib.error.URLError("boom"), TimeoutError("slow")):
+            with self.subTest(exc=exc), mock.patch.object(gate, "api_get", side_effect=exc):
+                code, out = self.online(None, None, "--pr", "243")
+                self.assertEqual(code, 1)
+                self.assertIn("the reviews API failed", out)
+
+    def test_a_new_root_is_lifted_by_an_approval_but_a_mal_package_never_is(self):
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        diff = fixture("empty-diff.json")
+        diff["added"] = [{"name": f"p{i}", "version": "1.0.0"} for i in range(3)]
+        diff["summary"] = {"added": 3, "changed": 0, "removed": 0, "unchanged": 0}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.main(["--root", "ui", "--tree", str(FIX / "clean-tree.json"), "--diff", self.write("d.json", diff), "--pr", "243"])
+        self.assertEqual(code, 0, out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.main(["--root", "ui", "--tree", str(FIX / "npm-tree.json"), "--sarif", str(FIX / "npm-tree.sarif"),
+                              "--diff", str(FIX / "empty-diff.json"), "--pr", "243"])
+        self.assertEqual(code, 1)
+        self.assertIn("known-malicious package", out.getvalue())
+
+    def test_online_needs_both_script_inventories(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            gate.main(["--root", "ui", "--tree", str(FIX / "clean-tree.json"), "--online-diff", str(FIX / "diff-online.json")])
+
+    def test_a_package_name_cannot_issue_a_workflow_command(self):
+        doc = self.only("added", "lodahs")
+        doc["added"][0]["name"] = "evil\n::error::pwned"
+        code, out = self.online(doc, self.no_scripts())
+        self.assertNotIn("\n::error::pwned", out)

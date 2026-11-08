@@ -324,6 +324,10 @@ GATE_INPUTS = (
     "vex/*",
     ".forgejo/workflows/*",
     ".forgejo/CODEOWNERS",
+    # pnpm's `allowBuilds:` is what stops a dependency's install script: from
+    # a lockfile alone `postmortem scripts` cannot see one (RFC 0041 §17 M21).
+    "ui/pnpm-workspace.yaml",
+    "docs/pnpm-workspace.yaml",
     INLINE_NOSEMGREP,
 )
 RULES.append(

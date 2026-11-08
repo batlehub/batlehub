@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """The postmortem gate of one dependency root (RFC 0041 §6.5).
 
-Reads what the mise-pinned postmortem wrote and decides; it never calls the
-network itself.
+Reads what the mise-pinned postmortem wrote and decides. Its one network call
+is GitHub's reviews API, made only when a block is one a maintainer may lift.
 
     postmortem_new_risk.py --root ui --tree tree.json [--sarif tree.sarif]
                            [--diff diff.json] [--fail-on high|critical]
+                           [--online-diff online.json --scripts-base base.json
+                            --scripts-head head.json] [--pr N]
 
 `--tree` is `postmortem tree <root> --vulns --json`: the advisories, the
 root's package count and the diagnostics. `--sarif` is the same tree as
@@ -31,7 +33,22 @@ Exit 1 on any of:
 - with `--diff` (`block-new`, decisions 27 and 43): an advisory at or above
   `--fail-on` against a package the change adds or changes; a new or moved
   root, or more than 50 added packages, which needs a maintainer;
-- without `--diff` (push, schedule): any advisory at or above `--fail-on`.
+- without `--diff` (push, schedule): any advisory at or above `--fail-on`;
+- with `--online-diff` (`block-new` on reputation, decisions 23, 17, 49): the
+  `postmortem diff --online --json` of the change, with `postmortem scripts
+  --json` of both sides for the install scripts `diff` does not report. An
+  added package blocks on `typosquat`, on `newborn-package` under 7 days or on
+  an install script; a version change blocks on `new-publisher`, on an install
+  script the old version did not have, or on `fresh-release` under 7 days. The
+  other signals are reported. A `stats-failed` signal — postmortem 2.9.2 exits
+  0 when GitHub does not answer (§17 M20) — fails closed and is not liftable.
+
+`--pr` (decision 46): a reputation block, or a new or moved root, turns
+report-only when the pull request's head carries an `APPROVED` review — its
+`commit_id` equal to `head.sha` — from an account with the `admin` or
+`maintain` role that is not the author. Read from `GITHUB_API_URL`,
+`GITHUB_REPOSITORY` and `GITHUB_TOKEN`; an API error or a call over 30 s is red.
+A `MAL-` package, an advisory or a lookup that did not complete is never lifted.
 
 `unknown` ranks as `high` (§4.1). Every value read from lockfile data is
 escaped before printing, so a package name cannot issue a workflow command.
@@ -42,7 +59,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import time
+import urllib.error
+import urllib.request
 
 RANK = {"low": 1, "medium": 2, "moderate": 2, "high": 3, "critical": 4}
 # §4.1: a source that never rates (RUSTSEC) ranks as high; so does a word
@@ -51,6 +72,12 @@ UNRATED = RANK["high"]
 ANONYMOUS_TIER = 512
 TOKEN_TIER = 1024
 MAX_ADDED = 50
+YOUNG_SECS = 7 * 86_400
+API_BUDGET_SECS = 30
+# `permission` reports `maintain` as `write`; `role_name` keeps it.
+LIFTING_ROLES = {"admin", "maintain"}
+AGE = re.compile(r"\((\d+)([smhdwy]) old\)")
+UNIT_SECS = {"s": 1, "m": 60, "h": 3600, "d": 86_400, "w": 7 * 86_400, "y": 365 * 86_400}
 VULN_RULE = "postmortem.known-vulnerability"
 
 
@@ -134,7 +161,119 @@ def blocking(pkg: str, version: str, found: list[dict], fail_on: int) -> list[st
     ]
 
 
-def check_diff(diff: dict, vulns: dict, root: str, fail_on: int, errors: list[str]) -> None:
+def young(signal: str) -> bool:
+    """`newborn-package (3d old)` / `fresh-release (3h old)`: under 7 days.
+    An age this script cannot read counts as young — fail closed."""
+    m = AGE.search(signal)
+    return m is None or int(m.group(1)) * UNIT_SECS[m.group(2)] < YOUNG_SECS
+
+
+def install_scripts(scripts: dict) -> set[str]:
+    """Names with an install script. Cargo's build.rs and proc-macros are not
+    install scripts (every crate may have them, decision 17)."""
+    return {
+        str(p.get("name"))
+        for p in scripts.get("packages") or []
+        if str(p.get("ecosystem")) not in ("rust", "cargo")
+    }
+
+
+def check_online(online: dict, base_scripts: dict, head_scripts: dict, root: str,
+                 errors: list[str], liftable: list[str]) -> None:
+    if online.get("schema_version") != 2:
+        errors.append(f"unknown postmortem diff schema {esc(online.get('schema_version'))} — refusing to judge it")
+        return
+    before, after = install_scripts(base_scripts), install_scripts(head_scripts)
+    failed = []
+    for kind in ("added", "changed"):
+        for pkg in online.get(kind) or []:
+            name = str(pkg.get("name"))
+            label = f"{esc(name)}@{esc(pkg.get('version') or pkg.get('to'))}"
+            signals = [str(x) for x in (pkg.get("assessment") or {}).get("signals") or []]
+            if "stats-failed" in signals:
+                failed.append(label)
+            if kind == "added":
+                hits = [x for x in signals if x.startswith("typosquat") or (x.startswith("newborn-package") and young(x))]
+                if name in after:
+                    hits.append("install script")
+            else:
+                hits = [x for x in signals if x == "new-publisher" or (x.startswith("fresh-release") and young(x))]
+                if name in after and name not in before:
+                    hits.append("install script the old version did not have")
+            if hits:
+                liftable.append(f"{label} — {esc(', '.join(hits))}")
+            others = [x for x in signals if x not in hits and x != "stats-failed"]
+            if others:
+                print(f"{label}: reported, not blocking — {esc(', '.join(others))}")
+    if failed:
+        errors.append(
+            f"{esc(root)}: the reputation lookup did not complete for {len(failed)} package(s) "
+            f"({', '.join(failed[:5])}) — GitHub did not answer; never read as clean{rate_limit_reset()}"
+        )
+
+
+def api_get(url: str, token: str, timeout: float) -> object:
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — a fixed https API base
+        return json.load(resp)
+
+
+def rate_limit_reset() -> str:
+    """When GitHub's core budget comes back, if it is spent — best effort."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return ""
+    try:
+        core = api_get(f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}/rate_limit", token, 10)["resources"]["core"]
+    except Exception:  # noqa: BLE001 — a hint, never the verdict
+        return ""
+    if core.get("remaining", 1) > 0:
+        return ""
+    return f" (GitHub's rate limit resets at {time.strftime('%H:%M:%S UTC', time.gmtime(core['reset']))})"
+
+
+def approval(pr: int) -> tuple[str | None, str | None]:
+    """(approver, None) when a maintainer approved the head, (None, why) otherwise."""
+    api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not repo or not token:
+        return None, "GITHUB_REPOSITORY or GITHUB_TOKEN unset — cannot read the reviews"
+    deadline = time.monotonic() + API_BUDGET_SECS
+
+    def get(path: str) -> object:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f"the reviews API took over {API_BUDGET_SECS}s")
+        return api_get(f"{api}/repos/{repo}/{path}", token, left)
+
+    try:
+        pull = get(f"pulls/{pr}")
+        author, head = pull["user"]["login"], pull["head"]["sha"]
+        reviews: list[dict] = []
+        page = 1
+        while True:
+            batch = get(f"pulls/{pr}/reviews?per_page=100&page={page}")
+            reviews.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        for review in reviews:
+            login = (review.get("user") or {}).get("login")
+            if review.get("state") != "APPROVED" or review.get("commit_id") != head or not login or login == author:
+                continue
+            if get(f"collaborators/{login}/permission").get("role_name") in LIFTING_ROLES:
+                return login, None
+    except (urllib.error.URLError, TimeoutError, OSError, KeyError, TypeError, ValueError) as exc:
+        return None, f"the reviews API failed — {esc(exc)}"
+    return None, f"no approving review of head {esc(head)} by a maintainer other than the author"
+
+
+def check_diff(diff: dict, vulns: dict, root: str, fail_on: int, errors: list[str],
+               liftable: list[str]) -> None:
     if diff.get("schema_version") != 2:
         errors.append(f"unknown postmortem diff schema {esc(diff.get('schema_version'))} — refusing to judge it")
         return
@@ -144,7 +283,7 @@ def check_diff(diff: dict, vulns: dict, root: str, fail_on: int, errors: list[st
     # `diff` against a side without a lockfile reports the whole tree as added.
     new_root = summary.get("unchanged", 0) == 0 and summary.get("removed", 0) == 0 and not changed and added
     if new_root or len(added) > MAX_ADDED:
-        errors.append(
+        liftable.append(
             f"new or moved dependency root ({esc(root)}), or {len(added)} packages added — "
             "needs a maintainer's approving review of this head"
         )
@@ -165,10 +304,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sarif")
     ap.add_argument("--diff")
     ap.add_argument("--fail-on", choices=["high", "critical"], default="high")
+    ap.add_argument("--online-diff")
+    ap.add_argument("--scripts-base")
+    ap.add_argument("--scripts-head")
+    ap.add_argument("--pr", type=int, help="the pull request whose head approval lifts a liftable block")
     args = ap.parse_args(argv)
     fail_on = RANK[args.fail_on]
+    if args.online_diff is not None and (args.scripts_base is None or args.scripts_head is None):
+        ap.error("--online-diff needs --scripts-base and --scripts-head")
 
     errors: list[str] = []
+    liftable: list[str] = []
     tree = load(args.tree, "the postmortem tree JSON", errors)
     vulns = tree_vulns(tree) if isinstance(tree, dict) else {}
     if isinstance(tree, dict):
@@ -187,10 +333,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.diff is not None:
         diff = load(args.diff, "the postmortem diff JSON", errors)
         if isinstance(diff, dict):
-            check_diff(diff, vulns, args.root, fail_on, errors)
+            check_diff(diff, vulns, args.root, fail_on, errors, liftable)
     elif isinstance(tree, dict):
         for (name, version), found in sorted(vulns.items()):
             errors.extend(blocking(name, version, found, fail_on))
+
+    if args.online_diff is not None:
+        online = load(args.online_diff, "the postmortem online diff JSON", errors)
+        base_scripts = load(args.scripts_base, "the base's postmortem scripts JSON", errors)
+        head_scripts = load(args.scripts_head, "the head's postmortem scripts JSON", errors)
+        if all(isinstance(x, dict) for x in (online, base_scripts, head_scripts)):
+            check_online(online, base_scripts, head_scripts, args.root, errors, liftable)
+
+    if liftable:
+        approver, why = approval(args.pr) if args.pr is not None else (None, "no pull request to read an approval from")
+        if approver:
+            print(f"::notice::approved on this head by {esc(approver)} — reported, not blocking (decision 46)")
+            for line in liftable:
+                print(f"::warning::{line}")
+        else:
+            errors.extend(liftable)
+            errors.append(f"{why} — a maintainer's approving review of this head turns the lines above report-only")
 
     for line in errors:
         print(f"::error::{line}")

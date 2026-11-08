@@ -61,6 +61,10 @@ task dump-spec                # refresh ui/openapi.json from running server
 # Docs: every `batlehub-cli …` example parses with the CLI as built, none deprecated
 task docs:cli-commands
 
+# Mutation testing on tier 1 (.cargo/mutants.toml; CI: mutants.yaml, nightly + changed lines of a PR)
+task mutants FILE=crates/core/src/rules/rbac.rs # one file
+task mutants                                    # all of tier 1 — hours; the nightly shards it
+
 # Fuzz
 task fuzz:check                                 # every target compiles — the per-PR CI gate
 task fuzz TARGET=fuzz_rbac_evaluate MAX_TIME=30 # actually fuzz one (nightly)

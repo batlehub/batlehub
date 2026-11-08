@@ -1,0 +1,34 @@
+name: required-gate
+description: >-
+  The in-job path filter of RFC 0041 decision 28. A workflow-level `paths:`
+  leaves its required check "Expected" on a pull request it skips, so the
+  workflow always runs and this decides whether its jobs do. Expects the
+  repository checked out with `fetch-depth: 0` (`filter: blob:none` is enough).
+  Full run on a schedule, a manual run, or a change set that cannot be known.
+inputs:
+  paths:
+    description: One glob per line; `**` crosses directories, `*` does not.
+    required: true
+outputs:
+  run:
+    description: '"true" when a changed path matches, "false" otherwise.'
+    value: ${{ steps.decide.outputs.run }}
+runs:
+  using: composite
+  steps:
+    - id: decide
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+        mapfile -t globs < <(printf '%s\n' "$PATHS" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//')
+        run=$(python3 -I "$GITHUB_WORKSPACE/.github/scripts/required_gate.py" changed \
+          --event "$EVENT" --base "$BASE" --head "$HEAD" -- "${globs[@]}")
+        echo "run=$run" >> "$GITHUB_OUTPUT"
+        if [[ "$run" != "true" ]]; then
+          echo "Skipped: no path this workflow checks changed." >> "$GITHUB_STEP_SUMMARY"
+        fi

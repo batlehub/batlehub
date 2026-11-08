@@ -1,0 +1,13 @@
+{
+  "packages": [],
+  "root": "old",
+  "schema_version": 1,
+  "summary": {
+    "approved_but_flagged": 0,
+    "code_scanned": false,
+    "flagged": 0,
+    "pending": 0,
+    "total": 0,
+    "unmanaged_ecosystems": []
+  }
+}

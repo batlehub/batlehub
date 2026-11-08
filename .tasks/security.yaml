@@ -112,7 +112,17 @@ tasks:
       - defer: git worktree remove --force .postmortem-out/base
       - timeout 300 postmortem diff .postmortem-out/base/{{.ROOT}} {{.ROOT}} --json --no-progress -o .postmortem-out/diff.json
       - postmortem tree {{.ROOT}} --vulns --json --no-progress -o .postmortem-out/tree.json
-      - python3 -I .github/scripts/postmortem_new_risk.py --root {{.ROOT}} --tree .postmortem-out/tree.json --diff .postmortem-out/diff.json --fail-on {{if eq .ROOT "docs"}}critical{{else}}high{{end}}
+      # Reputation (RFC 0041 phase 4): online, so it needs GITHUB_TOKEN for a
+      # useful answer; without one GitHub rate-limits it and the gate says so.
+      - timeout 300 postmortem diff .postmortem-out/base/{{.ROOT}} {{.ROOT}} --online --json --no-progress -o .postmortem-out/online.json
+      - postmortem scripts .postmortem-out/base/{{.ROOT}} --json --no-progress -o .postmortem-out/scripts-base.json
+      - postmortem scripts {{.ROOT}} --json --no-progress -o .postmortem-out/scripts-head.json
+      - >-
+        python3 -I .github/scripts/postmortem_new_risk.py --root {{.ROOT}}
+        --tree .postmortem-out/tree.json --diff .postmortem-out/diff.json
+        --online-diff .postmortem-out/online.json
+        --scripts-base .postmortem-out/scripts-base.json --scripts-head .postmortem-out/scripts-head.json
+        --fail-on {{if eq .ROOT "docs"}}critical{{else}}high{{end}}
 
   postmortem:
     desc: "Run the dependency supply-chain gate over every dependency root (Rust, UI, Website)"

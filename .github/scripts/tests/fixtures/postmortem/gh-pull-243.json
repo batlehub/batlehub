@@ -1,0 +1,10 @@
+{
+  "number": 243,
+  "user": {
+    "login": "batleforc"
+  },
+  "head": {
+    "sha": "6e7042ca555caf8fb013aa487c73e59b8c9b2d15",
+    "ref": "feat/rfc-0038-setup-apply"
+  }
+}

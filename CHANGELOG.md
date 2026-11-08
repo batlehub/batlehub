@@ -172,6 +172,28 @@ refused, `mode = "warn"` included. See
   request's base. A pull request fails only on advisories against packages it
   adds or changes. Semgrep `WARNING`s now reach the Security tab. Three `cargo
   test` steps gained `--locked`, and the `npx` tools are pinned.
+- **Dependency reputation now blocks a pull request** (RFC 0041 phase 4;
+  this repository's CI only, Rust root first, `ui/` a week later). A change
+  that adds a typosquat, a package under 7 days old or one with an install
+  script, or that moves a dependency to a new publisher, a new install script
+  or a release under 7 days old, fails `postmortem — Rust`; a maintainer's
+  approving review of the head turns it into a report. postmortem 2.9.2 exits
+  0 when GitHub does not answer; the gate now fails instead.
+- **Mutation testing on tier 1** (RFC 0041 phase 5; CI only). `mutants.yaml`
+  runs cargo-mutants nightly in 8 shards over the code that decides grant,
+  deny or integrity (`.cargo/mutants.toml`), and on a pull request over the
+  tier-1 lines it changes, reporting the survivors; `task mutants [FILE=…]`
+  runs it locally. Its first finding is fixed: a bare-hex SHA-512 checksum
+  was verified by no test. The coverage holes of §6.6 (the CLI's report
+  renderers, galaxy's client, the JetBrains IDE listings, conda's local
+  mode, the UI composables) gained their tests.
+- **One required check per workflow** (RFC 0041 phase 6; CI only). Each
+  gated workflow now always runs, applies its path filter in a first `gate`
+  job, and ends with a `<file>.yaml / required` job, so a required check is
+  never left "Expected". A Dependabot `Cargo.lock` bump without the
+  `full-test` label now fails `test.yaml / required` instead of merging
+  untested. The `main` ruleset that requires these checks is added by the
+  maintainer.
 - **Coverage floors in CI** (RFC 0041 phase 3; CI only). `coverage-report`
   now fails when a path of `.github/coverage-floors.txt` drops below its
   floor, the file read from the pull request's base; `task coverage-check`

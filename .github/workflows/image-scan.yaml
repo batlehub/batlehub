@@ -2,28 +2,8 @@ name: Container image scan
 on:
   push:
     branches: ["main"]
-    paths:
-      - "Containerfile"
-      - "Containerfile.worker"
-      - "Containerfile.worker-guarddog"
-      - "Cargo.lock"
-      - "ui/pnpm-lock.yaml"
-      - ".trivyignore.yaml"
-      - "vex/**"
-      - ".github/scripts/vex.py"
-      - ".github/workflows/image-scan.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "Containerfile"
-      - "Containerfile.worker"
-      - "Containerfile.worker-guarddog"
-      - "Cargo.lock"
-      - "ui/pnpm-lock.yaml"
-      - ".trivyignore.yaml"
-      - "vex/**"
-      - ".github/scripts/vex.py"
-      - ".github/workflows/image-scan.yaml"
   # Daily rebuild + rescan so a CVE disclosed against a base/OS layer AFTER the
   # last build still trips CI — this is the "future CVE" detection, not just a
   # build-time snapshot.
@@ -33,6 +13,36 @@ on:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            Containerfile
+            Containerfile.worker
+            Containerfile.worker-guarddog
+            Cargo.lock
+            ui/pnpm-lock.yaml
+            .trivyignore.yaml
+            vex/**
+            .github/scripts/vex.py
+            .github/workflows/image-scan.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   # The two suppression mechanisms have to keep saying the same thing.
   # `.trivyignore.yaml` is what the gates below read; `vex/batlehub.openvex.json`
   # is what the release publishes, signs and attests for everyone else to read.
@@ -41,6 +51,8 @@ jobs:
   # the reason it was made. Seconds to run, and it needs no image, so it is its
   # own job rather than a step inside a ten-minute build.
   vex:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: VEX document
     runs-on: ubuntu-latest
     permissions:
@@ -51,6 +63,8 @@ jobs:
         run: python3 .github/scripts/vex.py check
 
   scan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Build & Trivy scan (Containerfile)
     runs-on: ubuntu-latest
     permissions:
@@ -104,6 +118,8 @@ jobs:
   # Both worker images in one job, because the GuardDog image is built FROM the
   # worker one.
   scan-worker:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Build & Trivy scan (worker images)
     runs-on: ubuntu-latest
     permissions:
@@ -206,3 +222,22 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: .trivyignore.yaml
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: image-scan.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, vex, scan, scan-worker]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

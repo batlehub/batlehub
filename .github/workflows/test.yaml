@@ -12,22 +12,12 @@ name: Test
 # that matter here: a route can be present, tested and answering `200` with a
 # document no client can use (RFC 0009 §5.1). Only the client is the oracle.
 on:
+  # No workflow-level `paths:` (RFC 0041 decision 28): a pull request it
+  # skipped would leave `Test / required` "Expected" forever. The `gate` job
+  # applies the same path list instead, and `required` is the one check the
+  # `main` ruleset requires.
   push:
     branches: ["main"]
-    paths:
-      - "crates/**"
-      - "server/**"
-      - "cli/**"
-      - "fuzz/**"
-      - "tests/heavy/**"
-      - "docs/guide/admin-policies.md"
-      - "docs/guide/hot-reload.md"
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/test.yaml"
-      - ".github/scripts/merge_coverage.py"
-      - ".github/coverage-floors.txt"
-      - "deploy/siem/**"
   pull_request:
     branches: ["main"]
     # No `labeled`: GitHub shows the newest check of each name on a pull
@@ -35,20 +25,6 @@ on:
     # skipped would mask the real run on the same commit, and count as passing.
     # The `full-test` label is read on the next push instead; on a dependabot
     # pull request, label it and comment `@dependabot recreate`.
-    paths:
-      - "crates/**"
-      - "server/**"
-      - "cli/**"
-      - "fuzz/**"
-      - "tests/heavy/**"
-      - "docs/guide/admin-policies.md"
-      - "docs/guide/hot-reload.md"
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/test.yaml"
-      - ".github/scripts/merge_coverage.py"
-      - ".github/coverage-floors.txt"
-      - "deploy/siem/**"
   # Nightly as well as per-PR, for the heavy client jobs: what they drive is not
   # all in this repository. They install Bundler and npm from their own
   # registries, pinned IDE, Terraform, .NET and micromamba builds, and several
@@ -91,26 +67,57 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      reason: ${{ steps.decide.outputs.reason }}
+      lockfile: ${{ steps.decide.outputs.lockfile }}
     steps:
+      # Blobless and full-depth: `git diff --name-only base...head` needs the
+      # merge base and the trees, never a file's content.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
       - id: decide
         env:
           HEAD_REF: ${{ github.head_ref }}
           FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          gate=.github/scripts/required_gate.py
+          # The path filter first (decision 41): a pull request it skips stays
+          # green whatever its branch.
+          relevant=$(python3 -I "$gate" changed --event "$EVENT" --base "$BASE" --head "$HEAD" -- \
+            'crates/**' 'server/**' 'cli/**' 'fuzz/**' 'tests/heavy/**' \
+            docs/guide/admin-policies.md docs/guide/hot-reload.md \
+            '**/Cargo.toml' '**/Cargo.lock' .github/workflows/test.yaml \
+            .github/scripts/merge_coverage.py .github/scripts/required_gate.py \
+            .github/coverage-floors.txt 'deploy/siem/**')
+          lockfile=$(python3 -I "$gate" changed --event "$EVENT" --base "$BASE" --head "$HEAD" -- \
+            Cargo.lock fuzz/Cargo.lock)
           run=true
+          reason=""
           why=""
-          if [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+          if [[ "$relevant" != "true" ]]; then
             run=false
+            reason=filter
+            why="no path this workflow tests changed"
+          elif [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+            run=false
+            reason=dependabot
             why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
           fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
+          { echo "run=$run"; echo "reason=$reason"; echo "lockfile=$lockfile"; } >> "$GITHUB_OUTPUT"
           if [[ "$run" == "false" ]]; then
             {
               echo "### Test suite skipped"
               echo
               echo "Skipped because $why."
-              echo
-              echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
+              if [[ "$reason" == "dependabot" ]]; then
+                echo
+                echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -1713,3 +1720,25 @@ jobs:
           name: coverage-merged
           path: coverage-merged.lcov
           if-no-files-found: error
+
+  # The one check the `main` ruleset requires (RFC 0041 decisions 28, 41). It
+  # fails unless every job succeeded, or the gate skipped the suite: by the
+  # path filter (green), or on a Dependabot branch without `full-test` (green,
+  # unless Cargo.lock or fuzz/Cargo.lock changed — then red, asking for the
+  # label). `heavy-authz-live` runs on schedule only and is not waited for.
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: test.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, lint, siem, fuzz, unit, integration, heavy-marketplace, heavy-vsx-extension, heavy-backends, heavy-browser, heavy-bundler, heavy-client, heavy-authz, heavy-closed-world, coverage-report]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

@@ -5,21 +5,39 @@ name: OpenAPI lint
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/openapi.json"
-      - ".spectral.yaml"
-      - ".github/workflows/openapi-lint.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/openapi.json"
-      - ".spectral.yaml"
-      - ".github/workflows/openapi-lint.yaml"
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/openapi.json
+            .spectral.yaml
+            .github/workflows/openapi-lint.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   spectral:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Spectral
     runs-on: ubuntu-latest
     steps:
@@ -31,3 +49,22 @@ jobs:
       # a ui/ devDependency). Fails on any warning: the spec is kept at zero.
       - name: Spectral lint
         run: npx --yes --ignore-scripts @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: openapi-lint.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, spectral]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

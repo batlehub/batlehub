@@ -1,0 +1,262 @@
+name: Mutants
+# Mutation testing on tier 1 (RFC 0041 §4.3, §6.4): the code that decides
+# grant, deny or integrity. Coverage says a line ran; a surviving mutant says no
+# test noticed it changed. Scope and exclusions: .cargo/mutants.toml.
+#
+#   | event         | runs                                   | fails on                                  |
+#   | ------------- | -------------------------------------- | ----------------------------------------- |
+#   | nightly       | all of tier 1, `--shard k/8`           | a red baseline, a shard that tested zero mutants, a timeout of the shard |
+#   | pull request  | the mutants on changed tier-1 lines    | nothing yet — reported until the nightly's MISSED list is empty |
+#
+# Two invocations each time: the crates/core paths with `--test-workspace=true`,
+# because crates/web's suites prove their refusals too, and the rest per package
+# (cargo-mutants' default). Local equivalent: `task mutants [FILE=…]`.
+#
+# **On a pull request nothing it controls picks the binary or the scope**
+# (decision 39): cargo-mutants and `yr` are installed from base/mise.toml and
+# base/mise.lock and called by absolute path, and the config is
+# base/.cargo/mutants.toml. The PR's code is built and tested, exactly as
+# `cargo test` already does, under a read-only token.
+on:
+  schedule:
+    - cron: "20 1 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "crates/core/src/rules/**"
+      - "crates/web/src/middleware/**"
+      - "crates/adapters/src/auth/**"
+      - "crates/web/src/extractors.rs"
+      - "crates/web/src/handlers/auth/**"
+      - "crates/core/src/services/integrity.rs"
+      - "crates/core/src/services/local_registry/mod.rs"
+      - "crates/adapters/src/storage/mod.rs"
+      - "crates/core/src/services/verdict.rs"
+      - "crates/adapters/src/vulnerability/osv.rs"
+      - "crates/adapters/src/scanners/**"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yaml"
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  nightly:
+    name: mutants — shard ${{ matrix.shard }}/8
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Decision 25: a shard is ~100 mutants; one that cannot finish in an hour
+    # is a finding about the shard size, not a reason to wait longer.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: mutants
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: 2026.9.5
+          install: true
+          install_args: github:sourcefrog/cargo-mutants github:VirusTotal/yara-x
+          add_shims_to_path: false
+          cache: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Mutants (shard ${{ matrix.shard }})
+        env:
+          SHARD: ${{ matrix.shard }}/8
+        run: |
+          set -uo pipefail
+          cm="$(mise which cargo-mutants)"
+          # By path, never the shim: the one test that runs the real `yr` kills
+          # yara.rs's matching mutants, and skips itself without one.
+          yr_dir="$(dirname "$(mise which yr)")"
+          export PATH="$yr_dir:$PATH"
+          yr --version
+          # --in-place: the checkout is disposable, and the cached target/ is
+          # then the baseline's.
+          "$cm" mutants --in-place --shard "$SHARD" --test-workspace=true \
+            --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o mutants.out/core
+          core=$?
+          "$cm" mutants --in-place --shard "$SHARD" --exclude 'crates/core/**' -o mutants.out/rest
+          rest=$?
+          echo "exit codes: core=$core rest=$rest"
+          # 0 all caught, 2 some missed, 3 some timed out: reported, not failed
+          # (the list is worked down, §6.4). 1 is a usage error, 4 a red baseline.
+          for rc in $core $rest; do
+            case $rc in 0|2|3) ;; *) echo "::error::cargo-mutants exited $rc (4 is a red baseline)"; exit 1 ;; esac
+          done
+          tested=$(cat mutants.out/*/mutants.out/outcomes.json | jq -s '[.[].outcomes[] | select(.scenario != "Baseline")] | length')
+          echo "mutants tested: $tested"
+          if [ "$tested" -eq 0 ]; then
+            echo "::error::shard $SHARD tested zero mutants — an empty MISSED list would mean nothing"
+            exit 1
+          fi
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Mutants, shard ${{ matrix.shard }}/8"
+            missed=$(cat mutants.out/*/mutants.out/missed.txt 2>/dev/null || true)
+            if [ -n "$missed" ]; then
+              echo "**MISSED** — no test noticed these changes:"
+              echo '```'
+              echo "$missed"
+              echo '```'
+            else
+              echo "No surviving mutant."
+            fi
+            timeout=$(cat mutants.out/*/mutants.out/timeout.txt 2>/dev/null || true)
+            if [ -n "$timeout" ]; then echo "**TIMEOUT:**"; echo '```'; echo "$timeout"; echo '```'; fi
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # A red nightly (a red baseline, an empty shard) opens or updates one issue,
+  # as the postmortem jobs do, so a stale MISSED list is seen (§10.1).
+  issue:
+    name: mutants-nightly issue
+    needs: nightly
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LABEL: mutants-nightly
+          RESULT: ${{ needs.nightly.result }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          case "$RESULT" in
+            failure)
+              gh label create "$LABEL" --color B60205 --description "nightly mutation testing failing on main" --force >/dev/null
+              if [ -n "$num" ]; then
+                gh issue comment "$num" --body "Still failing: $RUN"
+              else
+                gh issue create --label "$LABEL" --title "nightly mutation testing failing on main" \
+                  --body "A shard of \`mutants.yaml\` failed on \`main\`: $RUN — a red baseline or a shard that tested zero mutants; see its log."
+              fi ;;
+            success)
+              if [ -n "$num" ]; then gh issue close "$num" --comment "Passing again: $RUN"; fi ;;
+            *) echo "result $RESULT — leaving the issue as it is" ;;
+          esac
+
+  pr:
+    name: mutants — changed tier-1 lines
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Reporting until the nightly's MISSED list is empty (decision 1); then
+    # this one line is removed, in its own commit, and a MISSED mutant on a
+    # changed line fails the PR (block-new).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: head
+          shared-key: mutants
+          save-if: false
+      # From the base only: a head mise.toml cannot repoint the binaries, set
+      # `[env]` or add a postinstall. mise.lock's checksum is verified.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: 2026.9.5
+          working_directory: base
+          install: true
+          install_args: github:sourcefrog/cargo-mutants github:VirusTotal/yara-x
+          add_shims_to_path: false
+          cache: false
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/base
+          MISE_CEILING_PATHS: ${{ github.workspace }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Mutants on the changed lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/base
+          MISE_CEILING_PATHS: ${{ github.workspace }}
+        run: |
+          set -uo pipefail
+          cm="$(cd base && mise which cargo-mutants)"
+          yr_dir="$(dirname "$(cd base && mise which yr)")"
+          export PATH="$yr_dir:$PATH"
+          cfg="$GITHUB_WORKSPACE/base/.cargo/mutants.toml"
+          if [ ! -f "$cfg" ]; then
+            # The PR that introduces the file (decision 39's bootstrap).
+            echo "::warning::base has no .cargo/mutants.toml; using the head's copy"
+            cfg="$GITHUB_WORKSPACE/head/.cargo/mutants.toml"
+          fi
+          cd head
+          git diff "$BASE_SHA"...HEAD >"$RUNNER_TEMP/pr.diff"
+          "$cm" mutants --config "$cfg" --in-place --in-diff "$RUNNER_TEMP/pr.diff" --test-workspace=true \
+            --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o "$GITHUB_WORKSPACE/mutants.out/core"
+          core=$?
+          "$cm" mutants --config "$cfg" --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
+            --exclude 'crates/core/**' -o "$GITHUB_WORKSPACE/mutants.out/rest"
+          rest=$?
+          echo "exit codes: core=$core rest=$rest"
+          missed=$(cat "$GITHUB_WORKSPACE"/mutants.out/*/mutants.out/missed.txt 2>/dev/null || true)
+          {
+            echo "### Mutants on the changed tier-1 lines"
+            if [ -n "$missed" ]; then
+              echo "**MISSED** — no test noticed these changes:"
+              echo '```'; echo "$missed"; echo '```'
+            else
+              echo "No surviving mutant on a changed line."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          for line in $(printf '%s\n' "$missed" | cut -d: -f1,2 | sort -u); do
+            echo "::error file=${line%%:*},line=${line##*:}::a mutant on this line survived the tests (mutants.yaml)"
+          done
+          for rc in $core $rest; do
+            [ "$rc" -eq 0 ] || exit 1
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: mutants-pr
+          path: mutants.out/
+          retention-days: 14
+          if-no-files-found: warn

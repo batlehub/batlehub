@@ -24,6 +24,17 @@ inputs:
       `true` on a pull request — block-new: only what the change adds or
       changes is judged against `fail-on`. `MAL-` blocks either way.
     default: "false"
+  online:
+    description: >
+      `true` (with `diff`) — reputation block-new (RFC 0041 phase 4): `diff
+      --online` scores what the change adds or changes, `scripts` on both
+      sides finds the install scripts `diff` does not report.
+    default: "false"
+  pr:
+    description: >
+      The pull request number. A maintainer's approving review of its head
+      turns a reputation block or a new root report-only (decision 46).
+    default: ""
   harden:
     description: "`true` to add `postmortem harden` to the job summary (report only)."
     default: "false"
@@ -88,6 +99,7 @@ runs:
         TRUSTED: ${{ inputs.trusted }}
         UNDER_TEST: ${{ inputs.under-test }}
         DIFF: ${{ inputs.diff }}
+        ONLINE: ${{ inputs.online }}
         HARDEN: ${{ inputs.harden }}
         OUT: ${{ github.workspace }}/${{ inputs.out }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
@@ -109,6 +121,18 @@ runs:
           # advisories come from the tree JSON — `diff --vulns` writes the
           # same `assessment: null` for a clean package and an unanswered one.
           timeout 300 "$PM" diff "$GITHUB_WORKSPACE/$TRUSTED/$ROOT" "$ROOT" --json --no-progress -o "$OUT/diff.json"
+          if [ "$ONLINE" = true ]; then
+            # A root the base lacks, or more than 50 added packages, is not
+            # scored online: the cost would scale with the tree, not the
+            # change, and the gate already asks a maintainer for it.
+            if python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("summary") or {}; a=d.get("added") or []; sys.exit(0 if a and (len(a) > 50 or (not s.get("unchanged") and not s.get("removed") and not d.get("changed"))) else 1)' "$OUT/diff.json"; then
+              echo "new or large dependency change — online scoring skipped" > "$OUT/online-skipped"
+            else
+              timeout 300 "$PM" diff "$GITHUB_WORKSPACE/$TRUSTED/$ROOT" "$ROOT" --online --json --no-progress -o "$OUT/online.json"
+              timeout 120 "$PM" scripts "$GITHUB_WORKSPACE/$TRUSTED/$ROOT" --json --no-progress -o "$OUT/scripts-base.json"
+              timeout 120 "$PM" scripts "$ROOT" --json --no-progress -o "$OUT/scripts-head.json"
+            fi
+          fi
         fi
         if [ "$HARDEN" = true ]; then
           # `report`: CIRSEC CB-DEP controls, never failing (RFC 0041 §4.2).
@@ -122,13 +146,23 @@ runs:
         ROOT: ${{ inputs.root }}
         FAIL_ON: ${{ inputs.fail-on }}
         DIFF: ${{ inputs.diff }}
+        ONLINE: ${{ inputs.online }}
+        PR: ${{ inputs.pr }}
         TRUSTED: ${{ inputs.trusted }}
         OUT: ${{ github.workspace }}/${{ inputs.out }}
         # Presence only: the script picks the 512 or 1 024 tier from it.
         VULN_MLAB_TOKEN: ${{ inputs.vuln-token }}
+        # The reviews API of decision 46 (pull-requests: read).
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         set -euo pipefail
         args=(--root "$ROOT" --tree "$OUT/tree.json" --sarif "$OUT/tree.sarif" --fail-on "$FAIL_ON")
         if [ "$DIFF" = true ]; then args+=(--diff "$OUT/diff.json"); fi
+        # Skipped only by the Scan step's own marker: a missing online.json
+        # without it is a scan that did not run, and the script fails on it.
+        if [ "$DIFF" = true ] && [ "$ONLINE" = true ] && [ ! -f "$OUT/online-skipped" ]; then
+          args+=(--online-diff "$OUT/online.json" --scripts-base "$OUT/scripts-base.json" --scripts-head "$OUT/scripts-head.json")
+        fi
+        if [ -n "$PR" ]; then args+=(--pr "$PR"); fi
         cd "$TRUSTED"
         python3 -I "$PM_SCRIPT" "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

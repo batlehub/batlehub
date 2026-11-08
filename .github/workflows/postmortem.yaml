@@ -43,6 +43,10 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  # Decision 46: a maintainer's approval of the head re-runs the gate, which
+  # then reports a reputation block instead of failing on it.
+  pull_request_review:
+    types: [submitted]
   schedule:
     - cron: "50 23 * * *"
   workflow_dispatch:
@@ -59,6 +63,7 @@ jobs:
     permissions:
       contents: read
       security-events: write # upload SARIF to the Security tab
+      pull-requests: read # the approving review of decision 46
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,7 +79,10 @@ jobs:
         with:
           root: "."
           fail-on: high
-          diff: ${{ github.event_name == 'pull_request' }}
+          diff: ${{ github.event.pull_request != null }}
+          pr: ${{ github.event.pull_request.number }}
+          # Reputation block-new (RFC 0041 phase 4, decisions 23, 49).
+          online: ${{ github.event.pull_request != null }}
           harden: "true"
           out: pm-out
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
@@ -93,6 +101,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,7 +117,11 @@ jobs:
         with:
           root: ui
           fail-on: high
-          diff: ${{ github.event_name == 'pull_request' }}
+          diff: ${{ github.event.pull_request != null }}
+          pr: ${{ github.event.pull_request.number }}
+          # Reputation block-new lands here a week after the Rust job's
+          # (RFC 0041 §16 phase 4), once its first false positives are seen.
+          online: false
           out: pm-out
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
           github-token: ${{ github.token }}
@@ -196,3 +209,22 @@ jobs:
               if [ -n "$num" ]; then gh issue close "$num" --comment "Passing again: $RUN"; fi ;;
             *) echo "result $RESULT — leaving the issue as it is" ;;
           esac
+
+  # The one check the `main` ruleset requires (RFC 0041 decision 28): every
+  # job below succeeded. No path filter here, so no gate job.
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: postmortem.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [rust, ui, docs]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

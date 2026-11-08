@@ -73,7 +73,7 @@ the source never rates (RUSTSEC). **Fixable** means a version without the findin
 | postmortem vulns (Rust, UI) | vulnerability | ships | block on push and schedule, `block-new` on pull requests | ≥ high |
 | postmortem vulns (docs) | vulnerability in the whole docs tree | builds | block | critical |
 | `MAL-` check (Rust, UI, docs) | known-malicious package | all | block | any `MAL-` id |
-| postmortem reputation | an added dependency's signals | ships / builds | report (`block-new` on ships from RFC 0041 phase 4) | — |
+| postmortem reputation | an added or changed dependency's signals | ships | `block-new` on pull requests (Rust; UI a week later), report on push and schedule; lifted by a maintainer's approval of the head | typosquat, newborn < 7 d, install script; on a version change new-publisher, new install script, release < 7 d |
 | `postmortem harden .` | CIRSEC CB-DEP control | repo | report | `fail` controls |
 | vuln-scan | vulnerability | all | report | — |
 | Trivy (three images) | OS / library CVE | ships | block | fixable ≥ high |
@@ -101,6 +101,35 @@ every RUSTSEC finding; it is then promoted to `block` on `ships` roots.
 **CodeQL's `block-new` is not in any workflow.** It is a repository ruleset on `main` ("code
 scanning merge protection", tool **CodeQL**, alerts ≥ high), set by the maintainer. Scoped to CodeQL
 and not to all tools, or the Semgrep `WARNING`s in the Security tab would block too.
+
+### Required checks {#required-checks}
+
+A `block` gate blocks a merge only once its check is required on `main` (RFC 0041 decisions 28 and
+41). Each gated workflow ends with **one aggregate job, `<file>.yaml / required`**, and that is the
+only check the ruleset names. The job names are unique because a ruleset matches a check by name,
+not by workflow:
+
+`test.yaml`, `back-dep-audit.yaml`, `dep-audit-frontend.yaml`, `postmortem.yaml`, `image-scan.yaml`,
+`semgrep.yaml`, `openapi-lint.yaml`, `secret-scan.yaml`, `front-lint.yaml`, `front-test.yaml`,
+`scripts-test.yaml`, `helm-lint.yaml`, each followed by ` / required`.
+
+- **No workflow-level `paths:`.** A pull request it skipped would leave the required check
+  "Expected — waiting for status" forever. The workflow always runs; a first `gate` job applies the
+  same path list (`.github/actions/required-gate`, from `git diff --name-only base...head`) and the
+  other jobs hang off it. A schedule, a manual run or a push whose `before` is gone is a full run.
+- **The verdict** is `.github/scripts/required_gate.py verdict`: red unless every job succeeded, or
+  the gate skipped them all. A job skipped any other way is a failure, so a stub cannot mask a job.
+- **Dependabot** (`test.yaml` only): without the `full-test` label the Rust suite is skipped, and
+  `test.yaml / required` is green — unless `Cargo.lock` or `fuzz/Cargo.lock` changed, when it fails
+  with *"Cargo.lock changed but the Rust suite was skipped — add the full-test label"*. The path
+  filter runs first, so a bump that touches nothing `test.yaml` covers stays green whatever its
+  branch.
+- **Not aggregated**: CodeQL (the ruleset above), vuln-scan (`report`), SonarCloud (an external
+  app), and the label- or schedule-driven workflows.
+
+The ruleset itself is a repository setting the maintainer adds: these checks, CodeQL merge
+protection, and one approval of the most recent push with the maintainer in the bypass list
+(decision 47).
 
 Dependabot waits seven days (`cooldown`) before it proposes a version bump. Security updates
 don't wait. One pin is invisible to it: the `rustfs/rustfs` test image. The `github-actions`
@@ -143,7 +172,25 @@ runs the mise-pinned postmortem twice over its root — `tree --vulns --json`, t
 - on a pull request (Rust, UI): an advisory ≥ high against a package the change **adds or
   changes** (`block-new`). An advisory published today against a package already on `main` does not
   fail an unrelated pull request: `main`'s own run reports it. A root the base does not have, or more
-  than 50 added packages, fails and needs a maintainer.
+  than 50 added packages, fails and needs a maintainer;
+- on a pull request (Rust; UI a week later): the **reputation** of what the change adds or changes,
+  from `postmortem diff --online` and `postmortem scripts` on both sides (`block-new`). An added
+  package blocks on `typosquat`, on `newborn-package` under 7 days, or on an install script; a
+  version change blocks on `new-publisher`, on an install script the old version did not have, or
+  on a target version published under 7 days ago (`fresh-release`). Every other signal is printed
+  and blocks nothing. A Cargo `build.rs` or proc-macro is not an install script. A `stats-failed`
+  signal — GitHub did not answer — fails the job: postmortem itself exits 0 on it.
+
+**A maintainer's approving review of the head lifts a reputation block.** The job reads the pull
+request's reviews and accepts an `APPROVED` one whose commit is the pull request's current head, from
+an account with the `admin` or `maintain` role that is not the author; the review re-runs the job
+(`pull_request_review`), which then reports the block instead of failing on it. A push voids it. The
+same review lifts "new or moved dependency root". It never lifts a `MAL-` package, an advisory, or
+a lookup that did not complete. An API error, or a call over 30 s, is red.
+
+`ui/` and `docs/` resolve with pnpm 9, whose lockfile no longer records which packages build, so
+`postmortem scripts` sees no install script there without `node_modules`. What stops one is pnpm's
+own `allowBuilds:` in `pnpm-workspace.yaml`, which `pr-checklist.yaml` lists as a gate input.
 
 Every package name or version the script prints is escaped, so a lockfile cannot issue a workflow
 command.
@@ -158,7 +205,7 @@ rewrite the workflow or `.github/actions/postmortem-gate`; review is the gate fo
 edit the check.
 
 The Rust job also adds `postmortem harden .` (CIRSEC CB-DEP controls) to its job summary, as
-`report`. The reputation scores reach SARIF; they block nothing until RFC 0041 phase 4.
+`report`. On push and schedule the reputation scores reach SARIF and block nothing.
 
 One caveat when reading its vulnerability list: `vuln.mlab.sh` also serves advisories that RustSec has
 since **withdrawn** — `RUSTSEC-2020-0053` (`dirs` unmaintained, withdrawn 2021) and `RUSTSEC-2025-0007`

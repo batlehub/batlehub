@@ -536,3 +536,561 @@ async fn a_malformed_upstream_digest_is_dropped_rather_than_relayed() {
     // it — only the *verifier's* field is cleared.
     assert_eq!(meta.extra["sha256"], "not-a-digest");
 }
+
+// --- RFC 0041 §6.6: pagination, the role surface and upstream errors -------
+
+/// A mock upstream whose `/api/` answers the discovery document, and a client
+/// rooted at it.
+async fn upstream() -> (mockito::ServerGuard, GalaxyRegistryClient) {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/api/")
+        .with_header("content-type", "application/json")
+        .with_body(discovery_body())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let c = client(&format!("{}/api", server.url()));
+    (server, c)
+}
+
+fn json_mock(
+    server: &mut mockito::ServerGuard,
+    path: &str,
+    body: serde_json::Value,
+) -> mockito::Mock {
+    server
+        .mock("GET", path)
+        .with_header("content-type", "application/json")
+        .with_body(body.to_string())
+}
+
+const VERSIONS: &str = "/api/v3/collections/acme/util/versions/?limit=100";
+const ROLE_SEARCH: &str = "/api/v1/roles/?owner__username=geerlingguy&name=docker";
+const ROLE_VERSIONS: &str = "/api/v1/roles/4567/versions/?page_size=100";
+
+#[tokio::test]
+async fn list_versions_walks_every_page_and_answers_oldest_first() {
+    let (mut server, c) = upstream().await;
+    let next = format!("{VERSIONS}&offset=2");
+    server
+        .mock("GET", VERSIONS)
+        .with_header("content-type", "application/json")
+        .with_body(page(&["2.0.0", "1.10.0"], Some(&next)))
+        .create_async()
+        .await;
+    server
+        .mock("GET", next.as_str())
+        .with_header("content-type", "application/json")
+        .with_body(page(&["1.2.0"], None))
+        .create_async()
+        .await;
+
+    let versions = c.list_versions("acme.util").await.expect("lists");
+    assert_eq!(versions, ["1.2.0", "1.10.0", "2.0.0"]);
+}
+
+#[tokio::test]
+async fn list_versions_of_a_role_is_empty_without_any_request() {
+    // No mock at all: a request would 501 and the call would fail.
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url()));
+    assert!(c
+        .list_versions("roles/geerlingguy.docker")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn an_upstream_error_on_a_later_page_fails_the_whole_listing() {
+    let (mut server, c) = upstream().await;
+    let next = format!("{VERSIONS}&offset=1");
+    server
+        .mock("GET", VERSIONS)
+        .with_header("content-type", "application/json")
+        .with_body(page(&["1.0.0"], Some(&next)))
+        .create_async()
+        .await;
+    server
+        .mock("GET", next.as_str())
+        .with_status(503)
+        .create_async()
+        .await;
+
+    // A truncated listing served as complete would hide versions; an error does not.
+    let err = c
+        .list_versions("acme.util")
+        .await
+        .expect_err("503 on page two");
+    assert!(matches!(err, CoreError::Registry(_)), "{err}");
+}
+
+#[tokio::test]
+async fn an_unknown_collection_listing_is_not_found() {
+    let (mut server, c) = upstream().await;
+    server
+        .mock("GET", VERSIONS)
+        .with_status(404)
+        .create_async()
+        .await;
+    let err = c.list_versions("acme.util").await.expect_err("404");
+    assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_listing_page_that_is_not_json_is_a_registry_error() {
+    let (mut server, c) = upstream().await;
+    server
+        .mock("GET", VERSIONS)
+        .with_body("<html>maintenance</html>")
+        .create_async()
+        .await;
+    let err = c.list_versions("acme.util").await.expect_err("not JSON");
+    assert!(
+        matches!(&err, CoreError::Registry(m) if m.contains("parsing listing page")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn an_upstream_with_no_discovery_document_is_an_error_naming_the_last_probe() {
+    let mut server = mockito::Server::new_async().await;
+    // Both probes — the configured root and it with `/api` appended — fail.
+    let probes = server
+        .mock("GET", mockito::Matcher::Any)
+        .with_status(500)
+        .expect(2)
+        .create_async()
+        .await;
+    let c = client(&server.url());
+    let err = c
+        .list_versions("acme.util")
+        .await
+        .expect_err("no discovery");
+    assert!(matches!(err, CoreError::Registry(_)), "{err}");
+    probes.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_root_that_is_not_a_discovery_document_is_refused_by_name() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", mockito::Matcher::Any)
+        .with_header("content-type", "application/json")
+        .with_body(json!({ "hello": "world" }).to_string())
+        .create_async()
+        .await;
+    let c = client(&server.url());
+    let err = c
+        .list_versions("acme.util")
+        .await
+        .expect_err("not discovery");
+    assert!(
+        matches!(&err, CoreError::Registry(m) if m.contains("is not a galaxy discovery document")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn discovery_is_probed_once_and_then_answered_from_cache() {
+    let mut server = mockito::Server::new_async().await;
+    let discovery = json_mock(
+        &mut server,
+        "/api/",
+        serde_json::from_str(&discovery_body()).unwrap(),
+    )
+    .expect(1)
+    .create_async()
+    .await;
+    json_mock(
+        &mut server,
+        VERSIONS,
+        serde_json::from_str(&page(&["1.0.0"], None)).unwrap(),
+    )
+    .expect(2)
+    .create_async()
+    .await;
+    let c = client(&format!("{}/api", server.url()));
+    c.list_versions("acme.util").await.expect("first");
+    c.list_versions("acme.util").await.expect("second");
+    discovery.assert_async().await;
+}
+
+#[tokio::test]
+async fn the_collection_document_is_relayed_as_served() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        "/api/v3/collections/acme/util/",
+        json!({ "namespace": "acme", "name": "util", "updated_at": "2026-02-02T00:00:00Z" }),
+    )
+    .create_async()
+    .await;
+    let doc = c
+        .fetch_version_document("acme.util", DocumentKind::COLLECTION)
+        .await
+        .expect("relays");
+    assert_eq!(
+        doc.body.as_json().unwrap()["updated_at"],
+        "2026-02-02T00:00:00Z"
+    );
+}
+
+#[tokio::test]
+async fn the_version_detail_document_is_addressed_by_its_version() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        "/api/v3/collections/acme/util/versions/1.0.0/",
+        json!({ "version": "1.0.0", "download_url": "x" }),
+    )
+    .create_async()
+    .await;
+    let doc = c
+        .fetch_version_document("acme.util@1.0.0", DocumentKind::VERSION_DETAIL)
+        .await
+        .expect("relays");
+    assert_eq!(doc.body.as_json().unwrap()["version"], "1.0.0");
+}
+
+#[tokio::test]
+async fn a_version_detail_request_with_no_version_is_not_supported() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url()));
+    let err = c
+        .fetch_version_document("acme.util", DocumentKind::VERSION_DETAIL)
+        .await
+        .expect_err("no @version");
+    assert!(matches!(err, CoreError::NotSupported(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_role_versions_listing_is_assembled_from_v1_pages() {
+    let (mut server, c) = upstream().await;
+    // v1 spells its continuation `next_link` and its entries `results`.
+    let next = "/api/v1/roles/4567/versions/?page=2&page_size=100";
+    json_mock(
+        &mut server,
+        ROLE_VERSIONS,
+        json!({ "count": 2, "next_link": next, "results": [{ "name": "1.0.0" }] }),
+    )
+    .create_async()
+    .await;
+    json_mock(
+        &mut server,
+        next,
+        json!({ "count": 2, "next_link": null, "results": [{ "name": "2.0.0" }] }),
+    )
+    .create_async()
+    .await;
+
+    let doc = c
+        .fetch_version_document("roles/geerlingguy.docker@4567", DocumentKind::ROLE_VERSIONS)
+        .await
+        .expect("assembles");
+    let names: Vec<&str> = doc.body.as_json().unwrap()["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1.0.0", "2.0.0"]);
+}
+
+#[tokio::test]
+async fn a_role_versions_request_with_no_id_is_not_supported() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url()));
+    let err = c
+        .fetch_version_document("roles/geerlingguy.docker", DocumentKind::ROLE_VERSIONS)
+        .await
+        .expect_err("no @id");
+    assert!(matches!(err, CoreError::NotSupported(_)), "{err}");
+}
+
+#[tokio::test]
+async fn the_role_document_is_the_v1_search() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        ROLE_SEARCH,
+        json!({ "count": 1, "results": [{ "id": 4567 }] }),
+    )
+    .create_async()
+    .await;
+    let doc = c
+        .fetch_version_document("roles/geerlingguy.docker", DocumentKind::ROLE)
+        .await
+        .expect("search");
+    assert_eq!(doc.body.as_json().unwrap()["results"][0]["id"], 4567);
+}
+
+#[tokio::test]
+async fn a_role_name_with_no_dot_is_not_supported() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url()));
+    let err = c
+        .fetch_version_document("roles/nodot", DocumentKind::ROLE)
+        .await
+        .expect_err("not user.role");
+    assert!(matches!(err, CoreError::NotSupported(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_document_kind_galaxy_does_not_have_is_not_supported() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url()));
+    let err = c
+        .fetch_version_document("acme.util", DocumentKind::MANIFEST)
+        .await
+        .expect_err("rustup's kind");
+    assert!(
+        matches!(&err, CoreError::NotSupported(m) if m.contains("no 'manifest' listing")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn roles_off_refuses_the_v1_surface_without_asking_upstream() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url())).with_roles(false, false);
+    let err = c
+        .role_search("geerlingguy", "docker")
+        .await
+        .expect_err("roles = off");
+    assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn an_unknown_role_id_is_not_found() {
+    let (mut server, c) = upstream().await;
+    server
+        .mock("GET", "/api/v1/roles/999/")
+        .with_status(404)
+        .create_async()
+        .await;
+    let err = c.role_name_for_id("999").await.expect_err("404");
+    assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_role_id_answered_as_a_one_entry_search_still_resolves() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        "/api/v1/roles/4567/",
+        json!({ "results": [{ "id": 4567, "github_user": "geerlingguy", "name": "docker" }] }),
+    )
+    .create_async()
+    .await;
+    assert_eq!(
+        c.role_name_for_id("4567").await.expect("resolves"),
+        "roles/geerlingguy.docker"
+    );
+}
+
+#[tokio::test]
+async fn a_role_id_whose_search_is_empty_names_nothing() {
+    let (mut server, c) = upstream().await;
+    json_mock(&mut server, "/api/v1/roles/4567/", json!({ "results": [] }))
+        .create_async()
+        .await;
+    let err = c.role_name_for_id("4567").await.expect_err("empty");
+    assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_role_with_no_github_user_cannot_be_named() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        "/api/v1/roles/4567/",
+        json!({ "id": 4567, "name": "docker" }),
+    )
+    .create_async()
+    .await;
+    let err = c.role_name_for_id("4567").await.expect_err("no user");
+    assert!(
+        matches!(&err, CoreError::Registry(m) if m.contains("no github_user/name pair")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn a_role_version_resolves_to_its_listing_entry_download_url() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        ROLE_SEARCH,
+        json!({ "results": [{ "id": 4567 }] }),
+    )
+    .create_async()
+    .await;
+    json_mock(
+        &mut server,
+        ROLE_VERSIONS,
+        json!({ "results": [
+            { "name": "6.0.0", "download_url": "https://github.com/geerlingguy/ansible-role-docker/archive/6.0.0.tar.gz" },
+            { "name": "7.0.0", "release_date": "2026-03-01T00:00:00Z",
+              "download_url": "https://github.com/geerlingguy/ansible-role-docker/archive/7.0.0.tar.gz" },
+        ] }),
+    )
+    .create_async()
+    .await;
+
+    let pkg = PackageId::new("g", "roles/geerlingguy.docker", "7.0.0");
+    let meta = c.resolve_metadata(&pkg).await.expect("resolves");
+    assert_eq!(
+        meta.download_url.as_deref(),
+        Some("https://github.com/geerlingguy/ansible-role-docker/archive/7.0.0.tar.gz")
+    );
+}
+
+#[tokio::test]
+async fn a_role_version_absent_from_the_listing_is_not_found() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        ROLE_SEARCH,
+        json!({ "results": [{ "id": "4567" }] }),
+    )
+    .create_async()
+    .await;
+    json_mock(
+        &mut server,
+        ROLE_VERSIONS,
+        json!({ "results": [{ "name": "6.0.0" }] }),
+    )
+    .create_async()
+    .await;
+    let pkg = PackageId::new("g", "roles/geerlingguy.docker", "9.9.9");
+    let err = c.resolve_metadata(&pkg).await.expect_err("no 9.9.9");
+    assert!(
+        matches!(&err, CoreError::NotFound(m) if m.contains("has no version 9.9.9")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn a_role_the_search_does_not_find_is_not_found() {
+    let (mut server, c) = upstream().await;
+    json_mock(&mut server, ROLE_SEARCH, json!({ "results": [] }))
+        .create_async()
+        .await;
+    let pkg = PackageId::new("g", "roles/geerlingguy.docker", "7.0.0");
+    let err = c.resolve_metadata(&pkg).await.expect_err("no role");
+    assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_role_with_a_non_scalar_id_is_refused() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        ROLE_SEARCH,
+        json!({ "results": [{ "id": [1] }] }),
+    )
+    .create_async()
+    .await;
+    let pkg = PackageId::new("g", "roles/geerlingguy.docker", "7.0.0");
+    let err = c.resolve_metadata(&pkg).await.expect_err("array id");
+    assert!(
+        matches!(&err, CoreError::Registry(m) if m.contains("non-scalar id")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn roles_index_mode_refuses_role_bytes() {
+    let server = mockito::Server::new_async().await;
+    let c = client(&format!("{}/api", server.url())).with_roles(true, false);
+    let pkg = PackageId::new("g", "roles/geerlingguy.docker", "7.0.0");
+    let meta = batlehub_core::entities::PackageMetadata {
+        id: pkg.clone(),
+        published_at: None,
+        download_url: Some("https://github.com/x/y/archive/7.0.0.tar.gz".to_owned()),
+        checksum: None,
+        is_signed: None,
+        extra: json!({}),
+        cache_control: None,
+    };
+    let Err(err) = c.fetch_artifact_resolved(&pkg, &meta).await else {
+        panic!("roles = index serves metadata only");
+    };
+    assert!(matches!(err, CoreError::NotSupported(_)), "{err}");
+}
+
+#[tokio::test]
+async fn a_version_with_no_download_url_has_nothing_to_fetch() {
+    let (mut server, c) = upstream().await;
+    json_mock(
+        &mut server,
+        "/api/v3/collections/acme/util/versions/1.0.0/",
+        json!({ "version": "1.0.0" }),
+    )
+    .create_async()
+    .await;
+    let pkg = PackageId::new("g", "acme.util", "1.0.0").with_artifact("tarball");
+    let Err(err) = c.fetch_artifact(&pkg).await else {
+        panic!("no download_url");
+    };
+    assert!(
+        matches!(&err, CoreError::NotFound(m) if m.contains("carries no download_url")),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn a_version_document_upstream_error_is_a_registry_error() {
+    let (mut server, c) = upstream().await;
+    server
+        .mock("GET", "/api/v3/collections/acme/util/versions/1.0.0/")
+        .with_status(502)
+        .create_async()
+        .await;
+    let pkg = PackageId::new("g", "acme.util", "1.0.0");
+    let err = c.resolve_metadata(&pkg).await.expect_err("502");
+    assert!(matches!(err, CoreError::Registry(_)), "{err}");
+}
+
+#[tokio::test]
+async fn the_collection_tarball_bytes_are_streamed_through() {
+    use futures::TryStreamExt;
+    let (mut server, c) = upstream().await;
+    let download_url = format!("{}/api/x.tar.gz", server.url());
+    json_mock(
+        &mut server,
+        "/api/v3/collections/acme/util/versions/1.0.0/",
+        json!({ "version": "1.0.0", "download_url": download_url }),
+    )
+    .create_async()
+    .await;
+    server
+        .mock("GET", "/api/x.tar.gz")
+        .with_body("tarball-bytes")
+        .create_async()
+        .await;
+    let pkg = PackageId::new("g", "acme.util", "1.0.0").with_artifact("tarball");
+    let Ok(fetched) = c.fetch_artifact(&pkg).await else {
+        panic!("fetches");
+    };
+    let chunks: Vec<_> = fetched.stream.try_collect().await.expect("streams");
+    assert_eq!(chunks.concat(), b"tarball-bytes");
+}
+
+#[test]
+fn the_artifact_name_is_the_upstream_tarball_filename() {
+    assert_eq!(
+        GalaxyRegistryClient::artifact_name("acme.util", "1.0.0").unwrap(),
+        "acme-util-1.0.0.tar.gz"
+    );
+}
+
+#[tokio::test]
+async fn search_is_answered_locally_not_upstream() {
+    let c = client("http://127.0.0.1:9");
+    assert_eq!(c.registry_type(), "galaxy");
+    assert_eq!(c.base_url(), "http://127.0.0.1:9");
+    assert!(c.search_packages("docker", 10).await.unwrap().is_empty());
+}

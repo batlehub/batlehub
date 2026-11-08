@@ -45,6 +45,8 @@ GATE_INPUT_PATHS = {
     "vex/*": "vex/batlehub.openvex.json",
     ".forgejo/workflows/*": ".forgejo/workflows/build.yaml",
     ".forgejo/CODEOWNERS": ".forgejo/CODEOWNERS",
+    "ui/pnpm-workspace.yaml": "ui/pnpm-workspace.yaml",
+    "docs/pnpm-workspace.yaml": "docs/pnpm-workspace.yaml",
 }
 
 

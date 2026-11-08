@@ -1237,6 +1237,24 @@ stopped.
   one-crate command that reproduces it, and the job goes red. It is
   **reported red in CI** today and **blocks a merge from RFC 0041 phase 6**,
   when the required checks land.
+- **Mutation testing on tier 1** (RFC 0041 §6.4): coverage says a line ran,
+  a surviving mutant says no test noticed it changed. `.cargo/mutants.toml`
+  names the scope (the tier-1 paths, and only the mapping functions of the
+  scanner adapters) and the equivalent mutants, each with its reason.
+  `task mutants FILE=crates/core/src/rules/rbac.rs` runs one file;
+  `task mutants` runs all of tier 1, in two invocations: the `crates/core`
+  paths with `--test-workspace=true`, because `crates/web`'s suites prove
+  their refusals too, and the rest per package. It calls cargo-mutants and
+  yara-x's `yr` by `mise which`, never the shims: a shim passes
+  `command_exists` and fails in cargo-mutants' scratch copy, and without a
+  real `yr` the test that kills `yara.rs`'s matching mutants skips itself.
+  **In CI**, `mutants.yaml` runs tier 1 nightly in 8 shards (red on a red
+  baseline or an empty shard, never on a survivor; the `MISSED` list is in
+  the job summary and a red night opens the `mutants-nightly` issue) and,
+  on a pull request touching a tier-1 file, the mutants on its changed
+  lines (`--in-diff`), with the binaries and the config from the base. The
+  pull request job reports until the nightly list is empty, then blocks a
+  new survivor.
 - **UI (tier 3)**: `pnpm run coverage` measures the whole of `ui/src` (minus
   the generated client, tests, `main.ts`, barrels and `.d.ts`), so a file
   nobody tests counts at 0 %; Vitest fails below 80 % on any of lines,

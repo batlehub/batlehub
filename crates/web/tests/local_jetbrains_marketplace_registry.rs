@@ -1133,3 +1133,348 @@ async fn jbm_xml_ids_omit_a_team_visible_plugin() {
         serde_json::json!(["org.demo.public", "org.demo.secret"])
     );
 }
+
+// ── IDE JSON API against a real upstream (proxy and hybrid arms) ─────────────
+//
+// `make_local_jbm_app` wires no upstream URL, so every forwarding arm of
+// `ide.rs` was unreachable from it. These rows put a mockito marketplace behind
+// the registry and assert what the IDE is handed.
+
+async fn make_jbm_app_with_upstream(mode: RegistryMode, upstream: &str) -> impl TestService {
+    build_local_registry_app_with_defaults(
+        local_registry_app_parts("local-jbm", "jetbrains-marketplace", mode, None),
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults {
+            upstream_map: batlehub_web::UpstreamMap::new(
+                [("local-jbm".to_owned(), upstream.to_owned())]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// A marketplace answering `GET path` (any query) with `body`.
+async fn upstream_get(server: &mut mockito::ServerGuard, path: &str, body: Value) -> mockito::Mock {
+    server
+        .mock("GET", path)
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(body.to_string())
+        .create_async()
+        .await
+}
+
+async fn get_value<S: TestService>(app: &S, uri: &str) -> Value {
+    let req = TestRequest::get()
+        .uri(uri)
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(app, req).await;
+    assert_eq!(resp.status(), 200, "{uri}");
+    read_body_json(resp).await
+}
+
+fn ids_of(hits: &Value, key: &str) -> Vec<String> {
+    hits.as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h[key].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+async fn publish_demo_a<S: TestService>(app: &S) {
+    let jar = make_plugin_jar(&plugin_xml("org.demo.a", "1.0.0", "233.0", "241.*"));
+    assert_eq!(publish_plugin(app, &jar, None, false).await.status(), 201);
+}
+
+#[actix_web::test]
+async fn jbm_proxy_search_plugins_relays_the_marketplace_answer() {
+    let mut server = mockito::Server::new_async().await;
+    let upstream = serde_json::json!({ "plugins": [{ "xmlId": "up.only" }], "total": 1 });
+    let mock = upstream_get(&mut server, "/api/searchPlugins", upstream.clone()).await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Proxy, &server.url()).await;
+
+    let body = get_value(&app, "/proxy/local-jbm/api/searchPlugins?search=up").await;
+    assert_eq!(body, upstream);
+    mock.assert_async().await;
+}
+
+#[actix_web::test]
+async fn jbm_proxy_search_array_relays_the_marketplace_answer() {
+    let mut server = mockito::Server::new_async().await;
+    let upstream = serde_json::json!([{ "xmlId": "up.only" }]);
+    upstream_get(&mut server, "/api/search/plugins", upstream.clone()).await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Proxy, &server.url()).await;
+
+    let body = get_value(&app, "/proxy/local-jbm/api/search/plugins?search=up").await;
+    assert_eq!(body, upstream);
+}
+
+/// The POST is forwarded in the marketplace's own spelling (`pluginXMLIds`),
+/// whichever alias the client sent.
+#[actix_web::test]
+async fn jbm_proxy_compatible_updates_post_forwards_the_canonical_body() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/api/search/updates/compatible")
+        .match_body(mockito::Matcher::Json(serde_json::json!({
+            "build": "IU-240.5",
+            "pluginXMLIds": ["up.c"],
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"[{"pluginXmlId":"up.c","version":"2.0"}]"#)
+        .create_async()
+        .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Proxy, &server.url()).await;
+
+    let req = TestRequest::post()
+        .uri("/proxy/local-jbm/api/search/updates/compatible")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({ "build": "IU-240.5", "pluginXmlIds": ["up.c"] }))
+        .to_request();
+    let body: Value = read_body_json(call_service(&app, req).await).await;
+    assert_eq!(body[0]["version"], "2.0");
+    mock.assert_async().await;
+}
+
+#[actix_web::test]
+async fn jbm_proxy_compatible_updates_get_forwards_the_query_verbatim() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/api/search/updates/compatible")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("build".into(), "IU-240.5".into()),
+            mockito::Matcher::UrlEncoded("os".into(), "Linux".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"[{"pluginXmlId":"up.c","version":"2.0"}]"#)
+        .create_async()
+        .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Proxy, &server.url()).await;
+
+    let body = get_value(
+        &app,
+        "/proxy/local-jbm/api/search/updates/compatible?build=IU-240.5&os=Linux&pluginXmlId=up.c",
+    )
+    .await;
+    assert_eq!(ids_of(&body, "pluginXmlId"), ["up.c"]);
+    mock.assert_async().await;
+}
+
+/// Hybrid search appends the marketplace's hits, but a plugin published here
+/// shadows the marketplace copy of the same id, and an id-less hit is dropped.
+#[actix_web::test]
+async fn jbm_hybrid_search_plugins_merges_upstream_and_local_wins() {
+    let mut server = mockito::Server::new_async().await;
+    upstream_get(
+        &mut server,
+        "/api/searchPlugins",
+        serde_json::json!({ "plugins": [
+            { "xmlId": "org.demo.a", "name": "marketplace copy" },
+            { "xmlId": "up.b" },
+            { "name": "no id" },
+        ]}),
+    )
+    .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Hybrid, &server.url()).await;
+    publish_demo_a(&app).await;
+
+    let body = get_value(&app, "/proxy/local-jbm/api/searchPlugins?search=demo").await;
+    assert_eq!(ids_of(&body["plugins"], "xmlId"), ["org.demo.a", "up.b"]);
+    assert_eq!(body["total"], 2);
+    assert_ne!(body["plugins"][0]["name"], "marketplace copy");
+}
+
+#[actix_web::test]
+async fn jbm_hybrid_search_array_merges_upstream_hits() {
+    let mut server = mockito::Server::new_async().await;
+    upstream_get(
+        &mut server,
+        "/api/search/plugins",
+        serde_json::json!([{ "xmlId": "org.demo.a" }, { "xmlId": "up.b" }]),
+    )
+    .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Hybrid, &server.url()).await;
+    publish_demo_a(&app).await;
+
+    let body = get_value(&app, "/proxy/local-jbm/api/search/plugins?search=demo").await;
+    assert_eq!(ids_of(&body, "xmlId"), ["org.demo.a", "up.b"]);
+}
+
+/// The upstream half is best-effort: a marketplace that errors must not fail a
+/// search the local half has already answered.
+#[actix_web::test]
+async fn jbm_hybrid_search_survives_a_failing_marketplace() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("GET", "/api/searchPlugins")
+        .match_query(mockito::Matcher::Any)
+        .with_status(500)
+        .create_async()
+        .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Hybrid, &server.url()).await;
+    publish_demo_a(&app).await;
+
+    let body = get_value(&app, "/proxy/local-jbm/api/searchPlugins?search=demo").await;
+    assert_eq!(ids_of(&body["plugins"], "xmlId"), ["org.demo.a"]);
+}
+
+/// The compatible-updates answer reads the upstream id under any of its three
+/// spellings (`pluginXmlId`, `xmlId`, `pluginId`).
+#[actix_web::test]
+async fn jbm_hybrid_compatible_updates_post_merges_every_id_spelling() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/api/search/updates/compatible")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                { "pluginXmlId": "org.demo.a", "version": "9.9.9" },
+                { "xmlId": "up.x" },
+                { "pluginId": "up.y" },
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Hybrid, &server.url()).await;
+    publish_demo_a(&app).await;
+
+    let req = TestRequest::post()
+        .uri("/proxy/local-jbm/api/search/updates/compatible")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({
+            "build": "IU-240.5",
+            "pluginXMLIds": ["org.demo.a", "up.x", "up.y"],
+        }))
+        .to_request();
+    let body: Value = read_body_json(call_service(&app, req).await).await;
+    let updates = body.as_array().unwrap();
+    assert_eq!(updates.len(), 3, "{body}");
+    assert_eq!(
+        updates[0]["version"], "1.0.0",
+        "the local build must shadow the marketplace's"
+    );
+}
+
+#[actix_web::test]
+async fn jbm_hybrid_compatible_updates_get_appends_the_marketplace_answer() {
+    let mut server = mockito::Server::new_async().await;
+    upstream_get(
+        &mut server,
+        "/api/search/updates/compatible",
+        serde_json::json!([{ "pluginXmlId": "up.c", "version": "2.0" }]),
+    )
+    .await;
+    let app = make_jbm_app_with_upstream(RegistryMode::Hybrid, &server.url()).await;
+    publish_demo_a(&app).await;
+
+    let body = get_value(
+        &app,
+        "/proxy/local-jbm/api/search/updates/compatible?build=IU-240.5&pluginXmlId=org.demo.a&pluginXmlId=up.c",
+    )
+    .await;
+    assert_eq!(ids_of(&body, "pluginXmlId"), ["org.demo.a", "up.c"]);
+}
+
+/// `aggregation`, `getImplementations` and comments have no local data: a
+/// local registry answers an empty JSON array rather than a 404.
+#[actix_web::test]
+async fn jbm_local_auxiliary_endpoints_answer_an_empty_array() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    for uri in [
+        "/proxy/local-jbm/api/search/aggregation/tags",
+        "/proxy/local-jbm/feature/getImplementations",
+        "/proxy/local-jbm/api/products/intellij/plugins/org.demo.a/comments",
+    ] {
+        assert_eq!(get_value(&app, uri).await, serde_json::json!([]), "{uri}");
+    }
+}
+
+#[actix_web::test]
+async fn jbm_proxy_auxiliary_endpoints_relay_the_marketplace() {
+    let mut server = mockito::Server::new_async().await;
+    for path in [
+        "/api/search/aggregation/tags",
+        "/feature/getImplementations",
+        "/api/products/intellij/plugins/org.demo.a/comments",
+    ] {
+        upstream_get(&mut server, path, serde_json::json!([{ "from": path }])).await;
+    }
+    let app = make_jbm_app_with_upstream(RegistryMode::Proxy, &server.url()).await;
+    for path in [
+        "/api/search/aggregation/tags",
+        "/feature/getImplementations",
+        "/api/products/intellij/plugins/org.demo.a/comments",
+    ] {
+        let body = get_value(&app, &format!("/proxy/local-jbm{path}")).await;
+        assert_eq!(body[0]["from"], path);
+    }
+}
+
+#[actix_web::test]
+async fn jbm_aggregation_with_a_traversal_field_is_400() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    let req = TestRequest::get()
+        .uri("/proxy/local-jbm/api/search/aggregation/%2E%2E")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 400);
+}
+
+#[actix_web::test]
+async fn jbm_local_search_pages_with_max_and_offset() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    for id in ["org.demo.a", "org.demo.b"] {
+        let jar = make_plugin_jar(&plugin_xml(id, "1.0.0", "233.0", "241.*"));
+        assert_eq!(publish_plugin(&app, &jar, None, false).await.status(), 201);
+    }
+    let first = get_value(
+        &app,
+        "/proxy/local-jbm/api/search/plugins?search=demo&max=1",
+    )
+    .await;
+    let second = get_value(
+        &app,
+        "/proxy/local-jbm/api/search/plugins?search=demo&max=1&offset=1",
+    )
+    .await;
+    let (first, second) = (ids_of(&first, "xmlId"), ids_of(&second, "xmlId"));
+    assert_eq!((first.len(), second.len()), (1, 1));
+    assert_ne!(first, second, "offset must move past the first page");
+}
+
+#[actix_web::test]
+async fn jbm_local_plugin_info_of_an_unknown_plugin_is_404() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    let req = TestRequest::get()
+        .uri("/proxy/local-jbm/api/plugins/org.never.published")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
+/// A proxy registry renders the plugin object from the upstream listing.
+#[actix_web::test]
+async fn jbm_proxy_plugin_updates_render_the_upstream_versions() {
+    let (app, _client, _storage) = make_flaky_jbm_app(batlehub_web::UpstreamMap::default()).await;
+    let body = get_value(&app, "/proxy/jbm/api/plugins/org.flaky.plugin/updates").await;
+    assert_eq!(ids_of(&body, "version"), ["1.2.0"]);
+}
+
+/// The proxy listing chokepoint hides an operator-blocked build, so the IDE is
+/// never offered an update that would fail at download.
+#[actix_web::test]
+async fn jbm_proxy_plugin_updates_hide_a_blocked_build() {
+    let (app, _client, _storage) = make_flaky_jbm_app(batlehub_web::UpstreamMap::default()).await;
+    block_version(&app, "jbm", "org.flaky.plugin", "1.2.0").await;
+    let body = get_value(&app, "/proxy/jbm/api/plugins/org.flaky.plugin/updates").await;
+    assert_eq!(body, serde_json::json!([]));
+}

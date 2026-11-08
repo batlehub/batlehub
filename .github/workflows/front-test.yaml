@@ -2,51 +2,46 @@ name: Frontend Test
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/**/*.ts"
-      - "ui/**/*.vue"
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "ui/vite.config.ts"
-      - ".github/workflows/front-test.yaml"
-      # `registryTypes.docs.test.ts` compares the console's setup snippets
-      # against `docs/registries/*.md`. It lives in `ui/`, but half of what it
-      # asserts lives here — so a docs-only edit that breaks the agreement, or
-      # one that fixes a drift and should lower the pinned baseline, has to run
-      # it too. A gate that does not run is not a gate.
-      - "docs/registries/**"
-      # The editor credential patch (RFC 0011) is TypeScript with no build
-      # and no dependencies — `node --test` strips its types. It runs here
-      # because this is the workflow that has a Node, not because it is part
-      # of the console.
-      - "patches/che-code/**"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/**/*.ts"
-      - "ui/**/*.vue"
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "ui/vite.config.ts"
-      - ".github/workflows/front-test.yaml"
-      # `registryTypes.docs.test.ts` compares the console's setup snippets
-      # against `docs/registries/*.md`. It lives in `ui/`, but half of what it
-      # asserts lives here — so a docs-only edit that breaks the agreement, or
-      # one that fixes a drift and should lower the pinned baseline, has to run
-      # it too. A gate that does not run is not a gate.
-      - "docs/registries/**"
-      # The editor credential patch (RFC 0011) is TypeScript with no build
-      # and no dependencies — `node --test` strips its types. It runs here
-      # because this is the workflow that has a Node, not because it is part
-      # of the console.
-      - "patches/che-code/**"
   schedule:
     - cron: "50 23 * * *"
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/**/*.ts
+            ui/**/*.vue
+            ui/package.json
+            ui/pnpm-lock.yaml
+            ui/vite.config.ts
+            .github/workflows/front-test.yaml
+            docs/registries/**
+            patches/che-code/**
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   test:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,3 +84,22 @@ jobs:
         run: pnpm run generate
       - name: Run tests with coverage
         run: pnpm run coverage
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: front-test.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, test]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"
