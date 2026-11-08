@@ -1,0 +1,42 @@
+{
+  "added": [
+    {
+      "assessment": null,
+      "ecosystem": "node",
+      "name": "event-stream",
+      "version": "3.3.6"
+    },
+    {
+      "assessment": null,
+      "ecosystem": "node",
+      "name": "ynodejs_mod_log",
+      "version": "10.0.1"
+    }
+  ],
+  "changed": [
+    {
+      "assessment": null,
+      "ecosystem": "node",
+      "from": "4.17.21",
+      "name": "lodash",
+      "to": "4.17.20"
+    },
+    {
+      "assessment": null,
+      "ecosystem": "node",
+      "from": "1.2.6",
+      "name": "minimist",
+      "to": "1.2.5"
+    }
+  ],
+  "new": "head",
+  "old": "base",
+  "removed": [],
+  "schema_version": 2,
+  "summary": {
+    "added": 2,
+    "changed": 2,
+    "removed": 0,
+    "unchanged": 1
+  }
+}

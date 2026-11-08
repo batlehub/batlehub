@@ -33,6 +33,14 @@ import sys
 MAX_COMPONENTS = 512
 
 
+def positive_int(value: str) -> int:
+    """A chunk below 1 wrote one empty piece and exited 0: a clean scan of nothing."""
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return number
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -42,7 +50,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--chunk",
-        type=int,
+        type=positive_int,
         default=MAX_COMPONENTS,
         help=f"Components per piece (default {MAX_COMPONENTS}).",
     )

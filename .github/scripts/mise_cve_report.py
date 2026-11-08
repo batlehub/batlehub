@@ -37,6 +37,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -171,18 +172,22 @@ def upstream_latest(wanted: set[str], timeout: float = 30.0) -> dict[str, str | 
     """
     if not shutil.which("mise"):
         return {}
-    env = {**os.environ, "MISE_GLOBAL_CONFIG_FILE": os.devnull}
     out: dict[str, str | None] = {}
-    for key, entries in _mise_listing(timeout, env).items():
-        for entry in entries or []:
-            install_dir = _wanted_dir(entry, wanted, out)
-            if install_dir is None:
-                continue
-            # An empty answer is "mise could not say", not "no newer release":
-            # leaving the key out keeps the two apart in the report.
-            newest = _mise_latest(key, entry, timeout, env)
-            if newest:
-                out[install_dir] = newest
+    # An empty `.toml`, not `os.devnull`: mise refuses a global config file
+    # with no config extension ("unknown config file type"), which made this
+    # whole lookup answer "could not be asked" (mise_repo_tools.sh, same fix).
+    with tempfile.NamedTemporaryFile(suffix=".toml") as empty_global:
+        env = {**os.environ, "MISE_GLOBAL_CONFIG_FILE": empty_global.name}
+        for key, entries in _mise_listing(timeout, env).items():
+            for entry in entries or []:
+                install_dir = _wanted_dir(entry, wanted, out)
+                if install_dir is None:
+                    continue
+                # An empty answer is "mise could not say", not "no newer release":
+                # leaving the key out keeps the two apart in the report.
+                newest = _mise_latest(key, entry, timeout, env)
+                if newest:
+                    out[install_dir] = newest
     return out
 
 
@@ -509,6 +514,8 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"recorded budget: {blocking} → {args.budget_file}")
+        # The number just written is the budget this run is judged against.
+        budget, budget_recorded = blocking, True
 
     over = budget_recorded and blocking > budget
     markdown = render(

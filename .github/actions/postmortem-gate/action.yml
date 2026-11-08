@@ -1,0 +1,134 @@
+name: postmortem gate on one dependency root
+description: >
+  RFC 0041 §6.5. Installs postmortem from the trusted tree's mise pins, scans
+  one root of the tree under test, and judges it with the trusted tree's
+  postmortem_new_risk.py. The trusted tree is the pull request's base, or the
+  pushed commit itself; the tree under test is never asked for a binary, a
+  script or a mise setting.
+
+inputs:
+  root:
+    description: The dependency root, relative to both trees (`.`, `ui`, `docs`).
+    required: true
+  fail-on:
+    description: Lowest blocking severity, `high` or `critical`.
+    required: true
+  trusted:
+    description: Directory of the trusted checkout (binary pins and the script).
+    default: base
+  under-test:
+    description: Directory of the checkout being judged.
+    default: head
+  diff:
+    description: >
+      `true` on a pull request — block-new: only what the change adds or
+      changes is judged against `fail-on`. `MAL-` blocks either way.
+    default: "false"
+  harden:
+    description: "`true` to add `postmortem harden` to the job summary (report only)."
+    default: "false"
+  out:
+    description: Where the JSON and SARIF are written, inside the workspace.
+    required: true
+  vuln-token:
+    description: VULN_MLAB_TOKEN. Empty is anonymous, cut at 512 packages (decision 50).
+    default: ""
+  github-token:
+    description: Token for the reputation lookups of the SARIF run.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # From the trusted tree only: a head `mise.toml` cannot repoint the
+    # binary, set `[env]` or add a postinstall. The two trees are siblings
+    # under an empty workspace, so mise finds no config above them either;
+    # the ceiling says so explicitly. mise.lock's checksum is verified.
+    - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      with:
+        version: 2026.9.5
+        working_directory: ${{ inputs.trusted }}
+        install: true
+        install_args: github:mlab-sh/postmortem
+        add_shims_to_path: false
+        cache: false
+      env:
+        MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/${{ inputs.trusted }}
+        MISE_CEILING_PATHS: ${{ github.workspace }}
+
+    - name: Resolve the binary and the script
+      shell: bash
+      env:
+        TRUSTED: ${{ inputs.trusted }}
+        UNDER_TEST: ${{ inputs.under-test }}
+        MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/${{ inputs.trusted }}
+        MISE_CEILING_PATHS: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        # By absolute path, never through a shim.
+        pm="$(cd "$TRUSTED" && mise where github:mlab-sh/postmortem)/postmortem"
+        "$pm" --version
+        echo "PM=$pm" >> "$GITHUB_ENV"
+        script=".github/scripts/postmortem_new_risk.py"
+        if [ -f "$TRUSTED/$script" ]; then
+          if ! cmp -s "$TRUSTED/$script" "$UNDER_TEST/$script"; then
+            echo "::warning::running the base copy of postmortem_new_risk.py; your change applies after merge"
+          fi
+          echo "PM_SCRIPT=$GITHUB_WORKSPACE/$TRUSTED/$script" >> "$GITHUB_ENV"
+        else
+          # The one pull request that adds the script: the base has no copy.
+          echo "::warning::the base has no postmortem_new_risk.py — running the head copy (bootstrap only)"
+          echo "PM_SCRIPT=$GITHUB_WORKSPACE/$UNDER_TEST/$script" >> "$GITHUB_ENV"
+        fi
+
+    - name: Scan
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root }}
+        TRUSTED: ${{ inputs.trusted }}
+        UNDER_TEST: ${{ inputs.under-test }}
+        DIFF: ${{ inputs.diff }}
+        HARDEN: ${{ inputs.harden }}
+        OUT: ${{ github.workspace }}/${{ inputs.out }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        VULN_MLAB_TOKEN: ${{ inputs.vuln-token }}
+        NO_COLOR: "1"
+      run: |
+        set -euo pipefail
+        mkdir -p "$OUT"
+        cd "$UNDER_TEST"
+        # The JSON carries what the SARIF cannot: the `vuln_scan_failed`
+        # diagnostic (postmortem exits 0 and writes an empty SARIF when the
+        # lookup fails, §17 M18) and the package count of decision 50. The
+        # second run reuses postmortem's local vulnerability cache, and
+        # postmortem_new_risk.py checks the two agree.
+        timeout 600 "$PM" tree "$ROOT" --vulns --json --no-progress -o "$OUT/tree.json"
+        timeout 900 "$PM" tree "$ROOT" --online --vulns --sarif --no-progress -o "$OUT/tree.sarif"
+        if [ "$DIFF" = true ]; then
+          # Offline: which packages the change adds or changes. Their
+          # advisories come from the tree JSON — `diff --vulns` writes the
+          # same `assessment: null` for a clean package and an unanswered one.
+          timeout 300 "$PM" diff "$GITHUB_WORKSPACE/$TRUSTED/$ROOT" "$ROOT" --json --no-progress -o "$OUT/diff.json"
+        fi
+        if [ "$HARDEN" = true ]; then
+          # `report`: CIRSEC CB-DEP controls, never failing (RFC 0041 §4.2).
+          { echo '### postmortem harden'; echo '```'; "$PM" harden . --no-progress 2>&1 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Gate
+      if: ${{ !cancelled() }}
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        DIFF: ${{ inputs.diff }}
+        TRUSTED: ${{ inputs.trusted }}
+        OUT: ${{ github.workspace }}/${{ inputs.out }}
+        # Presence only: the script picks the 512 or 1 024 tier from it.
+        VULN_MLAB_TOKEN: ${{ inputs.vuln-token }}
+      run: |
+        set -euo pipefail
+        args=(--root "$ROOT" --tree "$OUT/tree.json" --sarif "$OUT/tree.sarif" --fail-on "$FAIL_ON")
+        if [ "$DIFF" = true ]; then args+=(--diff "$OUT/diff.json"); fi
+        cd "$TRUSTED"
+        python3 -I "$PM_SCRIPT" "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -32,11 +32,14 @@ jobs:
       - name: Install Semgrep
         run: pipx install semgrep
       # Produce SARIF for the Security tab (writes the file even when it fails).
+      # ERROR and WARNING: a WARNING is `report` on the grid of
+      # security-scanning.md (RFC 0041 §6.7) — in the Security tab, never
+      # failing. Only the gate step below blocks, on ERROR.
       - name: Semgrep scan (SARIF)
         run: |
           semgrep scan \
             --config p/rust --config p/typescript --config p/secrets \
-            --severity ERROR \
+            --severity ERROR --severity WARNING \
             --sarif --output semgrep.sarif
       - name: Upload SARIF
         if: always()

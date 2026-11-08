@@ -1,0 +1,328 @@
+{
+  "aqua:EmbarkStudios/cargo-deny": [
+    {
+      "version": "0.20.2",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/aqua-embark-studios-cargo-deny/0.20.2",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "cargo:cargo-audit": [
+    {
+      "version": "0.22.2",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/cargo-cargo-audit/0.22.2",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "cargo:cargo-cyclonedx": [
+    {
+      "version": "0.5.9",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/cargo-cargo-cyclonedx/0.5.9",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "cargo:cargo-sweep": [
+    {
+      "version": "0.8.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/cargo-cargo-sweep/0.8.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "claude": [
+    {
+      "version": "2.1.318",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/claude/2.1.318",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "cocogitto": [
+    {
+      "version": "7.0.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/cocogitto/7.0.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "github:batleforc/weebo-skillsagent": [
+    {
+      "version": "0.17.0",
+      "requested_version": "0.17.0",
+      "install_path": "/home/user/.local/share/mise/installs/github-batleforc-weebo-skillsagent/0.17.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "github:mlab-sh/mlab-cli": [
+    {
+      "version": "1.2.0",
+      "requested_version": "1.2.0",
+      "install_path": "/home/user/.local/share/mise/installs/github-mlab-sh-mlab-cli/1.2.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "github:mlab-sh/postmortem": [
+    {
+      "version": "2.9.2",
+      "requested_version": "2.9.2",
+      "install_path": "/home/user/.local/share/mise/installs/github-mlab-sh-postmortem/2.9.2",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "github:rustfs/cli": [
+    {
+      "version": "0.1.37",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/github-rustfs-cli/0.1.37",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "gitleaks": [
+    {
+      "version": "8.30.1",
+      "requested_version": "8.30.1",
+      "install_path": "/home/user/.local/share/mise/installs/gitleaks/8.30.1",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "go": [
+    {
+      "version": "1.27.3",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/go/1.27.3",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "go:github.com/norwoodj/helm-docs/cmd/helm-docs": [
+    {
+      "version": "a5573af096a4b526dcbc3c896c220b1714a0765b",
+      "requested_version": "a5573af096a4b526dcbc3c896c220b1714a0765b",
+      "install_path": "/home/user/.local/share/mise/installs/go-github-com-norwoodj-helm-docs-cmd-helm-docs/a5573af096a4b526dcbc3c896c220b1714a0765b",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "helm": [
+    {
+      "version": "4.3.1",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/helm/4.3.1",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "k6": [
+    {
+      "version": "2.3.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/k6/2.3.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "node": [
+    {
+      "version": "26.13.0",
+      "requested_version": "26",
+      "install_path": "/home/user/.local/share/mise/installs/node/26.13.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "pnpm": [
+    {
+      "version": "12.17.0",
+      "requested_version": "12",
+      "install_path": "/home/user/.local/share/mise/installs/pnpm/12.17.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "python": [
+    {
+      "version": "3.15.2",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/python/3.15.2",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "rust": [
+    {
+      "version": "1.99.1",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/rust/1.99.1",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "symlinked_to": "/home/user/.local/share/mise/installs/rust/1.99.1",
+      "installed": true,
+      "active": true
+    }
+  ],
+  "semgrep": [
+    {
+      "version": "1.183.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/semgrep/1.183.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "sonar-scanner-cli": [
+    {
+      "version": "8.3.1.16491",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/sonar-scanner-cli/8.3.1.16491",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "syft": [
+    {
+      "version": "1.56.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/syft/1.56.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "task": [
+    {
+      "version": "3.54.0",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/task/3.54.0",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ],
+  "trivy": [
+    {
+      "version": "0.76.2",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/trivy/0.76.2",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": false,
+      "active": false
+    }
+  ],
+  "uv": [
+    {
+      "version": "0.13.7",
+      "requested_version": "latest",
+      "install_path": "/home/user/.local/share/mise/installs/uv/0.13.7",
+      "source": {
+        "type": "mise.toml",
+        "path": "/projects/proxy-cache/mise.toml"
+      },
+      "installed": true,
+      "active": true
+    }
+  ]
+}

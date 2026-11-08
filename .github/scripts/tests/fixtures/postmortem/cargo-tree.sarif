@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": "file:///work/cargo/"
+        }
+      },
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "rustdecimal@1.23.1: GHSA-7pwq-f4pq-78gm — `rustdecimal` is a malicious crate"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "194c1da962b3cabc"
+          },
+          "properties": {
+            "advisory": "GHSA-7pwq-f4pq-78gm",
+            "security-severity": "7.5"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "rustdecimal@1.23.1: MAL-2022-1 — Malicious code in rustdecimal (crates.io)"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "f849fc8fe8b41af3"
+          },
+          "properties": {
+            "advisory": "MAL-2022-1",
+            "security-severity": "5.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "rustdecimal@1.23.1: RUSTSEC-2022-0042 — malicious crate `rustdecimal`"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "d6d5a8c70de81898"
+          },
+          "properties": {
+            "advisory": "RUSTSEC-2022-0042",
+            "security-severity": "5.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://github.com/mlab-sh/postmortem",
+          "name": "postmortem",
+          "rules": [
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "A dependency version matches a published advisory (OSV / GHSA / CVE) from the mlab SBOM scan."
+              },
+              "help": {
+                "markdown": "See the [postmortem README](https://github.com/mlab-sh/postmortem#--vulns-known-vulnerabilities) for the vulnerability source.",
+                "text": "See https://github.com/mlab-sh/postmortem#--vulns-known-vulnerabilities for the vulnerability source."
+              },
+              "id": "postmortem.known-vulnerability",
+              "name": "postmortem.known-vulnerability",
+              "properties": {
+                "precision": "high",
+                "tags": [
+                  "security",
+                  "supply-chain",
+                  "vulnerability"
+                ]
+              },
+              "shortDescription": {
+                "text": "Known vulnerability in dependency"
+              }
+            }
+          ],
+          "semanticVersion": "2.9.2",
+          "version": "2.9.2"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

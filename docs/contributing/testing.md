@@ -31,6 +31,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 | **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
 | **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
+| **Gate scripts** | `.github/scripts/tests/test_*.py` | none — stdlib `unittest`, fixtures recorded from the real scanners | `task test:scripts` (CI: `scripts-test.yaml`) |
 
 The in-process layer is the workhorse: every test there spins up a real
 actix-web application wired to `InMemoryPackageRepository`,
@@ -113,7 +114,7 @@ task test:authz-heavy         # …plus signed-URL expiry/rotation and each real
 
 # Coverage (starts Postgres + RustFS + Redis; HTML report in coverage/html/)
 task coverage
-task coverage-check           # fails if line coverage < 80%
+task coverage-check           # fails if line coverage < 80% or a .github/coverage-floors.txt floor is breached
 
 # Fuzz
 task fuzz:check               # every target still compiles — the per-PR gate
@@ -1223,8 +1224,23 @@ stopped.
 
 ## 11. Coverage
 
-- **Gate: 80% lines.** `task coverage-check` runs
-  `cargo llvm-cov report --fail-under-lines 80`.
+- **Gate: 80% lines overall, plus per-path floors** (RFC 0041 §4.3, §6.1).
+  `task coverage-check` runs `cargo llvm-cov report --fail-under-lines 80`,
+  then `merge_coverage.py --floors-file .github/coverage-floors.txt` on the
+  same run. The floors file lists `total` and the tier-1 paths (grant, deny,
+  integrity) at 90 % lines, and only paths a recorded run showed at their
+  floor: a tier-1 path enters the day it reaches 90 %.
+- **In CI**, `test.yaml`'s `coverage-report` applies the same file to the
+  `unit` + `integration` LCOVs, reading it from the pull request's **base**,
+  so a pull request cannot lower its own floor. A breach prints one
+  `coverage floor:` line naming the three least-covered files and the
+  one-crate command that reproduces it, and the job goes red. It is
+  **reported red in CI** today and **blocks a merge from RFC 0041 phase 6**,
+  when the required checks land.
+- **UI (tier 3)**: `pnpm run coverage` measures the whole of `ui/src` (minus
+  the generated client, tests, `main.ts`, barrels and `.d.ts`), so a file
+  nobody tests counts at 0 %; Vitest fails below 80 % on any of lines,
+  branches, functions and statements.
 - `task coverage` aggregates the workspace tests **plus** each adapter
   integration test explicitly (pg_cache, pg_vulnerability, local_registry,
   artifact_meta, pg_rate_limit, storage_router, s3_storage [+`storage-s3`],

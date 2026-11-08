@@ -117,6 +117,11 @@ tasks:
         vars:
           TEST: pg_scan_queue
 
+  test:scripts:
+    desc: Run the gate scripts' tests (.github/scripts/tests, RFC 0041 tier 4) — the scripts-test.yaml job
+    cmds:
+      - python3 -I -m unittest discover -s .github/scripts/tests
+
   test:pg-vulnerability:
     desc: Run PgVulnerabilityRepository integration tests (starts a temporary Postgres container via Podman)
     cmds:

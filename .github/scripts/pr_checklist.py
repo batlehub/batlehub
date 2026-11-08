@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import sys
 from dataclasses import dataclass, field
 
@@ -292,6 +293,55 @@ RULES: list[Rule] = [
     ),
 ]
 
+# RFC 0041 §6.5 (decisions 30 and 47): every file a gate reads its verdict,
+# its binary or its threshold from. A pull request can loosen a gate through
+# any of them, and from phase 6 a maintainer's approval of the head is what
+# stops that — so the reviewer is told, from `pull_request_target`, which the
+# pull request cannot edit. `INLINE_NOSEMGREP` is not a path: `main` adds it
+# when an added line of the diff carries a `nosemgrep` comment.
+INLINE_NOSEMGREP = ":added an inline nosemgrep:"
+GATE_INPUTS = (
+    ".github/workflows/*",
+    ".github/scripts/*",
+    ".github/actions/*",
+    ".github/coverage-floors.txt",
+    ".github/CODEOWNERS",
+    ".github/mise-cve-budget.json",
+    "mise.toml",
+    "mise.lock",
+    ".tasks/*",
+    "ui/vite.config.ts",
+    ".cargo/mutants.toml",
+    "deny.toml",
+    ".cargo/audit.toml",
+    "gitleaks.toml",
+    ".gitleaksignore",
+    ".semgrep/*",
+    ".semgrep.yml",
+    ".semgrepignore",
+    # Beyond §6.5's list, for the same reason: each one silences a scanner.
+    ".trivyignore*",
+    "vex/*",
+    ".forgejo/workflows/*",
+    ".forgejo/CODEOWNERS",
+    INLINE_NOSEMGREP,
+)
+RULES.append(
+    Rule(
+        title="A gate input changed",
+        why="These files decide what a gate checks, with which binary and at which "
+        "threshold (RFC 0041 §6.5). A pull request can loosen a gate through any of "
+        "them while every check stays green.",
+        when=GATE_INPUTS,
+        items=[
+            Item(
+                "Read each of these changes as a change to a gate: "
+                "what does it stop catching? (the matched files are listed below)"
+            ),
+        ],
+    )
+)
+
 # Shown when nothing above fires: the floor, not a guess.
 FALLBACK = [
     "- [ ] The change does what the description says, and the description says what it does",
@@ -338,6 +388,9 @@ def build(paths: list[str]) -> str:
             out.append(f"_{rule.why}_")
         out.append("")
         out.extend(item.render(paths) for item in rule.items)
+        if rule.when is GATE_INPUTS:
+            out.append("")
+            out.extend(f"  - `{p}`" for p in matches(paths, *GATE_INPUTS))
 
     out.append("")
     out.append(_footer())
@@ -353,12 +406,36 @@ def _footer() -> str:
     )
 
 
+def from_api(path: str) -> list[str]:
+    """Changed paths from the pulls/files API, plus `INLINE_NOSEMGREP` when an
+    added line carries one. A renamed file counts under both names."""
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    files = [f for page in doc for f in page] if doc and isinstance(doc[0], list) else doc
+    paths: list[str] = []
+    for f in files:
+        paths.append(f["filename"])
+        if f.get("previous_filename"):
+            paths.append(f["previous_filename"])
+        added = (ln for ln in (f.get("patch") or "").splitlines() if ln.startswith("+"))
+        if any("nosemgrep" in ln for ln in added) and INLINE_NOSEMGREP not in paths:
+            paths.append(INLINE_NOSEMGREP)
+    return paths
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--files", nargs="*", help="changed paths (default: read stdin)")
+    ap.add_argument(
+        "--api-files",
+        help="the JSON of `GET /repos/{repo}/pulls/{n}/files`, paged and slurped "
+        "into one list — the head is never checked out",
+    )
     args = ap.parse_args()
 
-    if args.files is not None:
+    if args.api_files is not None:
+        paths = from_api(args.api_files)
+    elif args.files is not None:
         paths = args.files
     else:
         paths = [line.strip() for line in sys.stdin if line.strip()]

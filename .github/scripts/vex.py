@@ -167,11 +167,15 @@ def gate_problems(
         for cve in sorted(ignored - seen)
     ]
     for cve in sorted(seen - ignored):
-        st = next(s for s in statements if (s.get("vulnerability") or {}).get("name") == cve)
         # `fixed` and `under_investigation` say nothing about the gate, so they
         # are not expected to have an ignore entry. A standing `not_affected`
-        # that the gate still fails on is the mismatch worth reporting.
-        if st.get("status") == "not_affected":
+        # that the gate still fails on is the mismatch worth reporting — in any
+        # of the CVE's statements, not only the first.
+        if any(
+            s.get("status") == "not_affected"
+            for s in statements
+            if (s.get("vulnerability") or {}).get("name") == cve
+        ):
             problems.append(
                 f"{cve} is stated not_affected but {trivyignore} does not ignore it — "
                 "either the gate is still failing on it, or the statement outlived its reason"

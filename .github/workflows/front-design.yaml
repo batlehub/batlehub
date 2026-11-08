@@ -50,8 +50,11 @@ jobs:
         working-directory: ui
 
       # Anti-pattern rules over source. No LLM, no API key, no network.
+      # `npx` tools are pinned to an exact version at least 14 days old, with
+      # install scripts off — neither needs one (RFC 0041 §6.5, §17 M5);
+      # `postmortem harden` reports an unpinned `npx` as CB-DEP-EXEC-003.
       - name: Impeccable detector
-        run: npx --yes impeccable detect ui/src docs/.vitepress
+        run: npx --yes --ignore-scripts impeccable@4.8.0 detect ui/src docs/.vitepress
 
       # Pinned at 0: a new hardcoded user-visible string fails here.
       - name: No untranslated strings
@@ -176,7 +179,7 @@ jobs:
       - name: Serve the build with a stubbed API
         run: |
           node ui/build/stub-server.mjs --port 4173 --dist ui/dist &
-          npx --yes wait-on http://127.0.0.1:4173 -t 60000
+          npx --yes --ignore-scripts wait-on@9.5.1 http://127.0.0.1:4173 -t 60000
 
       # Two viewports here, four in the rendered harness below. The split is
       # deliberate: these rules are anti-pattern rules over what is on the page,
@@ -201,7 +204,7 @@ jobs:
           for viewport in 1440x900 390x844; do
             for route in / /login /packages /packages/npm/react /setup /tools/access-check /tools/url-mapper; do
               echo "::group::$viewport $route"
-              npx --yes impeccable detect --viewport "$viewport" "http://127.0.0.1:4173$route" || fail=1
+              npx --yes --ignore-scripts impeccable@4.8.0 detect --viewport "$viewport" "http://127.0.0.1:4173$route" || fail=1
               echo "::endgroup::"
             done
           done
@@ -289,7 +292,7 @@ jobs:
       - name: Serve the build
         run: |
           pnpm exec vitepress preview --port 4173 >/dev/null 2>&1 &
-          npx --yes wait-on http://127.0.0.1:4173 -t 60000
+          npx --yes --ignore-scripts wait-on@9.5.1 http://127.0.0.1:4173 -t 60000
         working-directory: docs
 
       - name: Start a headless browser

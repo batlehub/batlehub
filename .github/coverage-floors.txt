@@ -1,0 +1,22 @@
+# Line-coverage floors (RFC 0041 §4.3, §6.1). `PATH=PCT`, PATH = `total` or a
+# repository-relative path prefix. Read by merge_coverage.py --floors-file from
+# test.yaml's coverage-report (the base's copy on a pull request) and from
+# `task coverage-check`. A tier-1 path enters only once a recorded run shows it
+# at its floor (decision 40); the measured values are RFC 0041 §17 M12.
+#
+# Not here yet: crates/core/src/services/verdict.rs (87.55 % on 2026-11-08).
+# Never here: crates/adapters/src/scanners/*.rs (tier 1 for mutation only).
+
+# Tier 2 — everything the gate measures.
+total=80
+
+# Tier 1 — decides grant, deny or integrity.
+crates/core/src/rules=90
+crates/web/src/middleware=90
+crates/adapters/src/auth=90
+crates/web/src/extractors.rs=90
+crates/web/src/handlers/auth=90
+crates/core/src/services/integrity.rs=90
+crates/core/src/services/local_registry/mod.rs=90
+crates/adapters/src/storage/mod.rs=90
+crates/adapters/src/vulnerability/osv.rs=90

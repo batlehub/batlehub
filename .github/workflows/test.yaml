@@ -26,6 +26,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - ".github/coverage-floors.txt"
       - "deploy/siem/**"
   pull_request:
     branches: ["main"]
@@ -46,6 +47,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - ".github/coverage-floors.txt"
       - "deploy/siem/**"
   # Nightly as well as per-PR, for the heavy client jobs: what they drive is not
   # all in this repository. They install Bundler and npm from their own
@@ -343,12 +345,12 @@ jobs:
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
       # llvm-cov cannot instrument doctests on stable — run them uninstrumented.
       - name: Doc tests
-        run: cargo test --workspace --doc
+        run: cargo test --locked --workspace --doc
       # `merge_layers` sorts keys itself so its output (and a consumer's hash
       # of it) holds when a consumer's graph turns `toml::Table` into an
       # insertion-ordered map (RFC 0037 §6.2). Nothing here enables it.
       - name: Config tests with toml/preserve_order
-        run: cargo test -p batlehub-config --lib --features toml/preserve_order
+        run: cargo test --locked -p batlehub-config --lib --features toml/preserve_order
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-unit
@@ -1682,7 +1684,31 @@ jobs:
             authz-rubygems=coverage-authz-rubygems.lcov \
             authz-terraform=coverage-authz-terraform.lcov \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      # The floors are read from the base (RFC 0041 §6.1, decision 39), so a
+      # pull request cannot lower its own; the script itself runs from the
+      # head, whose interface changes with the floors — the required review is
+      # what covers that. Computed on unit + integration only.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/coverage-floors.txt
+          sparse-checkout-cone-mode: false
+      - name: Coverage floors
+        shell: bash
+        run: |
+          floors=base/.github/coverage-floors.txt
+          if [ ! -f "$floors" ]; then
+            # Only on the pull request that adds the file (RFC 0041 phase 3).
+            echo "::warning::the base has no .github/coverage-floors.txt — reading the head's copy"
+            floors=.github/coverage-floors.txt
+          fi
+          python3 .github/scripts/merge_coverage.py --output /dev/null --floors-file "$floors" \
+            unit=coverage-unit.lcov integration=coverage-integration.lcov \
+            2>&1 >/dev/null | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
           name: coverage-merged
           path: coverage-merged.lcov

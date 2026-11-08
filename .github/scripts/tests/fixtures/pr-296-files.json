@@ -1,0 +1,74 @@
+[
+  {
+    "sha": "a5bfaab844cb6baa07dbdbc6675578b88acef032",
+    "filename": ".trivyignore.yaml",
+    "status": "modified",
+    "additions": 4,
+    "deletions": 10,
+    "changes": 14,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/.trivyignore.yaml",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/.trivyignore.yaml",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/.trivyignore.yaml?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -3,7 +3,9 @@\n # to. Every entry carries an expiry, so the gate reopens on its own and the\n # entry has to be re-justified rather than quietly outliving its reason.\n #\n-# Empty since Trivy v0.76.0 (2026-10-14). The four entries this file carried\n+# Empty since Trivy v0.76.2 (2026-11-07): it carries go-jose/v4 4.1.6\n+# (CVE-2026-116587) and `x/net` v0.62.0 (CVE-2026-78661). Before that, empty\n+# since Trivy v0.76.0 (2026-10-14). The four entries this file carried\n # were all advisories against the Trivy release binary the worker image ships\n # (`/usr/local/bin/trivy`, pinned by `TRIVY_VERSION` in `Containerfile.worker`):\n # grpc-go CVE-2026-84304 and CVE-2026-84445, and Go standard-library\n@@ -14,12 +16,4 @@\n #\n #   go version -m /usr/local/bin/trivy | head -1\n #   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod\n-vulnerabilities:\n-  - id: CVE-2026-116587\n-    # go-jose DoS via crafted RSA parameters in a JWK. Fixed in go-jose 4.1.6;\n-    # Trivy main carries it, v0.76.1 (the latest release) still has 4.1.5. Trivy\n-    # parses JWKs only on its opt-in sigstore/Rekor attestation paths, and the\n-    # worker runs it as `trivy … --server <endpoint>` without those flags.\n-    paths:\n-      - \"usr/local/bin/trivy\"\n-    expired_at: 2026-12-01\n+vulnerabilities: []"
+  },
+  {
+    "sha": "a390e6166f4d311bb712b2af7991fdfd1f2effcb",
+    "filename": "CHANGELOG.md",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "changes": 10,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/CHANGELOG.md",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/CHANGELOG.md",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/CHANGELOG.md?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).\n \n ## [Unreleased]\n \n+### Security\n+\n+- **actix stack**: `actix-http` 3.20.3, `actix-web` 4.18.2 and `actix-files`\n+  0.7.4 fix RUSTSEC-2026-0443, -0446, -0447, -0448 and -0455 (request\n+  smuggling through chunked trailers, unbounded request decompression,\n+  hidden-file disclosure through Windows short names).\n+- **Worker images**: Trivy moves to v0.76.2, which carries `golang.org/x/net`\n+  v0.62.0 (CVE-2026-78661, HTML parser denial of service) and go-jose 4.1.6\n+  (CVE-2026-116587, whose `.trivyignore.yaml` entry is gone).\n+\n ## [1.9.0] - 2026-11-05\n \n ### Changed"
+  },
+  {
+    "sha": "18b2b64b2b8893ffa8b3698925d6d1482e92a08f",
+    "filename": "Cargo.lock",
+    "status": "modified",
+    "additions": 15,
+    "deletions": 14,
+    "changes": 29,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/Cargo.lock",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/Cargo.lock",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/Cargo.lock?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -36,9 +36,9 @@ dependencies = [\n \n [[package]]\n name = \"actix-files\"\n-version = \"0.7.3\"\n+version = \"0.7.4\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n-checksum = \"a4eb203ca8ec2fd8261d7ab0b46b0d33ac80abfc780bfdd021009decc61df62f\"\n+checksum = \"c6f3a6769c3bc1c7d8e04b5c15f0c87489924c93455d9820296c219475a9051a\"\n dependencies = [\n  \"actix-http\",\n  \"actix-service\",\n@@ -60,16 +60,17 @@ dependencies = [\n \n [[package]]\n name = \"actix-http\"\n-version = \"3.20.0\"\n+version = \"3.20.3\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n-checksum = \"d20a22850ea7fecad12c5f8cd97d246c3af1f04ef400033977c2f13425c45816\"\n+checksum = \"cd4ef186188fed2d4f8177d712ad623c751c6e84f45b31da694cc53f483f320b\"\n dependencies = [\n  \"actix-codec\",\n  \"actix-service\",\n  \"actix-utils\",\n- \"base64 0.22.1\",\n+ \"base64 0.23.1\",\n  \"bitflags 2.13.2\",\n  \"brotli\",\n+ \"brotli-decompressor\",\n  \"bytes\",\n  \"bytestring\",\n  \"derive_more\",\n@@ -207,9 +208,9 @@ dependencies = [\n \n [[package]]\n name = \"actix-web\"\n-version = \"4.18.1\"\n+version = \"4.18.2\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n-checksum = \"81f8da0d2ae4200dde8773d72ba47a65c220b251ba7b9248db5bd263c247e959\"\n+checksum = \"697d10a06f7a550791dcb963e3090aa5c65c4d94c029114814a4bd652f30f0b4\"\n dependencies = [\n  \"actix-codec\",\n  \"actix-http\",\n@@ -1594,7 +1595,7 @@ version = \"3.1.1\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34\"\n dependencies = [\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -2212,7 +2213,7 @@ source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb\"\n dependencies = [\n  \"libc\",\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -4590,7 +4591,7 @@ dependencies = [\n  \"once_cell\",\n  \"socket2\",\n  \"tracing\",\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -5053,7 +5054,7 @@ dependencies = [\n  \"errno\",\n  \"libc\",\n  \"linux-raw-sys\",\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -5112,7 +5113,7 @@ dependencies = [\n  \"security-framework\",\n  \"security-framework-sys\",\n  \"webpki-root-certs\",\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -5850,7 +5851,7 @@ dependencies = [\n  \"getrandom 0.3.4\",\n  \"once_cell\",\n  \"rustix\",\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]\n@@ -6882,7 +6883,7 @@ version = \"0.1.11\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22\"\n dependencies = [\n- \"windows-sys 0.52.0\",\n+ \"windows-sys 0.61.2\",\n ]\n \n [[package]]"
+  },
+  {
+    "sha": "ff06ff09397cfb9364c9be2c03e191e1b150ea2c",
+    "filename": "Containerfile.worker",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 1,
+    "changes": 2,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/Containerfile.worker",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/Containerfile.worker",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/Containerfile.worker?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -21,7 +21,7 @@\n #   podman run --rm -v ./config.toml:/etc/batlehub/config.toml:ro batlehub-worker\n \n ARG POSTMORTEM_VERSION=2.9.2\n-ARG TRIVY_VERSION=0.76.1\n+ARG TRIVY_VERSION=0.76.2\n ARG YARA_X_VERSION=1.20.0\n # The release's own asset digest (GitHub's `digest` field); the binary runs\n # operator rules over hostile bytes, so it is checked, not only fetched."
+  },
+  {
+    "sha": "9c47225ea8dd5ffbebb7c4a94bb539ea4c3f2a5d",
+    "filename": "mise.lock",
+    "status": "modified",
+    "additions": 4,
+    "deletions": 4,
+    "changes": 8,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/mise.lock",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/mise.lock",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/mise.lock?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -177,13 +177,13 @@ url = \"https://github.com/go-task/task/releases/download/v3.54.0/task_linux_amd6\n url_api = \"https://api.github.com/repos/go-task/task/releases/assets/604090073\"\n \n [[tools.trivy]]\n-version = \"0.76.1\"\n+version = \"0.76.2\"\n backend = \"aqua:aquasecurity/trivy\"\n \n [tools.trivy.\"platforms.linux-x64\"]\n-checksum = \"sha256:c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0\"\n-url = \"https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz\"\n-url_api = \"https://api.github.com/repos/aquasecurity/trivy/releases/assets/662254617\"\n+checksum = \"sha256:bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf\"\n+url = \"https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz\"\n+url_api = \"https://api.github.com/repos/aquasecurity/trivy/releases/assets/713401165\"\n provenance = \"cosign\"\n \n [[tools.uv]]"
+  },
+  {
+    "sha": "5f6714a830ce1c7799d76c46c3ea628cc0b34b4e",
+    "filename": "vex/batlehub.openvex.json",
+    "status": "modified",
+    "additions": 5,
+    "deletions": 8,
+    "changes": 13,
+    "blob_url": "https://github.com/batlehub/batlehub/blob/40db9d47cff5ad0af17735808a3d0d049a6a448d/vex%2Fbatlehub.openvex.json",
+    "raw_url": "https://github.com/batlehub/batlehub/raw/40db9d47cff5ad0af17735808a3d0d049a6a448d/vex%2Fbatlehub.openvex.json",
+    "contents_url": "https://api.github.com/repos/batlehub/batlehub/contents/vex%2Fbatlehub.openvex.json?ref=40db9d47cff5ad0af17735808a3d0d049a6a448d",
+    "patch": "@@ -3,8 +3,8 @@\n   \"@id\": \"https://batleforc.git.batleforc.fr/batlehub/vex/batlehub\",\n   \"author\": \"BatleHub maintainers\",\n   \"role\": \"Project maintainers\",\n-  \"timestamp\": \"2026-10-30T00:00:00Z\",\n-  \"version\": 4,\n+  \"timestamp\": \"2026-11-07T00:00:00Z\",\n+  \"version\": 5,\n   \"tooling\": \"hand-maintained; validated and rendered by .github/scripts/vex.py\",\n   \"statements\": [\n     {\n@@ -136,7 +136,7 @@\n         \"name\": \"CVE-2026-116587\",\n         \"description\": \"go-jose: denial of service via crafted RSA parameters in JWKs\"\n       },\n-      \"timestamp\": \"2026-10-30T00:00:00Z\",\n+      \"timestamp\": \"2026-11-07T00:00:00Z\",\n       \"products\": [\n         {\n           \"@id\": \"pkg:oci/batlehub-worker\",\n@@ -151,11 +151,8 @@\n           ]\n         }\n       ],\n-      \"status\": \"not_affected\",\n-      \"justification\": \"vulnerable_code_not_in_execute_path\",\n-      \"impact_statement\": \"The vulnerable go-jose is an indirect dependency of the upstream Trivy release binary the worker image carries (/usr/local/bin/trivy, pinned by TRIVY_VERSION in Containerfile.worker), not of any BatleHub code. Trivy reaches JWK parsing only through its sigstore/Rekor attestation paths (`--sbom-sources rekor`, attestation verification), which are opt-in; the worker runs it as `trivy ... --server <endpoint>` (crates/adapters/src/scanners/trivy.rs) and never passes those flags, so no JWK from an untrusted source is parsed.\",\n-      \"action_statement\": \"Bump TRIVY_VERSION to the first Trivy release whose go.mod carries go-jose/v4 >= 4.1.6 (Trivy main already does; v0.76.1 does not), and delete this statement together with its .trivyignore.yaml entry.\",\n-      \"action_statement_timestamp\": \"2026-10-30T00:00:00Z\"\n+      \"status\": \"fixed\",\n+      \"status_notes\": \"Fixed after 1.9.0: Trivy v0.76.2 (TRIVY_VERSION in Containerfile.worker) carries go-jose/v4 4.1.6. Until then it was not_affected: the worker runs Trivy as `trivy ... --server <endpoint>` and never takes the opt-in sigstore/Rekor paths that parse JWKs.\"\n     }\n   ]\n }"
+  }
+]
