@@ -17,13 +17,15 @@ name: Supply chain (postmortem)
 # answer, `--fail-on-vuln` included (§17 M18), and ranks a `MAL-` record
 # `medium` (§17 M4). The script reads the JSON's diagnostics and fails closed.
 #
-# **Nothing the pull request controls picks the binary or the script**
-# (decision 39). The trusted tree is checked out into `base/` — the PR's base
-# commit, or the pushed commit itself — and the tree under test into `head/`;
-# postmortem is installed from `base/mise.toml` + `base/mise.lock` and called
-# by absolute path, and `base/.github/scripts/postmortem_new_risk.py` judges.
-# A PR can still rewrite this workflow or the composite action; review is the
-# gate for that (decisions 30, 47) and pr-checklist.yaml points at it.
+# **Nothing the pull request controls picks the binary, the script or the
+# action** (decision 39). The trusted tree is checked out into `base/` — the
+# merge's first parent on a PR, or the pushed commit itself — and the tree
+# under test into `head/`; postmortem is installed from `base/mise.toml` +
+# `base/mise.lock` and called by absolute path,
+# `base/.github/scripts/postmortem_new_risk.py` judges, and the composite
+# action is copied from `base/` before it is used. A PR can still rewrite this
+# workflow; review is the gate for that (decisions 30, 47) and
+# pr-checklist.yaml points at it.
 #
 # **`VULN_MLAB_TOKEN` is required** (decision 50). An anonymous scan reads 512
 # packages and says nothing about the rest; the Rust root and ui/ are over it,
@@ -87,8 +89,20 @@ jobs:
           path: base
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
+      # The action from the trusted tree, like the script and the binary it
+      # runs: a pull request cannot pick the code its own gate executes. The
+      # head's copy only on the pull request that adds the action (bootstrap).
+      - name: The gate action, from base
+        run: |
+          src="base"
+          if [ ! -f base/.github/actions/postmortem-gate/action.yml ]; then
+            echo "::warning::the base has no postmortem-gate action — using the head's (bootstrap only)"
+            src="head"
+          fi
+          mkdir -p trusted-actions
+          cp -r "$src/.github/actions/postmortem-gate" trusted-actions/
       - name: postmortem gate (Rust)
-        uses: ./head/.github/actions/postmortem-gate
+        uses: ./trusted-actions/postmortem-gate
         with:
           root: "."
           fail-on: high
@@ -136,8 +150,20 @@ jobs:
           path: base
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
+      # The action from the trusted tree, like the script and the binary it
+      # runs: a pull request cannot pick the code its own gate executes. The
+      # head's copy only on the pull request that adds the action (bootstrap).
+      - name: The gate action, from base
+        run: |
+          src="base"
+          if [ ! -f base/.github/actions/postmortem-gate/action.yml ]; then
+            echo "::warning::the base has no postmortem-gate action — using the head's (bootstrap only)"
+            src="head"
+          fi
+          mkdir -p trusted-actions
+          cp -r "$src/.github/actions/postmortem-gate" trusted-actions/
       - name: postmortem gate (UI)
-        uses: ./head/.github/actions/postmortem-gate
+        uses: ./trusted-actions/postmortem-gate
         with:
           root: ui
           fail-on: high
@@ -187,8 +213,20 @@ jobs:
           path: base
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
+      # The action from the trusted tree, like the script and the binary it
+      # runs: a pull request cannot pick the code its own gate executes. The
+      # head's copy only on the pull request that adds the action (bootstrap).
+      - name: The gate action, from base
+        run: |
+          src="base"
+          if [ ! -f base/.github/actions/postmortem-gate/action.yml ]; then
+            echo "::warning::the base has no postmortem-gate action — using the head's (bootstrap only)"
+            src="head"
+          fi
+          mkdir -p trusted-actions
+          cp -r "$src/.github/actions/postmortem-gate" trusted-actions/
       - name: postmortem gate (Website)
-        uses: ./head/.github/actions/postmortem-gate
+        uses: ./trusted-actions/postmortem-gate
         with:
           root: docs
           fail-on: critical

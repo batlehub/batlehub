@@ -36,10 +36,17 @@ jobs:
     name: postmortem — fork PR #${{ inputs.pr }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Read-only: this job runs postmortem over the fork's lockfiles and hands
+    # it the token for its GitHub lookups, so the token must not write. The
+    # verdicts are posted by `post`, which never touches the fork's content.
     permissions:
       contents: read
       pull-requests: read
-      statuses: write
+    outputs:
+      verified: ${{ steps.pr.outputs.verified }}
+      rust: ${{ steps.rust.outcome }}
+      ui: ${{ steps.ui.outcome }}
+      docs: ${{ steps.docs.outcome }}
     steps:
       - name: The pull request is still at the reviewed head
         id: pr
@@ -58,8 +65,11 @@ jobs:
             echo "::error::the pull request's head is $head, not the reviewed $SHA — review the new head and run again"
             exit 1
           fi
-          echo "repo=$(jq -r .head.repo.clone_url "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
-          echo "base=$(jq -r .base.sha "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
+          {
+            echo "verified=true"
+            echo "repo=$(jq -r .head.repo.clone_url "$RUNNER_TEMP/pr.json")"
+            echo "base=$(jq -r .base.sha "$RUNNER_TEMP/pr.json")"
+          } >> "$GITHUB_OUTPUT"
 
       # The trusted tree: the pull request's base commit, from this repository.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,15 +138,26 @@ jobs:
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
           github-token: ${{ github.token }}
 
+  # The only job holding `statuses: write`. It checks nothing out and runs
+  # nothing from the fork: it reads the three outcomes and posts them.
+  post:
+    name: post the verdicts on the reviewed head
+    needs: gate
+    # Only once the head was checked against the reviewed SHA.
+    if: ${{ !cancelled() && needs.gate.outputs.verified == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
       - name: Post the verdicts on the reviewed head
-        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RUST: ${{ steps.rust.outcome }}
-          UI: ${{ steps.ui.outcome }}
-          DOCS: ${{ steps.docs.outcome }}
+          RUST: ${{ needs.gate.outputs.rust }}
+          UI: ${{ needs.gate.outputs.ui }}
+          DOCS: ${{ needs.gate.outputs.docs }}
         run: |
           set -euo pipefail
           red=0
