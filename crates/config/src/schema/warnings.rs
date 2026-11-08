@@ -427,6 +427,12 @@ pub const SECURITY_TIMESTAMP_HOLD_UNAVAILABLE: &str = "security.timestamp-hold-u
 /// it is an explicit choice, so it is named (RFC 0041 §6.8, T14).
 pub const SECURITY_SCANNER_ERROR_OPEN: &str = "security.scanner-error-open";
 
+/// `[registries.security]` in `mode = "block"` with an `unknown_severity`
+/// *set* below `max_severity`: unrated advisories, `MAL-` aside, are served
+/// (RFC 0041 §4.5). The default `high` under `max_severity = "critical"`
+/// warns about nothing, since nobody chose it.
+pub const SECURITY_UNKNOWN_SERVED: &str = "security.unknown-served";
+
 /// `[upstream_audit]` enabled with no registry in `proxy`/`hybrid` mode
 /// (RFC 0014 §4.4): a config in transition is legitimate, so a warning.
 pub const UPSTREAM_AUDIT_NOTHING_TO_AUDIT: &str = "upstream-audit.nothing-to-audit";

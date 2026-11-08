@@ -156,6 +156,13 @@ when you can see findings. Upgrade to a fixed version if there is one. If the
 vulnerability cannot affect how you use the package, your administrator can
 record that judgement as an exemption, with a reason and an end date.
 
+The advisory may be **unrated**: some databases, the Go vulnerability database
+first among them, publish advisories with no severity. The registry then
+judges it at its `unknown_severity` level, `high` unless your administrator
+changed it, so an unrated advisory is refused like a high one.
+`batlehub-cli why` shows it as severity `unknown`, judged as `high` by
+`unknown_severity`. See [Unrated findings](/guide/security-gates#unknown-severity).
+
 #### `MALWARE_SIGNAL` {#malware-signal}
 
 A scanner found code that behaves like malware: obfuscated execution, a network
@@ -170,7 +177,10 @@ a package published to steal credentials, mine, or open a back door. This is
 always refused, whatever the registry's mode or severity threshold. **Do not
 work around this one.** Remove the package from your project, and tell your
 security team if it was ever installed: what it ran at install time already
-happened.
+happened. If the listing is wrong, only an administrator can serve this exact
+version, with an exemption on the gate `security_verdict`
+(`batlehub-cli exemption add … --gate security_verdict`). It is then served as
+`warned`, with `ADMIN_OVERRIDE` in its reasons.
 
 #### `INSTALL_HOOK` {#install-hook}
 
@@ -334,6 +344,8 @@ whole answer, and `batlehub-cli why` has nothing to add.
 | `cannot verify the publisher` | The publisher check is on, and this registry type cannot report publishers | Your administrator's configuration needs a fix |
 | `this release is not signed` | Only signed releases are served | Use a signed version |
 | `blocked: known … vulnerability` | A recorded vulnerability at or above the threshold | Upgrade, or ask for an exemption |
+| `blocked: unrated vulnerability` | An advisory with no severity, judged at the registry's `unknown_severity` | Upgrade, or ask for an exemption |
+| `blocked: known malicious package` | An OSV `MAL-` record lists this version as malware | Remove it from your project; see [`KNOWN_MALICIOUS`](#known-malicious) |
 | `blocked: licence '…'` / `blocked: no declared licence` | The licence policy | Ask whoever owns the licence policy |
 | `blocked: … flagged by …` | Your security team flagged it | Use another version |
 | any other text | Most likely an administrator's block, in their own words | Ask the administrator |

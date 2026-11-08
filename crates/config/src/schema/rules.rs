@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use batlehub_core::entities::Severity;
 use serde::{Deserialize, Serialize};
 
 use super::registry::default_true;
@@ -157,6 +158,22 @@ pub struct CveGateConfig {
     /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
+    /// What an unrated advisory is judged at against `min_severity` (RFC 0041
+    /// decision 16). Absent means `high`; `unknown` restores "an unrated
+    /// advisory never blocks". Not read on a `[registries.security]`
+    /// registry, where the profile's own `unknown_severity` decides.
+    #[serde(default)]
+    pub unknown_severity: Option<String>,
+}
+
+impl CveGateConfig {
+    /// `unknown_severity`, `high` when absent or unparseable (validated at load).
+    pub fn unknown_severity(&self) -> Severity {
+        self.unknown_severity
+            .as_deref()
+            .and_then(Severity::parse)
+            .unwrap_or(Severity::High)
+    }
 }
 
 fn default_cve_min_severity() -> String {

@@ -28,9 +28,9 @@ postmortem tree "$d" --vulns --fail-on-vuln high   # needs VULN_MLAB_TOKEN, or 8
 ## Running the worker probe
 
 ```bash
-uv run --with cvss python3 -I probe_osv_severity.py cases            # recorded answers, offline
-uv run --with cvss python3 -I probe_osv_severity.py cases --record   # refresh from api.osv.dev
-uv run --with cvss python3 -I probe_osv_severity.py purls <file>     # any purl list, live
+uv run --with cvss==3.6 python3 -I probe_osv_severity.py cases            # recorded answers, offline
+uv run --with cvss==3.6 python3 -I probe_osv_severity.py cases --record   # refresh from api.osv.dev
+uv run --with cvss==3.6 python3 -I probe_osv_severity.py purls <file>     # any purl list, live
 ```
 
 It prints, per purl, the verdict under the default profile three ways:

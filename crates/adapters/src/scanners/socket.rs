@@ -67,7 +67,7 @@ impl SocketScanner {
                     .get("severity")
                     .and_then(|s| s.as_str())
                     .and_then(Severity::parse)
-                    .unwrap_or(Severity::Medium);
+                    .unwrap_or_else(|| kind.default_severity());
                 let category = a.get("category").and_then(|c| c.as_str()).unwrap_or("");
                 let summary = if category.is_empty() {
                     format!("socket: {ty}")

@@ -3093,6 +3093,17 @@ impl AppConfig {
                 sec.max_severity
             );
         }
+        if let Some(u) = sec
+            .unknown_severity
+            .as_deref()
+            .filter(|u| Severity::parse(u).is_none())
+        {
+            bail!(
+                "registry '{}': security.unknown_severity '{u}' is not one of unknown, low, \
+                 medium, high, critical",
+                registry.name
+            );
+        }
         for name in &sec.scanners {
             let Some(cfg) = self.scanner_named(name) else {
                 bail!(
@@ -3844,6 +3855,23 @@ impl AppConfig {
                     ),
                 ));
             }
+            if let Some(chosen) = sec.unknown_severity.as_deref().and_then(Severity::parse) {
+                let max = Severity::parse(&sec.max_severity).unwrap_or(Severity::High);
+                if sec.mode == batlehub_core::entities::SecurityMode::Block && chosen < max {
+                    out.push(ConfigWarning::new(
+                        warnings::SECURITY_UNKNOWN_SERVED,
+                        path.clone(),
+                        format!(
+                            "registry '{}' judges unrated findings as {} (unknown_severity), \
+                             below max_severity = \"{}\": an advisory nobody rated is served, \
+                             a known-malicious (MAL-) package aside",
+                            registry.name,
+                            chosen.as_str(),
+                            max.as_str()
+                        ),
+                    ));
+                }
+            }
             for name in &sec.required_scanners {
                 if self.scanner_named(name).is_some_and(|c| c.is_enrichment()) {
                     out.push(ConfigWarning::new(
@@ -3910,6 +3938,11 @@ impl AppConfig {
                         out.push(format!(
                             "cve_gate.min_severity = \"{}\" is not the threshold",
                             c.min_severity
+                        ));
+                    }
+                    if let Some(u) = &c.unknown_severity {
+                        out.push(format!(
+                            "cve_gate.unknown_severity = \"{u}\" is not read (security.unknown_severity decides)"
                         ));
                     }
                     ("cve_gate", &c.bypass_roles)

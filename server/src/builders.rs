@@ -782,7 +782,9 @@ fn push_flags_rule(
         .find(|r| matches!(r, RuleConfig::CveGate(_)))
     {
         let min = Severity::parse(&cfg.min_severity).unwrap_or(Severity::High);
-        rule = rule.with_gate(min, cfg.block);
+        rule = rule
+            .with_gate(min, cfg.block)
+            .with_unknown_severity(cfg.unknown_severity());
     }
     rules.push(Box::new(rule));
 }
@@ -918,12 +920,19 @@ fn build_policy_with_rules(
                         cfg.min_severity
                     )
                 })?;
-                rules.push(Box::new(CveGateRule::new(
-                    Arc::clone(&vuln_repo),
-                    min_severity,
-                    bypass,
-                    cfg.block,
-                )));
+                if let Some(u) = cfg
+                    .unknown_severity
+                    .as_deref()
+                    .filter(|u| Severity::parse(u).is_none())
+                {
+                    anyhow::bail!(
+                        "unknown cve_gate.unknown_severity '{u}' (expected unknown, low, medium, high, or critical)"
+                    );
+                }
+                rules.push(Box::new(
+                    CveGateRule::new(Arc::clone(&vuln_repo), min_severity, bypass, cfg.block)
+                        .with_unknown_severity(cfg.unknown_severity()),
+                ));
             }
             RuleConfig::LicenseGate(cfg) => {
                 let bypass = parse_bypass_roles(&cfg.bypass_roles)?;

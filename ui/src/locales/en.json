@@ -1259,7 +1259,8 @@
     "rescanQueued": "Rescan queued.",
     "rescanAlreadyOpen": "A scan job for this version is already open.",
     "rescanFailed": "The rescan could not be queued.",
-    "codeDocs": "What {code} means, in the documentation"
+    "codeDocs": "What {code} means, in the documentation",
+    "judgedAs": "{stored}, judged as {judged} by unknown_severity"
   },
   "visibility": {
     "internal": "Internal — authenticated users only",

@@ -93,6 +93,7 @@ impl PgVerdictRepository {
                     confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
                     available_at: r.try_get("available_at").ok(),
                     raw: r.try_get("raw").unwrap_or(serde_json::Value::Null),
+                    judged_as: None,
                 })
             })
             .collect()

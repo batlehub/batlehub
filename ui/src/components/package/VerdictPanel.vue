@@ -8,6 +8,7 @@ import type { VerdictResponse } from "@/client/types.gen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { severityVariant } from "@/lib/badge-variants";
+import { SEVERITY_KEYS } from "@/config/severity";
 import { formatDay } from "@/lib/format";
 import { reasonCodeDocsUrl } from "@/config";
 
@@ -213,7 +214,16 @@ async function rescan() {
         :key="i"
         class="flex flex-wrap items-baseline gap-2"
       >
-        <Badge :variant="severityVariant(f.severity)" class="text-xs">{{ f.severity }}</Badge>
+        <!-- Coloured by what the finding was judged at; the text keeps what the
+             scanner said (RFC 0041 §4.5). -->
+        <Badge :variant="severityVariant(f.judged_as ?? f.severity)" class="text-xs">{{
+          f.judged_as
+            ? t("verdictPanel.judgedAs", {
+                stored: t(SEVERITY_KEYS[f.severity]),
+                judged: t(SEVERITY_KEYS[f.judged_as]),
+              })
+            : t(SEVERITY_KEYS[f.severity])
+        }}</Badge>
         <span class="font-mono text-xs text-muted-foreground">{{ f.scanner }}</span>
         <span class="font-mono text-xs">{{ f.code }}</span>
         <span>{{ f.summary }}</span>

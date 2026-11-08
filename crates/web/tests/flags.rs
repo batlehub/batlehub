@@ -318,6 +318,22 @@ async fn a_hard_block_denies_the_download_and_the_report_names_who_pulled_before
     assert_eq!(v["revoked"], false);
 }
 
+/// RFC 0041 §4.5: a pushed `gate` flag rated `unknown` is judged at the
+/// registry's `unknown_severity` (default `high`), not read as below every
+/// threshold.
+#[actix_web::test]
+async fn an_unrated_gate_flag_is_judged_high_by_default() {
+    let (app, _) = lab("hard_block").await;
+    let body = serde_json::json!({ "flags": [{
+        "external_id": "G-unrated", "registry": REG, "package_name": "pkg", "version": "1.0.0",
+        "effect": "gate", "severity": "unknown", "summary": "s" }]})
+    .to_string();
+    let resp = call_service(&app, push_req(SOURCE, SECRET, &body)).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+    let resp = call_service(&app, user_get(&tarball("1.0.0"))).await;
+    assert_eq!(resp.status(), 403);
+}
+
 #[actix_web::test]
 async fn a_gate_flag_is_judged_by_severity_and_a_warn_flag_never_denies() {
     let (app, _) = lab("hard_block").await;

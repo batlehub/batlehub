@@ -120,6 +120,21 @@ impl FakeOsv {
             .with_reference("GHSA-test")],
         );
     }
+    /// The shape an older worker stored for a `MAL-` record (RFC 0041 §17
+    /// M1): an unrated vulnerability whose reference is the `MAL-` id.
+    fn unrated_mal(&self, version: &str) {
+        self.findings.lock().unwrap().insert(
+            version.to_owned(),
+            vec![Finding::new(
+                "osv",
+                FindingKind::Vulnerability,
+                ReasonCode::Vulnerability,
+                Severity::Unknown,
+                "MAL-2023-1000",
+            )
+            .with_reference("MAL-2023-1000")],
+        );
+    }
 }
 
 #[async_trait]
@@ -592,6 +607,107 @@ async fn the_same_finding_serves_in_warn_mode() {
         .unwrap();
     assert_eq!(stored.state, VerdictState::Warned);
     assert_eq!(stored.reason_codes, vec![ReasonCode::Vulnerability]);
+}
+
+/// RFC 0041 decisions 18 and 36: a finding citing a `MAL-` record is
+/// `KNOWN_MALICIOUS`, refused under `mode = "warn"` too, with npm's error
+/// shape and the reason in the header.
+#[actix_web::test]
+async fn a_mal_finding_is_refused_as_known_malicious_even_in_warn_mode() {
+    let (app, lab) = lab(SecurityMode::Warn, old()).await;
+    lab.osv.unrated_mal("1.1.0");
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("denied"));
+    assert_eq!(header(&resp, HEADER_REASON), Some("KNOWN_MALICIOUS"));
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("KNOWN_MALICIOUS"),
+        "{body}"
+    );
+}
+
+/// An unrated advisory is judged `high` by default: refused in `block` mode.
+#[actix_web::test]
+async fn an_unrated_finding_is_denied_under_the_default_unknown_severity() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Unknown);
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.findings[0].severity,
+        Severity::Unknown,
+        "what the scanner said"
+    );
+    // `judged_as` is never stored: every reader re-judges, the stored-row
+    // fallback of the verdict endpoint and the admin listing included.
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/verdicts/{REG}/pkg/1.1.0"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["findings"][0]["severity"], "unknown", "{body}");
+    assert_eq!(body["findings"][0]["judged_as"], "high", "{body}");
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/admin/verdicts?registry={REG}&state=denied"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(
+        body["items"][0]["findings"][0]["judged_as"], "high",
+        "{body}"
+    );
+}
+
+/// The fallback that answers with the stored row (no metadata at hand) shows
+/// the judgement too: what the real `batlehub-cli why` found missing.
+#[test]
+fn a_stored_row_is_re_judged_for_its_reader() {
+    let mut policy = SecurityPolicy::defaults_for(REG);
+    let stored = batlehub_core::entities::Finding::new(
+        "osv",
+        FindingKind::Vulnerability,
+        ReasonCode::Vulnerability,
+        Severity::Unknown,
+        "GO-2099-0001",
+    );
+    let v = batlehub_core::entities::Verdict {
+        package: PackageId::new(REG, "pkg", "1.1.0"),
+        state: VerdictState::Denied,
+        reason_codes: vec![ReasonCode::Vulnerability],
+        findings: vec![stored],
+        policy_ref: format!("{REG}/default"),
+        available_at: None,
+        evaluated_at: chrono::Utc::now(),
+        last_scanned_at: None,
+        scanners_done: vec!["osv".into()],
+    };
+    let seen = batlehub_core::services::verdict::with_judgement(v.clone(), &policy);
+    assert_eq!(seen.findings[0].judged_as, Some(Severity::High));
+    assert_eq!(
+        seen.state,
+        VerdictState::Denied,
+        "the state is the stored one"
+    );
+    policy.unknown_severity = Severity::Unknown;
+    let seen = batlehub_core::services::verdict::with_judgement(v, &policy);
+    assert_eq!(seen.findings[0].judged_as, None);
 }
 
 /// A version older than `mature_age_secs` is served `warned` while nobody

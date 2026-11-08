@@ -19,8 +19,8 @@ mode = block) three ways:
           informational record (RUSTSEC unsound/unmaintained/notice) is low;
           a withdrawn one is ignored; what is still unrated is judged high
 
-`cvss` (PyPI) scores the vectors; run through uv:
-    uv run --with cvss python3 -I probe_osv_severity.py cases
+`cvss` (PyPI) scores the vectors, pinned exactly (RFC 0041 §8); run through uv:
+    uv run --with cvss==3.6 python3 -I probe_osv_severity.py cases
 """
 
 import json
@@ -41,16 +41,16 @@ def parse(s):
 
 
 def bucket(score):
-    # Severity::from_cvss_score's buckets.
+    # Severity::from_cvss_score's buckets: 0.0 ("None") is low, a non-score unknown.
+    if not 0.0 <= score <= 10.0:
+        return "unknown"
     if score >= 9.0:
         return "critical"
     if score >= 7.0:
         return "high"
     if score >= 4.0:
         return "medium"
-    if score > 0.0:
-        return "low"
-    return "unknown"
+    return "low"
 
 
 def vector_score(vector):

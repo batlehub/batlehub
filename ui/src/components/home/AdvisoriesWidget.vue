@@ -22,6 +22,7 @@ import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
 import { myAdvisories } from "@/client/sdk.gen";
 import type { MyAdvisoriesResponse, MyAdvisoryDto } from "@/client/types.gen";
+import { SEVERITY_KEYS } from "@/config/severity";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { severityVariant } from "@/lib/badge-variants";
@@ -44,19 +45,6 @@ const scanningAvailable = computed(() => data.value?.scanning_available ?? false
 
 const relationLabel = (relation: MyAdvisoryDto["relation"]) =>
   relation === "owned" ? t("advisoriesWidget.owned") : t("advisoriesWidget.pulled");
-
-/**
- * Spelled out rather than built as `t(\`severity.${value}\`)`. A template-literal
- * key is invisible to the i18n audit, which reads templates, so a missing
- * translation would ship as the literal text `severity.critical`.
- */
-const SEVERITY_KEYS = {
-  unknown: "severity.unknown",
-  low: "severity.low",
-  medium: "severity.medium",
-  high: "severity.high",
-  critical: "severity.critical",
-} as const;
 
 const severityLabel = (severity: MyAdvisoryDto["highest_severity"]) =>
   t(SEVERITY_KEYS[severity] ?? SEVERITY_KEYS.unknown);

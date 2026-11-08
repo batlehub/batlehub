@@ -38,6 +38,12 @@ pub const PENDING_SCANNER: &str = "pending";
 /// `"security_verdict"` in `EXEMPTIBLE_GATES`.
 pub const VERDICT_EXEMPTION_GATE: &str = "security_verdict";
 
+/// The evaluator version a saved verdict was judged by, written into its
+/// free-text `policy_ref` (RFC 0041 decision 45): a change caused only by
+/// this evaluator's on-read substitutions is saved once per version, so a
+/// stored row converges without being rewritten on every read.
+pub const EVALUATOR_TAG: &str = "eval=2";
+
 /// The findings the internal `AgeScanner` produces for `package` under
 /// `policy` at `now` (RFC 0018 §5.2): a time-bound `MIN_AGE_NOT_MET` with its
 /// `available_at`, or an open-ended `TIMESTAMP_MISSING` when the upstream
@@ -98,6 +104,57 @@ pub fn pending_findings(policy: &SecurityPolicy, done: &[String]) -> Vec<Finding
         .collect()
 }
 
+/// The severity a finding is judged at: its `judged_as` when `evaluate` set
+/// one, else what the scanner said.
+fn judged_of(f: &Finding) -> Severity {
+    f.judged_as.unwrap_or(f.severity)
+}
+
+/// The forge-ref codes carry the operator's own action as their severity
+/// (RFC 0019 §4.2), so `unknown_severity` never applies to them.
+fn is_forge_ref(code: ReasonCode) -> bool {
+    matches!(
+        code,
+        ReasonCode::MutableRef
+            | ReasonCode::TagMoved
+            | ReasonCode::AssetReplaced
+            | ReasonCode::PinnedRefRequired
+            | ReasonCode::RawScript
+    )
+}
+
+/// The on-read substitutions of RFC 0041 §4.5: a finding citing a `MAL-`
+/// record is `KNOWN_MALICIOUS` whatever it was stored as (decision 36), and
+/// an unrated one is judged at `unknown_severity`. `judged_as` is cleared
+/// first, so a substitution made under an older setting never survives.
+fn judge(findings: &mut [Finding], policy: &SecurityPolicy) {
+    for f in findings.iter_mut() {
+        f.judged_as = None;
+        if f.code != ReasonCode::KnownMalicious && !f.code.is_always_denied() && f.names_malicious()
+        {
+            f.code = ReasonCode::KnownMalicious;
+            f.kind = FindingKind::MalwareSignal;
+            f.severity = Severity::Critical;
+        }
+        if f.severity == Severity::Unknown && !is_forge_ref(f.code) {
+            let judged = f.severity.judged(policy.unknown_severity);
+            if judged != f.severity {
+                f.judged_as = Some(judged);
+            }
+        }
+    }
+}
+
+/// A stored verdict as a reader should see it: its findings re-judged under
+/// `policy` (`judged_as`, a `MAL-` citation read as `KNOWN_MALICIOUS`), its
+/// state untouched. `judged_as` is never stored, so a path that answers with
+/// the stored row — no metadata at hand to re-derive the whole verdict — goes
+/// through this rather than showing an unrated finding with no judgement.
+pub fn with_judgement(mut verdict: Verdict, policy: &SecurityPolicy) -> Verdict {
+    judge(&mut verdict.findings, policy);
+    verdict
+}
+
 /// Apply each scanner's escalation block (RFC 0018 §4.2): `count` findings of
 /// the named kinds at or above `from`, *from that scanner*, are raised to
 /// `to`. Findings are never combined across scanners.
@@ -107,14 +164,15 @@ pub fn escalate(findings: &mut [Finding], policy: &SecurityPolicy) {
             .iter()
             .enumerate()
             .filter(|(_, f)| {
-                &f.scanner == scanner && esc.kinds.contains(&f.kind) && f.severity >= esc.from
+                &f.scanner == scanner && esc.kinds.contains(&f.kind) && judged_of(f) >= esc.from
             })
             .map(|(i, _)| i)
             .collect();
         if hits.len() >= esc.count.max(1) {
             for i in hits {
-                if findings[i].severity < esc.to {
+                if judged_of(&findings[i]) < esc.to {
                     findings[i].severity = esc.to;
+                    findings[i].judged_as = None;
                 }
             }
         }
@@ -196,7 +254,7 @@ fn classify(f: &Finding, policy: &SecurityPolicy) -> Option<VerdictState> {
         | ReasonCode::AssetReplaced
         | ReasonCode::PinnedRefRequired
         | ReasonCode::RawScript => forge_ref_effect(f, policy),
-        _ => threshold(f.severity, policy),
+        _ => threshold(judged_of(f), policy),
     }
 }
 
@@ -295,6 +353,7 @@ pub fn evaluate(
 ) -> Verdict {
     let mut findings = scanner_findings;
     findings.retain(|f| f.scanner != AGE_SCANNER && f.scanner != PENDING_SCANNER);
+    judge(&mut findings, policy);
     escalate(&mut findings, policy);
     findings.extend(age_findings(package, policy, now));
     findings.extend(pending_findings(policy, &scanners_done));
@@ -316,7 +375,7 @@ pub fn evaluate(
         state: folded.state,
         reason_codes: folded.codes,
         findings,
-        policy_ref: policy.policy_ref.clone(),
+        policy_ref: format!("{} {EVALUATOR_TAG}", policy.policy_ref),
         available_at: folded.available_at,
         evaluated_at: now,
         last_scanned_at,
@@ -408,7 +467,16 @@ impl VerdictService {
             // left for the release that understands it (RFC 0041 decision 33).
             return Ok(fresh);
         }
-        if previous.state != fresh.state || previous.reason_codes != fresh.reason_codes {
+        let changed = previous.state != fresh.state || previous.reason_codes != fresh.reason_codes;
+        if changed
+            && previous.policy_ref.contains(EVALUATOR_TAG)
+            && substitution_only(package, &previous, policy, now)
+        {
+            // Already saved once by this evaluator; what differs is only the
+            // on-read substitution, which every read re-applies (decision 45).
+            return Ok(fresh);
+        }
+        if changed {
             metrics::counter!(
                 "batlehub_verdict_transitions_total",
                 "registry" => key.registry.clone(),
@@ -529,6 +597,43 @@ impl VerdictService {
         }
         Ok((from, verdict))
     }
+}
+
+/// Whether `previous` differs from today's judgement only by this RFC's
+/// on-read substitutions: judged without them, it would stand unchanged.
+fn substitution_only(
+    package: &PackageMetadata,
+    previous: &Verdict,
+    policy: &SecurityPolicy,
+    now: DateTime<Utc>,
+) -> bool {
+    let plain_policy = SecurityPolicy {
+        unknown_severity: Severity::Unknown,
+        ..policy.clone()
+    };
+    // A stored `MAL-` finding read as `KNOWN_MALICIOUS` is the other
+    // substitution: hide the citation from `judge` for the plain judgement.
+    let findings = previous
+        .findings
+        .iter()
+        .cloned()
+        .map(|mut f| {
+            if f.names_malicious() && f.code != ReasonCode::KnownMalicious {
+                f.reference = None;
+                f.raw = serde_json::Value::Null;
+            }
+            f
+        })
+        .collect();
+    let plain = evaluate(
+        package,
+        findings,
+        previous.scanners_done.clone(),
+        &plain_policy,
+        now,
+        previous.last_scanned_at,
+    );
+    plain.state == previous.state && plain.reason_codes == previous.reason_codes
 }
 
 /// Whether a stored verdict carries a code this release does not know.
@@ -979,6 +1084,255 @@ mod tests {
             PackageId::new("npm", "left-pad", "1.3.1")
         );
     }
+
+    // ── RFC 0041 §4.5: unrated findings, MAL-, judged_as ─────────────────────
+
+    fn unrated(reference: &str) -> Finding {
+        Finding::new(
+            "osv",
+            FindingKind::Vulnerability,
+            ReasonCode::Vulnerability,
+            Severity::Unknown,
+            reference,
+        )
+        .with_reference(reference)
+    }
+
+    fn mature(now: DateTime<Utc>) -> PackageMetadata {
+        meta(Some(30 * 86_400), now)
+    }
+
+    #[test]
+    fn an_unrated_finding_is_judged_high_by_default_and_keeps_its_stored_severity() {
+        let now = Utc::now();
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1")],
+            done(),
+            &policy(),
+            now,
+            None,
+        );
+        assert_eq!(v.state, VerdictState::Denied);
+        assert_eq!(v.reason_codes, vec![ReasonCode::Vulnerability]);
+        assert_eq!(v.findings[0].severity, Severity::Unknown);
+        assert_eq!(v.findings[0].judged_as, Some(Severity::High));
+        assert!(
+            !v.findings[0].summary.contains("judged"),
+            "never in the summary"
+        );
+    }
+
+    #[test]
+    fn unknown_severity_unknown_restores_the_old_behaviour() {
+        let now = Utc::now();
+        let mut p = policy();
+        p.unknown_severity = Severity::Unknown;
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1")],
+            done(),
+            &p,
+            now,
+            None,
+        );
+        assert_eq!(v.state, VerdictState::Allowed);
+        assert_eq!(v.findings[0].judged_as, None);
+    }
+
+    #[test]
+    fn an_unrated_finding_warns_under_mode_warn() {
+        let now = Utc::now();
+        let mut p = policy();
+        p.mode = SecurityMode::Warn;
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1")],
+            done(),
+            &p,
+            now,
+            None,
+        );
+        assert_eq!(v.state, VerdictState::Warned);
+    }
+
+    #[test]
+    fn a_stated_severity_is_never_substituted() {
+        let now = Utc::now();
+        let v = evaluate(
+            &mature(now),
+            vec![vuln(Severity::Low)],
+            done(),
+            &policy(),
+            now,
+            None,
+        );
+        assert_eq!(v.state, VerdictState::Allowed);
+        assert_eq!(v.findings[0].judged_as, None);
+    }
+
+    #[test]
+    fn a_stale_judged_as_is_cleared_when_the_setting_changes() {
+        let now = Utc::now();
+        let first = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1")],
+            done(),
+            &policy(),
+            now,
+            None,
+        );
+        assert_eq!(first.findings[0].judged_as, Some(Severity::High));
+        let mut p = policy();
+        p.unknown_severity = Severity::Unknown;
+        let again = evaluate(&mature(now), first.findings, done(), &p, now, None);
+        assert_eq!(again.state, VerdictState::Allowed);
+        assert_eq!(again.findings[0].judged_as, None);
+    }
+
+    #[test]
+    fn forge_ref_codes_are_not_judged() {
+        let now = Utc::now();
+        let f = Finding::new(
+            "forge_refs",
+            FindingKind::Ref,
+            ReasonCode::MutableRef,
+            Severity::Unknown,
+            "a branch",
+        );
+        let v = evaluate(&mature(now), vec![f], done(), &policy(), now, None);
+        assert_eq!(v.findings[0].judged_as, None);
+        assert_eq!(v.state, VerdictState::Warned);
+    }
+
+    #[test]
+    fn an_unrated_finding_counts_toward_an_escalation_at_its_judged_level() {
+        let now = Utc::now();
+        let mut p = policy();
+        p.max_severity = Severity::Critical;
+        p.escalation.insert(
+            "osv".into(),
+            Escalation {
+                kinds: vec![FindingKind::Vulnerability],
+                count: 2,
+                from: Severity::High,
+                to: Severity::Critical,
+            },
+        );
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1"), unrated("GO-2024-2")],
+            done(),
+            &p,
+            now,
+            None,
+        );
+        assert_eq!(v.state, VerdictState::Denied);
+        assert!(v
+            .findings
+            .iter()
+            .all(|f| f.severity == Severity::Critical && f.judged_as.is_none()));
+    }
+
+    #[test]
+    fn a_stored_mal_finding_is_known_malicious_on_read_under_warn_and_critical() {
+        let now = Utc::now();
+        for (mode, max) in [
+            (SecurityMode::Warn, Severity::High),
+            (SecurityMode::Block, Severity::Critical),
+        ] {
+            let mut p = policy();
+            p.mode = mode;
+            p.max_severity = max;
+            // The shape M1 stored: VULNERABILITY / unknown / MAL-2023-1000.
+            let v = evaluate(
+                &mature(now),
+                vec![unrated("MAL-2023-1000")],
+                done(),
+                &p,
+                now,
+                None,
+            );
+            assert_eq!(v.state, VerdictState::Denied, "{mode:?} {max:?}");
+            assert_eq!(v.reason_codes, vec![ReasonCode::KnownMalicious]);
+        }
+    }
+
+    #[test]
+    fn a_mal_alias_is_known_malicious_too() {
+        let now = Utc::now();
+        let f = vuln(Severity::Low)
+            .with_raw(serde_json::json!({ "id": "GHSA-x", "aliases": ["MAL-2022-1"] }));
+        let v = evaluate(&mature(now), vec![f], done(), &policy(), now, None);
+        assert_eq!(v.reason_codes, vec![ReasonCode::KnownMalicious]);
+    }
+
+    #[test]
+    fn an_exemption_lifts_known_malicious_to_warned_with_admin_override() {
+        let now = Utc::now();
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("MAL-2023-1000")],
+            done(),
+            &policy(),
+            now,
+            None,
+        );
+        let v = apply_override(v);
+        assert_eq!(v.state, VerdictState::Warned);
+        assert!(v.reason_codes.contains(&ReasonCode::AdminOverride));
+    }
+
+    #[test]
+    fn a_verdict_carries_the_evaluator_tag() {
+        let now = Utc::now();
+        let v = evaluate(&mature(now), vec![], done(), &policy(), now, None);
+        assert_eq!(v.policy_ref, format!("npm-public/default {EVALUATOR_TAG}"));
+    }
+
+    /// `Severity::judged` is the one substitution (RFC 0041 §5.4): called by
+    /// `evaluate`, `FlagsRule` and `CveGateRule`, and nowhere else.
+    #[test]
+    fn severity_judged_is_called_at_the_three_sites_only() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(dir)
+                .expect("readable source tree")
+                .flatten()
+            {
+                let path = e.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("utf-8 source");
+                    // Code before the file's test module only.
+                    let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+                    if code.contains(".judged(") {
+                        out.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/core has a parent");
+        let mut found = Vec::new();
+        for krate in ["core", "adapters", "web", "config"] {
+            walk(&root.join(krate).join("src"), &mut found);
+        }
+        let mut found: Vec<String> = found
+            .iter()
+            .map(|p| p.rsplit("crates/").next().unwrap_or(p).to_owned())
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "core/src/rules/cve_gate.rs",
+                "core/src/rules/flags.rs",
+                "core/src/services/verdict.rs",
+            ]
+        );
+    }
 }
 
 /// `record_scan`'s carry-forward, which decides what a rescan is allowed to
@@ -1000,11 +1354,12 @@ mod record_scan_tests {
     /// One verdict, in memory. Only `upsert`/`get` are exercised; the listing
     /// methods belong to the read side and are not on this path.
     #[derive(Default)]
-    struct OneVerdict(Mutex<Option<Verdict>>);
+    struct OneVerdict(Mutex<Option<Verdict>>, std::sync::atomic::AtomicUsize);
 
     #[async_trait::async_trait]
     impl VerdictRepository for OneVerdict {
         async fn upsert(&self, verdict: &Verdict) -> Result<(), CoreError> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *self.0.lock().expect("test mutex") = Some(verdict.clone());
             Ok(())
         }
@@ -1221,6 +1576,92 @@ mod record_scan_tests {
                 .iter()
                 .any(|f| f.kind == FindingKind::SocVerdict),
             "the revoked finding must not survive a successful run"
+        );
+    }
+
+    // ── RFC 0041 decision 45: a substitution is saved once per evaluator ─────
+
+    fn unrated_mal() -> Finding {
+        Finding::new(
+            "osv",
+            FindingKind::Vulnerability,
+            ReasonCode::Vulnerability,
+            Severity::Unknown,
+            "MAL-2023-1000",
+        )
+        .with_reference("MAL-2023-1000")
+    }
+
+    #[tokio::test]
+    async fn an_on_read_substitution_is_saved_once_with_the_evaluator_tag() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let mut p = SecurityPolicy::defaults_for("npm-public");
+        p.min_age = Duration::from_secs(0);
+        // What an older release stored: allowed, no tag.
+        let old = Verdict {
+            package: pkg.id.clone(),
+            state: VerdictState::Allowed,
+            reason_codes: vec![],
+            findings: vec![unrated_mal()],
+            policy_ref: "npm-public/default".into(),
+            available_at: None,
+            evaluated_at: now,
+            last_scanned_at: Some(now),
+            scanners_done: vec!["osv".into()],
+        };
+        let repo = Arc::new(OneVerdict::default());
+        repo.upsert(&old).await.unwrap();
+        let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+        let saves = || repo.1.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(saves(), 1);
+
+        let v = svc.current(&pkg, &p, now).await.unwrap();
+        assert_eq!(v.state, VerdictState::Denied);
+        assert_eq!(saves(), 2, "saved once");
+        let stored = repo.get(&pkg.id).await.unwrap().unwrap();
+        assert_eq!(stored.state, VerdictState::Denied, "listings see it now");
+        assert!(stored.policy_ref.ends_with(EVALUATOR_TAG));
+
+        svc.current(&pkg, &p, now).await.unwrap();
+        assert_eq!(saves(), 2, "not re-saved on the next read");
+    }
+
+    #[tokio::test]
+    async fn a_tagged_row_is_not_resaved_for_a_substitution_alone() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let mut p = SecurityPolicy::defaults_for("npm-public");
+        p.min_age = Duration::from_secs(0);
+        let unrated = Finding::new(
+            "osv",
+            FindingKind::Vulnerability,
+            ReasonCode::Vulnerability,
+            Severity::Unknown,
+            "GO-2024-1",
+        );
+        // Tagged by this evaluator, but stored allowed (as an older release
+        // rewrote it during the rollout): the difference is the substitution.
+        let row = Verdict {
+            package: pkg.id.clone(),
+            state: VerdictState::Allowed,
+            reason_codes: vec![],
+            findings: vec![unrated],
+            policy_ref: format!("npm-public/default {EVALUATOR_TAG}"),
+            available_at: None,
+            evaluated_at: now,
+            last_scanned_at: Some(now),
+            scanners_done: vec!["osv".into()],
+        };
+        let repo = Arc::new(OneVerdict::default());
+        repo.upsert(&row).await.unwrap();
+        let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+        let v = svc.current(&pkg, &p, now).await.unwrap();
+        assert_eq!(v.state, VerdictState::Denied, "judged on every read");
+        assert_eq!(
+            repo.1.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "not saved again"
         );
     }
 }

@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: de37efbd9aaef3ca
+sourceHash: f1ccd9e4feb980f2
 ---
 
 # Contrôles de sécurité
@@ -40,7 +40,8 @@ et [Le scan worker](/fr/operations/scan-worker).
 ::: warning Les réglages que le verdict ne lit pas
 Sur un registre `[security]`, `bypass_roles` sur les quatre garde-fous
 encapsulés, `block = false` sur `cve_gate` et `license_gate`,
-`cve_gate.min_severity`, et toute surcharge de namespace de ces quatre
+`cve_gate.min_severity`, `cve_gate.unknown_severity`, et toute surcharge de
+namespace de ces quatre
 garde-fous sont sans effet. Un rechargement signale chacun d'eux comme
 `security.rule-settings-ignored`, plutôt que de les laisser dans le fichier
 comme s'ils servaient à quelque chose.
@@ -223,9 +224,10 @@ supérieure ou égale à un seuil.
 ```toml
 [[registries.rules]]
 kind         = "cve_gate"
-min_severity = "high"   # unknown | low | medium | high | critical
-block        = true     # the default is false: report only, never refuse
-bypass_roles = ["admin"]
+min_severity     = "high"   # unknown | low | medium | high | critical
+unknown_severity = "high"   # how an unrated advisory is judged; the default is "high"
+block            = true     # the default is false: report only, never refuse
+bypass_roles     = ["admin"]
 ```
 
 - **Lit :** les vulnérabilités que la réanalyse SBOM a enregistrées pour la
@@ -235,12 +237,23 @@ bypass_roles = ["admin"]
 - **Par défaut `block = false` :** les constats apparaissent dans la console et
   le garde-fou ne refuse rien.
 - **Erreur du store :** échoue ouvert, avec une ligne de log `WARN`.
-- **Refus :** `blocked: known <severity> vulnerability <id> (minimum gated severity: …)`.
+- **Les avis non notés** sont jugés à `unknown_severity`, `high` par défaut :
+  avec `block = true`, un avis que personne n'a noté est donc refusé comme un
+  avis `high`. `"unknown"` rétablit l'ancien comportement, où un avis non noté
+  ne refusait jamais. Voir [Les constats non notés](#unknown-severity).
+- **Les avis `MAL-`** sont refusés quoi que dise `min_severity`, tant que
+  `block = true`. `bypass_roles` les laisse quand même passer : la garantie
+  qu'un paquet connu comme malveillant n'est jamais servi appartient au profil
+  `[security]`, pas à cette règle.
+- **Refus :** `blocked: known <severity> vulnerability <id> (minimum gated severity: …)`,
+  `blocked: unrated vulnerability GO-… (judged as high by unknown_severity; minimum gated severity: high)`,
+  ou `blocked: known malicious package MAL-…`.
 - **Il fixe aussi le seuil du garde-fou des [flags](#flags).** Avec
   `block = false`, les flags `gate` cessent eux aussi de refuser.
 - **Sous `[security]` :** les vulnérabilités enregistrées deviennent des
-  constats `VULNERABILITY`. `min_severity`, `block` et `bypass_roles` ne sont
-  pas lus. Dans ce régime, le scanner `osv` répond d'ailleurs généralement le
+  constats `VULNERABILITY`. `min_severity`, `unknown_severity`, `block` et
+  `bypass_roles` ne sont pas lus : ce sont le `max_severity` et le
+  `unknown_severity` du profil qui décident. Dans ce régime, le scanner `osv` répond d'ailleurs généralement le
   premier.
 
 ### `license_gate` {#license-gate}
@@ -304,7 +317,9 @@ Les flags poussés par une entrée `[[flag_sources]]` (voir
 | `gate` | Refusé au seuil de `cve_gate` ou au-dessus (`high` si aucun `cve_gate` n'est déclaré), et seulement tant que ce `cve_gate` a `block = true` |
 | `warn`, `inform` | Ne refusent jamais |
 
-Il n'y a pas de contournement. Une erreur du store échoue ouvert sur le chemin
+Un flag `gate` poussé avec la gravité `unknown` est jugé au `unknown_severity`
+du `cve_gate`, `high` si aucun `cve_gate` n'est déclaré. Il n'y a pas de
+contournement. Une erreur du store échoue ouvert sur le chemin
 de la requête. Le scanner utilisé sur un registre `[security]`, lui, échoue
 fermé.
 
@@ -349,6 +364,149 @@ signifie et ce qu'il faut faire, dans
 [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads#codes).
 L'audit de présence amont en ajoute un sur ces registres,
 `UNPUBLISHED_UPSTREAM`, pour une version que son amont ne liste plus.
+
+---
+
+## Comment un constat est noté {#severity}
+
+Sur un registre `[security]`, chaque constat porte une gravité, et
+`max_severity` décide de son effet : à ce niveau ou au-dessus, `denied` en mode
+`block` et `warned` en mode `warn`. Cette section dit d'où vient cette gravité,
+et ce qui se passe quand personne n'en a donné.
+
+### Les constats non notés : `unknown_severity` {#unknown-severity}
+
+Un constat dont la source ne déclare aucune gravité est stocké en `unknown`.
+`unknown_severity` dit comment il est jugé face à `max_severity` :
+
+```toml
+[registries.security]
+mode             = "block"
+max_severity     = "high"
+unknown_severity = "high"   # unknown | low | medium | high | critical; the default is "high"
+```
+
+- **Absent, il vaut `"high"`.** Sous le `max_severity = "high"` par défaut,
+  une version dont le seul avis n'est pas noté est refusée : un avis que
+  personne n'a encore noté n'est pas une raison de servir.
+- **`"unknown"` rétablit l'ancien comportement**, où un constat non noté
+  n'agissait jamais. Écrivez-le explicitement, pour que le choix se voie dans
+  le fichier.
+- **La gravité stockée n'est pas réécrite.** Le constat garde `unknown`, et le
+  verdict enregistre le substitut à côté, sous `judged_as`. `batlehub-cli why`
+  et le panneau de verdict de la page du paquet montrent les deux : gravité
+  inconnue, jugée high par `unknown_severity`. Comme tout constat, c'est
+  visible des appelants qui détiennent `findings:read`.
+- **Il est recalculé à chaque lecture.** Modifier `unknown_severity` prend
+  effet au téléchargement suivant, sans réanalyse. L'exception est une
+  [escalade](#escalation) qu'un constat non noté a déjà déclenchée : celle-ci a
+  écrit sa nouvelle gravité dans le constat stocké, et elle reste.
+- **Il est appliqué partout où une gravité rencontre un seuil de
+  l'opérateur :** `max_severity`, le `from` d'une escalade, et un
+  [flag](#flags) poussé.
+- Réglé sous `max_severity` sur un registre `block`, il lève
+  `security.unknown-served` au chargement : les avis non notés sont alors
+  servis. Le `"high"` par défaut sous `max_severity = "critical"` ne lève rien,
+  puisque personne ne l'a choisi.
+
+Les registres sans profil règlent la même clé sur leur
+[`cve_gate`](#cve-gate), avec le même défaut.
+
+### Les paquets connus comme malveillants : `MAL-` {#known-malicious}
+
+Un avis OSV dont l'identifiant ou l'un des alias commence par `MAL-` n'est pas
+une vulnérabilité dotée d'une gravité. C'est la déclaration d'une base que le
+paquet est un malware, et le constat vaut `KNOWN_MALICIOUS` :
+
+- **Toujours refusé**, sous `mode = "warn"` aussi, quoi que disent
+  `max_severity` et `unknown_severity`, comme `BLOCK_LIST` et `SOC_VERDICT`.
+- **Rien ne l'abaisse.** Il est décidé en premier, à partir de l'identifiant
+  et de chaque alias, avant toutes les règles de notation ci-dessous.
+- **Les versions en cache sont couvertes sans réanalyse.** Un constat stocké
+  avant la mise à jour et qui nomme un avis `MAL-` est reconnu à la lecture :
+  la version est refusée à son prochain téléchargement.
+- **La seule issue** est une exemption par version, posée par un
+  administrateur sur le garde-fou `security_verdict`
+  (`batlehub-cli exemption add … --gate security_verdict`). Elle sert la
+  version en `warned` avec `ADMIN_OVERRIDE`, visible dans les en-têtes de
+  réponse et le journal d'audit. Elle existe pour un faux signalement `MAL-`.
+
+Sur un registre sans profil, `cve_gate` ne refuse un avis `MAL-` que tant que
+`block = true`, et un appelant de `bypass_roles` passe quand même.
+
+### Ce que rapporte chaque scanner {#scanner-severity}
+
+Un scanner qui déclare une gravité n'est jamais contredit. Quand sa sortie
+n'en déclare aucune, le constat prend le défaut de son type :
+
+| Type de constat | Quand le scanner ne déclare aucune gravité |
+| --- | --- |
+| `MALWARE_SIGNAL`, `INSTALL_HOOK` | `high` |
+| `TYPOSQUAT_SUSPECT`, les codes de transition | `medium` |
+| `VULNERABILITY`, tous les autres types | `unknown`, puis jugé par `unknown_severity` |
+
+Scanner par scanner :
+
+| Scanner | D'où vient la gravité |
+| --- | --- |
+| `osv` | Un identifiant ou un alias `MAL-` : `KNOWN_MALICIOUS`, `critical`. Sinon, dans l'ordre : le `database_specific.severity` de l'avis lui-même (le `MODERATE` de GitHub vaut `medium`) ; à défaut, la plus haute de ces notes parmi ses *jumeaux*, les avis qu'il nomme comme alias ou qui le nomment ; à défaut, le plus haut score de base CVSS calculé à partir des vecteurs `severity[]` (v2, v3, v4) ou des nombres bruts de l'avis et de ses jumeaux, un score de `0.0` valant `low`. Un avis `RUSTSEC-` marqué informatif (`unsound`, `unmaintained`, `notice`) vaut `low`. Un avis `withdrawn` est ignoré. Un avis sans rien de tout cela vaut `unknown` |
+| `trivy` | Le `Severity` de Trivy. Son `UNKNOWN` vaut `unknown`, jugé par `unknown_severity` |
+| `postmortem` | La `severity` du constat. Sans elle : signaux de malware et hooks d'installation `high`, typosquats `medium`. Les transitions de l'historique valent `medium` ; une version absente de l'historique des releases vaut `high` |
+| `socket` | La `severity` de l'alerte. Sans elle, le défaut du type de l'alerte |
+| `guarddog` | Par famille de règles : règles d'installation et d'exécution `high`, exfiltration et stéganographie `high`, typosquat `medium`, toute autre règle `medium` |
+| `yara` | La méta `severity` de la règle, `high` si elle n'en a pas |
+| `sigstore` | `PROVENANCE_MISSING` `high` ; `PROVENANCE_INVALID` `high`, `critical` quand une entrée de journal citée n'existe pas |
+| `mlab` | Ne crée rien. Élève en `critical` une vulnérabilité listée au CISA KEV |
+
+Avant cette version, postmortem et socket notaient `medium` un signal de
+malware sans gravité déclarée, et aucun réglage ne le rétablit : un signal de
+malware non noté est précisément ce à quoi sert le seuil.
+
+### Les registres Go {#go}
+
+Un registre `goproxy` est celui où les avis non notés sont les plus fréquents,
+et donc celui où `unknown_severity` est le plus souvent abaissé. La base de
+vulnérabilités Go ne note rien : un avis `GO-` ne prend une note que d'un
+jumeau, généralement un avis GitHub, et beaucoup n'en ont pas.
+`golang.org/x/net@0.22.0` porte 17 avis `GO-` sans jumeau noté : sous les
+défauts, il est donc refusé.
+
+Le choix, registre par registre :
+
+```toml
+# Keep the default, refuse what nobody rated, and excuse a version at a time
+# with a security_verdict exemption.
+
+# Or serve unrated Go advisories, and accept the load-time warning
+# security.unknown-served that says so.
+[registries.security]
+max_severity     = "high"
+unknown_severity = "medium"
+```
+
+Les avis `MAL-` sont refusés dans les deux cas.
+
+### Élever une combinaison : l'escalade {#escalation}
+
+`[scanners.<name>.escalation]` élève les constats d'un scanner quand assez
+d'entre eux tombent sur une même version. Rien n'est réglé par défaut. Un
+usage documenté est l'historique de postmortem sur npm : un changement
+d'éditeur seul est courant, mais un changement d'éditeur dans la release même
+qui ajoute un hook d'installation est la façon habituelle dont un compte
+détourné livre sa charge.
+
+```toml
+[scanners.postmortem.escalation]
+kinds = ["transition"]   # publisher_changed, install_hook_added, repository_moved, …
+count = 2                # two transitions at the same version…
+from  = "medium"
+to    = "high"           # …are both raised to high, which max_severity = "high" refuses
+```
+
+L'escalade compte des types de constats, pas des codes : deux transitions
+quelconques sur une même version suffisent, `repository_moved` avec
+`dormant_release` compris. Mesurez la fréquence sur votre propre cache avant
+de l'activer. Un constat escaladé est stocké à sa nouvelle gravité.
 
 ---
 
@@ -451,6 +609,7 @@ Un rechargement signale ceux-ci sans refuser le fichier :
 | `security.unprotected` | `mode = "warn"` sans `required_scanners` : rien ne peut retenir une version |
 | `security.timestamp-hold-unavailable` | `hold_missing_timestamp = true` sur un type sans date de publication : chaque version est retenue |
 | `security.enrichment-required` | Une entrée de `required_scanners` qui ne produit jamais de constats propres (`mlab`) |
+| `security.unknown-served` | `mode = "block"` avec `unknown_severity` réglé sous `max_severity` (`"unknown"` compris) : les avis non notés sont servis. Les avis `MAL-` restent refusés. Voir [Les constats non notés](#unknown-severity) |
 | `security.scanner-error-open` | `mode = "block"` avec `scanner_error = "warn"` ou `"ignore"` : un scanner qui ne répond pas — base d'avis indisponible ou qui limite le débit comprise — laisse servir la version |
 | `license-gate.sbom-disabled`, `license-gate.no-extractor`, `license-gate.denies-everything` | `license_gate` sans rien à lire |
 | `require-signed-release.unsigned-publishes` | Le garde-fou sur un registre qui accepte des publications non signées |

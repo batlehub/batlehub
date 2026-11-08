@@ -18,6 +18,9 @@ pub struct CveGateRule {
     pub min_severity: Severity,
     pub bypass_roles: Vec<Role>,
     pub block: bool,
+    /// What an unrated record is judged at (RFC 0041 decision 16); default
+    /// `high`, `unknown` restores "an unrated advisory never blocks".
+    pub unknown_severity: Severity,
 }
 
 impl CveGateRule {
@@ -32,7 +35,13 @@ impl CveGateRule {
             min_severity,
             bypass_roles,
             block,
+            unknown_severity: Severity::High,
         }
+    }
+
+    pub fn with_unknown_severity(mut self, unknown_as: Severity) -> Self {
+        self.unknown_severity = unknown_as;
+        self
     }
 }
 
@@ -70,12 +79,28 @@ impl Rule for CveGateRule {
             }
         };
 
+        // A `MAL-` record is not a severity to weigh: always refused.
+        if let Some(f) = findings.iter().find(|f| f.osv_id.starts_with("MAL-")) {
+            return RuleDecision::Deny {
+                reason: format!("blocked: known malicious package {}", f.osv_id),
+            };
+        }
+        let judged =
+            |f: &crate::entities::ArtifactVulnerability| f.severity.judged(self.unknown_severity);
         let worst = findings
             .iter()
-            .filter(|f| f.severity >= self.min_severity)
-            .max_by_key(|f| f.severity);
+            .filter(|f| judged(f) >= self.min_severity)
+            .max_by_key(|f| judged(f));
 
         match worst {
+            Some(f) if f.severity == Severity::Unknown => RuleDecision::Deny {
+                reason: format!(
+                    "blocked: unrated vulnerability {} (judged as {} by unknown_severity; minimum gated severity: {})",
+                    f.osv_id,
+                    judged(f).as_str(),
+                    self.min_severity.as_str(),
+                ),
+            },
             Some(f) => RuleDecision::Deny {
                 reason: format!(
                     "blocked: known {} vulnerability {} (minimum gated severity: {})",
@@ -112,6 +137,10 @@ mod tests {
 
     impl MemVulnRepo {
         fn with(reg: &str, name: &str, ver: &str, sev: Severity) -> Arc<Self> {
+            Self::with_id(reg, name, ver, sev, "RUSTSEC-2021-0001")
+        }
+
+        fn with_id(reg: &str, name: &str, ver: &str, sev: Severity, osv_id: &str) -> Arc<Self> {
             let r = Arc::new(Self::default());
             r.items.lock().unwrap().insert(
                 format!("{reg}/{name}/{ver}"),
@@ -121,7 +150,7 @@ mod tests {
                     registry: reg.to_owned(),
                     package_name: name.to_owned(),
                     version: ver.to_owned(),
-                    osv_id: "RUSTSEC-2021-0001".to_owned(),
+                    osv_id: osv_id.to_owned(),
                     severity: sev,
                     summary: "boom".to_owned(),
                     fixed_version: None,
@@ -188,6 +217,45 @@ mod tests {
             requested_version: None,
         };
         rule.evaluate(&ctx).await
+    }
+
+    fn deny_reason(d: RuleDecision) -> String {
+        match d {
+            RuleDecision::Deny { reason } => reason,
+            other => panic!("expected a denial, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unrated_record_is_denied_under_the_default() {
+        let repo = MemVulnRepo::with_id("cargo", "yaml", "0.3.0", Severity::Unknown, "GO-2024-1");
+        let rule = CveGateRule::new(repo, Severity::High, vec![], true);
+        let reason = deny_reason(eval(&rule, &meta(), &identity(Role::Anonymous)).await);
+        assert_eq!(
+            reason,
+            "blocked: unrated vulnerability GO-2024-1 (judged as high by unknown_severity; minimum gated severity: high)"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unrated_record_is_allowed_with_unknown_severity_unknown() {
+        let repo = MemVulnRepo::with_id("cargo", "yaml", "0.3.0", Severity::Unknown, "GO-2024-1");
+        let rule = CveGateRule::new(repo, Severity::High, vec![], true)
+            .with_unknown_severity(Severity::Unknown);
+        assert!(matches!(
+            eval(&rule, &meta(), &identity(Role::Anonymous)).await,
+            RuleDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_mal_record_is_refused_whatever_the_threshold() {
+        let repo =
+            MemVulnRepo::with_id("cargo", "yaml", "0.3.0", Severity::Unknown, "MAL-2023-1000");
+        let rule = CveGateRule::new(repo, Severity::Critical, vec![], true)
+            .with_unknown_severity(Severity::Unknown);
+        let reason = deny_reason(eval(&rule, &meta(), &identity(Role::Anonymous)).await);
+        assert_eq!(reason, "blocked: known malicious package MAL-2023-1000");
     }
 
     #[tokio::test]

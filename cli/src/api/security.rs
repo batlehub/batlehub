@@ -14,6 +14,10 @@ pub struct FindingView {
     pub kind: String,
     pub code: String,
     pub severity: String,
+    /// The level an unrated finding was judged at (RFC 0041 §4.5); absent
+    /// when the scanner rated it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged_as: Option<String>,
     #[serde(default)]
     pub reference: Option<String>,
     pub summary: String,

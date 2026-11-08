@@ -254,3 +254,100 @@ max_severity = "high"
 type = "yara"
 command = "${HEAVY_YR}"
 rules_dir = "${HEAVY_YARA_RULES}"
+
+# ── Steps 10–13 (RFC 0041 §6.P observations 9–12): how a finding is rated ────
+#
+# One registry and one scanner per case, each scanner a fixed answer of
+# osv_fake.py's `/case/<name>`, so a case cannot leak into another step.
+# `unknown_severity` is left at its default ("high") except on the escape-hatch
+# registry, which sets it to "unknown" — and so must log
+# `security.unknown-served` at startup.
+
+[[registries]]
+type = "npm"
+name = "npm-mal-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osvmal"]
+required_scanners = ["osvmal"]
+max_severity = "high"
+
+[[registries]]
+type = "npm"
+name = "npm-unrated-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osvunrated"]
+required_scanners = ["osvunrated"]
+max_severity = "high"
+
+[[registries]]
+type = "npm"
+name = "npm-vector-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osvvector"]
+required_scanners = ["osvvector"]
+max_severity = "high"
+
+[[registries]]
+type = "npm"
+name = "npm-unrated-open-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osvunrated"]
+required_scanners = ["osvunrated"]
+max_severity = "high"
+unknown_severity = "unknown"
+
+[scanners.osvmal]
+type = "osv"
+api_url = "${HEAVY_OSV_URL}/case/mal"
+
+[scanners.osvunrated]
+type = "osv"
+api_url = "${HEAVY_OSV_URL}/case/unrated"
+
+[scanners.osvvector]
+type = "osv"
+api_url = "${HEAVY_OSV_URL}/case/vector"

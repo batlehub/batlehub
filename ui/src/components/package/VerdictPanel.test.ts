@@ -108,6 +108,47 @@ describe("VerdictPanel", () => {
     expect(w.text()).toContain("Rescan queued");
   });
 
+  /**
+   * RFC 0041 §4.5: an unrated finding keeps "unknown" in its text — what the
+   * scanner said — and is coloured by the level it was judged at.
+   */
+  it("shows an unrated finding's judged level beside its stored one", async () => {
+    getVerdict.mockResolvedValue({
+      data: verdict({
+        state: "denied",
+        reason_codes: ["VULNERABILITY"],
+        findings: [
+          {
+            scanner: "osv",
+            kind: "vulnerability",
+            code: "VULNERABILITY",
+            severity: "unknown",
+            judged_as: "high",
+            reference: "GO-2024-2687",
+            summary: "x/net",
+            raw: null,
+          },
+          {
+            scanner: "osv",
+            kind: "vulnerability",
+            code: "VULNERABILITY",
+            severity: "medium",
+            reference: "GHSA-yyyy",
+            summary: "y",
+            raw: null,
+          },
+        ],
+      }),
+      error: undefined,
+    });
+    const w = panel();
+    await flushPromises();
+    const items = w.findAll('[data-testid="verdict-findings"] li');
+    expect(items[0].text()).toContain("Unknown, judged as High by unknown_severity");
+    expect(items[1].text()).toContain("Medium");
+    expect(items[1].text()).not.toContain("judged");
+  });
+
   it("does not offer a rescan to a reader without the grant", async () => {
     getVerdict.mockResolvedValue({ data: verdict(), error: undefined });
     const w = panel(false);

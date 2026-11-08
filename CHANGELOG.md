@@ -32,6 +32,93 @@ advisories and OSV `MAL-` records more strictly, and writes a reason code
    failing OSV served the version silently, and those settings are now the
    only way to keep doing so.
 
+### Upgrade checklist (RFC 0041 phase 1 — release N+1)
+
+The second of the two releases. An advisory with no severity is now judged as
+`high`, so under the default `max_severity = "high"` and `mode = "block"` a
+version whose only advisory is unrated is **refused at its next download**,
+not at its next scan. An OSV `MAL-` record is `KNOWN_MALICIOUS` and always
+refused, `mode = "warn"` included. See
+[Security gates § How a finding is rated](https://batlehub.dev/guide/security-gates#severity).
+
+0. **Release N (above) must run on every process first**, and never roll back
+   below it. Finish this rollout quickly: while N and N+1 both serve, a
+   version whose only advisory is unrated is refused by an N+1 replica and
+   served by an N one, and its stored verdict can flip between the two until
+   only N+1 runs.
+1. **Read N's counts**: `grep batlehub::upgrade` on N's logs gives one line per
+   registry, zero included: `<n> versions on <registry> hold an unrated
+   advisory, and <m> cached artifacts carry one in their SBOM scan; from the
+   next release they are judged unknown_severity (default high)`. Those are
+   the versions this release starts refusing.
+2. **Decide `unknown_severity` per registry**, or accept `"high"`. A Go
+   registry is where it is most often lowered: the Go vulnerability database
+   rates nothing, and `golang.org/x/net@0.22.0` alone carries 17 `GO-`
+   records with no rated twin. `unknown_severity = "unknown"` restores the
+   old judgement on the next read, but it does not undo an escalation an
+   unrated finding has already triggered (the escalated severity is stored),
+   nor the new per-kind defaults below.
+3. **Check registries in `mode = "warn"`**: they no longer serve `MAL-`
+   records. The only way to serve one is an administrator's per-version
+   exemption on the gate `security_verdict`, which serves it `warned` with
+   `ADMIN_OVERRIDE`.
+4. **Check `cve_gate` rules with `block = true`**, including on registries
+   without a `[registries.security]` profile (the Helm `values-restricted.yaml`
+   profile has one, now with an explicit `unknown_severity: "high"`): they now
+   refuse unrated advisories, and a `MAL-` advisory whatever `min_severity`
+   says. Set `cve_gate.unknown_severity` to change the first.
+5. **Once every process runs this release, rescan** each registry whose
+   count in item 1 was not zero: `batlehub-cli verdict rescan -r <registry>`,
+   repeated until it queues nothing (it reads 1 000 verdicts per state).
+   It re-runs every scanner of the registry. Advisories with a CVSS vector
+   then take their computed level instead of `high`. That is lower for most,
+   but `critical` for a vector scoring 9 or more, so under
+   `max_severity = "critical"` or `unknown_severity = "unknown"` a rescan can
+   newly refuse a version. Progress is `batlehub_scan_jobs_queued{trigger="rescan"}`.
+   A registry with a `cve_gate` and no security profile has no verdicts
+   (`verdict rescan` answers 404 there). The periodic SBOM re-scan re-scores
+   it instead, every `[vulnerability_scan] interval_secs` (daily by default).
+6. **Rollback** goes back to release N at the earliest, and re-opens the
+   cached `MAL-` versions until this release is back: N reads a stored `MAL-`
+   finding as an unrated vulnerability. Setting `unknown_severity = "unknown"`
+   is the rollback of the new default that keeps the binary.
+
+### Changed
+
+- **Unrated findings are judged as `high`** (RFC 0041 phase 1, decision 13).
+  New key `[registries.security] unknown_severity` (`unknown`, `low`,
+  `medium`, `high` or `critical`; absent means `high`), any other value
+  refused at load. The stored finding keeps `unknown`; the verdict carries
+  the substitute as `judged_as`, shown by the console's verdict panel and
+  `batlehub-cli why`. The same level judges a pushed flag rated `unknown`.
+  Setting it below `max_severity` on a `block` registry raises the config
+  warning `security.unknown-served`; the default under
+  `max_severity = "critical"` does not.
+- **`cve_gate` has its own `unknown_severity`** (default `high`, decision 16).
+  Its refusals now read `blocked: unrated vulnerability GO-… (judged as high
+  by unknown_severity; minimum gated severity: high)` and `blocked: known
+  malicious package MAL-…`. On a registry with a security profile the key is
+  not read, and `security.rule-settings-ignored` names it.
+- **OSV `MAL-` records are `KNOWN_MALICIOUS`** (decisions 18, 31, 36): read
+  from the id and every alias, always denied, `mode = "warn"` included, and
+  lifted only by a per-version `security_verdict` exemption. A finding stored
+  before the upgrade is recognised when read, so cached malware is refused
+  at its next download with no rescan.
+- **OSV severities are read fully** (decision 21): CVSS v2, v3 and v4 vectors
+  are scored; a score of 0.0 is `low`; an informational `RUSTSEC-` record
+  (`unsound`, `unmaintained`, `notice`) is `low`; a `withdrawn` record is
+  dropped; an unrated record takes the rating of its twins (the records it
+  names as aliases or that name it).
+- **One default severity per finding kind** when a scanner states none:
+  malware signals and install hooks `high` (postmortem and socket said
+  `medium`; no setting restores it, decision 19), typosquats and transitions
+  `medium`, everything else `unknown`. Trivy's own `UNKNOWN` is now judged
+  by `unknown_severity`.
+- **The verdict's `policy_ref` ends with ` eval=2`** (decision 45): a version
+  refused on read is saved once under the new evaluator, so listings,
+  `verdict list --state denied`, the rescan by state and the transitions
+  counter see it once the rollout is complete.
+
 ### Fixed
 
 - **OSV fails closed** (RFC 0041 §6.8). A 429, a 5xx, a 401/403/407, a 200
@@ -77,6 +164,24 @@ advisories and OSV `MAL-` records more strictly, and writes a reason code
 - **Worker images**: Trivy moves to v0.76.2, which carries `golang.org/x/net`
   v0.62.0 (CVE-2026-78661, HTML parser denial of service) and go-jose 4.1.6
   (CVE-2026-116587, whose `.trivyignore.yaml` entry is gone).
+- **The CI supply-chain gate now fails closed** (RFC 0041 phase 2; this
+  repository's CI only, nothing ships). Before, postmortem passed a lockfile
+  when vuln.mlab.sh did not answer, when the scan was cut at 512 packages, or
+  when its only problem was a known-malicious (`MAL-`) package. The verdict now
+  comes from `.github/scripts/postmortem_new_risk.py`, run from the pull
+  request's base. A pull request fails only on advisories against packages it
+  adds or changes. Semgrep `WARNING`s now reach the Security tab. Three `cargo
+  test` steps gained `--locked`, and the `npx` tools are pinned.
+- **Coverage floors in CI** (RFC 0041 phase 3; CI only). `coverage-report`
+  now fails when a path of `.github/coverage-floors.txt` drops below its
+  floor, the file read from the pull request's base; `task coverage-check`
+  applies the same file. The UI's 80 % now covers the whole of `ui/src`, not
+  only the files that have a test. Every gate script under `.github/scripts/`
+  has tests, which found four silent failures, now fixed: the mise CVE
+  report never asked mise for newer releases (`/dev/null` is not a config
+  file mise accepts), `--write-budget` judged the run against the budget it
+  had just replaced, `slim_sbom.py --chunk 0|-1` wrote an empty SBOM and
+  exited 0, and `vex.py check` read only the first statement of a CVE.
 
 ## [1.9.0] - 2026-11-05
 

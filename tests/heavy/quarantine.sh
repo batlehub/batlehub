@@ -46,6 +46,13 @@
 #      pull came *before* the flag. The revoke lifts it and npm installs
 #      again — the lifecycle of §4.5, driven by npm rather than asserted.
 #
+#  10–13. **How a finding is rated** (RFC 0041 §6.P observations 9–12), each
+#      on its own registry and fake-OSV answer: a `MAL-` record is refused as
+#      KNOWN_MALICIOUS (10); an unrated `GO-` record is refused, judged high by
+#      the default `unknown_severity` (11); a record rated only by a CVSS vector
+#      is read as medium and served (12); the case of 11 on a registry with
+#      `unknown_severity = "unknown"` is served, and that registry's
+#      `security.unknown-served` warning is in the startup log (13).
 #   9. **An operator's YARA rule refuses.** (RFC 0036 §6.6.) A rule the suite
 #      writes, matching a line of left-pad's own `index.js` and carrying no
 #      `severity` meta, run by the real `yr` under `bwrap`: the version is
@@ -80,6 +87,10 @@ RESCAN_REG="npm-rescan-$HEAVY_RUN"
 FLAGS_REG="npm-flags-$HEAVY_RUN"
 YARA_REG="npm-yara-$HEAVY_RUN"
 YOUNG_REG="npm-young-$HEAVY_RUN"
+MAL_REG="npm-mal-$HEAVY_RUN"
+UNRATED_REG="npm-unrated-$HEAVY_RUN"
+VECTOR_REG="npm-vector-$HEAVY_RUN"
+OPEN_REG="npm-unrated-open-$HEAVY_RUN"
 OSV_PORT="${HEAVY_OSV_PORT:-8127}"
 SINK_PORT="${HEAVY_SINK_PORT:-8137}"
 export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
@@ -198,6 +209,10 @@ registry=$REG_URL
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$FLAGS_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$YARA_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$YOUNG_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$MAL_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$UNRATED_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$VECTOR_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$OPEN_REG/:_authToken=$ADMIN_TOKEN
 EOF
 export NPM_CONFIG_USERCONFIG="$NPMRC"
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -951,5 +966,98 @@ EOF
     || { cat "$HEAVY_WORK/why-yara.out" >&2; heavy_fail "batlehub why does not name the YARA rule and the file it matched"; }
   heavy_log "YARA-OK (an operator rule with no severity meta denied the version under bwrap; npm was refused MALWARE_SIGNAL)"
 fi
+
+# ── 10–13. How a finding is rated (RFC 0041 §6.P observations 9–12) ──────────
+#
+# The same package each time, on its own registry with its own fake-OSV
+# answer: first contact holds, `batlehub wait` reports the verdict, then a
+# lockfile pinning the version is the download gate, as in step 9.
+RATED_PKG="$TRIVIAL_PKG"
+RATED_VERSION="1.3.0"
+
+rated_case() {  # step reg expect(denied|allowed) reason-or-empty
+  local step="$1" reg="$2" expect="$3" reason="$4"
+  local url="$HEAVY_TAP_BASE/proxy/$reg/"
+  local consumer="$HEAVY_WORK/consumer-$step" pinned="$HEAVY_WORK/consumer-$step-pinned"
+  new_consumer "$consumer"
+  export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-$step"
+  heavy_mark "$step-first-contact"
+  set +e
+  (cd "$consumer" && npm install "$RATED_PKG@$RATED_VERSION" --registry "$url") \
+    >"$HEAVY_WORK/install-$step.out" 2>"$HEAVY_WORK/install-$step.err"
+  "$CLI" wait "$reg:$RATED_PKG@$RATED_VERSION" --timeout 5m --interval 3s >"$HEAVY_WORK/wait-$step.out" 2>&1
+  local rc=$?
+  set -e
+  # `wait` exits 4 on a denied verdict ("waiting cannot help"), 0 once served.
+  local want=0
+  [[ "$expect" == "denied" ]] && want=4
+  if [[ $rc -ne $want ]]; then
+    cat "$HEAVY_WORK/wait-$step.out" >&2
+    "$CLI" why "$reg:$RATED_PKG@$RATED_VERSION" >&2 || true
+    heavy_fail "step $step: batlehub wait exited $rc; expected $want ($expect)"
+  fi
+
+  mkdir -p "$pinned"
+  cat > "$pinned/package.json" <<EOF
+{ "name": "consumer", "version": "1.0.0", "private": true, "dependencies": { "$RATED_PKG": "$RATED_VERSION" } }
+EOF
+  cat > "$pinned/package-lock.json" <<EOF
+{
+  "name": "consumer", "version": "1.0.0", "lockfileVersion": 3, "requires": true,
+  "packages": {
+    "": { "name": "consumer", "version": "1.0.0", "dependencies": { "$RATED_PKG": "$RATED_VERSION" } },
+    "node_modules/$RATED_PKG": { "version": "$RATED_VERSION", "resolved": "$url$RATED_PKG/$RATED_VERSION/tarball", "license": "WTFPL" }
+  }
+}
+EOF
+  export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-$step-pinned"
+  heavy_mark "$step-pinned"
+  set +e
+  (cd "$pinned" && npm ci --registry "$url") \
+    >"$HEAVY_WORK/install-$step-pinned.out" 2>"$HEAVY_WORK/install-$step-pinned.err"
+  rc=$?
+  set -e
+  if [[ "$expect" == "denied" ]]; then
+    [[ $rc -ne 0 ]] || heavy_fail "step $step: npm ci installed $RATED_PKG@$RATED_VERSION through $reg"
+    heavy_wire_re_after "$step-pinned" "GET /proxy/$reg/$RATED_PKG/$RATED_VERSION/tarball -> 403 .*X-BatleHub-Verdict: denied.*X-BatleHub-Reason: $reason" \
+      "step $step: the pinned tarball was not refused as denied/$reason on the wire"
+    grep -q "$reason" "$HEAVY_WORK/install-$step-pinned.err" \
+      || { cat "$HEAVY_WORK/install-$step-pinned.err" >&2; heavy_fail "step $step: npm printed no $reason"; }
+    [[ "$(heavy_wire_count_after "$step-first-contact" "GET /proxy/$reg/$RATED_PKG/$RATED_VERSION/tarball -> 200")" == "0" ]] \
+      || heavy_fail "step $step: the tap saw the refused tarball served"
+    [[ ! -d "$pinned/node_modules/$RATED_PKG" ]] \
+      || heavy_fail "step $step: npm ci left $RATED_PKG in node_modules after a refused tarball"
+  else
+    [[ $rc -eq 0 ]] || { cat "$HEAVY_WORK/install-$step-pinned.err" >&2; heavy_fail "step $step: npm ci failed through $reg"; }
+    [[ -f "$pinned/node_modules/$RATED_PKG/package.json" ]] \
+      || heavy_fail "step $step: $RATED_PKG is not installed through $reg"
+  fi
+  "$CLI" why "$reg:$RATED_PKG@$RATED_VERSION" >"$HEAVY_WORK/why-$step.out" 2>&1 || true
+}
+
+rated_case 10 "$MAL_REG" denied KNOWN_MALICIOUS
+grep -q "MAL-2023-1000" "$HEAVY_WORK/why-10.out" \
+  || { cat "$HEAVY_WORK/why-10.out" >&2; heavy_fail "step 10: the verdict does not cite MAL-2023-1000"; }
+heavy_log "MAL-OK (a MAL- record with no severity refused npm as KNOWN_MALICIOUS; no byte served)"
+
+rated_case 11 "$UNRATED_REG" denied VULNERABILITY
+grep -q "severity unknown, judged as high by unknown_severity" "$HEAVY_WORK/why-11.out" \
+  || { cat "$HEAVY_WORK/why-11.out" >&2; heavy_fail "step 11: the finding does not read 'severity unknown, judged as high by unknown_severity'"; }
+heavy_log "UNRATED-OK (an advisory nobody rated was judged high and refused; the stored severity stayed unknown)"
+
+rated_case 12 "$VECTOR_REG" allowed ""
+# `why` lists findings only for a version it cannot pull; the verdict endpoint
+# has them for a served one too.
+curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$HEAVY_BASE/api/v1/verdicts/$VECTOR_REG/$RATED_PKG/$RATED_VERSION" >"$HEAVY_WORK/verdict-12.json"
+python3 -I -c 'import json,sys; f=json.load(open(sys.argv[1]))["findings"]; sys.exit(0 if [x["severity"] for x in f]==["medium"] and "judged_as" not in f[0] else 1)' \
+  "$HEAVY_WORK/verdict-12.json" \
+  || { cat "$HEAVY_WORK/verdict-12.json" >&2; heavy_fail "step 12: the vector-only finding is not medium — the vector was not read"; }
+heavy_log "VECTOR-OK (a CVSS:3.1 vector scoring 5.9 was read as medium and served)"
+
+rated_case 13 "$OPEN_REG" allowed ""
+{ grep -q "security.unknown-served" "$HEAVY_WORK/server.log" && grep -q "$OPEN_REG" "$HEAVY_WORK/server.log"; } \
+  || heavy_fail "step 13: the server did not log security.unknown-served for $OPEN_REG at startup"
+heavy_log "ESCAPE-HATCH-OK (unknown_severity = \"unknown\" served the unrated advisory, and said so at startup)"
 
 heavy_done QUARANTINE-HEAVY-OK

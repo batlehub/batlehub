@@ -3594,6 +3594,57 @@ fn a_security_section_with_only_mode_loads_with_the_documented_defaults() {
     let policy = sec.to_policy("npm", &cfg.scanners);
     assert_eq!(policy.policy_ref, "npm/default");
     assert_eq!(policy.max_severity, batlehub_core::entities::Severity::High);
+    assert_eq!(
+        policy.unknown_severity,
+        batlehub_core::entities::Severity::High
+    );
+}
+
+#[test]
+fn unknown_severity_reaches_the_policy() {
+    let cfg = parse_config(&security_config(
+        r#"        mode = "block"
+        unknown_severity = "unknown""#,
+        "",
+    ));
+    cfg.validate().unwrap();
+    let policy = cfg.registries[0]
+        .security
+        .as_ref()
+        .unwrap()
+        .to_policy("npm", &cfg.scanners);
+    assert_eq!(
+        policy.unknown_severity,
+        batlehub_core::entities::Severity::Unknown
+    );
+}
+
+/// RFC 0041 §4.5: an unrated advisory served is a choice, so it is named — but
+/// only when someone made it.
+#[test]
+fn unknown_severity_set_below_max_severity_warns() {
+    for (mode, max, unknown, warned) in [
+        ("block", "high", Some("medium"), true),
+        ("block", "high", Some("unknown"), true),
+        ("block", "high", Some("high"), false),
+        ("block", "critical", None, false),
+        ("block", "high", Some("critical"), false),
+        ("warn", "high", Some("low"), false),
+    ] {
+        let line = unknown.map_or(String::new(), |u| {
+            format!("\n        unknown_severity = \"{u}\"")
+        });
+        let cfg = parse_config(&security_config(
+            &format!("        mode = \"{mode}\"\n        max_severity = \"{max}\"{line}"),
+            "",
+        ));
+        cfg.validate().unwrap();
+        assert_eq!(
+            warning_codes(&cfg).contains(&warnings::SECURITY_UNKNOWN_SERVED.to_owned()),
+            warned,
+            "mode = {mode}, max = {max}, unknown = {unknown:?}"
+        );
+    }
 }
 
 #[test]
@@ -3725,6 +3776,11 @@ fn mature_age_below_min_age_and_an_unknown_severity_are_refused() {
         "an unknown severity must not load",
     );
     assert!(err.contains("max_severity"), "{err}");
+    let err = validation_error(
+        &security_config(r#"        unknown_severity = "scary""#, ""),
+        "an unknown unknown_severity must not load",
+    );
+    assert!(err.contains("unknown_severity"), "{err}");
 }
 
 #[test]
@@ -5019,6 +5075,7 @@ fn rule_settings_a_security_registry_ignores_warn() {
         [[registries.rules]]
         kind = "cve_gate"
         min_severity = "critical"
+        unknown_severity = "low"
         bypass_roles = ["admin"]
 
         [[registries.namespaces]]
@@ -5038,6 +5095,7 @@ fn rule_settings_a_security_registry_ignores_warn() {
     for phrase in [
         "cve_gate.block = false",
         "cve_gate.min_severity = \"critical\"",
+        "cve_gate.unknown_severity = \"low\" is not read",
         "cve_gate.bypass_roles",
         "trusted_publisher override of namespace '@acme'",
     ] {

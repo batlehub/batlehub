@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 5f40ae9ca87e6e21
+sourceHash: 6447a8b0fb836ba4
 ---
 
 # Politiques et paquets
@@ -746,3 +746,10 @@ signalements poussés par un SOC. Ce que chacune lit, ce qu'elle fait quand
 cette donnée manque, et ce qui change sur un registre doté de
 `[registries.security]` sont décrits dans
 [Contrôles de sécurité](/fr/guide/security-gates).
+
+`cve_gate` juge un avis sans gravité à son `unknown_severity`, `high` en son
+absence : un `cve_gate` avec `block = true` refuse donc aussi les avis non
+notés. C'est sur les registres Go que cela se voit le plus, et `"unknown"`
+rétablit l'ancien comportement : voir
+[Les constats non notés](/fr/guide/security-gates#unknown-severity). Un avis
+`MAL-` est refusé quoi que dise l'un ou l'autre niveau.

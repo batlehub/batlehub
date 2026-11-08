@@ -18,6 +18,13 @@ instead of reading as clean, and an advisory published later against a
 package the suite expects served would refuse it. The suite's other
 registries ask this path, so what they are judged on is fixed.
 
+`POST /case/<name>/v1/query` — one fixed answer for every PURL, for the
+severity cases of RFC 0041 §6.P (steps 10–13): `mal` is api.osv.dev's real
+`MAL-2023-1000` record (recorded for `ynodejs_mod_log@10.0.1`, no severity of
+its own), `unrated` a `GO-`-style record carrying no severity at all, `vector`
+a record whose only rating is a CVSS 3.1 vector scoring 5.9. Each case has its
+own registry and scanner, so the answer cannot leak into another step.
+
 Everything else is `{}`: a package the suite did not name is clean here,
 whatever the real OSV would say.
 """
@@ -35,6 +42,40 @@ if len(sys.argv) > 4:
             with open(os.path.join(sys.argv[4], name), encoding="utf-8") as f:
                 rec = json.load(f)
             RECORDINGS[rec["purl"]] = rec["answer"]
+
+def _case_answers(recordings: dict) -> dict:
+    mal = [
+        v
+        for v in recordings.get("pkg:npm/ynodejs_mod_log@10.0.1", {}).get("vulns", [])
+        if v["id"].startswith("MAL-")
+    ]
+    return {
+        "mal": {"vulns": mal},
+        "unrated": {
+            "vulns": [
+                {
+                    "id": "GO-2099-0001",
+                    "summary": "heavy: an advisory nobody rated",
+                    "details": "Staged by tests/heavy/osv_fake.py (RFC 0041 §6.P observation 10).",
+                }
+            ]
+        },
+        "vector": {
+            "vulns": [
+                {
+                    "id": "GHSA-heav-yvec-tor1",
+                    "summary": "heavy: rated by its CVSS vector only",
+                    "severity": [
+                        {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"}
+                    ],
+                }
+            ]
+        },
+    }
+
+
+CASES = _case_answers(RECORDINGS)
+assert CASES["mal"]["vulns"], "the MAL- recording is missing from the recordings dir"
 
 ADVISORY = {
     "id": "BATLEHUB-HEAVY-FLIP",
@@ -58,7 +99,10 @@ class Osv(BaseHTTPRequestHandler):
             purl = json.loads(body).get("package", {}).get("purl", "")
         except ValueError:
             purl = ""
-        if self.path == "/replay/v1/query":
+        case = self.path.removeprefix("/case/").removesuffix("/v1/query")
+        if self.path.startswith("/case/") and case in CASES:
+            payload = json.dumps(CASES[case]).encode()
+        elif self.path == "/replay/v1/query":
             payload = json.dumps(RECORDINGS.get(purl, {})).encode()
         else:
             vulns = [ADVISORY] if (NEEDLE in purl and os.path.exists(FLAG)) else []

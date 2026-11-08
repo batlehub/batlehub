@@ -355,6 +355,9 @@ bypass_roles = ["admin"]
 # [[registries.rules]]
 # kind = "cve_gate"
 # min_severity = "high"        # unknown | low | medium | high | critical
+# unknown_severity = "high"    # how an advisory with no rating is judged (default: high);
+#                              # "unknown" never refuses one. A MAL- (known malicious)
+#                              # advisory is refused whatever these two say.
 # block = true
 # bypass_roles = ["admin"]
 

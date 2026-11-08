@@ -67,9 +67,13 @@ config:
           bypass_roles: ["admin"]
         # Refuse, not warn, on a known high-severity vulnerability. Needs the
         # [vulnerability_scan] background task to have recorded findings —
-        # with no scan behind it this rule has nothing to read.
+        # with no scan behind it this rule has nothing to read. An advisory
+        # nobody rated (most Go GO- records) is judged at unknown_severity,
+        # so it is refused like a high one; "unknown" would serve it. A MAL-
+        # (known malicious) advisory is refused whatever either level says.
         - kind: "cve_gate"
           min_severity: "high"
+          unknown_severity: "high"
           block: true
           bypass_roles: ["admin"]
         # Only packages from the org's own npm scope.

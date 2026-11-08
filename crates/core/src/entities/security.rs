@@ -334,6 +334,31 @@ impl FindingKind {
     }
 }
 
+impl FindingKind {
+    /// The severity an adapter gives a finding of this kind when the
+    /// scanner's output states none (RFC 0041 §4.5). Exhaustive, so a new
+    /// kind cannot be added without deciding it. A scanner that states a
+    /// severity is never overridden by this.
+    pub fn default_severity(&self) -> Severity {
+        match self {
+            Self::MalwareSignal | Self::InstallHook => Severity::High,
+            Self::Typosquat | Self::Transition => Severity::Medium,
+            Self::Vulnerability
+            | Self::Provenance
+            | Self::Signature
+            | Self::License
+            | Self::Publisher
+            | Self::Age
+            | Self::Pending
+            | Self::SocVerdict
+            | Self::ScannerError
+            | Self::AdvisoryDbError
+            | Self::BlockList
+            | Self::Ref => Severity::Unknown,
+        }
+    }
+}
+
 impl std::str::FromStr for FindingKind {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -379,7 +404,15 @@ pub struct Finding {
     /// The scanner's own output, untouched. Hostile data: never interpolated.
     #[serde(default)]
     pub raw: serde_json::Value,
+    /// The level an unrated finding was judged at, under the registry's
+    /// `unknown_severity` (RFC 0041 §4.5). Recomputed by every evaluation,
+    /// never stored: `severity` keeps what the scanner said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged_as: Option<Severity>,
 }
+
+/// The prefix of an OSV malicious-package record.
+const MALICIOUS_PREFIX: &str = "MAL-";
 
 impl Finding {
     /// A finding with only the fields every one has.
@@ -400,7 +433,26 @@ impl Finding {
             confidence: None,
             available_at: None,
             raw: serde_json::Value::Null,
+            judged_as: None,
         }
+    }
+
+    /// Whether this finding cites a known-malicious record (OSV `MAL-`), by
+    /// its reference or by an id or alias in its raw record. The one place
+    /// `MAL-` is recognised (RFC 0041 §6.8): a finding stored before the
+    /// worker emitted `KNOWN_MALICIOUS` is refused on read by this.
+    pub fn names_malicious(&self) -> bool {
+        let mal = |s: &str| s.starts_with(MALICIOUS_PREFIX);
+        if self.reference.as_deref().is_some_and(mal) {
+            return true;
+        }
+        let raw_names = |v: &serde_json::Value| {
+            v.get("id").and_then(|i| i.as_str()).is_some_and(mal)
+                || v.get("aliases")
+                    .and_then(|a| a.as_array())
+                    .is_some_and(|a| a.iter().filter_map(|x| x.as_str()).any(mal))
+        };
+        raw_names(&self.raw)
     }
 
     pub fn with_reference(mut self, reference: impl Into<String>) -> Self {
@@ -575,6 +627,10 @@ pub struct SecurityPolicy {
     pub scanners: Vec<String>,
     pub required_scanners: Vec<String>,
     pub max_severity: Severity,
+    /// What an unrated (`unknown`) finding is judged at against
+    /// `max_severity` (RFC 0041 §4.5). Default `high`; `unknown` restores
+    /// the old "an unrated finding never acts".
+    pub unknown_severity: Severity,
     pub require_provenance: bool,
     pub deny_install_hooks: InstallHookMode,
     pub scanner_error: ScannerErrorMode,
@@ -603,6 +659,7 @@ impl SecurityPolicy {
             scanners: vec!["osv".to_owned()],
             required_scanners: vec!["osv".to_owned()],
             max_severity: Severity::High,
+            unknown_severity: Severity::High,
             require_provenance: false,
             deny_install_hooks: InstallHookMode::Warn,
             scanner_error: ScannerErrorMode::Quarantine,

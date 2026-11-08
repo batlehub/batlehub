@@ -397,7 +397,7 @@ pub async fn get_verdict(
             .await
             .map_err(AppError::from)?,
         None => match service.verdicts.get(&pkg).await.map_err(AppError::from)? {
-            Some(v) => v,
+            Some(v) => batlehub_core::services::verdict::with_judgement(v, &policy),
             None => {
                 return Err(AppError::not_found(format!(
                     "no verdict for {registry}:{name}@{version}"
@@ -732,15 +732,15 @@ pub async fn list_verdicts(
     .await?;
     let verdicts = {
         let hot = svc.hot.read().await;
-        if !hot.security.contains_key(&query.registry) {
+        let Some(policy) = hot.security.get(&query.registry).cloned() else {
             return Err(AppError::not_found(format!(
                 "registry '{}' has no security profile",
                 query.registry
             )));
-        }
-        hot.verdicts.clone()
+        };
+        hot.verdicts.clone().map(|v| (v, policy))
     };
-    let Some(verdicts) = verdicts else {
+    let Some((verdicts, policy)) = verdicts else {
         return Err(AppError::not_found("no verdict store in this process"));
     };
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -750,7 +750,9 @@ pub async fn list_verdicts(
             verdicts
                 .list_by_state(&query.registry, state, limit)
                 .await
-                .map_err(AppError::from)?,
+                .map_err(AppError::from)?
+                .into_iter()
+                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy)),
         );
     }
     Ok(HttpResponse::Ok().json(VerdictListResponse {

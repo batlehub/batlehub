@@ -14,6 +14,7 @@ use batlehub_core::entities::{Finding, FindingKind, ReasonCode, RegistryKind};
 use batlehub_core::ports::{
     ArtifactScanner, LookupFailure, ScanInput, ScannerError, VulnerabilityScanner,
 };
+use batlehub_core::services::scanners::as_known_malicious;
 
 /// The most component PURLs one artifact's SBOM may make the worker ask
 /// about. An `Upstream` or `Extracted` SBOM is attacker-supplied, so its
@@ -127,6 +128,7 @@ impl ArtifactScanner for OsvArtifactScanner {
                     "aliases": m.aliases,
                 }))
             })
+            .map(as_known_malicious)
             .collect())
     }
 }
@@ -245,6 +247,39 @@ mod tests {
         assert_eq!(findings[0].code, ReasonCode::Vulnerability);
         assert_eq!(findings[0].reference.as_deref(), Some("GHSA-1"));
         assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    /// RFC 0041 §4.5: a `MAL-` match (here malicious through an alias, so
+    /// `parse_vulns` named it by its `MAL-` id) is `KNOWN_MALICIOUS`.
+    #[tokio::test]
+    async fn a_mal_match_is_known_malicious_and_critical() {
+        struct Mal;
+        #[async_trait]
+        impl VulnerabilityScanner for Mal {
+            async fn query_batch(&self, purls: &[String]) -> Result<BatchAnswer, CoreError> {
+                Ok(BatchAnswer {
+                    matches: vec![OsvMatch {
+                        purl: purls[0].clone(),
+                        osv_id: "MAL-2023-1000".into(),
+                        severity: Severity::Critical,
+                        summary: "malicious".into(),
+                        fixed_version: None,
+                        aliases: vec!["GHSA-gjjj-m5j2-h9fv".into()],
+                    }],
+                    failed: vec![],
+                })
+            }
+        }
+        let findings = OsvArtifactScanner::new(Arc::new(Mal))
+            .scan(&input(None))
+            .await
+            .unwrap();
+        let f = &findings[0];
+        assert_eq!(f.kind, FindingKind::MalwareSignal);
+        assert_eq!(f.code, ReasonCode::KnownMalicious);
+        assert_eq!(f.severity, Severity::Critical);
+        assert_eq!(f.reference.as_deref(), Some("MAL-2023-1000"));
+        assert_eq!(f.raw["aliases"][0], "GHSA-gjjj-m5j2-h9fv");
     }
 
     /// An unreachable OSV is not a clean answer.

@@ -186,6 +186,12 @@ fn findings(v: &crate::api::security::VerdictView) -> String {
             "  {:<12} {:<10} {:<22} {}{}\n",
             f.scanner, f.severity, f.code, f.summary, reference
         ));
+        if let Some(judged) = &f.judged_as {
+            out.push_str(&format!(
+                "  {:<12} severity {}, judged as {judged} by unknown_severity\n",
+                "", f.severity
+            ));
+        }
     }
     out
 }
@@ -305,6 +311,33 @@ async fn last(client: &BatleHubClient, limit: u64) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// RFC 0041 §4.5: the stored severity stays what the scanner said, and the
+    /// judged level is said beside it.
+    #[test]
+    fn an_unrated_finding_names_its_judged_level() {
+        let v: crate::api::security::VerdictView = serde_json::from_value(json!({
+            "package": {"registry": "go", "name": "golang.org/x/net", "version": "0.22.0"},
+            "state": "denied",
+            "reason_codes": ["VULNERABILITY"],
+            "findings": [
+                {"scanner": "osv", "kind": "vulnerability", "code": "VULNERABILITY",
+                 "severity": "unknown", "judged_as": "high", "reference": "GO-2024-2687",
+                 "summary": "x/net"},
+                {"scanner": "osv", "kind": "vulnerability", "code": "VULNERABILITY",
+                 "severity": "medium", "summary": "rated"},
+            ],
+            "policy_ref": "go/default eval=2",
+            "evaluated_at": "2026-11-08T10:00:00Z",
+        }))
+        .unwrap();
+        let text = findings(&v);
+        assert!(
+            text.contains("severity unknown, judged as high by unknown_severity"),
+            "{text}"
+        );
+        assert_eq!(text.matches("judged as").count(), 1, "{text}");
+    }
 
     #[test]
     fn a_held_version_reads_as_the_rfc_shows_it() {

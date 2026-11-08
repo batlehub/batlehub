@@ -24699,6 +24699,17 @@
             "format": "int32",
             "minimum": 0
           },
+          "judged_as": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Severity",
+                "description": "The level an unrated finding was judged at, under the registry's\n`unknown_severity` (RFC 0041 §4.5). Recomputed by every evaluation,\nnever stored: `severity` keeps what the scanner said."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "$ref": "#/components/schemas/FindingKind"
           },
