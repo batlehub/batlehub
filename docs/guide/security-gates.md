@@ -428,6 +428,7 @@ A reload reports these without refusing the file:
 | `security.unprotected` | `mode = "warn"` with no `required_scanners`: nothing can hold a version |
 | `security.timestamp-hold-unavailable` | `hold_missing_timestamp = true` on a kind that has no publish date: every version is held |
 | `security.enrichment-required` | A `required_scanners` entry that never produces findings of its own (`mlab`) |
+| `security.scanner-error-open` | `mode = "block"` with `scanner_error = "warn"` or `"ignore"`: a scanner that cannot answer — an advisory database down or throttling included — serves the version |
 | `license-gate.sbom-disabled`, `license-gate.no-extractor`, `license-gate.denies-everything` | `license_gate` with nothing to read |
 | `require-signed-release.unsigned-publishes` | The gate on a registry that accepts unsigned publishes |
 | `flag-source.can-hard-block` | A flag source that can refuse downloads with no threshold |

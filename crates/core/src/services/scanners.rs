@@ -72,13 +72,16 @@ impl ArtifactScanner for RecordedVulnerabilityScanner {
     fn supports(&self, _: RegistryKind) -> bool {
         true
     }
+    fn is_advisory_db(&self) -> bool {
+        true
+    }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         let id = &input.package.id;
         let rows = self
             .repo
             .list_for_coordinate(&id.registry, &id.name, &id.version)
             .await
-            .map_err(|e| ScannerError::Upstream(format!("vulnerability store unreadable: {e}")))?;
+            .map_err(|e| ScannerError::Transient(format!("vulnerability store unreadable: {e}")))?;
         Ok(rows
             .into_iter()
             .map(|r| {
@@ -459,6 +462,12 @@ impl ArtifactScanner for NamedScanner {
     }
     fn needs_listing(&self) -> bool {
         self.inner.needs_listing()
+    }
+    fn is_advisory_db(&self) -> bool {
+        self.inner.is_advisory_db()
+    }
+    fn unavailable_for(&self) -> Option<std::time::Duration> {
+        self.inner.unavailable_for()
     }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         let mut findings = self.inner.scan(input).await?;

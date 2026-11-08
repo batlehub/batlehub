@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: 7360757901fe0164
+sourceHash: ffec81c460a3c5ec
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -174,6 +174,15 @@ propres à votre organisation. **Ne contournez pas celui-ci.** Prévenez votre
 administrateur ou votre équipe sécurité, et utilisez une version qui n'en
 porte pas.
 
+#### `KNOWN_MALICIOUS` {#known-malicious}
+
+Une base d'avis de sécurité répertorie cette version comme malveillante — un
+avis OSV `MAL-` : un paquet publié pour voler des identifiants, miner, ou
+ouvrir une porte dérobée. C'est toujours refusé, quels que soient le mode du
+registre et son seuil de gravité. **Ne contournez pas celui-ci.** Retirez le
+paquet de votre projet, et prévenez votre équipe sécurité s'il a déjà été
+installé : ce qu'il a exécuté à l'installation a déjà eu lieu.
+
 #### `INSTALL_HOOK` {#install-hook}
 
 Le paquet exécute un script à son installation (un `preinstall` npm, un
@@ -315,6 +324,17 @@ nombreuses attaques de la chaîne d'approvisionnement : le registre avertit donc
 ou refuse. Vérifiez le script, et épinglez-le à un commit.
 
 ---
+
+### Un code que ce serveur ne connaît pas {#unknown-code}
+
+#### `UNRECOGNISED` {#unrecognised}
+
+Le verdict de cette version a été écrit par une version du serveur plus
+récente que celle qui vous a répondu, et porte une raison que celle-ci ne sait
+pas lire. Elle refuse plutôt que de deviner. Cela n'arrive que pendant le
+déploiement d'une mise à jour, ou après un retour arrière : réessayez dans
+quelques minutes et, si cela persiste, prévenez votre administrateur — le
+réplica qui a répondu est plus ancien que la base qu'il lit.
 
 ## Les refus à message simple {#plain-messages}
 

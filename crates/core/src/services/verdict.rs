@@ -208,12 +208,20 @@ struct Folded {
     codes: Vec<ReasonCode>,
     available_at: Option<DateTime<Utc>>,
     /// The codes that put the verdict into a hold, to decide whether the
-    /// maturity bypass may lift it.
-    hold_codes: Vec<ReasonCode>,
+    /// maturity bypass may lift it — each with whether the bypass may lift
+    /// *that* finding: an advisory database's error on a version it never
+    /// answered for may not (RFC 0041 decision 44).
+    hold_codes: Vec<(ReasonCode, bool)>,
+}
+
+/// Whether the maturity bypass may lift this held finding.
+fn bypassable(f: &Finding, scanners_done: &[String]) -> bool {
+    f.code.is_maturity_bypassable()
+        && !(f.kind == FindingKind::AdvisoryDbError && !scanners_done.contains(&f.scanner))
 }
 
 /// Fold every finding's effect into one state.
-fn fold(findings: &[Finding], policy: &SecurityPolicy) -> Folded {
+fn fold(findings: &[Finding], policy: &SecurityPolicy, scanners_done: &[String]) -> Folded {
     let mut folded = Folded {
         state: VerdictState::Allowed,
         codes: Vec::new(),
@@ -228,7 +236,9 @@ fn fold(findings: &[Finding], policy: &SecurityPolicy) -> Folded {
             folded.codes.push(f.code);
         }
         if effect == VerdictState::Quarantined {
-            folded.hold_codes.push(f.code);
+            folded
+                .hold_codes
+                .push((f.code, bypassable(f, scanners_done)));
             if let Some(at) = f.available_at {
                 folded.available_at = Some(
                     folded
@@ -258,11 +268,7 @@ fn maturity_lifts(
     {
         return false;
     }
-    if !folded
-        .hold_codes
-        .iter()
-        .all(ReasonCode::is_maturity_bypassable)
-    {
+    if !folded.hold_codes.iter().all(|(_, lifts)| *lifts) {
         return false;
     }
     let Some(published) = package.published_at else {
@@ -293,7 +299,7 @@ pub fn evaluate(
     findings.extend(age_findings(package, policy, now));
     findings.extend(pending_findings(policy, &scanners_done));
 
-    let mut folded = fold(&findings, policy);
+    let mut folded = fold(&findings, policy, &scanners_done);
 
     // The codes stay when maturity lifts a hold, so the served-unscanned state
     // stays visible; only the state and the lift time move.
@@ -397,6 +403,11 @@ impl VerdictService {
         }
 
         let previous = stored.expect("checked above");
+        if holds_unrecognised(&previous) {
+            // Written by a newer release: refused here (always denied), and
+            // left for the release that understands it (RFC 0041 decision 33).
+            return Ok(fresh);
+        }
         if previous.state != fresh.state || previous.reason_codes != fresh.reason_codes {
             metrics::counter!(
                 "batlehub_verdict_transitions_total",
@@ -434,6 +445,13 @@ impl VerdictService {
     ) -> Result<(Option<VerdictState>, Verdict), CoreError> {
         let key = coordinate_key(&package.id);
         let stored = self.verdicts.get(&key).await?;
+        if let Some(prev) = stored.as_ref().filter(|v| holds_unrecognised(v)) {
+            // A newer release wrote this row, SOC findings and all: rewriting
+            // it from what this release understands would drop what it does
+            // not (RFC 0041 decision 33). The job closes; the row stands.
+            tracing::warn!(package = %key, codes = ?prev.reason_codes, "security worker: verdict holds a reason code this release does not know; left untouched");
+            return Ok((Some(prev.state), prev.clone()));
+        }
         if let Some(prev) = &stored {
             // Whether the `flags` scanner actually answered *this* run. Read
             // before the carry-forward loop below, which appends to `done`.
@@ -511,6 +529,14 @@ impl VerdictService {
         }
         Ok((from, verdict))
     }
+}
+
+/// Whether a stored verdict carries a code this release does not know.
+fn holds_unrecognised(v: &Verdict) -> bool {
+    v.reason_codes.contains(&ReasonCode::Unrecognised)
+        || v.findings
+            .iter()
+            .any(|f| f.code == ReasonCode::Unrecognised)
 }
 
 tokio::task_local! {
@@ -1036,10 +1062,10 @@ mod record_scan_tests {
         async fn heartbeat(&self, _job_id: uuid::Uuid, _lease_secs: u64) -> Result<(), CoreError> {
             Ok(())
         }
-        async fn complete(&self, _job_id: uuid::Uuid) -> Result<(), CoreError> {
+        async fn complete(&self, _job_id: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
             Ok(())
         }
-        async fn fail(&self, _job_id: uuid::Uuid, _error: &str) -> Result<(), CoreError> {
+        async fn fail(&self, _job_id: uuid::Uuid, _: &str, _error: &str) -> Result<(), CoreError> {
             Ok(())
         }
         async fn exhausted(&self, _max: u32, _n: u32) -> Result<Vec<ScanJob>, CoreError> {

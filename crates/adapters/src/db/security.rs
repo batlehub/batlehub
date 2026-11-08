@@ -19,6 +19,40 @@ fn parse_err(what: &str, e: impl std::fmt::Display) -> CoreError {
     CoreError::Other(anyhow::anyhow!("{what}: {e}"))
 }
 
+/// The advisory lock release N's upgrade counts run under (RFC 0041 §6.8):
+/// a transaction lock, so it is gone when the count is, and no replica
+/// becomes a second rescan leader by holding it.
+const UPGRADE_COUNT_KEY: i64 = 0x0041_c0c0_0000;
+
+/// A `(registry, count)` query run once per process start on one replica:
+/// under `pg_try_advisory_xact_lock` with a 30 s `statement_timeout`. `None`
+/// when another replica holds the lock.
+pub(crate) async fn count_under_lock(
+    pool: &PgPool,
+    sql: &'static str,
+) -> Result<Option<Vec<(String, u64)>>, CoreError> {
+    let mut tx = pool.begin().await.db_err()?;
+    sqlx::query("SET LOCAL statement_timeout = '30s'")
+        .execute(&mut *tx)
+        .await
+        .db_err()?;
+    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
+        .bind(UPGRADE_COUNT_KEY)
+        .fetch_one(&mut *tx)
+        .await
+        .db_err()?;
+    if !held {
+        return Ok(None);
+    }
+    let rows = sqlx::query(sql).fetch_all(&mut *tx).await.db_err()?;
+    tx.commit().await.db_err()?;
+    Ok(Some(
+        rows.iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
+            .collect(),
+    ))
+}
+
 /// `artifact_verdicts` + `artifact_findings` (migrations 049, 050).
 pub struct PgVerdictRepository {
     pool: PgPool,
@@ -52,10 +86,8 @@ impl PgVerdictRepository {
                     kind: kind
                         .parse::<FindingKind>()
                         .map_err(|e| parse_err("artifact_findings.kind", e))?,
-                    code: code
-                        .parse::<ReasonCode>()
-                        .map_err(|e| parse_err("artifact_findings.code", e))?,
-                    severity: Severity::parse(&severity).unwrap_or(Severity::Unknown),
+                    code: ReasonCode::parse_stored(&code),
+                    severity: Severity::parse_stored(&severity),
                     reference: r.try_get("reference").ok(),
                     summary: r.get("summary"),
                     confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
@@ -81,13 +113,7 @@ impl PgVerdictRepository {
             state: state
                 .parse()
                 .map_err(|e| parse_err("artifact_verdicts.state", e))?,
-            reason_codes: codes
-                .iter()
-                .map(|c| {
-                    c.parse::<ReasonCode>()
-                        .map_err(|e| parse_err("artifact_verdicts.reason_codes", e))
-                })
-                .collect::<Result<_, _>>()?,
+            reason_codes: codes.iter().map(|c| ReasonCode::parse_stored(c)).collect(),
             findings,
             policy_ref: r.get("policy_ref"),
             available_at: r.try_get("available_at").ok(),
@@ -241,6 +267,15 @@ impl VerdictRepository for PgVerdictRepository {
             .collect())
     }
 
+    async fn count_unrated_by_registry(&self) -> Result<Option<Vec<(String, u64)>>, CoreError> {
+        count_under_lock(
+            &self.pool,
+            "SELECT registry, COUNT(DISTINCT (package_name, version))
+             FROM artifact_findings WHERE severity = 'unknown' GROUP BY registry",
+        )
+        .await
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,
@@ -315,11 +350,26 @@ impl PgScanQueue {
             attempts: r.get::<i32, _>("attempts") as u32,
             leased_until: r.try_get("leased_until").ok(),
             created_at: r.get("created_at"),
+            deferred_since: r
+                .try_get::<Option<String>, _>("last_error")
+                .ok()
+                .flatten()
+                .and_then(|e| deferred_since(&e)),
         })
     }
 }
 
-const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, created_at";
+/// The prefix `defer` writes into `last_error`: the anchor of the 24-hour
+/// deferral budget (RFC 0041 decision 44), in a column that already exists.
+const DEFERRED_SINCE: &str = "deferred since ";
+
+fn deferred_since(last_error: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(last_error.strip_prefix(DEFERRED_SINCE)?)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, created_at, last_error";
 
 impl PgScanQueue {
     /// One lease pick: up to `n` open, unleased, unexhausted jobs in
@@ -371,10 +421,22 @@ impl ScanQueue for PgScanQueue {
         published_at: Option<DateTime<Utc>>,
         trigger: ScanTrigger,
     ) -> Result<bool, CoreError> {
-        let result = sqlx::query(
+        // An open job that the new one outranks is promoted: its trigger and
+        // priority rise, and a deferral (`leased_by IS NULL` with a future
+        // `leased_until`) is cleared — a running lease is left alone. A
+        // flag or a webhook is not lost behind a deferred rescan (RFC 0041
+        // decision 44). `xmax = 0` tells an insert from that update.
+        let row = sqlx::query(
             "INSERT INTO scan_jobs (id, registry, package_name, version, published_at, trigger, priority)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT DO NOTHING",
+             ON CONFLICT (registry, package_name, version) WHERE completed_at IS NULL
+             DO UPDATE SET
+                 trigger = EXCLUDED.trigger,
+                 priority = EXCLUDED.priority,
+                 leased_until = CASE WHEN scan_jobs.leased_by IS NULL THEN NULL
+                                     ELSE scan_jobs.leased_until END
+             WHERE EXCLUDED.priority < scan_jobs.priority
+             RETURNING (xmax = 0) AS inserted",
         )
         .bind(Uuid::new_v4())
         .bind(&package.registry)
@@ -383,14 +445,14 @@ impl ScanQueue for PgScanQueue {
         .bind(published_at)
         .bind(trigger.as_str())
         .bind(trigger.priority())
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .db_err()?;
-        let created = result.rows_affected() == 1;
-        if created {
-            self.work.notify_one();
-        }
-        Ok(created)
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        self.work.notify_one();
+        Ok(row.get::<bool, _>("inserted"))
     }
 
     async fn wait_for_work(&self, max: std::time::Duration) {
@@ -482,22 +544,57 @@ impl ScanQueue for PgScanQueue {
         Ok(())
     }
 
-    async fn complete(&self, job_id: Uuid) -> Result<(), CoreError> {
-        sqlx::query("UPDATE scan_jobs SET completed_at = NOW(), leased_until = NULL WHERE id = $1")
-            .bind(job_id)
-            .execute(&self.pool)
-            .await
-            .db_err()?;
+    async fn complete(&self, job_id: Uuid, worker: Option<&str>) -> Result<(), CoreError> {
+        sqlx::query(
+            "UPDATE scan_jobs SET completed_at = NOW(), leased_until = NULL
+             WHERE id = $1 AND ($2::text IS NULL OR leased_by = $2)",
+        )
+        .bind(job_id)
+        .bind(worker)
+        .execute(&self.pool)
+        .await
+        .db_err()?;
         Ok(())
     }
 
-    async fn fail(&self, job_id: Uuid, error: &str) -> Result<(), CoreError> {
+    async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {
         sqlx::query(
-            "UPDATE scan_jobs SET leased_until = NULL, leased_by = NULL, last_error = $2
-             WHERE id = $1 AND completed_at IS NULL",
+            "UPDATE scan_jobs SET leased_until = NULL, leased_by = NULL, last_error = $3
+             WHERE id = $1 AND leased_by = $2 AND completed_at IS NULL",
         )
         .bind(job_id)
+        .bind(worker)
         .bind(error)
+        .execute(&self.pool)
+        .await
+        .db_err()?;
+        Ok(())
+    }
+
+    /// The column is a not-before time, the attempt is given back,
+    /// `last_error` anchors the 24-hour budget across restarts, and
+    /// `leased_by` is cleared — which is what marks the row deferred rather
+    /// than running, and keeps a stale worker from touching it again.
+    async fn defer(
+        &self,
+        job_id: Uuid,
+        worker: &str,
+        not_before: DateTime<Utc>,
+    ) -> Result<(), CoreError> {
+        sqlx::query(
+            "UPDATE scan_jobs SET
+                 leased_until = $3,
+                 leased_by = NULL,
+                 attempts = GREATEST(attempts - 1, 0),
+                 last_error = CASE WHEN last_error LIKE 'deferred since %' THEN last_error
+                                   ELSE 'deferred since '
+                                        || to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+                              END
+             WHERE id = $1 AND leased_by = $2 AND completed_at IS NULL",
+        )
+        .bind(job_id)
+        .bind(worker)
+        .bind(not_before)
         .execute(&self.pool)
         .await
         .db_err()?;
@@ -523,7 +620,10 @@ impl ScanQueue for PgScanQueue {
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {
         let rows = sqlx::query(
-            "SELECT registry, trigger, COUNT(*) AS n FROM scan_jobs
+            "SELECT registry, trigger,
+                    COUNT(*) FILTER (WHERE leased_until IS NULL OR leased_until < NOW()) AS n,
+                    COUNT(*) FILTER (WHERE leased_by IS NULL AND leased_until >= NOW()) AS deferred
+             FROM scan_jobs
              WHERE completed_at IS NULL
              GROUP BY registry, trigger",
         )
@@ -539,6 +639,7 @@ impl ScanQueue for PgScanQueue {
                         .parse()
                         .map_err(|e| parse_err("scan_jobs.trigger", e))?,
                     count: r.get::<i64, _>("n") as u64,
+                    deferred: r.get::<i64, _>("deferred") as u64,
                 })
             })
             .collect()

@@ -65,6 +65,8 @@ tasks:
     env:
       CONTAINERS_CONF_OVERRIDE: "{{.CONF_OVERRIDE}}"
       DATABASE_URL: "postgresql://postgres:{{.PG_PASSWORD}}@127.0.0.1:{{.PORT}}/postgres"
+      # A suite that reads it fails instead of skipping green without a database.
+      BATLEHUB_REQUIRE_DB: "1"
     cmds:
       - printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' > {{.CONF_OVERRIDE}}
       - defer: podman rm -f {{.CONTAINER}} 2>/dev/null || true
@@ -107,6 +109,13 @@ tasks:
       - task: pg
         vars:
           TEST: pg_grants
+
+  test:pg-scan-queue:
+    desc: Run the scan-queue deferral integration tests, RFC 0041 decision 44 (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_scan_queue
 
   test:pg-vulnerability:
     desc: Run PgVulnerabilityRepository integration tests (starts a temporary Postgres container via Podman)

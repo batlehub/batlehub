@@ -70,6 +70,19 @@ impl VerdictRepository for InMemoryVerdictRepository {
             .collect())
     }
 
+    async fn count_unrated_by_registry(&self) -> Result<Option<Vec<(String, u64)>>, CoreError> {
+        let mut counts: HashMap<String, u64> = HashMap::new();
+        for v in self.rows.read().await.values() {
+            if v.findings
+                .iter()
+                .any(|f| f.severity == batlehub_core::entities::Severity::Unknown)
+            {
+                *counts.entry(v.package.registry.clone()).or_default() += 1;
+            }
+        }
+        Ok(Some(counts.into_iter().collect()))
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,
@@ -147,6 +160,25 @@ impl InMemoryScanQueue {
             .collect()
     }
 
+    /// Make a deferred job leasable now, as if its deferral began at
+    /// `since` — what a test needs to reach the 24-hour budget.
+    pub async fn backdate_deferral(&self, id: Uuid, since: DateTime<Utc>) {
+        if let Some(r) = self.rows.write().await.iter_mut().find(|r| r.job.id == id) {
+            r.job.deferred_since = Some(since);
+            r.job.leased_until = None;
+        }
+    }
+
+    /// Expire every open lease, as a crashed worker would leave them.
+    pub async fn expire_leases(&self) {
+        for r in self.rows.write().await.iter_mut().filter(|r| !r.completed) {
+            r.job.leased_until = r
+                .job
+                .leased_until
+                .map(|_| Utc::now() - Duration::seconds(1));
+        }
+    }
+
     /// The last error a job failed with, for assertions.
     pub async fn last_error(&self, id: Uuid) -> Option<String> {
         self.rows
@@ -167,10 +199,18 @@ impl ScanQueue for InMemoryScanQueue {
         trigger: ScanTrigger,
     ) -> Result<bool, CoreError> {
         let mut rows = self.rows.write().await;
-        if rows
-            .iter()
-            .any(|r| !r.completed && r.job.package == *package)
+        if let Some(open) = rows
+            .iter_mut()
+            .find(|r| !r.completed && r.job.package == *package)
         {
+            // Promote: an outranking trigger rises, and clears a deferral (a
+            // running lease is left alone) — RFC 0041 decision 44.
+            if trigger.priority() < open.job.trigger.priority() {
+                open.job.trigger = trigger;
+                if open.leased_by.is_none() {
+                    open.job.leased_until = None;
+                }
+            }
             return Ok(false);
         }
         rows.push(Row {
@@ -183,6 +223,7 @@ impl ScanQueue for InMemoryScanQueue {
                 attempts: 0,
                 leased_until: None,
                 created_at: Utc::now(),
+                deferred_since: None,
             },
             leased_by: None,
             completed: false,
@@ -242,21 +283,49 @@ impl ScanQueue for InMemoryScanQueue {
         Ok(())
     }
 
-    async fn complete(&self, job_id: Uuid) -> Result<(), CoreError> {
+    async fn complete(&self, job_id: Uuid, worker: Option<&str>) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows.iter_mut().find(|r| r.job.id == job_id) {
+        if let Some(r) = rows.iter_mut().find(|r| {
+            r.job.id == job_id && worker.is_none_or(|w| r.leased_by.as_deref() == Some(w))
+        }) {
             r.completed = true;
             r.job.leased_until = None;
         }
         Ok(())
     }
 
-    async fn fail(&self, job_id: Uuid, error: &str) -> Result<(), CoreError> {
+    async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows.iter_mut().find(|r| r.job.id == job_id && !r.completed) {
+        if let Some(r) = rows
+            .iter_mut()
+            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
+        {
             r.job.leased_until = None;
             r.leased_by = None;
             r.last_error = Some(error.to_owned());
+        }
+        Ok(())
+    }
+
+    async fn defer(
+        &self,
+        job_id: Uuid,
+        worker: &str,
+        not_before: DateTime<Utc>,
+    ) -> Result<(), CoreError> {
+        let mut rows = self.rows.write().await;
+        if let Some(r) = rows
+            .iter_mut()
+            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
+        {
+            r.job.leased_until = Some(not_before);
+            r.leased_by = None;
+            r.job.attempts = r.job.attempts.saturating_sub(1);
+            r.job.deferred_since.get_or_insert_with(Utc::now);
+            r.last_error = Some(format!(
+                "deferred since {}",
+                r.job.deferred_since.unwrap_or_else(Utc::now).to_rfc3339()
+            ));
         }
         Ok(())
     }
@@ -284,18 +353,26 @@ impl ScanQueue for InMemoryScanQueue {
     }
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {
-        let mut counts: HashMap<(String, ScanTrigger), u64> = HashMap::new();
+        let now = Utc::now();
+        let mut counts: HashMap<(String, ScanTrigger), (u64, u64)> = HashMap::new();
         for r in self.rows.read().await.iter().filter(|r| !r.completed) {
-            *counts
+            let e = counts
                 .entry((r.job.package.registry.clone(), r.job.trigger))
-                .or_default() += 1;
+                .or_default();
+            match r.job.leased_until {
+                None => e.0 += 1,
+                Some(u) if u < now => e.0 += 1,
+                Some(_) if r.leased_by.is_none() => e.1 += 1,
+                Some(_) => {}
+            }
         }
         Ok(counts
             .into_iter()
-            .map(|((registry, trigger), count)| QueuedCount {
+            .map(|((registry, trigger), (count, deferred))| QueuedCount {
                 registry,
                 trigger,
                 count,
+                deferred,
             })
             .collect())
     }
@@ -370,15 +447,15 @@ mod tests {
         assert_eq!(second[0].package.version, "1");
 
         // Expire the first lease by hand and it comes back.
-        q.fail(first[0].id, "crashed").await.unwrap();
+        q.fail(first[0].id, "w1", "crashed").await.unwrap();
         let again = q.lease("w3", &[], 5, 60, 3).await.unwrap();
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].package.version, "2");
         assert_eq!(again[0].attempts, 2);
         assert_eq!(q.last_error(first[0].id).await.as_deref(), Some("crashed"));
 
-        q.complete(again[0].id).await.unwrap();
-        q.complete(second[0].id).await.unwrap();
+        q.complete(again[0].id, Some("w3")).await.unwrap();
+        q.complete(second[0].id, Some("w2")).await.unwrap();
         assert!(q.open_jobs().await.is_empty());
     }
 
@@ -390,7 +467,7 @@ mod tests {
             .unwrap();
         for _ in 0..2 {
             let j = q.lease("w", &[], 1, 60, 2).await.unwrap();
-            q.fail(j[0].id, "boom").await.unwrap();
+            q.fail(j[0].id, "w", "boom").await.unwrap();
         }
         assert!(q.lease("w", &[], 1, 60, 2).await.unwrap().is_empty());
         let spent = q.exhausted(2, 10).await.unwrap();

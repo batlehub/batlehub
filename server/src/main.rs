@@ -756,6 +756,23 @@ async fn main() -> Result<()> {
         }),
     };
 
+    // RFC 0041 §6.8: how many versions and artifacts hold an unrated
+    // advisory the next release will judge by `unknown_severity` — once per
+    // process start, one replica (an advisory transaction lock), off the
+    // start-up path.
+    if let Some(verdicts) = security_stores.verdicts.clone() {
+        let vulns = Arc::clone(&vuln_repo);
+        let names = registry_names.clone();
+        tokio::spawn(async move {
+            batlehub_core::services::upgrade_counts::log_unrated_upgrade_counts(
+                verdicts.as_ref(),
+                vulns.as_ref(),
+                &names,
+            )
+            .await;
+        });
+    }
+
     let (
         init_hot,
         init_access,

@@ -8,6 +8,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Upgrade checklist (RFC 0041 phase 0 — this is release N)
+
+This release is the first of two. The next one (N+1) judges unrated
+advisories and OSV `MAL-` records more strictly, and writes a reason code
+(`KNOWN_MALICIOUS`) that only this release and later can read.
+
+0. **Run this release on every process before N+1, and never roll back below
+   it.** From N+1 an older binary refuses to start against the database (this
+   release ships an empty marker migration, `065`, which sqlx enforces).
+1. **Check that every worker reaches OSV** (or the configured `api_url`):
+   from this release an unreachable or throttling OSV *holds* a new version
+   instead of reading as "no advisory". A version first seen during an outage
+   waits up to 24 hours on `SCAN_PENDING`, then gets `SCANNER_ERROR`, which the
+   maturity bypass does not serve. `batlehub_scan_jobs_deferred` shows the
+   jobs waiting.
+2. **Read the upgrade counts**: `grep batlehub::upgrade` on the logs. One line
+   per registry, zero included — how many versions and cached artifacts hold
+   an unrated advisory, which N+1 judges by `unknown_severity` (default
+   `high`).
+3. **`scanner_error = "warn"` or `"ignore"`** on a `block` registry now raises
+   the `security.scanner-error-open` config warning: until this release a
+   failing OSV served the version silently, and those settings are now the
+   only way to keep doing so.
+
+### Fixed
+
+- **OSV fails closed** (RFC 0041 §6.8). A 429, a 5xx, a 401/403/407, a 200
+  that is not JSON and a transport error used to read as "no advisory", so a
+  throttled or unreachable OSV gave a clean verdict — a known-malicious
+  package included. Only a 400, 404 or 422 is still "no data". A 429 or a 5xx
+  opens a per-process circuit breaker (its `Retry-After`, or 60 s, at most an
+  hour); `next_page_token` is followed, up to 20 pages; an answer over 16 MiB,
+  a 21st page, or an SBOM with more than 2 000 component PURLs is a permanent
+  `SCANNER_ERROR`.
+- **A throttled SBOM re-scan no longer erases stored advisories.** When any
+  component's lookup fails, the stored findings are kept and unioned with the
+  new ones; removal waits for a pass where every PURL answered.
+- **An exhausted scan job no longer drops a denied version's findings.** A
+  required scanner that answered before is carried forward rather than marked
+  done with nothing, so a lone `SCANNER_ERROR` can no longer be served by the
+  maturity bypass. An exhausted rescan or backfill now leaves the verdict as
+  it was.
+- **A transient advisory-database error defers the job** instead of recording
+  `SCANNER_ERROR`: OSV runs first, the job waits (1 minute doubling to 1 hour,
+  or the upstream's `Retry-After`) with its attempt given back, for up to 24
+  hours. A webhook, a flag or a block-list change promotes a deferred job.
+  `batlehub_scan_jobs_queued` now counts only leasable jobs, so a deferral
+  does not hold the worker autoscaler at its maximum.
+- **An unknown stored reason code or severity no longer fails the read.** A
+  code this release does not know reads as `UNRECOGNISED` (always refused,
+  `X-BatleHub-Reason: UNRECOGNISED`, the row left untouched); an unparsable
+  severity reads as `critical`.
+
+### Added
+
+- Reason codes `KNOWN_MALICIOUS` and `UNRECOGNISED`, both always refused, with
+  their sections on the refusals page. This release never writes either.
+- `batlehub_scan_jobs_deferred` gauge; `ScannerError` classes `rate_limited`,
+  `transient` and `permanent` on `batlehub_scanner_errors_total`.
+
 ### Security
 
 - **actix stack**: `actix-http` 3.20.3, `actix-web` 4.18.2 and `actix-files`

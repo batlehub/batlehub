@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: 07d139f9312b4acc
+sourceHash: 92cd175a53504540
 ---
 
 # Le worker d'analyse
@@ -168,6 +168,7 @@ récupéré une version — est [`batlehub-cli verdict`](/fr/use/cli#commands-ve
 | La profondeur de file monte, mais les travaux finissent par aboutir | `batlehub_scan_jobs_queued` par registre et par déclencheur | Augmentez `max_concurrent`, ou ajoutez des réplicas — l'autoscaler se règle sur cette métrique |
 | Une version bloquée, les autres passent | `batlehub-cli why <coordonnée>`, puis les `attempts` et le `last_error` du travail | Laissez les tentatives s'épuiser, ou relancez avec `batlehub-cli why --rescan` une fois la cause corrigée |
 | Des versions reviennent en masse en `SCANNER_ERROR` | `batlehub_scanner_errors_total` par analyseur et par classe | Un analyseur est en panne ou injoignable. Vérifiez ses flux sortants et son entrée `[scanners.<nom>]` |
+| Les nouvelles versions restent en `SCAN_PENDING`, `batlehub_scan_jobs_deferred` monte | `batlehub_scanner_errors_total{class="rate_limited"}` ou `"transient"` pour `osv` | OSV limite le débit ou est injoignable. Les travaux attendent (1 minute doublée jusqu'à 1 heure, 24 heures au plus) au lieu de lire la panne comme « aucun avis » ; passé 24 heures, une version vue pour la première fois reçoit `SCANNER_ERROR`, que le contournement par maturité ne sert pas. Rétablissez les flux vers OSV, ou pointez `[scanners.osv] api_url` sur un miroir |
 | Les travaux retournent dans la file sans aboutir | `batlehub_scan_jobs_expired_total`, et la mémoire du pod | Une location expire. En général le `memory_limit_mb` du bac à sable face à une archive grosse ou hostile, ou le `job_timeout` face à un analyseur lent |
 | Deux instances, une base, des travaux qui disparaissent de l'une | le `worker_id` des deux processus dans `worker_heartbeats` | La file est à l'échelle du parc, par conception. Cloisonnez chaque worker avec les registres de `[worker]` s'ils ne doivent pas la partager |
 
@@ -183,6 +184,7 @@ un seul Postgres.
 | --- | --- | --- |
 | `batlehub_workers_live` | jauge | Workers vus dans les deux dernières minutes. Zéro avec une quarantaine configurée, c'est une panne de la barrière |
 | `batlehub_scan_jobs_queued` | jauge | Profondeur de file, par registre et par déclencheur |
+| `batlehub_scan_jobs_deferred` | jauge | Travaux qui attendent la fin d'une panne d'une base d'avis, par registre et par déclencheur — hors de `batlehub_scan_jobs_queued`, pour ne pas bloquer l'autoscaler à son maximum |
 | `batlehub_scan_jobs_leased` | jauge | Ce que ce worker tient à l'instant |
 | `batlehub_scan_job_duration_seconds` | histogramme | Par analyseur, avec une issue `ok`/`error` |
 | `batlehub_scanner_errors_total` | compteur | Par analyseur et par classe d'erreur |

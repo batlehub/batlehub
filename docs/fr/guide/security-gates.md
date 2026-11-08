@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: 3810efe0f860a89b
+sourceHash: de37efbd9aaef3ca
 ---
 
 # Contrôles de sécurité
@@ -451,6 +451,7 @@ Un rechargement signale ceux-ci sans refuser le fichier :
 | `security.unprotected` | `mode = "warn"` sans `required_scanners` : rien ne peut retenir une version |
 | `security.timestamp-hold-unavailable` | `hold_missing_timestamp = true` sur un type sans date de publication : chaque version est retenue |
 | `security.enrichment-required` | Une entrée de `required_scanners` qui ne produit jamais de constats propres (`mlab`) |
+| `security.scanner-error-open` | `mode = "block"` avec `scanner_error = "warn"` ou `"ignore"` : un scanner qui ne répond pas — base d'avis indisponible ou qui limite le débit comprise — laisse servir la version |
 | `license-gate.sbom-disabled`, `license-gate.no-extractor`, `license-gate.denies-everything` | `license_gate` sans rien à lire |
 | `require-signed-release.unsigned-publishes` | Le garde-fou sur un registre qui accepte des publications non signées |
 | `flag-source.can-hard-block` | Une source de flags qui peut refuser des téléchargements sans seuil |

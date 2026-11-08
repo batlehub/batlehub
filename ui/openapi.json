@@ -24741,6 +24741,7 @@
           "pending",
           "soc_verdict",
           "scanner_error",
+          "advisory_db_error",
           "block_list",
           "ref"
         ]
@@ -27431,7 +27432,9 @@
           "TAG_MOVED",
           "ASSET_REPLACED",
           "PINNED_REF_REQUIRED",
-          "RAW_SCRIPT"
+          "RAW_SCRIPT",
+          "KNOWN_MALICIOUS",
+          "UNRECOGNISED"
         ]
       },
       "RecentErrorDto": {

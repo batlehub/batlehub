@@ -3826,6 +3826,24 @@ impl AppConfig {
                     ),
                 ));
             }
+            if sec.mode == batlehub_core::entities::SecurityMode::Block
+                && sec.scanner_error != batlehub_core::entities::ScannerErrorMode::Quarantine
+            {
+                let chosen = match sec.scanner_error {
+                    batlehub_core::entities::ScannerErrorMode::Warn => "warn",
+                    _ => "ignore",
+                };
+                out.push(ConfigWarning::new(
+                    warnings::SECURITY_SCANNER_ERROR_OPEN,
+                    path.clone(),
+                    format!(
+                        "registry '{}' has mode = \"block\" and scanner_error = \"{chosen}\": \
+                         a scanner that cannot answer — an advisory database that is down or \
+                         throttling included — serves the version instead of holding it",
+                        registry.name
+                    ),
+                ));
+            }
             for name in &sec.required_scanners {
                 if self.scanner_named(name).is_some_and(|c| c.is_enrichment()) {
                     out.push(ConfigWarning::new(

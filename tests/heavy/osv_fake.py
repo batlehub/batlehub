@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""An OSV that changes its mind, for the rescan half of the quarantine suite.
+"""The quarantine suite's OSV: one that changes its mind, and one that replays.
 
-    osv_fake.py <flag-file> <listen-port> <purl-substring>
+    osv_fake.py <flag-file> <listen-port> <purl-substring> [<recordings-dir>]
 
-Answers `POST /v1/query` the way api.osv.dev does — `{"vulns": [...]}` — with
-one critical advisory for any PURL containing <purl-substring> **while
-<flag-file> exists**, and `{}` otherwise. That is the instrument RFC 0018
-phase 4 needs: a version scanned clean, then a database that has learned
-something, then a rescan — a flip staged without waiting for a real advisory
-to be published against a real package.
+`POST /v1/query` — the flip. Answers the way api.osv.dev does —
+`{"vulns": [...]}` — with one critical advisory for any PURL containing
+<purl-substring> **while <flag-file> exists**, and `{}` otherwise. That is the
+instrument RFC 0018 phase 4 needs: a version scanned clean, then a database
+that has learned something, then a rescan — a flip staged without waiting for
+a real advisory to be published against a real package.
+
+`POST /replay/v1/query` — api.osv.dev's own answer for the PURL, recorded
+verbatim in <recordings-dir> (`tests/fixtures/supply-chain-jdd/osv/`, the
+`answer` of each file), and `{}` for a PURL nothing was recorded for. RFC 0041
+made OSV fail closed: a 429 from the live database in CI now holds a version
+instead of reading as clean, and an advisory published later against a
+package the suite expects served would refuse it. The suite's other
+registries ask this path, so what they are judged on is fixed.
 
 Everything else is `{}`: a package the suite did not name is clean here,
 whatever the real OSV would say.
@@ -20,6 +28,13 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FLAG, PORT, NEEDLE = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+RECORDINGS = {}
+if len(sys.argv) > 4:
+    for name in os.listdir(sys.argv[4]):
+        if name.endswith(".json"):
+            with open(os.path.join(sys.argv[4], name), encoding="utf-8") as f:
+                rec = json.load(f)
+            RECORDINGS[rec["purl"]] = rec["answer"]
 
 ADVISORY = {
     "id": "BATLEHUB-HEAVY-FLIP",
@@ -43,8 +58,11 @@ class Osv(BaseHTTPRequestHandler):
             purl = json.loads(body).get("package", {}).get("purl", "")
         except ValueError:
             purl = ""
-        vulns = [ADVISORY] if (NEEDLE in purl and os.path.exists(FLAG)) else []
-        payload = json.dumps({"vulns": vulns} if vulns else {}).encode()
+        if self.path == "/replay/v1/query":
+            payload = json.dumps(RECORDINGS.get(purl, {})).encode()
+        else:
+            vulns = [ADVISORY] if (NEEDLE in purl and os.path.exists(FLAG)) else []
+            payload = json.dumps({"vulns": vulns} if vulns else {}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))

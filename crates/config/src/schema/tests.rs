@@ -3807,6 +3807,30 @@ fn roles_and_worker_scoping_are_checked() {
     assert!(err.contains("nope"), "{err}");
 }
 
+/// RFC 0041 §6.8: serving through a scanner error is a choice, so it is named.
+#[test]
+fn a_block_registry_that_serves_through_a_scanner_error_warns() {
+    for (mode, setting, warned) in [
+        ("block", "warn", true),
+        ("block", "ignore", true),
+        ("block", "quarantine", false),
+        ("warn", "warn", false),
+    ] {
+        let cfg = parse_config(&security_config(
+            &format!(
+                r#"        mode = "{mode}"
+        scanner_error = "{setting}""#
+            ),
+            "",
+        ));
+        assert_eq!(
+            warning_codes(&cfg).contains(&warnings::SECURITY_SCANNER_ERROR_OPEN.to_owned()),
+            warned,
+            "mode = {mode}, scanner_error = {setting}"
+        );
+    }
+}
+
 #[test]
 fn warn_mode_with_nothing_required_and_a_dateless_kind_warn() {
     let cfg = parse_config(&security_config(

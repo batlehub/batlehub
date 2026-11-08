@@ -163,6 +163,15 @@ call to a known-bad address, credentials read and sent somewhere, or a match
 on one of your organisation's own rules. **Do not work around this one.** Tell
 your administrator or security team, and use a version that does not carry it.
 
+#### `KNOWN_MALICIOUS` {#known-malicious}
+
+An advisory database lists this version as malicious — an OSV `MAL-` record:
+a package published to steal credentials, mine, or open a back door. This is
+always refused, whatever the registry's mode or severity threshold. **Do not
+work around this one.** Remove the package from your project, and tell your
+security team if it was ever installed: what it ran at install time already
+happened.
+
 #### `INSTALL_HOOK` {#install-hook}
 
 The package runs a script when it is installed (an npm `preinstall`, a Python
@@ -297,6 +306,16 @@ a forge is how many supply-chain attacks start, so the registry warns or
 refuses. Check the script, and pin it to a commit.
 
 ---
+
+### A code this server does not know {#unknown-code}
+
+#### `UNRECOGNISED` {#unrecognised}
+
+The version's verdict was written by a newer release of the server than the
+one that answered you, and carries a reason this release cannot read. It is
+refused rather than guessed at. This happens only while an upgrade is rolling
+out, or after a rollback: retry in a few minutes, and if it persists, tell your
+administrator — the replica that answered is older than the database it reads.
 
 ## Refusals with a plain message {#plain-messages}
 

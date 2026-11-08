@@ -156,6 +156,7 @@ version — is [`batlehub-cli verdict`](/use/cli#commands-verdicts).
 | Queue depth climbing, jobs eventually complete | `batlehub_scan_jobs_queued` by registry and trigger | Raise `max_concurrent`, or add worker replicas — the autoscaler scales on this metric |
 | One version stuck, others fine | `batlehub-cli why <coordinate>`, then the job's `attempts` and `last_error` | Let the attempts run out, or `batlehub-cli why --rescan` after fixing the cause |
 | Versions coming back `SCANNER_ERROR` in bulk | `batlehub_scanner_errors_total` by scanner and class | One scanner is down or unreachable. Check its egress and its `[scanners.<name>]` entry |
+| New versions held `SCAN_PENDING`, `batlehub_scan_jobs_deferred` rising | `batlehub_scanner_errors_total{class="rate_limited"}` or `"transient"` for `osv` | OSV is throttling or unreachable. Jobs wait it out (1 minute doubling to 1 hour, at most 24 hours) instead of reading the outage as "no advisory"; after 24 hours a first-seen version gets `SCANNER_ERROR`, which the maturity bypass does not serve. Restore egress to OSV, or point `[scanners.osv] api_url` at a mirror |
 | Jobs keep returning to the queue without completing | `batlehub_scan_jobs_expired_total`, and the pod's memory | A lease is expiring. Usually the sandbox's `memory_limit_mb` against a large or hostile archive, or `job_timeout` under a slow scanner |
 | Two instances, one database, jobs vanishing from one | both processes' `worker_id` in `worker_heartbeats` | The queue is estate-wide by design. Scope each worker with `[worker] registries` if they must not share |
 
@@ -170,6 +171,7 @@ instances against one Postgres.
 | --- | --- | --- |
 | `batlehub_workers_live` | gauge | Workers seen in the last two minutes. Zero with a quarantine configured is an outage of the gate |
 | `batlehub_scan_jobs_queued` | gauge | Queue depth, by registry and trigger |
+| `batlehub_scan_jobs_deferred` | gauge | Jobs waiting out an advisory database's outage, by registry and trigger — not in `batlehub_scan_jobs_queued`, so they do not hold the autoscaler at its maximum |
 | `batlehub_scan_jobs_leased` | gauge | What this worker holds right now |
 | `batlehub_scan_job_duration_seconds` | histogram | Per scanner, with an `ok`/`error` outcome |
 | `batlehub_scanner_errors_total` | counter | By scanner and error class |

@@ -421,6 +421,12 @@ pub const SECURITY_RULE_SETTINGS_IGNORED: &str = "security.rule-settings-ignored
 /// is held open-ended (RFC 0018 §4.3, decision 27).
 pub const SECURITY_TIMESTAMP_HOLD_UNAVAILABLE: &str = "security.timestamp-hold-unavailable";
 
+/// `[registries.security]` in `mode = "block"` with `scanner_error = "warn"`
+/// or `"ignore"`: a scanner that cannot answer — OSV down, OSV throttling —
+/// serves the version. Until RFC 0041 the OSV client did that silently; now
+/// it is an explicit choice, so it is named (RFC 0041 §6.8, T14).
+pub const SECURITY_SCANNER_ERROR_OPEN: &str = "security.scanner-error-open";
+
 /// `[upstream_audit]` enabled with no registry in `proxy`/`hybrid` mode
 /// (RFC 0014 §4.4): a config in transition is legitimate, so a warning.
 pub const UPSTREAM_AUDIT_NOTHING_TO_AUDIT: &str = "upstream-audit.nothing-to-audit";

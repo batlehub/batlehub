@@ -61,9 +61,12 @@
 # HEAVY_TAP_PORT (8117), HEAVY_OSV_PORT (8127), HEAVY_SINK_PORT (8137),
 # HEAVY_QUARANTINE_SKIP_SANDBOX, COVERAGE. Needs yara-x's `yr` on PATH (the
 # server refuses a `[scanners.yara]` it cannot start, sandbox or not). Needs network: registry.npmjs.org
-# for the packages and api.osv.dev for the scanner — a fixture OSV would
-# prove the mapping, not the quarantine (step 7's fake OSV serves the one
-# registry whose point is a database that changes its mind).
+# for the packages. No step asks api.osv.dev any more (RFC 0041 phase 0): OSV
+# fails closed, so a CI 429 would hold a version, and an advisory published
+# later against a package a step expects served would refuse it. Every `osv`
+# lookup is api.osv.dev's own answer, recorded verbatim in
+# tests/fixtures/supply-chain-jdd/osv/ and replayed by osv_fake.py — step 3's
+# GHSA included — and step 7's flip is the same fake changing its mind.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -147,7 +150,7 @@ EOF
 # and the receiver the flip alert is asserted at.
 OSV_FLAG="$HEAVY_WORK/osv-flip-on"
 python3 tests/heavy/osv_fake.py "$OSV_FLAG" "$OSV_PORT" "pkg:npm/$FLIP_PKG@$FLIP_VERSION" \
-  >"$HEAVY_WORK/osv.err" 2>&1 &
+  tests/fixtures/supply-chain-jdd/osv >"$HEAVY_WORK/osv.err" 2>&1 &
 OSV_PID=$!
 SINK_LOG="$HEAVY_WORK/sink.log"
 : > "$SINK_LOG"

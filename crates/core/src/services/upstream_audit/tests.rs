@@ -352,10 +352,10 @@ impl ScanQueue for RecordingQueue {
     async fn heartbeat(&self, _: uuid::Uuid, _: u64) -> Result<(), CoreError> {
         Ok(())
     }
-    async fn complete(&self, _: uuid::Uuid) -> Result<(), CoreError> {
+    async fn complete(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
         Ok(())
     }
-    async fn fail(&self, _: uuid::Uuid, _: &str) -> Result<(), CoreError> {
+    async fn fail(&self, _: uuid::Uuid, _: &str, _: &str) -> Result<(), CoreError> {
         Ok(())
     }
     async fn exhausted(&self, _: u32, _: u32) -> Result<Vec<ScanJob>, CoreError> {
