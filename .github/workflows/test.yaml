@@ -54,7 +54,7 @@ jobs:
   # answer is to *ask* for the run rather than to buy it forty times a week.
   #
   # So this job is the one gate the rest of the workflow hangs off: on a
-  # `dependabot/*` head branch every job below is skipped unless the pull
+  # pull request opened by `dependabot[bot]` every job below is skipped unless the pull
   # request carries the **`full-test`** label. Nothing else changes — a human
   # branch, a push to `main`, the nightly schedule and `workflow_dispatch` all
   # run the full suite as before, because `github.head_ref` is empty outside a
@@ -80,6 +80,9 @@ jobs:
       - id: decide
         env:
           HEAD_REF: ${{ github.head_ref }}
+          # The author, not the branch name: anyone can push `dependabot/…`,
+          # and the skip turns the required check green.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -91,6 +94,11 @@ jobs:
           relevant=$(python3 -I "$gate" changed --event "$EVENT" --base "$BASE" --head "$HEAD" -- \
             'crates/**' 'server/**' 'cli/**' 'fuzz/**' 'tests/heavy/**' \
             docs/guide/admin-policies.md docs/guide/hot-reload.md \
+            docs/guide/access-control.md docs/guide/configuration.md \
+            docs/use/refused-downloads.md docs/fr/use/refused-downloads.md \
+            docs/use/cli.md docs/fr/use/cli.md docs/operations/incident-response.md \
+            'docs/rfc/0002-*.md' 'config.example*.toml' 'perf/**' ui/openapi.json \
+            'tests/fixtures/**' 'examples/**' \
             '**/Cargo.toml' '**/Cargo.lock' .github/workflows/test.yaml \
             .github/scripts/merge_coverage.py .github/scripts/required_gate.py \
             .github/coverage-floors.txt 'deploy/siem/**')
@@ -103,10 +111,10 @@ jobs:
             run=false
             reason=filter
             why="no path this workflow tests changed"
-          elif [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+          elif [[ "$PR_AUTHOR" == "dependabot[bot]" && "$FULL_TEST" != "true" ]]; then
             run=false
             reason=dependabot
-            why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
+            why="\`$HEAD_REF\` is a Dependabot pull request not labelled \`full-test\`"
           fi
           { echo "run=$run"; echo "reason=$reason"; echo "lockfile=$lockfile"; } >> "$GITHUB_OUTPUT"
           if [[ "$run" == "false" ]]; then

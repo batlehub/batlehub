@@ -111,19 +111,28 @@ not by workflow:
 
 `test.yaml`, `back-dep-audit.yaml`, `dep-audit-frontend.yaml`, `postmortem.yaml`, `image-scan.yaml`,
 `semgrep.yaml`, `openapi-lint.yaml`, `secret-scan.yaml`, `front-lint.yaml`, `front-test.yaml`,
-`scripts-test.yaml`, `helm-lint.yaml`, each followed by ` / required`.
+`front-design.yaml` (the only CI type-check of `ui/src`, and the generated-docs drift),
+`docs-cli-commands.yaml`, `repo-interop.yaml`, `mise-scan.yaml`, `scripts-test.yaml`,
+`helm-lint.yaml`, each followed by ` / required`. `test_required_gate.py` fails when one of them
+does not wait for every other job of its workflow.
 
 - **No workflow-level `paths:`.** A pull request it skipped would leave the required check
   "Expected — waiting for status" forever. The workflow always runs; a first `gate` job applies the
-  same path list (`.github/actions/required-gate`, from `git diff --name-only base...head`) and the
+  same path list (`.github/actions/required-gate`, from `git diff --no-renames --name-only base...head`, so a
+  file moved out of a watched tree counts under its old name) and the
   other jobs hang off it. A schedule, a manual run or a push whose `before` is gone is a full run.
 - **The verdict** is `.github/scripts/required_gate.py verdict`: red unless every job succeeded, or
   the gate skipped them all. A job skipped any other way is a failure, so a stub cannot mask a job.
-- **Dependabot** (`test.yaml` only): without the `full-test` label the Rust suite is skipped, and
+- **Dependabot** (`test.yaml` only, recognised by the author `dependabot[bot]`, never by the branch
+  name anyone can push): without the `full-test` label the Rust suite is skipped, and
   `test.yaml / required` is green — unless `Cargo.lock` or `fuzz/Cargo.lock` changed, when it fails
   with *"Cargo.lock changed but the Rust suite was skipped — add the full-test label"*. The path
   filter runs first, so a bump that touches nothing `test.yaml` covers stays green whatever its
   branch.
+- **A fork's pull request**: its own `postmortem.yaml` run has no `VULN_MLAB_TOKEN` and is red by
+  construction; `postmortem-fork.yaml`, run by a maintainer on the reviewed head, posts the verdict
+  as a commit status named `postmortem.yaml / required`. That this status satisfies the ruleset
+  beside the failed check of the same name is not yet observed on a real fork PR.
 - **Not aggregated**: CodeQL (the ruleset above), vuln-scan (`report`), SonarCloud (an external
   app), and the label- or schedule-driven workflows.
 

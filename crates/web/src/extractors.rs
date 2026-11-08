@@ -270,6 +270,31 @@ mod tests {
         );
     }
 
+    /// `Token` is galaxy's scheme only: on any other registry the header is
+    /// the caller's, left as sent (the survivor of M11 at `:121`).
+    #[test]
+    fn a_token_scheme_becomes_bearer_on_galaxy_only() {
+        let auth = |uri: &str| {
+            let req = TestRequest::get()
+                .uri(uri)
+                .insert_header(("Authorization", "Token tok-123"))
+                .to_http_request();
+            raw_auth_from_request(&req)
+                .headers
+                .get("authorization")
+                .cloned()
+        };
+        assert_eq!(
+            auth("/proxy/g/galaxy/api/v3/collections/").as_deref(),
+            Some("Bearer tok-123")
+        );
+        assert_eq!(
+            auth("/proxy/npm/pkg").as_deref(),
+            Some("Token tok-123"),
+            "a known registry that is not galaxy keeps its header"
+        );
+    }
+
     #[test]
     fn ovsx_publish_token_in_the_query_becomes_a_bearer_header() {
         let req = TestRequest::post()

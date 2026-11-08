@@ -16,23 +16,40 @@ name: Frontend Design Gates
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/**"
-      - "docs/**"
-      - "DESIGN.md"
-      - ".github/workflows/front-design.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/**"
-      - "docs/**"
-      - "DESIGN.md"
-      - ".github/workflows/front-design.yaml"
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/**
+            docs/**
+            DESIGN.md
+            .github/workflows/front-design.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   static:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Static design gates
     runs-on: ubuntu-latest
     steps:
@@ -131,6 +148,8 @@ jobs:
         working-directory: docs
 
   rendered:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Rendered page gates
     runs-on: ubuntu-latest
     steps:
@@ -254,6 +273,8 @@ jobs:
         working-directory: ui
 
   docs-rendered:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Rendered page gates — docs site
     runs-on: ubuntu-latest
     # The same class of gate the console has, on the surface every prospective
@@ -324,3 +345,22 @@ jobs:
           BASE: http://127.0.0.1:4173
         run: node build/design-routes.mjs
         working-directory: docs
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: front-design.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, static, rendered, docs-rendered]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

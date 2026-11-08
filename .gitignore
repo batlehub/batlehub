@@ -166,3 +166,4 @@ graphify-out/
 # task postmortem:* — the JSON postmortem_new_risk.py judges
 .postmortem-out/
 mutants.out/
+mutants.out.old/

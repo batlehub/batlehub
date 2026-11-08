@@ -1357,8 +1357,12 @@ stopped.
   question.
 
   **A new job in this file must declare `needs: gate` and
-  `if: needs.gate.outputs.run == 'true'`** — a job that forgets it is a job
-  dependabot still pays for, and nothing fails the build over it.
+  `if: needs.gate.outputs.run == 'true'`, and be listed in the `needs:` of
+  `required`** — the one check the `main` ruleset requires (RFC 0041
+  decision 28; [the required checks](./security-scanning.md#required-checks)).
+  The first rule is what keeps Dependabot from paying for it; the second is
+  enforced by `test_required_gate.py`, which fails when a gated workflow's
+  `required` does not wait for every other job.
 - **`soak.yaml`** — the two soak suites, **started by hand only**: a
   `workflow_dispatch`, or the `soak` label on a pull request. No push, no cron,
   and no pull request without that label. Inputs for the duration, the arrival rate, the

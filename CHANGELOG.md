@@ -187,8 +187,8 @@ refused, `mode = "warn"` included. See
   was verified by no test. The coverage holes of §6.6 (the CLI's report
   renderers, galaxy's client, the JetBrains IDE listings, conda's local
   mode, the UI composables) gained their tests.
-- **One required check per workflow** (RFC 0041 phase 6; CI only). Each
-  gated workflow now always runs, applies its path filter in a first `gate`
+- **One required check per workflow** (RFC 0041 phase 6; CI only). Sixteen
+  gated workflows now always run, applies its path filter in a first `gate`
   job, and ends with a `<file>.yaml / required` job, so a required check is
   never left "Expected". A Dependabot `Cargo.lock` bump without the
   `full-test` label now fails `test.yaml / required` instead of merging

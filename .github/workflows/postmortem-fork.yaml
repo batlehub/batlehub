@@ -95,6 +95,10 @@ jobs:
           root: "."
           fail-on: high
           diff: "true"
+          # The same reputation block-new as postmortem.yaml (phase 4); an
+          # approval of this head lifts it, as on a branch pull request.
+          online: "true"
+          pr: ${{ inputs.pr }}
           out: pm-out/rust
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
           github-token: ${{ github.token }}
@@ -106,6 +110,10 @@ jobs:
           root: ui
           fail-on: high
           diff: "true"
+          # The same reputation block-new as postmortem.yaml (phase 4); an
+          # approval of this head lifts it, as on a branch pull request.
+          online: "true"
+          pr: ${{ inputs.pr }}
           out: pm-out/ui
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
           github-token: ${{ github.token }}
@@ -141,4 +149,12 @@ jobs:
               -f target_url="$RUN" -f description="postmortem gate, $outcome" >/dev/null
             echo "postmortem-fork / $name: $state"
           done
+          # The required check itself (decision 28): a fork's own postmortem.yaml
+          # run has no VULN_MLAB_TOKEN and is red by construction, so this
+          # verdict, on the head the maintainer reviewed, is the one that counts.
+          agg=success; [ "$red" -eq 0 ] || agg=failure
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$agg" -f context="postmortem.yaml / required" \
+            -f target_url="$RUN" -f description="postmortem-fork verdict on the reviewed head" >/dev/null
+          echo "postmortem.yaml / required: $agg"
           exit "$red"

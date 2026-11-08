@@ -52,8 +52,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A review run has its own group: a comment or a bot review must not cancel the
+# push's run mid-way, which would post a red `postmortem.yaml / required`.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request_review' && 'review-' || '' }}${{ github.ref || github.run_id }}
   cancel-in-progress: true
 jobs:
   rust:
@@ -68,11 +70,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
+          fetch-depth: 2
           persist-credentials: false
+      # On a pull request head is refs/pull/N/merge, built on main as it is
+      # now; pull_request.base.sha is not refreshed when main moves, so main's
+      # own bumps would be judged as the PR's. The merge's first parent is the
+      # base it was built on, and a commit of main: still the trusted side.
+      - id: base
+        env:
+          IS_PR: ${{ github.event.pull_request != null }}
+        run: |
+          if [ "$IS_PR" = true ]; then rev=HEAD^1; else rev=HEAD; fi
+          echo "sha=$(git -C head rev-parse "$rev")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: base
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
       - name: postmortem gate (Rust)
         uses: ./head/.github/actions/postmortem-gate
@@ -106,11 +119,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
+          fetch-depth: 2
           persist-credentials: false
+      # On a pull request head is refs/pull/N/merge, built on main as it is
+      # now; pull_request.base.sha is not refreshed when main moves, so main's
+      # own bumps would be judged as the PR's. The merge's first parent is the
+      # base it was built on, and a commit of main: still the trusted side.
+      - id: base
+        env:
+          IS_PR: ${{ github.event.pull_request != null }}
+        run: |
+          if [ "$IS_PR" = true ]; then rev=HEAD^1; else rev=HEAD; fi
+          echo "sha=$(git -C head rev-parse "$rev")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: base
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
       - name: postmortem gate (UI)
         uses: ./head/.github/actions/postmortem-gate
@@ -146,11 +170,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
+          fetch-depth: 2
           persist-credentials: false
+      # On a pull request head is refs/pull/N/merge, built on main as it is
+      # now; pull_request.base.sha is not refreshed when main moves, so main's
+      # own bumps would be judged as the PR's. The merge's first parent is the
+      # base it was built on, and a commit of main: still the trusted side.
+      - id: base
+        env:
+          IS_PR: ${{ github.event.pull_request != null }}
+        run: |
+          if [ "$IS_PR" = true ]; then rev=HEAD^1; else rev=HEAD; fi
+          echo "sha=$(git -C head rev-parse "$rev")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: base
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
       - name: postmortem gate (Website)
         uses: ./head/.github/actions/postmortem-gate

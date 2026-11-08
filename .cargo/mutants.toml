@@ -41,9 +41,8 @@ examine_re = [
 exclude_re = [
   # Rendering: a Display/Debug impl decides nothing.
   'impl (std::fmt::|fmt::)?(Display|Debug) for ',
-  # `Rule::name` is the label in a deny reason and in logs; the gates that key
-  # on it (`EXEMPTIBLE_GATES`) compare the constant, not the method.
-  '<impl Rule for [A-Za-z]+>::name',
+  # Not `Rule::name`: authz/chain.rs decides on it (EXEMPTIBLE_GATES,
+  # METADATA_DERIVED_RULES, the `deny_latest` filter), so its mutants count.
   # The streaming chunk size is a memory tuning, not a decision: any size
   # serves the same bytes (M11, the one survivor in storage/mod.rs).
   '^crates/adapters/src/storage/mod\.rs:\d+:\d+: replace \* with \+$',

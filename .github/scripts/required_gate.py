@@ -62,7 +62,9 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
         return None
     try:
         out = subprocess.run(
-            ["git", "diff", "--name-only", f"{base}...{head}"],
+            # No rename detection: a file moved out of a watched tree counts
+            # under its old name too. -z: no C-quoting of unusual names.
+            ["git", "diff", "-z", "--no-renames", "--name-only", f"{base}...{head}"],
             check=True,
             capture_output=True,
             text=True,
@@ -71,7 +73,7 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
     except (OSError, subprocess.CalledProcessError) as e:
         print(f"required_gate: cannot diff {base}...{head} ({e}); full run", file=sys.stderr)
         return None
-    return [line for line in out.splitlines() if line]
+    return [p for p in out.split("\0") if p]
 
 
 def changed(event: str, base: str, head: str, globs: list[str], cwd: str | None = None) -> bool:
@@ -89,7 +91,11 @@ def verdict(needs: dict) -> tuple[bool, str]:
         return False, f"the gate job did not succeed ({gate.get('result')})"
     outputs = gate.get("outputs") or {}
     others = {name: n.get("result") for name, n in needs.items() if name != "gate"}
-    if outputs.get("run") != "true":
+    run = outputs.get("run")
+    if run not in ("true", "false"):
+        # A broken output reference renders "", which must not read as a skip.
+        return False, f"the gate's run output is {run!r}, not true or false"
+    if run == "false":
         if outputs.get("reason") == "dependabot" and outputs.get("lockfile") == "true":
             return False, "Cargo.lock changed but the Rust suite was skipped — add the full-test label"
         ran = {k: v for k, v in others.items() if v not in ("skipped", "success")}

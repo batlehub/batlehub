@@ -51,7 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     # Decision 25: a shard is ~100 mutants; one that cannot finish in an hour
     # is a finding about the shard size, not a reason to wait longer.
-    timeout-minutes: 60
+    # Over decision 25's hour: each shard now runs the workspace suite once
+    # before its mutants (mutants_run.sh). A shard that cannot finish in two is
+    # a finding about the shard size.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +83,8 @@ jobs:
       - name: Mutants (shard ${{ matrix.shard }})
         env:
           SHARD: ${{ matrix.shard }}/8
+        # No errexit (GitHub's default is `bash -e`): see mutants_run.sh.
+        shell: bash --noprofile --norc {0}
         run: |
           set -uo pipefail
           cm="$(mise which cargo-mutants)"
@@ -89,26 +94,20 @@ jobs:
           export PATH="$yr_dir:$PATH"
           yr --version
           # --in-place: the checkout is disposable, and the cached target/ is
-          # then the baseline's.
-          "$cm" mutants --in-place --shard "$SHARD" --test-workspace=true \
-            --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o mutants.out/core
-          core=$?
-          "$cm" mutants --in-place --shard "$SHARD" --exclude 'crates/core/**' -o mutants.out/rest
-          rest=$?
-          echo "exit codes: core=$core rest=$rest"
-          # 0 all caught, 2 some missed, 3 some timed out: reported, not failed
-          # (the list is worked down, §6.4). 1 is a usage error, 4 a red baseline.
-          for rc in $core $rest; do
-            case $rc in 0|2|3) ;; *) echo "::error::cargo-mutants exited $rc (4 is a red baseline)"; exit 1 ;; esac
-          done
+          # then the baseline's. Survivors are reported, not failed (§6.4).
+          rc=0
+          bash .github/scripts/mutants_run.sh "$cm" .cargo/mutants.toml mutants.out --in-place --shard "$SHARD" || rc=$?
+          [ "$rc" -eq 0 ] || exit "$rc"
           tested=$(cat mutants.out/*/mutants.out/outcomes.json | jq -s '[.[].outcomes[] | select(.scenario != "Baseline")] | length')
           echo "mutants tested: $tested"
           if [ "$tested" -eq 0 ]; then
             echo "::error::shard $SHARD tested zero mutants — an empty MISSED list would mean nothing"
             exit 1
           fi
+      # always(): a shard that hits timeout-minutes ends `cancelled`, and its
+      # partial MISSED list is still worth reading.
       - name: Summary
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         run: |
           {
             echo "### Mutants, shard ${{ matrix.shard }}/8"
@@ -125,7 +124,7 @@ jobs:
             if [ -n "$timeout" ]; then echo "**TIMEOUT:**"; echo '```'; echo "$timeout"; echo '```'; fi
           } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: mutants.out/
@@ -154,13 +153,15 @@ jobs:
           set -euo pipefail
           num=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
           case "$RESULT" in
-            failure)
+            # A timed-out shard ends `cancelled`; on a schedule nothing else
+            # cancels one, so it is as red as a failure.
+            failure|cancelled)
               gh label create "$LABEL" --color B60205 --description "nightly mutation testing failing on main" --force >/dev/null
               if [ -n "$num" ]; then
                 gh issue comment "$num" --body "Still failing: $RUN"
               else
                 gh issue create --label "$LABEL" --title "nightly mutation testing failing on main" \
-                  --body "A shard of \`mutants.yaml\` failed on \`main\`: $RUN — a red baseline or a shard that tested zero mutants; see its log."
+                  --body "A shard of \`mutants.yaml\` failed on \`main\`: $RUN — a red baseline, a shard that tested zero mutants or one that timed out; see its log."
               fi ;;
             success)
               if [ -n "$num" ]; then gh issue close "$num" --comment "Passing again: $RUN"; fi ;;
@@ -213,8 +214,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
       - name: Mutants on the changed lines
+        shell: bash --noprofile --norc {0}
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/base
           MISE_CEILING_PATHS: ${{ github.workspace }}
         run: |
@@ -228,15 +229,17 @@ jobs:
             echo "::warning::base has no .cargo/mutants.toml; using the head's copy"
             cfg="$GITHUB_WORKSPACE/head/.cargo/mutants.toml"
           fi
+          run_sh="$GITHUB_WORKSPACE/base/.github/scripts/mutants_run.sh"
+          if [ ! -f "$run_sh" ]; then
+            echo "::warning::base has no mutants_run.sh; using the head's copy"
+            run_sh="$GITHUB_WORKSPACE/head/.github/scripts/mutants_run.sh"
+          fi
           cd head
-          git diff "$BASE_SHA"...HEAD >"$RUNNER_TEMP/pr.diff"
-          "$cm" mutants --config "$cfg" --in-place --in-diff "$RUNNER_TEMP/pr.diff" --test-workspace=true \
-            --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o "$GITHUB_WORKSPACE/mutants.out/core"
-          core=$?
-          "$cm" mutants --config "$cfg" --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
-            --exclude 'crates/core/**' -o "$GITHUB_WORKSPACE/mutants.out/rest"
-          rest=$?
-          echo "exit codes: core=$core rest=$rest"
+          # head is refs/pull/N/merge: its first parent is the base it was
+          # merged onto, so main's own later changes are not the PR's.
+          git diff HEAD^1 HEAD >"$RUNNER_TEMP/pr.diff"
+          rc=0
+          bash "$run_sh" "$cm" "$cfg" "$GITHUB_WORKSPACE/mutants.out" --in-place --in-diff "$RUNNER_TEMP/pr.diff" || rc=$?
           missed=$(cat "$GITHUB_WORKSPACE"/mutants.out/*/mutants.out/missed.txt 2>/dev/null || true)
           {
             echo "### Mutants on the changed tier-1 lines"
@@ -250,9 +253,7 @@ jobs:
           for line in $(printf '%s\n' "$missed" | cut -d: -f1,2 | sort -u); do
             echo "::error file=${line%%:*},line=${line##*:}::a mutant on this line survived the tests (mutants.yaml)"
           done
-          for rc in $core $rest; do
-            [ "$rc" -eq 0 ] || exit 1
-          done
+          [ "$rc" -eq 0 ] || exit 1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

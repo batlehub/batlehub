@@ -190,8 +190,11 @@ def check_online(online: dict, base_scripts: dict, head_scripts: dict, root: str
             name = str(pkg.get("name"))
             label = f"{esc(name)}@{esc(pkg.get('version') or pkg.get('to'))}"
             signals = [str(x) for x in (pkg.get("assessment") or {}).get("signals") or []]
-            if "stats-failed" in signals:
-                failed.append(label)
+            # `stats-failed` (GitHub) and `resolve-failed` (the registry) both
+            # mean a signal was never computed; postmortem exits 0 on either.
+            lookup_failed = [x for x in signals if x.endswith("-failed")]
+            if lookup_failed:
+                failed.append(f"{label} ({esc(', '.join(lookup_failed))})")
             if kind == "added":
                 hits = [x for x in signals if x.startswith("typosquat") or (x.startswith("newborn-package") and young(x))]
                 if name in after:
@@ -202,13 +205,13 @@ def check_online(online: dict, base_scripts: dict, head_scripts: dict, root: str
                     hits.append("install script the old version did not have")
             if hits:
                 liftable.append(f"{label} — {esc(', '.join(hits))}")
-            others = [x for x in signals if x not in hits and x != "stats-failed"]
+            others = [x for x in signals if x not in hits and x not in lookup_failed]
             if others:
                 print(f"{label}: reported, not blocking — {esc(', '.join(others))}")
     if failed:
         errors.append(
             f"{esc(root)}: the reputation lookup did not complete for {len(failed)} package(s) "
-            f"({', '.join(failed[:5])}) — GitHub did not answer; never read as clean{rate_limit_reset()}"
+            f"({', '.join(failed[:5])}) — GitHub or the registry did not answer; never read as clean{rate_limit_reset()}"
         )
 
 
@@ -261,11 +264,17 @@ def approval(pr: int) -> tuple[str | None, str | None]:
             if len(batch) < 100:
                 break
             page += 1
+        # Each reviewer's latest decision on this head (the API lists oldest
+        # first): an approval later replaced by a change request lifts nothing.
+        latest: dict[str, str] = {}
         for review in reviews:
             login = (review.get("user") or {}).get("login")
-            if review.get("state") != "APPROVED" or review.get("commit_id") != head or not login or login == author:
+            if review.get("commit_id") != head or not login or login == author:
                 continue
-            if get(f"collaborators/{login}/permission").get("role_name") in LIFTING_ROLES:
+            if review.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+                latest[login] = review["state"]
+        for login, state in latest.items():
+            if state == "APPROVED" and get(f"collaborators/{login}/permission").get("role_name") in LIFTING_ROLES:
                 return login, None
     except (urllib.error.URLError, TimeoutError, OSError, KeyError, TypeError, ValueError) as exc:
         return None, f"the reviews API failed — {esc(exc)}"
@@ -283,11 +292,12 @@ def check_diff(diff: dict, vulns: dict, root: str, fail_on: int, errors: list[st
     # `diff` against a side without a lockfile reports the whole tree as added.
     new_root = summary.get("unchanged", 0) == 0 and summary.get("removed", 0) == 0 and not changed and added
     if new_root or len(added) > MAX_ADDED:
+        # Liftable, but the advisories below are judged anyway: an approval
+        # never lifts a vulnerable package, however large the change.
         liftable.append(
             f"new or moved dependency root ({esc(root)}), or {len(added)} packages added — "
             "needs a maintainer's approving review of this head"
         )
-        return
     for pkg in added:
         name, version = str(pkg.get("name")), str(pkg.get("version"))
         errors.extend(blocking(name, version, vulns.get((name, version), []), fail_on))

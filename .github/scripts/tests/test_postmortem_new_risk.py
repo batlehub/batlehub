@@ -261,9 +261,6 @@ class Gate(unittest.TestCase):
         self.assertIn("::warning::postmortem diagnostic on ui: note", out)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Reputation(unittest.TestCase):
     """Phase 4: `diff --online` and the approval of decision 46.
@@ -456,6 +453,36 @@ class Reputation(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("known-malicious package", out.getvalue())
 
+    def test_resolve_failed_fails_closed_like_stats_failed(self):
+        # postmortem 2.9.2 behind a dead proxy: every package `resolve-failed`, exit 0.
+        doc = fixture("diff-online.json")
+        for kind in ("added", "changed"):
+            for pkg in doc.get(kind) or []:
+                pkg["assessment"] = {"risk": 0, "signals": ["resolve-failed"]}
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        code, out = self.online(doc, None, "--pr", "243")
+        self.assertEqual(code, 1)
+        self.assertIn("the reputation lookup did not complete", out)
+        self.assertNotIn("reported, not blocking — resolve-failed", out)
+
+    def test_an_approval_replaced_by_a_change_request_lifts_nothing(self):
+        self.roles["maint"] = "maintain"
+        self.review("maint")
+        self.review("maint", state="CHANGES_REQUESTED")
+        self.assertEqual(self.online(None, None, "--pr", "243")[0], 1)
+
+    def test_a_new_root_still_judges_its_advisories(self):
+        diff = fixture("empty-diff.json")
+        diff["added"] = [{"name": "lodash", "version": "4.17.20"}]
+        diff["summary"] = {"added": 1, "changed": 0, "removed": 0, "unchanged": 0}
+        vulns = {("lodash", "4.17.20"): [{"id": "GHSA-35jh-r3h4-6jhm", "severity": "high"}]}
+        errors, liftable = [], []
+        with contextlib.redirect_stdout(io.StringIO()):
+            gate.check_diff(diff, vulns, "ui", gate.RANK["high"], errors, liftable)
+        self.assertTrue(liftable)
+        self.assertTrue(any("lodash" in e for e in errors), errors)
+
     def test_online_needs_both_script_inventories(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             gate.main(["--root", "ui", "--tree", str(FIX / "clean-tree.json"), "--online-diff", str(FIX / "diff-online.json")])
@@ -465,3 +492,7 @@ class Reputation(unittest.TestCase):
         doc["added"][0]["name"] = "evil\n::error::pwned"
         code, out = self.online(doc, self.no_scripts())
         self.assertNotIn("\n::error::pwned", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

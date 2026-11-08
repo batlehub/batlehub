@@ -5,25 +5,42 @@ name: Repo interop (apt/dnf/pacman)
 on:
   push:
     branches: ["main"]
-    paths:
-      - "crates/adapters/src/repo/**"
-      - "crates/adapters/tests/repo_interop.rs"
-      - "tests/interop/**"
-      - ".github/workflows/repo-interop.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "crates/adapters/src/repo/**"
-      - "crates/adapters/tests/repo_interop.rs"
-      - "tests/interop/**"
-      - ".github/workflows/repo-interop.yaml"
   workflow_dispatch:
 permissions:
   contents: read
 env:
   CARGO_TERM_COLOR: always
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            crates/adapters/src/repo/**
+            crates/adapters/tests/repo_interop.rs
+            tests/interop/**
+            .github/workflows/repo-interop.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   interop:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: apt + dnf + pacman accept signed repos
     runs-on: ubuntu-latest
     steps:
@@ -39,3 +56,22 @@ jobs:
       # ubuntu-latest ships Docker; verify.sh auto-detects docker or podman.
       - name: Verify apt + dnf + pacman interop
         run: bash tests/interop/verify.sh
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: repo-interop.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, interop]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

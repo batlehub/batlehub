@@ -65,6 +65,14 @@ class Changed(unittest.TestCase):
             head = git("rev-parse", "HEAD")
             self.assertFalse(rg.changed("pull_request", base, head, TEST_GLOBS, cwd=d))
             self.assertTrue(rg.changed("pull_request", base, head, ["ui/**"], cwd=d))
+            # A file moved out of a watched tree is still a change to that tree.
+            git("mv", "ui/App.vue", "App.vue")
+            git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "mv")
+            self.assertTrue(rg.changed("pull_request", head, git("rev-parse", "HEAD"), ["ui/**"], cwd=d))
+            Path(d, "ui", "café.ts").write_text("x")
+            git("add", ".")
+            git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "utf8")
+            self.assertTrue(rg.changed("pull_request", head, git("rev-parse", "HEAD"), ["ui/*.ts"], cwd=d))
 
 
 class Verdict(unittest.TestCase):
@@ -96,6 +104,32 @@ class Verdict(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertIn("full-test", why)
+
+    def test_a_missing_run_output_fails_rather_than_reading_as_a_skip(self):
+        for bad in ("", None, "True"):
+            ok, why = rg.verdict({"gate": {"result": "success", "outputs": {"run": bad}}, "lint": {"result": "skipped"}})
+            self.assertFalse(ok, bad)
+            self.assertIn("run output", why)
+
+    def test_every_required_job_waits_for_every_other_job(self):
+        """A job added to a gated workflow and not to `required.needs` would never block."""
+        import re
+
+        # Jobs that run on a schedule or a push only, so a PR never sees them.
+        not_waited = {"test.yaml": {"heavy-authz-live"}, "postmortem.yaml": {"issue"}}
+        wf = Path(__file__).resolve().parents[2] / "workflows"
+        seen = 0
+        for f in sorted(wf.glob("*.yaml")):
+            text = f.read_text()
+            if f"name: {f.name} / required" not in text:
+                continue
+            seen += 1
+            body = text.split("\njobs:\n", 1)[1]
+            jobs = set(re.findall(r"^  ([a-z][a-z0-9_-]*):\n", body, re.M)) - {"required"}
+            req = body.split("\n  required:\n", 1)[1]
+            needs = set(re.search(r"^    needs: \[([^\]]*)\]", req, re.M).group(1).replace(" ", "").split(","))
+            self.assertEqual(needs, jobs - not_waited.get(f.name, set()), f.name)
+        self.assertGreaterEqual(seen, 12)
 
     def test_a_failed_gate_fails(self):
         self.assertFalse(rg.verdict({"gate": gate(result="failure")})[0])
