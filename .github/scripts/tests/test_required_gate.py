@@ -47,6 +47,10 @@ class Changed(unittest.TestCase):
     def test_a_new_branch_push_is_a_full_run(self):
         self.assertTrue(rg.changed("push", rg.ZERO_SHA, "abc", ["nothing/**"]))
 
+    def test_anything_but_commit_ids_is_a_full_run(self):
+        for base, head in (("--output=/tmp/x", "f" * 40), ("f" * 40, "HEAD"), ("main", "f" * 40)):
+            self.assertTrue(rg.changed("pull_request", base, head, ["nothing/**"]))
+
     def test_an_unknown_base_is_a_full_run_not_a_skip(self):
         self.assertTrue(rg.changed("push", "f" * 40, "HEAD", ["nothing/**"]))
 

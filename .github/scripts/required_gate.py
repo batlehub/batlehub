@@ -32,6 +32,7 @@ import sys
 
 FULL_RUN_EVENTS = {"schedule", "workflow_dispatch"}
 ZERO_SHA = "0" * 40
+SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def glob_re(glob: str) -> re.Pattern[str]:
@@ -59,6 +60,10 @@ def any_match(paths: list[str], globs: list[str]) -> bool:
 def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | None:
     """`git diff --name-only base...head`, or None when it cannot be known."""
     if not base or not head or base == ZERO_SHA:
+        return None
+    # Commit ids only: a value starting with `-` would reach git as an option.
+    if not (SHA_RE.fullmatch(base) and SHA_RE.fullmatch(head)):
+        print(f"required_gate: {base!r}...{head!r} is not a pair of commit ids; full run", file=sys.stderr)
         return None
     try:
         out = subprocess.run(

@@ -9,7 +9,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  security-events: write
 jobs:
   # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
   # would leave `required` "Expected"); this job applies them instead.
@@ -43,6 +42,10 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
+    # Only this job uploads SARIF; the gate and required jobs stay read-only.
+    permissions:
+      contents: read
+      security-events: write
     defaults:
       run:
         working-directory: ui
