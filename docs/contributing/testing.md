@@ -1428,7 +1428,10 @@ Each posts its result as one comment on the pull request, edited in place on
 a re-run. Add them **after** the push's `test.yaml` run is green: a red build
 makes their numbers moot. They can all go on at once: each job of a
 GitHub-hosted runner is its own VM, so `soak`, `profile` and `breaking-point`
-do not measure each other. A label is
+do not measure each other. The exception is `image`: every label wakes every
+`labeled` workflow, and `pr-image.yaml` cancels its run in progress when it
+wakes again, so a label added while the image builds kills the build. Add
+`image` alone, or last. A label is
 the way in on a branch because a `workflow_dispatch`-only workflow does not
 exist until it has landed on `main`; once it has, the Actions tab's dispatch
 form does the same with every input exposed.

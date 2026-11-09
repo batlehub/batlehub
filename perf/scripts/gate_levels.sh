@@ -22,7 +22,7 @@ mkdir -p "$OUT/layers"
 for level in $LEVELS none; do
   dir="$OUT/$level"
   [[ -d "$dir" ]] && dir="$OUT/${level}-again"
-  python3 -I perf/scripts/gate_levels.py layer "$level" perf/config.soak.toml >"$OUT/layers/$level.toml"
+  python3 -I perf/scripts/gate_levels.py layer "$level" >"$OUT/layers/$level.toml"
   printf '\n==> gate level %s\n' "$level"
   PROFILE_LAYERS="$OUT/layers/$level.toml" PROFILE_OUT="$dir" bash perf/scripts/profile.sh
 done

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What each level of security gating costs a request (perf/scripts/gate_levels.sh).
 
-    gate_levels.py layer <level> <base.toml>   a config layer over <base.toml>
+    gate_levels.py layer <level>                a config layer over perf/config.soak.toml
     gate_levels.py report <out-dir>             the comparison, from each level's profile.json
 
 A level is a `--config` layer adding rules to every registry of the base
@@ -81,7 +81,11 @@ fetch_upstream = false
 """
 
 
-def layer(level: str, base: Path) -> str:
+# The profile harness's config: the only base a layer is written over.
+BASE = Path(__file__).resolve().parent.parent / "config.soak.toml"
+
+
+def layer(level: str) -> str:
     if level not in LEVELS:
         sys.exit(f"unknown level {level!r}; one of {', '.join(LEVELS)}")
     body = {
@@ -94,7 +98,7 @@ def layer(level: str, base: Path) -> str:
     out = [f"# gate level: {level} (perf/scripts/gate_levels.py)\n"]
     if not body:
         return "".join(out)
-    for reg in tomllib.loads(base.read_text()).get("registries", []):
+    for reg in tomllib.loads(BASE.read_text()).get("registries", []):
         b = body
         if reg["type"] in NO_SECURITY:
             b = b.replace(SECURITY, "")
@@ -157,8 +161,8 @@ def report(out: Path) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) == 4 and sys.argv[1] == "layer":
-        sys.stdout.write(layer(sys.argv[2], Path(sys.argv[3])))
+    if len(sys.argv) == 3 and sys.argv[1] == "layer":
+        sys.stdout.write(layer(sys.argv[2]))
     elif len(sys.argv) == 3 and sys.argv[1] == "report":
         sys.stdout.write(report(Path(sys.argv[2])))
     else:
