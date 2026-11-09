@@ -304,3 +304,34 @@ async fn a_release_listing_repoints_its_download_urls() {
     assert!(body.starts_with('[') || body.starts_with('{'), "{body}");
     let _ = HashMap::<String, String>::new();
 }
+
+// ── the repository name is the name the forge is asked about ─────────────────
+
+/// inkdex VULN-SSRF (PR #304): actix decodes `%3F`/`%23` in a path parameter,
+/// and `validate_path_safe` lets `?` and `#` through, so `cli%3F` reached the
+/// handler as `cli?`: authorization checked `cli/cli?` while an unencoded
+/// upstream URL asked the forge about `cli/cli`. Owner and repo are now
+/// refused at the edge unless they are a name a forge could hold.
+#[actix_web::test]
+async fn a_repository_name_no_forge_could_hold_is_a_400_on_every_family() {
+    let app = lab(RawPolicy::default(), ApiReadFamily::ALL.to_vec()).await;
+    for repo in ["cli%3F", "cli%23x", "cli%25", "c%20li", "cli%3Fx=1"] {
+        for tail in [
+            "tags".to_owned(),
+            format!("commits/{A}"),
+            "branches/main".to_owned(),
+        ] {
+            let uri = format!("/proxy/{REG}/cli/{repo}/{tail}");
+            let resp = get(&app, &uri).await;
+            assert_eq!(resp.status(), 400, "{uri}");
+        }
+    }
+    // The owner too, and a dot-only segment.
+    for owner in ["o%3Fx", "%2E%2E"] {
+        let resp = get(&app, &format!("/proxy/{REG}/{owner}/cli/tags")).await;
+        assert_eq!(resp.status(), 400, "owner {owner}");
+    }
+    // What forges do allow is untouched.
+    let v = get_json(&app, &format!("/proxy/{REG}/my-org.io/repo_name.rs/tags")).await;
+    assert_eq!(v["package"], "my-org.io/repo_name.rs");
+}

@@ -8,7 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Security
+
+- **Forge API reads could ask the forge about another repository than the
+  one authorization checked** (inkdex VULN-SSRF, CWE-918; reported and fixed
+  in PR #304). actix decodes `%3F` and `%23` in a path parameter and
+  `validate_path_safe` lets `?` and `#` through, while the Forgejo and GitHub
+  clients built their upstream URLs unencoded: `/proxy/<forge>/org/secret%3F/tags`
+  was authorized as `org/secret?` and sent, with the instance token, as
+  `/repos/org/secret`; a ref like `main%3Fx=1` injected a query. Every
+  user-derived segment of those URLs is now percent-encoded (GitLab already
+  was), and the forge API routes refuse an owner or repository that is not
+  `[A-Za-z0-9._-]` with a `400`. A tag such as `name@1.2.3` is now sent as
+  `name%401.2.3`, which GitHub answers on the API, the archive and the raw
+  host alike.
 
 ## [1.10.0] - 2026-11-09
 
