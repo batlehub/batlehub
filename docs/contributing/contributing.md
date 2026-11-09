@@ -979,3 +979,24 @@ git push origin v1.3.0
 `origin` carries both remotes (GitHub and the Forgejo instance), so one push
 reaches both. **The second command is the release.** Nothing before it is
 visible to anyone, and everything after it is.
+
+### 13.5 Publishing the draft
+
+`build.yaml` leaves a **draft** on GitHub, and a person publishes it. Wait for
+two runs of the tag, not one:
+
+- **`build.yaml`** — the binaries, the images, the SBOMs, the VEX, the chart
+  and the checksums.
+- **`perf-report.yaml`** — about 40 minutes of load, then `perf-report.json`
+  and `perf-report.md` attached, and the draft's *Do not publish yet* note
+  removed.
+
+**Publish only once that note is gone.** A published release is immutable:
+GitHub refuses any asset uploaded after it, so publishing early ships the
+release without its report (v1.10.0 did; its report is the run's
+`perf-report-v1.10.0` artifact). If the note stays, the perf run failed:
+read it, and either rerun it or remove the note and publish without the
+report, knowingly.
+
+Editing the draft's text through the API, send `tag_name` with the `body`: a
+body-only `PATCH` detaches the draft from its tag.
