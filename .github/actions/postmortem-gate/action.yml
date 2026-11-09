@@ -104,6 +104,7 @@ runs:
         OUT: ${{ github.workspace }}/${{ inputs.out }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         VULN_MLAB_TOKEN: ${{ inputs.vuln-token }}
+        EVENT: ${{ github.event_name }}
         NO_COLOR: "1"
       run: |
         set -euo pipefail
@@ -115,7 +116,16 @@ runs:
         # second run reuses postmortem's local vulnerability cache, and
         # postmortem_new_risk.py checks the two agree.
         timeout 600 "$PM" tree "$ROOT" --vulns --json --no-progress -o "$OUT/tree.json"
-        timeout 900 "$PM" tree "$ROOT" --online --vulns --sarif --no-progress -o "$OUT/tree.sarif"
+        # The whole tree's reputation (`--online`) is one GitHub API call per
+        # package, ~600 per root, on GITHUB_TOKEN's per-repository hourly
+        # budget: on every pull request it emptied that budget and failed the
+        # SARIF uploads, CodeQL and the checklist of every other run that
+        # hour. The verdict reads only the SARIF's advisories; reputation on
+        # a pull request is judged on what the change adds (`diff --online`
+        # below). The Security tab's whole-tree reputation comes from `main`.
+        online_tree=(--online)
+        case "$EVENT" in pull_request*) online_tree=() ;; esac
+        timeout 900 "$PM" tree "$ROOT" "${online_tree[@]}" --vulns --sarif --no-progress -o "$OUT/tree.sarif"
         if [ "$DIFF" = true ]; then
           # Offline: which packages the change adds or changes. Their
           # advisories come from the tree JSON — `diff --vulns` writes the

@@ -163,8 +163,10 @@ category `upload-sarif` derives from the job id. Read the alert message
 (`<pkg>@<version> [<repo>] — <signal>`) for the target.
 
 **The verdict is `postmortem_new_risk.py`'s, never postmortem's exit code** (RFC 0041 §6.5). Each job
-runs the mise-pinned postmortem twice over its root — `tree --vulns --json`, then `tree --online
---vulns --sarif` (which reuses the local vulnerability cache) — and, on a pull request, an offline
+runs the mise-pinned postmortem twice over its root — `tree --vulns --json`, then `tree --vulns
+--sarif` (which reuses the local vulnerability cache; `--online` too on `main` and the nightly, never
+on a pull request: the whole tree's reputation is one GitHub API call per package, and ~600 per root
+emptied `GITHUB_TOKEN`'s hourly budget for every other job) — and, on a pull request, an offline
 `diff` against the base. The script then fails the job on any of:
 
 - a lookup that did not complete. postmortem 2.9.2 exits `0` and writes an empty SARIF when
