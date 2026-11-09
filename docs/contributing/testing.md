@@ -1374,9 +1374,9 @@ stopped.
   and no pull request without that label. Inputs for the duration, the arrival rate, the
   heavy suite's round count and all four growth thresholds, so a run can be
   made stricter from the dispatch form. Two jobs (`k6-soak`, `heavy-soak`),
-  selectable, with a `concurrency` group so two soaks never share a runner's
-  CPU — a resource curve measured beside another soak is a measurement of the
-  runner. The samples and the report are uploaded on failure as well as on
+  selectable, with a `concurrency` group so two soaks of one pull request never
+  post into the same report (each hosted job is its own VM, so it is not about
+  the CPU). The samples and the report are uploaded on failure as well as on
   success, because that is when they are worth reading.
 - **`perf-report.yaml`** — on every release tag, runs scenarios 01–07 against a
   freshly built server, diffs the result against the previous published
@@ -1425,9 +1425,10 @@ a trigger (see the gate above).
 | `image` | `pr-image.yaml` | `ghcr.io/<repo>:pr-<number>` (amd64 + arm64), Trivy-scanned, linked in a comment | someone has to run the branch outside CI |
 
 Each posts its result as one comment on the pull request, edited in place on
-a re-run. Add them **after** the push's `test.yaml` run is green, and one
-load suite at a time when you can: `soak`, `profile` and `breaking-point`
-measure a shared runner, and a red build makes their numbers moot. A label is
+a re-run. Add them **after** the push's `test.yaml` run is green: a red build
+makes their numbers moot. They can all go on at once: each job of a
+GitHub-hosted runner is its own VM, so `soak`, `profile` and `breaking-point`
+do not measure each other. A label is
 the way in on a branch because a `workflow_dispatch`-only workflow does not
 exist until it has landed on `main`; once it has, the Actions tab's dispatch
 form does the same with every input exposed.
