@@ -121,6 +121,12 @@ refused, `mode = "warn"` included. See
 
 ### Fixed
 
+- A `[registries.security]` profile whose required scanner does not cover
+  the registry's kind (the default `osv` on deb, rpm, pacman, jetbrains,
+  generic, nodedist, sdkman, terraform, openvsx and the two marketplaces) held
+  every version `SCAN_PENDING` for good, `mode = "warn"` included. Such a
+  scanner now counts as answered, and the server warns at startup that the
+  profile is judged by its other scanners only.
 - **OSV fails closed** (RFC 0041 §6.8). A 429, a 5xx, a 401/403/407, a 200
   that is not JSON and a transport error used to read as "no advisory", so a
   throttled or unreachable OSV gave a clean verdict — a known-malicious
@@ -161,7 +167,9 @@ refused, `mode = "warn"` included. See
   `[database] listen_url` to a direct connection, or the cache stays off
   (see *High availability*). Gauges `batlehub_read_cache_live`, counter
   `batlehub_read_cache_invalidations_total`. Without `listen_url` the listener
-  holds one connection of the pool.
+  holds one connection of the pool. A silently dead listener is noticed by its
+  10-second heartbeat, so a stale answer lasts 20 s at most;
+  `[database] read_cache = false` turns the cache off.
 - `perf/scripts/gate_levels.sh`: what each level of security gating costs a
   request, on the profile harness.
 - Reason codes `KNOWN_MALICIOUS` and `UNRECOGNISED`, both always refused, with

@@ -610,10 +610,13 @@ async fn main() -> Result<()> {
     repo.run_migrations().await.context("running migrations")?;
     // The per-download reads are cached only while this listener is connected
     // (migration 066's triggers keep every replica's copy coherent).
-    batlehub_adapters::db::read_cache::spawn_invalidation_listener(
-        repo.pool(),
-        config.database.listen_url.clone(),
-    );
+    // `read_cache = false`: never live, so every read goes to the database.
+    if config.database.read_cache {
+        batlehub_adapters::db::read_cache::spawn_invalidation_listener(
+            repo.pool(),
+            config.database.listen_url.clone(),
+        );
+    }
     stores::spawn_db_pool_gauge_sampler(repo.pool());
     stores::spawn_db_housekeeping(repo.pool());
     allocator::spawn_allocator_gauge_sampler();

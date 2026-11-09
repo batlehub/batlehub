@@ -64,20 +64,6 @@ Current adapters: npm, Cargo, GitHub, Forgejo/Gitea, GitLab, OpenVSX, VS Code Ma
 - [x] Health check endpoint (`/healthz`) that verifies connectivity to the database and all configured storage backends
 - [x] Stats dashboard on the admin home screen: hits/misses, bandwidth saved, per-registry and aggregate
 
-### Database load — known debt (PR #297, 2026-11-09)
-
-Measured by `tests/heavy/db_calls.sh` and the `breaking-point` label: one replica with a 10-connection pool breaks at 400–800 req/s on the pool, not the CPU. The per-download reads are now served from an in-process cache kept coherent by `LISTEN/NOTIFY` (migration 066, `crates/adapters/src/db/read_cache.rs`); a cached download costs 1 statement instead of 5–7, and the pullability batch 1 instead of 200. What is left:
-
-- [ ] **One audit write per read** — every download inserts an `access_events` row (and the first-sight `package_statuses` row) in the request's own statement: ~69 M rows/day at 800 req/s, each holding a pool connection. Batch them (a channel drained every ~100 ms into one multi-row `INSERT` or `COPY`), keeping the "no event lost on a clean shutdown" property; then decide retention against the purge job's cost
-- [ ] **Pool size default of 10** — the measured ceiling (`s3-redis-pool50` serves 800 req/s clean where the 10-connection arms break). Raise the default to 20–30, document sizing per replica, and recommend PgBouncer (transaction mode) once there are several replicas; the read cache's `LISTEN` holds one connection of the pool
-- [ ] **`/healthz` runs 3 statements** — `SELECT 1` plus a storage probe that resolves a key through the dedup tables. Keep the storage probe on readiness only; liveness needs no database round trip at all
-
-- [ ] **A security profile on a kind its required scanner does not cover holds every version for good** — `[registries.security]` defaults to `required_scanners = ["osv"]`, and `OsvArtifactScanner::supports` is false for deb, rpm, pacman, jetbrains, generic, nodedist, sdkman, the two marketplaces, openvsx and terraform. The worker never runs an unsupported scanner, so `osv` never answers and the version stays `SCAN_PENDING`; an undated version never reaches `mature_age_secs`, so nothing lifts it, `mode = "warn"` included. No config warning says so (found by `perf/scripts/gate_levels.sh`). Warn at load, and decide whether an unsupported required scanner should count as answered or as `SCANNER_UNSUPPORTED`
-
-### Request routing — known debt (PR #297, 2026-11-09)
-
-- [ ] **The router tries every route in turn** — `collect_routes` (`crates/web/src/lib.rs`) registers 384 flat services, 291 of them dynamic and 220 under `/proxy/{registry}/`; actix-router 0.5.4 runs each pattern's regex until one matches, so an npm request is tested against ~217 regexes before its own. Measured on the PR #297 profile: 100 % of the `regex_automata` samples are `AppRouting::call → ResourceDef::capture_match_info`, 21–52 % of a request's CPU on the arms registered late (npm, openvsx, jetbrains, composer), 3 % on those registered early (helm, devfile). Fix: one `scope("")` per registry kind, guarded by the kind as `is_helm`/`is_devfile` already are (`utoipa_actix_web::scope` passes `.guard()` through and keeps the OpenAPI paths), each keeping its routes' relative order; the multi-kind handlers (`get_version`/`get_packument` for npm and cargo, the forge routes, openvsx/vscode) registered in each of their kinds' scopes, and a 404 default service per scope so a wrong-kind path does not reach the SPA fallback. `protocol_conformance.rs`, `authz_matrix.rs` and `profile_route_coverage` are the safety net. Switching to axum/matchit would also fix it but means rewriting 384 handlers, the extractors and the utoipa wiring for the same gain
-
 ---
 
 ## Artifact integrity & security

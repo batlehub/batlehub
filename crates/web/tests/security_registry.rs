@@ -93,6 +93,9 @@ struct FakeOsv {
     advisory_db: std::sync::atomic::AtomicBool,
     rate_limited: Mutex<bool>,
     open_for: Mutex<Option<Duration>>,
+    /// Off: this fake does not cover the registry's kind, as osv does not
+    /// cover deb or terraform.
+    uncovered: std::sync::atomic::AtomicBool,
 }
 
 impl FakeOsv {
@@ -105,6 +108,7 @@ impl FakeOsv {
             advisory_db: std::sync::atomic::AtomicBool::new(false),
             rate_limited: Mutex::new(false),
             open_for: Mutex::new(None),
+            uncovered: std::sync::atomic::AtomicBool::new(false),
         })
     }
     fn vuln(&self, version: &str, severity: Severity) {
@@ -143,7 +147,7 @@ impl ArtifactScanner for FakeOsv {
         "osv"
     }
     fn supports(&self, _: RegistryKind) -> bool {
-        true
+        !self.uncovered.load(Ordering::SeqCst)
     }
     fn needs_artifact(&self) -> bool {
         true
@@ -786,6 +790,31 @@ async fn an_undated_version_is_held_open_ended() {
     assert_eq!(code, 403, "{body}");
     assert!(body.contains("TIMESTAMP_MISSING"), "{body}");
     assert!(!body.contains("available "), "no clock to wait on: {body}");
+}
+
+/// A required scanner that does not cover the kind counts as answered: it
+/// used to leave every version `SCAN_PENDING` for good (gate_levels.sh on
+/// deb, terraform, the marketplaces…), `mode = "warn"` included.
+#[actix_web::test]
+async fn a_required_scanner_that_does_not_cover_the_kind_does_not_hold_for_good() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.uncovered.store(true, Ordering::SeqCst);
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(body.contains("SCAN_PENDING"), "{body}");
+    lab.worker.run_once().await.unwrap();
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(lab.osv.scans.load(Ordering::SeqCst), 0, "never run");
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.scanners_done, vec!["block_list", "osv"]);
 }
 
 /// A registry without `[security]` is exactly as it was.

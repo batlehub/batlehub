@@ -199,6 +199,11 @@ pub struct DatabaseConfig {
     /// connection of the pool, and the cache stays off behind such a pooler.
     #[serde(default)]
     pub listen_url: Option<String>,
+    /// The in-process read cache of blocks, flags, visibility, tokens, user
+    /// blocks and dedup mappings. `false` reads every one from the database
+    /// on every request, and no listener is started.
+    #[serde(default = "super::registry::default_true")]
+    pub read_cache: bool,
 }
 
 pub(super) fn default_max_connections() -> u32 {

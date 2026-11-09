@@ -29,16 +29,12 @@ from pathlib import Path
 
 LEVELS = ["none", "min", "medium", "high", "max"]
 
-# Kinds the default scanner (osv) does not cover (OsvArtifactScanner::supports),
-# plus devfile, whose mock versions are undated: with `required_scanners =
-# ["osv"]` every version of those is held SCAN_PENDING for good — the worker
-# never runs a scanner on a kind it does not support, and an undated version
-# never matures — so they get no security profile here. That is a product
-# finding, not a harness choice: see ROADMAP "Database load — known debt".
-NO_SECURITY = {
-    "deb", "rpm", "pacman", "jetbrains", "generic", "nodedist", "sdkman",
-    "jetbrains-marketplace", "openvsx", "vscode-marketplace", "terraform", "devfile",
-}
+# devfile's mock versions are undated and stayed held in the measurement,
+# so a security profile there would measure the hold, not the
+# gate. (The kinds osv does not cover at all used to be listed here too: a
+# required scanner that cannot cover a kind held every version for good.
+# Fixed in PR #297, `scan_worker::run_job` now counts it as answered.)
+NO_SECURITY = {"devfile"}
 
 AGE = """[[registries.rules]]
 kind = "release_age_gate"

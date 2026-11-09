@@ -264,8 +264,11 @@ pub fn spawn_invalidation_listener(pool: sqlx::PgPool, listen_url: Option<String
     });
 }
 
-/// How often the listener proves notifications still reach it.
-const HEARTBEAT: Duration = Duration::from_secs(60);
+/// How often the listener proves notifications still reach it. A listener
+/// whose connection dies silently (no RST: a partition, a pooler restart)
+/// keeps serving for at most two of these, so this is the bound on a stale
+/// answer: 20 s, for one `pg_notify` per replica every 10 s.
+const HEARTBEAT: Duration = Duration::from_secs(10);
 
 #[cfg(feature = "db-postgres")]
 async fn listen(pool: &sqlx::PgPool, listen_url: Option<&str>) -> Result<(), sqlx::Error> {

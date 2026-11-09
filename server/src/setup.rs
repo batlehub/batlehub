@@ -692,10 +692,43 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
             (name, named)
         })
         .collect();
+    warn_uncovered_required(config, &out);
     Ok(BuiltScanners {
         scanners: out,
         enrichers,
     })
+}
+
+/// A required scanner that does not cover the registry's kind can never
+/// answer there; the worker counts it as answered (`scan_worker::run_job`),
+/// so the profile is judged by the others. Said once at startup, since the
+/// operator asked for a scan this kind does not get.
+fn warn_uncovered_required(
+    config: &batlehub_config::schema::AppConfig,
+    scanners: &HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>>,
+) {
+    for reg in &config.registries {
+        let Some(sec) = reg.security.as_ref() else {
+            continue;
+        };
+        let Ok(kind) = reg
+            .registry_type
+            .parse::<batlehub_core::entities::RegistryKind>()
+        else {
+            continue;
+        };
+        for name in &sec.required_scanners {
+            if scanners.get(name).is_some_and(|s| !s.supports(kind)) {
+                tracing::warn!(
+                    registry = %reg.name,
+                    kind = %kind.as_str(),
+                    scanner = %name,
+                    "security.required_scanners names a scanner that does not cover this kind; \
+                     it is counted as answered and versions are judged by the other scanners only"
+                );
+            }
+        }
+    }
 }
 
 // ── The audit trail (RFC 0036 §6.3–6.4) ──────────────────────────────────────

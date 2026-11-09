@@ -389,10 +389,11 @@ def run(base, log, budget_path, update):
 
 # An idle scan worker, per minute: one lease per 16 s poll once the backoff
 # has ramped (4), and a heartbeat, a queue count and an exhausted sweep every
-# 30 s (6). The worker it replaced polled every 2 s with five statements — 150
-# a minute. A fixed ceiling rather than a budget entry: the count depends on
-# where the window falls against the two clocks, by a statement or two.
-IDLE_CEILING = 14
+# 30 s (6), plus the read cache's heartbeat every 10 s (6). The worker it
+# replaced polled every 2 s with five statements — 150 a minute. A fixed
+# ceiling rather than a budget entry: the count depends on where the window
+# falls against the clocks, by a statement or two.
+IDLE_CEILING = 20
 IDLE_WARMUP, IDLE_WINDOW = 40, 60
 
 

@@ -158,6 +158,21 @@ Sans `listen_url`, le listener occupe une connexion du pool. `batlehub_read_cach
 (1 ou 0) indique si le cache est actif ; `batlehub_read_cache_invalidations_total` compte
 les notifications reçues.
 
+Un listener dont la connexion meurt sans reset (une partition réseau) est repéré par son
+heartbeat, envoyé toutes les 10 s : une réponse peut alors être périmée 20 s au plus, et
+chaque entrée est de toute façon abandonnée au bout de 5 minutes. Une écriture faite *par* un
+réplica vide la copie de ce réplica au commit, sans attendre la notification.
+
+Le cache est actif par défaut, y compris avec un seul réplica : le scan worker
+(`--roles worker`), un autre réplica ou une requête SQL d'un opérateur écrivent les mêmes
+lignes, et seule la notification en informe ce processus. Pour le couper — chaque lecture va
+à la base, et aucun listener n'est démarré :
+
+```toml
+[database]
+read_cache = false
+```
+
 ### CORS {#config-cors}
 
 Depuis la 1.1.0, un `cors_allowed_origins` non défini signifie **même origine

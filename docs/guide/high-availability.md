@@ -135,6 +135,21 @@ Without `listen_url` the listener holds one connection of the pool. `batlehub_re
 (1 or 0) says whether the cache is on; `batlehub_read_cache_invalidations_total` counts the
 notifications received.
 
+A listener whose connection dies without a reset (a network partition) is noticed by its
+heartbeat, sent every 10 s: an answer can be stale for at most 20 s in that case, and every
+entry is dropped after 5 minutes regardless. A write made *through* a replica clears that
+replica's own copy at commit, without waiting for the notification.
+
+The cache is on by default, also with a single replica: the scan worker
+(`--roles worker`), another replica or an operator's SQL writes the same rows, and only the
+notification tells this process. To turn it off — every read goes to the database, and no
+listener is started:
+
+```toml
+[database]
+read_cache = false
+```
+
 ### CORS {#config-cors}
 
 Since 1.1.0 an unset `cors_allowed_origins` means **same-origin only**. If BatleHub serves the

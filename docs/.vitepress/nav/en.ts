@@ -318,6 +318,10 @@ export const sidebar = {
           text: "TD-0003 — The container build time",
           link: "/techdebt/0003-container-build-time",
         },
+        {
+          text: "TD-0004 — Routing, the audit write, the pool",
+          link: "/techdebt/0004-request-routing-and-db-writes",
+        },
       ],
     },
   ],

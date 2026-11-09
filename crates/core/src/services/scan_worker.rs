@@ -350,6 +350,16 @@ impl ScanWorker {
             return Ok(JobOutcome::Done);
         };
         let package = self.dated_metadata(job).await;
+        // A required scanner that does not cover this kind can never answer
+        // here: left out of `done`, it held every version SCAN_PENDING for
+        // good (an undated one never matures). It counts as answered, with no
+        // findings; server startup warns about such a profile.
+        let uncovered: Vec<String> = scanners
+            .iter()
+            .filter(|s| !s.supports(kind))
+            .map(|s| s.name().to_owned())
+            .filter(|n| policy.required_scanners.contains(n))
+            .collect();
         let mut applicable: Vec<Arc<dyn ArtifactScanner>> =
             scanners.into_iter().filter(|s| s.supports(kind)).collect();
         // Advisory databases first: a transient error from one stops the job
@@ -383,6 +393,11 @@ impl ScanWorker {
             }
         }
         self.enrich(job, &policy, &mut findings, &mut done).await;
+        for n in uncovered {
+            if !done.contains(&n) {
+                done.push(n);
+            }
+        }
         self.record(job, &package, &policy, findings, done).await?;
         Ok(JobOutcome::Done)
     }
