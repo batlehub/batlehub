@@ -28,6 +28,32 @@ fn separator_of(r: &sqlx::postgres::PgRow) -> char {
 }
 
 impl PgTeamNamespaceStore {
+    async fn get_visibility_uncached(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Visibility, CoreError> {
+        let row = sqlx::query(
+            "SELECT visibility FROM local_packages \
+             WHERE registry = $1 AND name = $2 AND status = 'published' \
+             LIMIT 1",
+        )
+        .bind(registry)
+        .bind(package)
+        .fetch_optional(&self.pool)
+        .await
+        .db_err()?;
+
+        match row {
+            None => Ok(Visibility::Public),
+            Some(r) => {
+                let s: String = r.get("visibility");
+                Visibility::from_str(&s)
+                    .map_err(|e| CoreError::Database(format!("invalid visibility in db: {e}")))
+            }
+        }
+    }
+
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -144,6 +170,7 @@ impl TeamNamespacePort for PgTeamNamespaceStore {
         package: &str,
         vis: Visibility,
     ) -> Result<(), CoreError> {
+        let _clear = crate::db::read_cache::CACHES.visibility.clear_after();
         let result = sqlx::query(
             "UPDATE local_packages SET visibility = $3 \
              WHERE registry = $1 AND name = $2",
@@ -165,24 +192,49 @@ impl TeamNamespacePort for PgTeamNamespaceStore {
     }
 
     async fn get_visibility(&self, registry: &str, package: &str) -> Result<Visibility, CoreError> {
-        let row = sqlx::query(
-            "SELECT visibility FROM local_packages \
-             WHERE registry = $1 AND name = $2 AND status = 'published' \
-             LIMIT 1",
-        )
-        .bind(registry)
-        .bind(package)
-        .fetch_optional(&self.pool)
-        .await
-        .db_err()?;
+        crate::db::read_cache::CACHES
+            .visibility
+            .get_or_try(
+                (registry.to_owned(), package.to_owned()),
+                self.get_visibility_uncached(registry, package),
+            )
+            .await
+    }
 
-        match row {
-            None => Ok(Visibility::Public),
-            Some(r) => {
-                let s: String = r.get("visibility");
-                Visibility::from_str(&s)
-                    .map_err(|e| CoreError::Database(format!("invalid visibility in db: {e}")))
-            }
+    async fn prefetch_visibility(&self, packages: &[(String, String)]) {
+        let c = &crate::db::read_cache::CACHES.visibility;
+        let missing = c.missing(packages);
+        if missing.is_empty() {
+            return;
+        }
+        let ticket = c.ticket();
+        let (regs, names): (Vec<&str>, Vec<&str>) = missing
+            .iter()
+            .map(|(r, n)| (r.as_str(), n.as_str()))
+            .unzip();
+        let rows = sqlx::query(
+            "SELECT DISTINCT ON (registry, name) registry, name, visibility FROM local_packages \
+             WHERE (registry, name) IN (SELECT * FROM UNNEST($1::text[], $2::text[])) \
+               AND status = 'published'",
+        )
+        .bind(&regs)
+        .bind(&names)
+        .fetch_all(&self.pool)
+        .await;
+        let Ok(rows) = rows else { return };
+        let mut found: std::collections::HashMap<(String, String), Visibility> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let Ok(v) = Visibility::from_str(&r.get::<String, _>("visibility")) else {
+                // Unparseable: leave it to the single read, which reports it.
+                return;
+            };
+            found.insert((r.get("registry"), r.get("name")), v);
+        }
+        for k in missing {
+            // No published row is `Public`, as `get_visibility` answers.
+            let v = found.get(k).copied().unwrap_or(Visibility::Public);
+            c.put(ticket, k.clone(), v);
         }
     }
 

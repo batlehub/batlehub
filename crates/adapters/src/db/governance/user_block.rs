@@ -52,6 +52,7 @@ impl UserBlockRepository for PgUserBlockRepository {
         blocked_by: &str,
         reason: Option<&str>,
     ) -> Result<(), CoreError> {
+        let _clear = crate::db::read_cache::CACHES.user_blocks.clear_after();
         sqlx::query(
             "INSERT INTO user_blocks (user_id, blocked_by, reason) VALUES ($1, $2, $3) \
              ON CONFLICT (user_id) DO UPDATE \
@@ -69,6 +70,7 @@ impl UserBlockRepository for PgUserBlockRepository {
     }
 
     async fn unblock(&self, user_id: &str) -> Result<(), CoreError> {
+        let _clear = crate::db::read_cache::CACHES.user_blocks.clear_after();
         sqlx::query("DELETE FROM user_blocks WHERE user_id = $1")
             .bind(user_id)
             .execute(&self.pool)
@@ -78,13 +80,16 @@ impl UserBlockRepository for PgUserBlockRepository {
     }
 
     async fn is_blocked(&self, user_id: &str) -> Result<bool, CoreError> {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_blocks WHERE user_id = $1)")
-                .bind(user_id)
-                .fetch_one(&self.pool)
-                .await
-                .db_err()?;
-        Ok(exists)
+        crate::db::read_cache::CACHES
+            .user_blocks
+            .get_or_try(user_id.to_owned(), async {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_blocks WHERE user_id = $1)")
+                    .bind(user_id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .db_err()
+            })
+            .await
     }
 }
 

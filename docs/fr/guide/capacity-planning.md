@@ -61,6 +61,20 @@ artefacts en cache. Les pics de CPU surviennent lors de :
 
 Recommandé : **2 à 4 vCPU** pour la plupart des déploiements.
 
+## Ce que coûtent les gates de sécurité par requête {#gate-cost}
+
+Mesuré avec `perf/scripts/gate_levels.sh` (2026-11-09, build release, upstream simulé, 50 req/s par forme de requête) : la latence médiane de huit requêtes de téléchargement et de métadonnées, à cinq niveaux de contrôle. Chaque niveau ajoute des règles à tous les registres, toutes réglées pour *laisser passer* le trafic : le chiffre est le coût de l'évaluation des gates sur une requête acceptée.
+
+| Niveau | Règles | Latence médiane ajoutée | Premier téléchargement d'une nouvelle version |
+| --- | --- | --- | --- |
+| aucun | — | — (≈ 5 ms par téléchargement, 1,3 ms par packument) | servi tout de suite |
+| min | `release_age_gate` | +0,0 à +0,2 ms | servi tout de suite (s'il est assez ancien) |
+| moyen | + `cve_gate` | +0,0 à +0,4 ms | servi tout de suite |
+| élevé | `[registries.security]` (osv) + `cve_gate` | +0,3 à +0,65 ms | **retenu jusqu'à la réponse du scan : ~9 s** |
+| max | élevé + `license_gate`, `version_gate`, `require_signed_release`, SBOM | +0,2 à +0,75 ms | **retenu jusqu'à la réponse du scan : ~10 s** |
+
+D'une mesure à l'autre, un même niveau varie de ±0,15 ms au plus. Le coût par requête de chaque niveau reste sous la milliseconde. Ce qu'un niveau coûte vraiment, c'est la **retenue** : un profil `[registries.security]` ne sert une version qu'une fois que ses scanners requis ont répondu (ici, OSV par le réseau plus le tour de 2 secondes du worker), et une `release_age_gate` ou `security.min_age_secs` retient une version plus jeune que son âge, ce qui se compte en heures ou en jours, par construction. Prévoyez la retenue, pas le processeur.
+
 ## Base de données (PostgreSQL)
 
 - **Connexions :** le `max_connections = 10` par défaut convient en dessous de 50

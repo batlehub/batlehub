@@ -9,57 +9,57 @@
   },
   "proxy-tarball-anon": {
     "cold": 12,
-    "warm": 5
+    "warm": 2
   },
   "proxy-packument-static-token": {
     "cold": 2,
-    "warm": 2
+    "warm": 1
   },
   "proxy-packument-pat": {
     "cold": 4,
-    "warm": 3
+    "warm": 2
   },
   "proxy-tarball-pat": {
-    "cold": 7,
-    "warm": 7
-  },
-  "api-pullability": {
-    "cold": 4,
-    "warm": 4
-  },
-  "api-pullability-batch": {
-    "cold": 200,
-    "warm": 200
-  },
-  "local-publish": {
-    "cold": 18,
-    "warm": 15
-  },
-  "local-packument": {
-    "cold": 6,
-    "warm": 6
-  },
-  "local-tarball": {
-    "cold": 7,
-    "warm": 7
-  },
-  "api-explore-list": {
-    "cold": 3,
-    "warm": 1
-  },
-  "api-explore-detail": {
-    "cold": 7,
-    "warm": 7
-  },
-  "api-packages-admin": {
-    "cold": 3,
-    "warm": 3
-  },
-  "api-me": {
     "cold": 1,
     "warm": 1
   },
+  "api-pullability": {
+    "cold": 1,
+    "warm": 0
+  },
+  "api-pullability-batch": {
+    "cold": 1,
+    "warm": 0
+  },
+  "local-publish": {
+    "cold": 17,
+    "warm": 14
+  },
+  "local-packument": {
+    "cold": 5,
+    "warm": 2
+  },
+  "local-tarball": {
+    "cold": 4,
+    "warm": 2
+  },
+  "api-explore-list": {
+    "cold": 2,
+    "warm": 0
+  },
+  "api-explore-detail": {
+    "cold": 6,
+    "warm": 6
+  },
+  "api-packages-admin": {
+    "cold": 2,
+    "warm": 2
+  },
+  "api-me": {
+    "cold": 0,
+    "warm": 0
+  },
   "seq_scans": {
-    "package_statuses": "the admin package list's total (GET /api/v1/packages): unfiltered it counts every row by definition, and its ILIKE '%\u2026%' name filter cannot use a b-tree \u2014 admin-only, not a client path"
+    "package_statuses": "the admin package list's total (GET /api/v1/packages): unfiltered it counts every row by definition, and its ILIKE '%…%' name filter cannot use a b-tree — admin-only, not a client path"
   }
 }

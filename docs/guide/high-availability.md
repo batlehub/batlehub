@@ -111,6 +111,30 @@ url             = "postgresql://batlehub:changeme@postgres:5432/batlehub"
 max_connections = 5   # recommended per replica when using a connection pooler
 ```
 
+#### The read cache and `LISTEN` {#config-db-listen}
+
+Each replica keeps the reads every download repeats — the package's block, its flags, its
+visibility, the presented token, the caller's user block, where the artifact is stored — in
+memory, and Postgres tells every replica when one of them changes (`LISTEN/NOTIFY`, fed by
+triggers). A block or a revoked token therefore applies on every replica within a notification
+round trip, not after a timeout.
+
+The cache turns on only once the replica has seen a notification it sent itself come back, and
+turns off as soon as one does not. **Behind a transaction-mode pooler** (PgBouncer's
+`pool_mode = transaction`), notifications never reach the listener: the cache stays off,
+every read goes to the database as before, and the log says why once. To keep the cache,
+give the listener a direct or session-mode connection:
+
+```toml
+[database]
+url        = "postgresql://batlehub:changeme@pgbouncer:6432/batlehub"
+listen_url = "postgresql://batlehub:changeme@postgres:5432/batlehub"  # direct, for LISTEN only
+```
+
+Without `listen_url` the listener holds one connection of the pool. `batlehub_read_cache_live`
+(1 or 0) says whether the cache is on; `batlehub_read_cache_invalidations_total` counts the
+notifications received.
+
 ### CORS {#config-cors}
 
 Since 1.1.0 an unset `cors_allowed_origins` means **same-origin only**. If BatleHub serves the

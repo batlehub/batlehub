@@ -168,6 +168,11 @@ impl StorageRouter {
         // Keep the legacy artifact_storage record for routing and size queries.
         self.record_backend(target.key, backend_name, target.size)
             .await;
+        // Committed: a re-pointed key must not be read from this replica's
+        // cache before its own notification arrives.
+        crate::db::read_cache::CACHES
+            .dedup
+            .forget(&target.key.to_owned());
 
         Ok(())
     }
@@ -497,6 +502,7 @@ impl StorageBackend for StorageRouter {
                 return Ok(artifact);
             }
             // Physical blob missing (possible race during first write); fall through.
+            crate::db::read_cache::CACHES.dedup.forget(&key.to_owned());
         }
 
         // Legacy path: artifact was stored before dedup was enabled.
@@ -554,6 +560,7 @@ impl StorageBackend for StorageRouter {
             .inspect_err(
                 |e| tracing::warn!(error = %e, key, "failed to delete artifact_storage record"),
             );
+        crate::db::read_cache::CACHES.dedup.forget(&key.to_owned());
 
         Ok(existed)
     }

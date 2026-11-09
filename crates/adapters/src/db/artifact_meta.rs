@@ -10,11 +10,43 @@ use batlehub_core::{
 
 pub struct PgArtifactMetaRepository {
     pool: PgPool,
+    /// When this process last wrote each key's `last_accessed_at`: the
+    /// statement's own one-minute guard still cost a round trip per download.
+    /// Process-local like `UserTokenAuthProvider::last_recorded`; with several
+    /// replicas each writes at most once a minute per key.
+    touched: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
+
+/// Matches the statement's `INTERVAL '1 minute'`.
+const TOUCH_THROTTLE: std::time::Duration = std::time::Duration::from_secs(60);
+// shortcut: cleared wholesale past this size; eviction LRU-reads `last_accessed_at` at minute grain anyway.
+const TOUCH_CAP: usize = 100_000;
 
 impl PgArtifactMetaRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            touched: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Claims the key's write slot as it answers.
+    fn should_touch(&self, key: &str) -> bool {
+        let Ok(mut seen) = self.touched.lock() else {
+            return true;
+        };
+        let now = std::time::Instant::now();
+        if seen
+            .get(key)
+            .is_some_and(|at| now.duration_since(*at) < TOUCH_THROTTLE)
+        {
+            return false;
+        }
+        if seen.len() >= TOUCH_CAP {
+            seen.clear();
+        }
+        seen.insert(key.to_owned(), now);
+        true
     }
 }
 
@@ -59,6 +91,9 @@ impl ArtifactCacheMeta for PgArtifactMetaRepository {
     /// and a hot artifact rewrote its row — a dead tuple and a WAL record —
     /// once per download for an LRU that needs no finer grain than that.
     async fn touch_artifact(&self, key: &str) -> Result<(), CoreError> {
+        if !self.should_touch(key) {
+            return Ok(());
+        }
         sqlx::query(
             "UPDATE artifact_cache_meta SET last_accessed_at = NOW() \
              WHERE artifact_key = $1 \

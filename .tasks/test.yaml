@@ -117,6 +117,16 @@ tasks:
         vars:
           TEST: pg_scan_queue
 
+  test:pg-read-cache:
+    desc: Run the read-cache invalidation integration test — migration 066's triggers and the LISTEN loop (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_read_cache
+      - task: pg
+        vars:
+          TEST: pg_read_cache_undelivered
+
   test:scripts:
     desc: Run the gate scripts' tests (.github/scripts/tests, RFC 0041 tier 4) — the scripts-test.yaml job
     cmds:

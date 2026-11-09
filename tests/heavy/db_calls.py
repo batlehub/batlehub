@@ -304,8 +304,20 @@ def metrics_seen(base):
     return re.findall(r'batlehub_db_statements_per_request_count\{route="([^"]*)"\}', text)
 
 
+def wait_read_cache_live(base):
+    """The counts assume the read cache serves (db/read_cache.rs): before its
+    listener connects every read bypasses it, and a cold count would be high."""
+    for _ in range(60):
+        with urllib.request.urlopen(base + "/metrics", timeout=30) as r:
+            if re.search(r"^batlehub_read_cache_live 1\b", r.read().decode(), re.M):
+                return
+        time.sleep(0.5)
+    sys.exit("batlehub_read_cache_live never reached 1: the read-cache listener did not connect")
+
+
 def run(base, log, budget_path, update):
     run_id = os.environ["HEAVY_RUN"]
+    wait_read_cache_live(base)
     budget = json.load(open(budget_path)) if os.path.exists(budget_path) else {}
     measured, failures, slack, statements = {}, [], [], set()
     for name, factory, expect in scenarios(run_id):

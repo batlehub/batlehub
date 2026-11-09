@@ -150,6 +150,20 @@ refused, `mode = "warn"` included. See
 
 ### Added
 
+- **A read cache for the per-download lookups**, kept coherent across replicas
+  by Postgres: migration `066` adds triggers that `NOTIFY` a change to a
+  block, a flag, a visibility, a token, a user block or a dedup mapping, and
+  each replica `LISTEN`s and drops what changed. A cached download now costs
+  one statement instead of five to seven, and `POST
+  /api/v1/packages/access/batch` one per kind of read instead of four per item
+  (200 for 50 items). The cache is on only while the listener has seen its own
+  heartbeat delivered; behind a transaction-mode pooler set the new
+  `[database] listen_url` to a direct connection, or the cache stays off
+  (see *High availability*). Gauges `batlehub_read_cache_live`, counter
+  `batlehub_read_cache_invalidations_total`. Without `listen_url` the listener
+  holds one connection of the pool.
+- `perf/scripts/gate_levels.sh`: what each level of security gating costs a
+  request, on the profile harness.
 - Reason codes `KNOWN_MALICIOUS` and `UNRECOGNISED`, both always refused, with
   their sections on the refusals page. This release never writes either.
 - `batlehub_scan_jobs_deferred` gauge; `ScannerError` classes `rate_limited`,

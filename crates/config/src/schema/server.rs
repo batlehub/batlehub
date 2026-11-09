@@ -193,6 +193,12 @@ pub struct DatabaseConfig {
     /// How long to wait for a connection to become available before erroring out.
     #[serde(default = "default_acquire_timeout_secs")]
     pub acquire_timeout_secs: u64,
+    /// A direct (session) connection for the read cache's `LISTEN`, when
+    /// `url` goes through a transaction-mode pooler such as PgBouncer, which
+    /// does not deliver notifications. Absent, the listener holds one
+    /// connection of the pool, and the cache stays off behind such a pooler.
+    #[serde(default)]
+    pub listen_url: Option<String>,
 }
 
 pub(super) fn default_max_connections() -> u32 {

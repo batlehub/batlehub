@@ -83,19 +83,22 @@ impl UserTokenRepository for PgPackageRepository {
     }
 
     async fn find_by_hash(&self, token_hash: &str) -> Result<Option<UserToken>, CoreError> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, last_used_ip, groups
-            FROM user_tokens
-            WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()
-            "#,
-        )
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
-        .await
-        .db_err()?;
-
-        row.as_ref().map(token_from_row).transpose()
+        // Only a live token is cached; an unknown hash always asks the
+        // database, so a token minted on another replica works at once.
+        // Revocation and expiry are re-checked on every hit.
+        let c = &crate::db::read_cache::CACHES.tokens;
+        if let Some(t) = c.get(&token_hash.to_owned()) {
+            if t.revoked_at.is_none() && t.expires_at > Utc::now() {
+                return Ok(Some(t));
+            }
+            c.forget(&token_hash.to_owned());
+        }
+        let ticket = c.ticket();
+        let found = self.find_by_hash_uncached(token_hash).await?;
+        if let Some(t) = &found {
+            c.put(ticket, token_hash.to_owned(), t.clone());
+        }
+        Ok(found)
     }
 
     /// Scoped to `(provider, user_id)`, not `user_id` alone: the same string
@@ -136,10 +139,15 @@ impl UserTokenRepository for PgPackageRepository {
         .execute(&self.pool)
         .await
         .db_err()?;
+        // The cached row's last_used_ip is what `token_new_source` compares.
+        crate::db::read_cache::CACHES
+            .tokens
+            .forget_where(|t| t.id == id);
         Ok(())
     }
 
     async fn revoke(&self, id: Uuid, owner: &TokenOwner) -> Result<bool, CoreError> {
+        let _clear = crate::db::read_cache::CACHES.tokens.clear_after();
         let result = sqlx::query(
             r#"
             UPDATE user_tokens
@@ -156,5 +164,26 @@ impl UserTokenRepository for PgPackageRepository {
         .db_err()?;
 
         Ok(result.is_some())
+    }
+}
+
+impl PgPackageRepository {
+    async fn find_by_hash_uncached(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<UserToken>, CoreError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, last_used_ip, groups
+            FROM user_tokens
+            WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .db_err()?;
+
+        row.as_ref().map(token_from_row).transpose()
     }
 }

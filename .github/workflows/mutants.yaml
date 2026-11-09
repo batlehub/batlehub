@@ -251,7 +251,9 @@ jobs:
           # merged onto, so main's own later changes are not the PR's.
           git diff HEAD^1 HEAD >"$RUNNER_TEMP/pr.diff"
           rc=0
-          bash "$run_sh" "$cm" "$cfg" "$GITHUB_WORKSPACE/mutants.out" --in-place --in-diff "$RUNNER_TEMP/pr.diff" || rc=$?
+          # 40 of the job's 60 minutes: setup and the report get the rest.
+          MUTANTS_PR_BUDGET=40 MUTANTS_PR_MAX=40 \
+            bash "$run_sh" "$cm" "$cfg" "$GITHUB_WORKSPACE/mutants.out" --in-place --in-diff "$RUNNER_TEMP/pr.diff" || rc=$?
           missed=$(cat "$GITHUB_WORKSPACE"/mutants.out/*/mutants.out/missed.txt 2>/dev/null || true)
           {
             echo "### Mutants on the changed tier-1 lines"

@@ -237,6 +237,18 @@ mod tests {
         );
     }
 
+    // Kills the mutant that gives a rated finding the unrated wording (M11's PR run).
+    #[tokio::test]
+    async fn a_rated_record_is_denied_by_its_own_severity() {
+        let repo = MemVulnRepo::with_id("cargo", "yaml", "0.3.0", Severity::High, "GHSA-xxxx");
+        let rule = CveGateRule::new(repo, Severity::High, vec![], true);
+        let reason = deny_reason(eval(&rule, &meta(), &identity(Role::Anonymous)).await);
+        assert_eq!(
+            reason,
+            "blocked: known high vulnerability GHSA-xxxx (minimum gated severity: high)"
+        );
+    }
+
     #[tokio::test]
     async fn an_unrated_record_is_allowed_with_unknown_severity_unknown() {
         let repo = MemVulnRepo::with_id("cargo", "yaml", "0.3.0", Severity::Unknown, "GO-2024-1");

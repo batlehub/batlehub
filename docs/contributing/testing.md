@@ -1253,8 +1253,14 @@ stopped.
   the job summary and a red night opens the `mutants-nightly` issue) and,
   on a pull request touching a tier-1 file, the mutants on its changed
   lines (`--in-diff`), with the binaries and the config from the base. The
-  pull request job reports until the nightly list is empty, then blocks a
-  new survivor.
+  pull request job fits in its hour: each mutant is tested by its own
+  package's suite (a `crates/core` mutant otherwise rebuilds every crate's
+  tests, about five minutes each — PR #297's 67 mutants were five hours), at
+  most 40 mutants spread by `--shard`, in a 40-minute budget whose remainder
+  is reported, not failed (`MUTANTS_PR_BUDGET`/`MUTANTS_PR_MAX` in
+  `mutants_run.sh`). A mutant only `crates/web`'s suites kill can read
+  MISSED there; the nightly runs the workspace. The pull request job
+  reports until the nightly list is empty, then blocks a new survivor.
 - **UI (tier 3)**: `pnpm run coverage` measures the whole of `ui/src` (minus
   the generated client, tests, `main.ts`, barrels and `.d.ts`), so a file
   nobody tests counts at 0 %; Vitest fails below 80 % on any of lines,

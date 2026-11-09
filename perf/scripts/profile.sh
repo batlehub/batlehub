@@ -22,6 +22,8 @@
 #   PROFILE_BUILD     release | debug (release; debug only smoke-tests the harness)
 #   PROFILE_BASELINE  a previous run's profile.json to compare with (none)
 #   PROFILE_OUT       output directory (perf/results/profile)
+#   PROFILE_LAYERS    config layers over perf/config.soak.toml, space-separated
+#                     (none; gate_levels.sh passes one per security level)
 #
 # Outputs, in $PROFILE_OUT:
 #   arms/<op>.folded        folded stacks — speedscope and inferno read them
@@ -100,7 +102,9 @@ curl -sf -o /dev/null "$SOAK_UPSTREAM_URL/health" \
 mkdir -p "$WORK/storage"
 export PROXY_CACHE__SERVER__PORT="$PORT" PROXY_CACHE__STORAGE__PATH="$WORK/storage"
 log "Starting BatleHub on $PORT"
-"./target/$TARGET_DIR/batlehub" --config perf/config.soak.toml >"$OUT/server.log" 2>&1 &
+LAYER_ARGS=()
+for layer in ${PROFILE_LAYERS:-}; do LAYER_ARGS+=(--config "$layer"); done
+"./target/$TARGET_DIR/batlehub" --config perf/config.soak.toml "${LAYER_ARGS[@]}" >"$OUT/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 120); do
   curl -sf -o /dev/null "$BASE/healthz" && break
@@ -113,9 +117,20 @@ curl -sf -o /dev/null -H "$AUTH" "$BASE/debug/routes" \
 # ── Pre-flight, which is also the seed ────────────────────────────────────────
 # The soak's: every arm once, against its declared statuses. An arm that 404s
 # would otherwise profile the 404 path and be reported as cheap.
+# PROFILE_PREFLIGHT_WAIT > 0 retries it that long: a [registries.security]
+# profile holds every version as SCAN_PENDING until the embedded worker has
+# scanned it, and how long that takes is itself the measurement
+# (preflight_wait_secs).
 log "Pre-flight: every arm, once"
-BATLEHUB_URL="$BASE" k6 run --quiet perf/k6/scenarios/11_soak_arms.js >"$WORK/arms.log" 2>&1 \
-  || { tail -40 "$WORK/arms.log" >&2; echo "ERROR: the pre-flight failed — fix the arm before profiling it" >&2; exit 1; }
+PREFLIGHT_START=$(date +%s)
+until BATLEHUB_URL="$BASE" k6 run --quiet perf/k6/scenarios/11_soak_arms.js >"$WORK/arms.log" 2>&1; do
+  if (( $(date +%s) - PREFLIGHT_START >= ${PROFILE_PREFLIGHT_WAIT:-0} )); then
+    grep -A1 "✗" "$WORK/arms.log" >&2; tail -40 "$WORK/arms.log" >&2
+    echo "ERROR: the pre-flight failed — fix the arm before profiling it" >&2; exit 1
+  fi
+  sleep 5
+done
+echo "$(( $(date +%s) - PREFLIGHT_START ))" >"$OUT/preflight_wait_secs"
 
 # ── One CPU window per arm ────────────────────────────────────────────────────
 # k6 runs one second longer on each side of the window, so the window sees

@@ -31,6 +31,37 @@ impl StorageRouter {
         &self,
         logical_key: &str,
     ) -> Result<Option<(String, Arc<dyn StorageBackend>)>, CoreError> {
+        let c = &crate::db::read_cache::CACHES.dedup;
+        let mapping = match c.get(&logical_key.to_owned()) {
+            Some(hit) => Some(hit),
+            None => {
+                let ticket = c.ticket();
+                let found = self.dedup_mapping_uncached(logical_key).await?;
+                // A miss is not cached: the first write of this key inserts
+                // rows no trigger reports.
+                if let Some(m) = &found {
+                    c.put(ticket, logical_key.to_owned(), m.clone());
+                }
+                found
+            }
+        };
+        let Some((content_key, backend_name)) = mapping else {
+            return Ok(None);
+        };
+        let backend = self
+            .backends
+            .get(&backend_name)
+            .cloned()
+            .or_else(|| self.backends.get(&self.default_name).cloned());
+
+        Ok(backend.map(|b| (content_key, b)))
+    }
+
+    /// `(content_key, backend_name)` for a logical key, from the database.
+    async fn dedup_mapping_uncached(
+        &self,
+        logical_key: &str,
+    ) -> Result<Option<(String, String)>, CoreError> {
         use sqlx::Row;
         let row = sqlx::query(
             r#"
@@ -57,13 +88,7 @@ impl StorageRouter {
         let backend_name: String = row
             .try_get("backend_name")
             .map_err(|e| CoreError::Storage(e.to_string()))?;
-        let backend = self
-            .backends
-            .get(&backend_name)
-            .cloned()
-            .or_else(|| self.backends.get(&self.default_name).cloned());
-
-        Ok(backend.map(|b| (content_key, b)))
+        Ok(Some((content_key, backend_name)))
     }
 
     pub(super) async fn record_backend(

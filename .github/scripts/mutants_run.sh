@@ -23,6 +23,43 @@ cm=$1 cfg=$2 out=$3
 shift 3
 mkdir -p "$out" # cargo-mutants does not create the parent of -o
 
+# PR mode (MUTANTS_PR_BUDGET=<minutes>): a pull request's changed lines in
+# the time a CI job has. Each mutant is tested by its own package's suite —
+# a crates/core mutant otherwise rebuilds every crate's tests, ~5 min each —
+# so a mutant only crates/web's suites kill reads MISSED here; the nightly
+# runs the workspace. At most MUTANTS_PR_MAX mutants (an even spread, by
+# --shard), and whatever the budget leaves unexamined is reported, not failed.
+if [ -n "${MUTANTS_PR_BUDGET:-}" ]; then
+  max=${MUTANTS_PR_MAX:-40}
+  n=$("$cm" mutants --config "$cfg" "$@" --list 2>/dev/null | grep -c . || true)
+  shard=()
+  if [ "$n" -gt "$max" ]; then
+    k=$(((n + max - 1) / max))
+    shard=(--shard "0/$k")
+    echo "::warning::$n mutants on the changed lines; examining 1 in $k (MUTANTS_PR_MAX=$max), the nightly covers the rest"
+  fi
+  echo "$n mutants on the changed lines"
+  rc=0
+  timeout --signal=INT --kill-after=60 "$((MUTANTS_PR_BUDGET * 60))" \
+    "$cm" mutants --config "$cfg" "$@" "${shard[@]}" --test-workspace=false -o "$out/pr" || rc=$?
+  missed=$(cat "$out"/pr/mutants.out/missed.txt 2>/dev/null || true)
+  if [ -n "$missed" ]; then
+    echo "MISSED — no test noticed these changes:"
+    printf '%s\n' "$missed"
+  fi
+  case $rc in
+    0 | 2 | 3) exit 0 ;;
+    124 | 130 | 137)
+      echo "::warning::the ${MUTANTS_PR_BUDGET}-minute budget ran out; the outcomes so far are reported"
+      exit 0
+      ;;
+    *)
+      echo "::error::cargo-mutants exited $rc (4 is a red baseline)"
+      exit 1
+      ;;
+  esac
+fi
+
 start=$(date +%s)
 if ! cargo test --workspace --locked >"$out/workspace-baseline.log" 2>&1; then
   tail -n 40 "$out/workspace-baseline.log"

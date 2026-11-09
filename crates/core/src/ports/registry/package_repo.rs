@@ -72,6 +72,11 @@ pub trait PackageRepository: Send + Sync {
         })
     }
 
+    /// Warm whatever cache backs [`Self::covering_block`] for many coordinates
+    /// at once, so a batch reads them in one statement. The default does
+    /// nothing: the batch then reads each coordinate on its own.
+    async fn prefetch_covering_blocks(&self, _pkgs: &[PackageId]) {}
+
     /// Every blocked version of one package, in no particular order.
     ///
     /// The bulk counterpart to [`Self::get_status`], for the version *listing*

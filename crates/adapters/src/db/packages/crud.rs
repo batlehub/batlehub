@@ -119,6 +119,70 @@ pub(super) async fn covering_block_impl(
     }))
 }
 
+/// [`covering_block_impl`] for many coordinates in one statement, into the
+/// read cache (`POST …/packages/access/batch`). Best effort: on an error, or
+/// with the cache not live, each coordinate is read on its own as before.
+pub(super) async fn prefetch_covering_blocks(pool: &PgPool, pkgs: &[PackageId]) {
+    let c = &crate::db::read_cache::CACHES.blocks;
+    let keys: Vec<crate::db::read_cache::BlockKey> = pkgs
+        .iter()
+        .map(|p| {
+            (
+                p.registry.clone(),
+                p.name.clone(),
+                p.version.clone(),
+                p.artifact.clone(),
+            )
+        })
+        .collect();
+    let missing = c.missing(&keys);
+    if missing.is_empty() {
+        return;
+    }
+    let ticket = c.ticket();
+    let mut cols: [Vec<Option<&str>>; 4] = Default::default();
+    for (r, n, v, a) in &missing {
+        cols[0].push(Some(r));
+        cols[1].push(Some(n));
+        cols[2].push(Some(v));
+        cols[3].push(a.as_deref());
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT q.i, b.block_reason, b.found
+        FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) WITH ORDINALITY
+             AS q(registry, name, version, artifact, i)
+        LEFT JOIN LATERAL (
+            SELECT block_reason, TRUE AS found
+            FROM package_statuses ps
+            WHERE ps.registry = q.registry AND ps.package_name = q.name
+              AND ps.package_version = q.version
+              AND (ps.package_artifact IS NOT DISTINCT FROM q.artifact OR ps.package_artifact IS NULL)
+              AND ps.status = 'blocked'
+            ORDER BY ps.package_artifact IS NULL
+            LIMIT 1
+        ) b ON TRUE
+        "#,
+    )
+    .bind(&cols[0])
+    .bind(&cols[1])
+    .bind(&cols[2])
+    .bind(&cols[3])
+    .fetch_all(pool)
+    .await;
+    let Ok(rows) = rows else { return };
+    for r in rows {
+        let i = r.get::<i64, _>("i") as usize - 1;
+        let reason = r.get::<Option<bool>, _>("found").map(|_| {
+            r.get::<Option<String>, _>("block_reason")
+                .unwrap_or_default()
+        });
+        if let Some(key) = missing.get(i) {
+            c.put(ticket, (*key).clone(), reason);
+        }
+    }
+}
+
 /// Every blocked version of one package.
 ///
 /// Deliberately not routed through `list_packages_impl`: that query LATERAL-joins
