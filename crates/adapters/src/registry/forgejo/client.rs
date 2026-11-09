@@ -169,7 +169,8 @@ impl ForgejoRegistryClient {
         use super::super::http_client::next_link;
         let mut url = format!(
             "{}/repos/{}/releases?limit=50",
-            self.api_base_url, owner_repo
+            self.api_base_url,
+            percent_encode_path(owner_repo)
         );
         let mut all = Vec::new();
         for page in 0..20 {
@@ -204,7 +205,9 @@ impl ForgejoRegistryClient {
     ) -> Result<FjRelease, CoreError> {
         let url = format!(
             "{}/repos/{}/releases/tags/{}",
-            self.api_base_url, owner_repo, tag
+            self.api_base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(tag)
         );
         let resp = self.api_get(&url).await?;
 
@@ -247,7 +250,11 @@ fn fj_release(release: FjRelease) -> ForgeRelease {
 #[async_trait]
 impl ForgeReleaseSource for ForgejoRegistryClient {
     async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
-        let url = format!("{}/repos/{}/releases", self.api_base_url, repo);
+        let url = format!(
+            "{}/repos/{}/releases",
+            self.api_base_url,
+            percent_encode_path(repo)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{repo} not found")));
@@ -280,7 +287,9 @@ impl ForgeRegistry for ForgejoRegistryClient {
     ) -> Result<ResolvedTarget, CoreError> {
         let tag_url = format!(
             "{}/repos/{}/tags/{}",
-            self.api_base_url, owner_repo, git_ref
+            self.api_base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(git_ref)
         );
         let resp = self.api_get(&tag_url).await?;
         if resp.status() != reqwest::StatusCode::NOT_FOUND {
@@ -300,7 +309,9 @@ impl ForgeRegistry for ForgejoRegistryClient {
 
         let branch_url = format!(
             "{}/repos/{}/branches/{}",
-            self.api_base_url, owner_repo, git_ref
+            self.api_base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(git_ref)
         );
         let resp = self.api_get(&branch_url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -331,7 +342,11 @@ impl ForgeRegistry for ForgejoRegistryClient {
     /// which is the same limitation the parity table records for its
     /// by-name endpoint.
     async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
-        let url = format!("{}/repos/{}/tags?limit=100", self.api_base_url, owner_repo);
+        let url = format!(
+            "{}/repos/{}/tags?limit=100",
+            self.api_base_url,
+            percent_encode_path(owner_repo)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{owner_repo} not found")));
@@ -366,7 +381,9 @@ impl ForgeRegistry for ForgejoRegistryClient {
     ) -> Result<ForgeProvenance, CoreError> {
         let url = format!(
             "{}/repos/{}/git/commits/{}",
-            self.api_base_url, owner_repo, sha
+            self.api_base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(sha)
         );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -401,7 +418,9 @@ impl ForgeRegistry for ForgejoRegistryClient {
     async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError> {
         let url = format!(
             "{}/repos/{}/git/commits/{}",
-            self.api_base_url, owner_repo, sha
+            self.api_base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(sha)
         );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -446,6 +465,10 @@ pub(super) fn static_artifact_url(
     owner_repo: &str,
     git_ref: &str,
 ) -> Option<String> {
+    // `?` / `#` survive `validate_path_safe`; unencoded they would cut the
+    // path short or inject a query on a request carrying the instance token.
+    let owner_repo = percent_encode_path(owner_repo);
+    let git_ref = percent_encode_path(git_ref);
     if artifact.starts_with("tarball/") {
         Some(format!("{base}/{owner_repo}/archive/{git_ref}.tar.gz"))
     } else if artifact == "zipball" {
@@ -487,7 +510,11 @@ impl RegistryClient for ForgejoRegistryClient {
         // instance root, and a listing fetched from it is `/repos/…` on the web
         // host — 404 on every Forgejo there is, which is what mise's `forgejo:`
         // backend got instead of a release list.
-        let url = format!("{}/repos/{}/releases?limit=50", self.api_base_url, package);
+        let url = format!(
+            "{}/repos/{}/releases?limit=50",
+            self.api_base_url,
+            percent_encode_path(package)
+        );
         fetch_release_listing(self.get(&url), kind, "forgejo", "Forgejo", package).await
     }
 
@@ -611,7 +638,9 @@ impl RegistryClient for ForgejoRegistryClient {
             None => {
                 let url = format!(
                     "{}/repos/{}/releases/tags/{}",
-                    self.api_base_url, owner_repo, git_ref
+                    self.api_base_url,
+                    percent_encode_path(owner_repo),
+                    percent_encode_path(git_ref)
                 );
                 let resp = self.api_get(&url).await?;
                 if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -1163,5 +1192,38 @@ mod forge_tests {
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+    }
+
+    /// `?` and `#` pass `validate_path_safe`; unencoded, `o/r?` would reach
+    /// `/repos/o/r` (another repo than the one authz checked) and `main?x=1`
+    /// would inject a query, both with the instance token.
+    #[tokio::test]
+    async fn query_and_fragment_chars_stay_inside_their_segment() {
+        let mut server = Server::new_async().await;
+        let t = server
+            .mock("GET", "/api/v1/repos/o/r%3F/tags/main%3Fx%3D1%23y")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let b = server
+            .mock("GET", "/api/v1/repos/o/r%3F/branches/main%3Fx%3D1%23y")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let err = client(&server)
+            .resolve_ref("o/r?", "main?x=1#y")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+        t.assert_async().await;
+        b.assert_async().await;
+
+        let url = static_artifact_url("tarball/x", "https://f.example", "o/r#", "main?x");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://f.example/o/r%23/archive/main%3Fx.tar.gz")
+        );
     }
 }

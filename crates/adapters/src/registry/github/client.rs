@@ -144,7 +144,11 @@ impl GithubRegistryClient {
         pkg: &PackageId,
         owner_repo: &str,
     ) -> Result<PackageMetadata, CoreError> {
-        let url = format!("{}/repos/{}/releases", self.base_url, owner_repo);
+        let url = format!(
+            "{}/repos/{}/releases",
+            self.base_url,
+            percent_encode_path(owner_repo)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{owner_repo} not found")));
@@ -274,7 +278,9 @@ impl GithubRegistryClient {
     async fn asset_by_id(&self, owner_repo: &str, asset_id: u64) -> Result<GhAsset, CoreError> {
         let url = format!(
             "{}/repos/{}/releases/assets/{}",
-            self.base_url, owner_repo, asset_id
+            self.base_url,
+            percent_encode_path(owner_repo),
+            asset_id
         );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -295,7 +301,9 @@ impl GithubRegistryClient {
     ) -> Result<FetchedArtifact, CoreError> {
         let url = format!(
             "{}/repos/{}/releases/tags/{}",
-            self.base_url, owner_repo, tag
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(tag)
         );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -315,7 +323,12 @@ impl GithubRegistryClient {
 
     /// The tag object behind an annotated tag: its target commit and tagger.
     async fn tag_object(&self, owner_repo: &str, sha: &str) -> Result<GhTagObject, CoreError> {
-        let url = format!("{}/repos/{}/git/tags/{}", self.base_url, owner_repo, sha);
+        let url = format!(
+            "{}/repos/{}/git/tags/{}",
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(sha)
+        );
         self.api_get(&url)
             .await?
             .error_for_status()
@@ -332,7 +345,9 @@ impl GithubRegistryClient {
     ) -> Result<GhRelease, CoreError> {
         let url = format!(
             "{}/repos/{}/releases/tags/{}",
-            self.base_url, owner_repo, tag
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(tag)
         );
         let resp = self.api_get(&url).await?;
 
@@ -375,7 +390,11 @@ fn gh_release(release: GhRelease) -> ForgeRelease {
 #[async_trait]
 impl ForgeReleaseSource for GithubRegistryClient {
     async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
-        let url = format!("{}/repos/{}/releases", self.base_url, repo);
+        let url = format!(
+            "{}/repos/{}/releases",
+            self.base_url,
+            percent_encode_path(repo)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{repo} not found")));
@@ -434,7 +453,9 @@ impl ForgeRegistry for GithubRegistryClient {
     ) -> Result<ResolvedTarget, CoreError> {
         let tag_url = format!(
             "{}/repos/{}/git/ref/tags/{}",
-            self.base_url, owner_repo, git_ref
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(git_ref)
         );
         let resp = self.api_get(&tag_url).await?;
         if resp.status() != reqwest::StatusCode::NOT_FOUND {
@@ -467,7 +488,9 @@ impl ForgeRegistry for GithubRegistryClient {
 
         let branch_url = format!(
             "{}/repos/{}/branches/{}",
-            self.base_url, owner_repo, git_ref
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(git_ref)
         );
         let resp = self.api_get(&branch_url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -497,7 +520,11 @@ impl ForgeRegistry for GithubRegistryClient {
     /// coordinate needs it, and paying two calls per tag to fill a listing
     /// would spend the whole rate-limit budget on a display.
     async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
-        let url = format!("{}/repos/{}/tags?per_page=100", self.base_url, owner_repo);
+        let url = format!(
+            "{}/repos/{}/tags?per_page=100",
+            self.base_url,
+            percent_encode_path(owner_repo)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{owner_repo} not found")));
@@ -541,7 +568,9 @@ impl ForgeRegistry for GithubRegistryClient {
             };
             let url = format!(
                 "{}/repos/{}/attestations/{}",
-                self.base_url, owner_repo, digest
+                self.base_url,
+                percent_encode_path(owner_repo),
+                digest
             );
             let resp = self.api_get(&url).await?;
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -561,7 +590,12 @@ impl ForgeRegistry for GithubRegistryClient {
                 }
             });
         }
-        let url = format!("{}/repos/{}/commits/{}", self.base_url, owner_repo, sha);
+        let url = format!(
+            "{}/repos/{}/commits/{}",
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(sha)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(ForgeProvenance::Missing);
@@ -578,7 +612,12 @@ impl ForgeRegistry for GithubRegistryClient {
     }
 
     async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError> {
-        let url = format!("{}/repos/{}/commits/{}", self.base_url, owner_repo, sha);
+        let url = format!(
+            "{}/repos/{}/commits/{}",
+            self.base_url,
+            percent_encode_path(owner_repo),
+            percent_encode_path(sha)
+        );
         let resp = self.api_get(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!(
@@ -665,6 +704,10 @@ pub(super) fn static_artifact_url(
     owner_repo: &str,
     git_ref: &str,
 ) -> Option<String> {
+    // `?` / `#` survive `validate_path_safe`; unencoded they would cut the
+    // path short or inject a query on a request carrying the operator's token.
+    let owner_repo = &percent_encode_path(owner_repo);
+    let git_ref = &percent_encode_path(git_ref);
     if artifact.starts_with("tarball/") {
         Some(format!(
             "{}/{}/archive/{}.tar.gz",
@@ -737,7 +780,11 @@ impl RegistryClient for GithubRegistryClient {
         package: &str,
         kind: DocumentKind,
     ) -> Result<VersionDocument, CoreError> {
-        let url = format!("{}/repos/{}/releases", self.base_url, package);
+        let url = format!(
+            "{}/repos/{}/releases",
+            self.base_url,
+            percent_encode_path(package)
+        );
         fetch_release_listing(self.get(&url), kind, "github", "GitHub", package).await
     }
 
@@ -905,7 +952,11 @@ impl RegistryClient for GithubRegistryClient {
     }
 
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
-        let mut url = format!("{}/repos/{}/releases?per_page=100", self.base_url, package);
+        let mut url = format!(
+            "{}/repos/{}/releases?per_page=100",
+            self.base_url,
+            percent_encode_path(package)
+        );
         let mut versions = Vec::new();
 
         for _ in 0..10 {
@@ -1536,5 +1587,90 @@ mod forge_tests {
         let err = c.resolve_ref("o/r", "v1").await.unwrap_err();
         assert!(err.to_string().contains("rate-limit budget"), "{err}");
         ref_mock.assert_async().await;
+    }
+
+    /// PR #304's regression on the GitHub client: `?` and `#` stay inside
+    /// their segment, so `o/r?` is not `/repos/o/r` (another repository than
+    /// the one authorization checked) and `main?x=1` injects no query, on a
+    /// request carrying the operator's token.
+    #[tokio::test]
+    async fn query_and_fragment_chars_stay_inside_their_segment() {
+        let mut server = Server::new_async().await;
+        let t = server
+            .mock("GET", "/repos/o/r%3F/git/ref/tags/main%3Fx%3D1%23y")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let b = server
+            .mock("GET", "/repos/o/r%3F/branches/main%3Fx%3D1%23y")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let err = client(&server)
+            .resolve_ref("o/r?", "main?x=1#y")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)), "{err}");
+        t.assert_async().await;
+        b.assert_async().await;
+
+        assert_eq!(
+            static_artifact_url("tarball/x", "https://gh", "https://raw", "o/r#", "main?x")
+                .as_deref(),
+            Some("https://gh/o/r%23/archive/main%3Fx.tar.gz")
+        );
+    }
+
+    /// What encoding changes for refs real repositories use. A changesets
+    /// monorepo tags `name@1.2.3`, and `@` is now `%40`: api.github.com,
+    /// github.com/…/archive and raw.githubusercontent.com all answer the
+    /// encoded form (checked against changesets/changesets'
+    /// `get-workspaces@1.0.11`, 2026-11-09). A `/` in a branch stays a `/`.
+    #[tokio::test]
+    async fn an_at_sign_tag_and_a_slashed_branch_build_the_urls_github_answers() {
+        let mut server = Server::new_async().await;
+        let m = server
+            .mock(
+                "GET",
+                "/repos/changesets/changesets/git/ref/tags/get-workspaces%401.0.11",
+            )
+            .with_status(200)
+            .with_body(format!(
+                r#"{{"object":{{"type":"commit","sha":"{COMMIT}"}}}}"#
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+        let r = client(&server)
+            .resolve_ref("changesets/changesets", "get-workspaces@1.0.11")
+            .await
+            .unwrap();
+        assert_eq!(r.sha, COMMIT);
+        m.assert_async().await;
+
+        assert_eq!(
+            static_artifact_url(
+                "tarball/x",
+                "https://gh",
+                "https://raw",
+                "o/r",
+                "get-workspaces@1.0.11"
+            )
+            .as_deref(),
+            Some("https://gh/o/r/archive/get-workspaces%401.0.11.tar.gz")
+        );
+        assert_eq!(
+            static_artifact_url(
+                "raw/a/b.txt",
+                "https://gh",
+                "https://raw",
+                "o/r",
+                "feature/x"
+            )
+            .as_deref(),
+            Some("https://raw/o/r/feature/x/a/b.txt")
+        );
     }
 }

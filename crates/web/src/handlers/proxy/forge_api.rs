@@ -63,6 +63,29 @@ pub struct ForgeBranchResponse {
     pub committer: Option<String>,
 }
 
+/// `owner` and `repo` as GitHub, Forgejo and GitLab spell them:
+/// `[A-Za-z0-9._-]`, never `.` or `..`. `validate_path_safe` lets `?`, `#`
+/// and `%` through (a branch may hold `#`), and a name holding one is not the
+/// name the forge is asked about: authorization ran on `org/secret?` while
+/// the forge answered for `org/secret` (inkdex VULN-SSRF, PR #304). The
+/// clients encode every segment now; this keeps the two names one name.
+fn validate_forge_repo(owner_repo: &str) -> Result<(), AppError> {
+    let ok = |seg: &str| {
+        !seg.is_empty()
+            && seg != "."
+            && seg != ".."
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    match owner_repo.split_once('/') {
+        Some((owner, repo)) if ok(owner) && ok(repo) => Ok(()),
+        _ => Err(AppError::bad_request(format!(
+            "'{owner_repo}' is not a repository name: owner and repo are letters, digits, '.', '_' and '-'"
+        ))),
+    }
+}
+
 /// The forge client for `registry`, once the family is enabled and the
 /// caller may read the repository.
 async fn forge_for(
@@ -73,6 +96,7 @@ async fn forge_for(
     family: ApiReadFamily,
 ) -> Result<Arc<dyn batlehub_core::ports::RegistryClient>, AppError> {
     batlehub_core::services::validate_package_name(owner_repo).map_err(AppError::from)?;
+    validate_forge_repo(owner_repo)?;
     let (client, enabled) = {
         let hot = svc.hot.read().await;
         (
