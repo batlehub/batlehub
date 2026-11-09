@@ -190,6 +190,7 @@ jobs:
         run: cat perf/results/perf-report.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Attach the report to the release
+        id: attach
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -198,6 +199,28 @@ jobs:
           files: |
             perf/results/perf-report.json
             perf/results/perf-report.md
+
+      # build.yaml's draft says "do not publish yet" between two markers; the
+      # report is attached, so the note goes. `tag_name` is sent with the body:
+      # a body-only PATCH of a draft detaches it from its tag.
+      - name: Clear the draft's "do not publish yet" note
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.attach.outputs.id }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .body > body.md
+          python3 - <<'PY'
+          import re
+          body = open("body.md").read()
+          open("body.md", "w").write(
+              re.sub(r"<!-- perf-pending -->.*?<!-- /perf-pending -->\n*", "", body, flags=re.S))
+          PY
+          jq -n --rawfile body body.md --arg tag "$TAG" '{body: $body, tag_name: $tag}' |
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --input - > /dev/null
+          echo "Removed the perf-pending note from the $TAG draft"
 
       # `always()`: the rows are most worth keeping when something went wrong
       # with the report built from them.

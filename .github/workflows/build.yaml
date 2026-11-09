@@ -101,7 +101,15 @@ jobs:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: "🚀 BatleHub ${{ needs.meta.outputs.tag }}"
           draft: true
+          # The note between the perf-pending markers is removed by
+          # perf-report.yaml once it has attached its report: publishing
+          # before that loses the report, since a published release is
+          # immutable and refuses the upload (v1.10.0 shipped without one).
           body: |
+            <!-- perf-pending -->
+            > ⏳ **Do not publish yet.** The *Performance report* run of this tag attaches `perf-report.json` and `perf-report.md` about 40 minutes after the tag, then removes this note. A published release is immutable and refuses them. If the note stays, that run failed: read it before publishing.
+            <!-- /perf-pending -->
+
             ## 🚀 BatleHub ${{ needs.meta.outputs.tag }}
 
             A fresh release just landed! ✨
