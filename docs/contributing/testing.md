@@ -1408,3 +1408,26 @@ The `.github` workflows start their own Postgres/RustFS/Redis service containers
 in YAML; the `task test:*` targets are the local-dev equivalents (Podman).
 `.forgejo/workflows/` handles image builds, Helm, the website, and updatecli —
 the Rust test matrix runs on the GitHub side.
+
+### The pull-request labels {#pr-labels}
+
+Five labels change what CI does on a pull request. Four of them *start* a
+workflow that nothing else runs on a pull request, and remove themselves when
+it finishes, so adding one again re-runs it. `full-test` is a condition, not
+a trigger (see the gate above).
+
+| Label | Workflow | What it runs | When to add it |
+| --- | --- | --- | --- |
+| `full-test` | `test.yaml`, `sonar.yaml` | the whole suite on a `dependabot/` branch, on the next push | a bump that could break a client: `actix-web`, `sqlx`, `aws-sdk-s3`, anything `CLAUDE.md`'s security constraints name |
+| `soak` | `soak.yaml` | both soak suites (§7-quater), about an hour | a streaming, caching or pooling path changed |
+| `profile` | `profile.yaml` | the CPU profile of every soak arm (`perf/scripts/profile.sh`), compared with the last `main` profile; report-only except for the route inventory | the request path or a per-request cost changed |
+| `breaking-point` | `breaking-point.yaml` | escalating load per backend until it breaks | a storage or cache backend, the request path, the pool or an allocator setting changed |
+| `image` | `pr-image.yaml` | `ghcr.io/<repo>:pr-<number>` (amd64 + arm64), Trivy-scanned, linked in a comment | someone has to run the branch outside CI |
+
+Each posts its result as one comment on the pull request, edited in place on
+a re-run. Add them **after** the push's `test.yaml` run is green, and one
+load suite at a time when you can: `soak`, `profile` and `breaking-point`
+measure a shared runner, and a red build makes their numbers moot. A label is
+the way in on a branch because a `workflow_dispatch`-only workflow does not
+exist until it has landed on `main`; once it has, the Actions tab's dispatch
+form does the same with every input exposed.

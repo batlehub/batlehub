@@ -946,8 +946,8 @@ points at.
   reports a slope) when a streaming, caching or pooling path changed, and
   `breaking-point.yaml` (minutes of saturating load per backend) when a
   storage or cache backend, the request path, the pool or an allocator setting
-  did. Run them from the Actions tab, or with a `breaking-point` label on the
-  pull request.
+  did. Run them from the Actions tab, or with the `soak` / `breaking-point`
+  label on the pull request ([the labels](./testing.md#pr-labels)).
 
 ### 13.4 Cutting it
 
