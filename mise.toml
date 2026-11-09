@@ -54,6 +54,14 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 # POSTMORTEM_VERSION, so the gate and the worker's scanner are one binary.
 "github:mlab-sh/postmortem" = "2.9.2"
 "github:mlab-sh/mlab-cli" = "1.2.0"
+# Mutation testing on tier 1 (RFC 0041 §6.4): `task mutants`, mutants.yaml.
+# Pinned, with its checksum in mise.lock; on a pull request the job installs it
+# from the base's pins and calls it by `mise where`, never through a shim.
+"github:sourcefrog/cargo-mutants" = "27.1.0"
+# yara-x's `yr`, the version and digest Containerfile.worker pins. The one test
+# that runs the real `yr` is what kills the mutants in yara.rs's matching; it
+# skips itself without one, and those mutants would survive.
+"github:VirusTotal/yara-x" = "1.20.0"
 uv = "latest"
 python = "latest"
 pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)

@@ -117,5 +117,20 @@ export function scenarios(): Scenario[] {
     out.push({ name: "toolchain-and-os-kinds-proxy", state: s });
   }
 
+  {
+    // cve_gate with the unrated-advisory level an operator lowers on a Go
+    // registry (RFC 0041 decision 22).
+    const s = defaultState();
+    s.registries = [
+      registry("goproxy", {
+        name: "go",
+        rule_cve_gate_enabled: true,
+        rule_cve_gate_block: true,
+        rule_cve_gate_unknown_severity: "medium",
+      }),
+    ];
+    out.push({ name: "goproxy-cve-gate-unknown-severity", state: s });
+  }
+
   return out;
 }

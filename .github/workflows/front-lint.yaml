@@ -2,33 +2,50 @@ name: Frontend Lint
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/**/*.ts"
-      - "ui/**/*.vue"
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "ui/.oxlintrc.json"
-      - "ui/.oxfmtrc.json"
-      - ".github/workflows/front-lint.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/**/*.ts"
-      - "ui/**/*.vue"
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "ui/.oxlintrc.json"
-      - "ui/.oxfmtrc.json"
-      - ".github/workflows/front-lint.yaml"
   schedule:
     - cron: "50 23 * * *"
   workflow_dispatch:
 permissions:
   contents: read
-  security-events: write
 jobs:
-  lint:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/**/*.ts
+            ui/**/*.vue
+            ui/package.json
+            ui/pnpm-lock.yaml
+            ui/.oxlintrc.json
+            ui/.oxfmtrc.json
+            .github/workflows/front-lint.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
+  lint:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # Only this job uploads SARIF; the gate and required jobs stay read-only.
+    permissions:
+      contents: read
+      security-events: write
     defaults:
       run:
         working-directory: ui
@@ -79,3 +96,22 @@ jobs:
       - name: Fail on lint errors
         if: steps.oxlint.outcome == 'failure' || steps.eslint.outcome == 'failure'
         run: exit 1
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: front-lint.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, lint]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

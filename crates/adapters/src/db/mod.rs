@@ -38,6 +38,8 @@ pub async fn timed_query<T>(
 #[cfg(feature = "db-postgres")]
 pub mod artifact_meta;
 
+pub mod read_cache;
+
 #[cfg(feature = "db-postgres")]
 pub mod readme;
 

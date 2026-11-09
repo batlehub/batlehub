@@ -1,0 +1,46 @@
+{
+  "root": "/work/cargo",
+  "ecosystems": [
+    "rust"
+  ],
+  "stats": {
+    "total": 1,
+    "direct": 1,
+    "transitive": 0,
+    "max_depth": 1,
+    "deduped": 0
+  },
+  "vulnerabilities": [
+    {
+      "name": "rustdecimal",
+      "version": "1.23.1",
+      "ecosystem": "crates.io",
+      "vulns": [
+        {
+          "id": "GHSA-7pwq-f4pq-78gm",
+          "severity": "high",
+          "summary": "`rustdecimal` is a malicious crate"
+        },
+        {
+          "id": "MAL-2022-1",
+          "severity": "medium",
+          "summary": "Malicious code in rustdecimal (crates.io)"
+        },
+        {
+          "id": "RUSTSEC-2022-0042",
+          "severity": "medium",
+          "summary": "malicious crate `rustdecimal`"
+        }
+      ]
+    }
+  ],
+  "roots": [
+    {
+      "name": "rustdecimal",
+      "version": "1.23.1",
+      "ecosystem": "rust",
+      "direct": true,
+      "children": []
+    }
+  ]
+}

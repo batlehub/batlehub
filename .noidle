@@ -2,4 +2,5 @@ enabled: true
 watchedCommands:
   - claude
   - helm
+  - claude-unsafe
 checkPeriodSeconds: 60

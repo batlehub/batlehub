@@ -111,7 +111,7 @@ jobs:
             echo "No successful profile of main yet — no comparison this time."
           fi
       - name: Frame-name simplification (its unit test)
-        run: cargo test -p batlehub-server --features profiling --bin batlehub profiling
+        run: cargo test --locked -p batlehub-server --features profiling --bin batlehub profiling
       - name: Profile
         env:
           PROFILE_SECONDS: ${{ inputs.seconds || '15' }}

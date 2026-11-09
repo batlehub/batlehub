@@ -66,3 +66,7 @@ tasks:
     cmds:
       - task: cov:collect
       - cargo llvm-cov report --fail-under-lines 80 --ignore-filename-regex "{{.COVERAGE_EXCLUDE}}"
+      # The same per-path floors CI's coverage-report applies (RFC 0041 §6.1),
+      # on the one merged local run.
+      - cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex "{{.COVERAGE_EXCLUDE}}"
+      - python3 .github/scripts/merge_coverage.py --output /dev/null --floors-file .github/coverage-floors.txt --floor-from local local=lcov.info > /dev/null

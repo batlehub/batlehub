@@ -242,7 +242,7 @@ impl PostmortemScanner {
                 .get("severity")
                 .and_then(|s| s.as_str())
                 .and_then(Severity::parse)
-                .unwrap_or(Severity::Medium);
+                .unwrap_or_else(|| kind.default_severity());
             let detail = f.get("detail").and_then(|d| d.as_str()).unwrap_or(category);
             let location = f
                 .get("location")
@@ -527,6 +527,42 @@ mod tests {
             .iter()
             .any(|f| f.summary.contains("obfuscation") && f.summary.contains("setup.js")));
         assert!(findings.iter().all(|f| f.scanner == "postmortem"));
+    }
+
+    /// T10 (RFC 0041 §4.5): the canary's last finding with its severity
+    /// removed and a category this build does not know is a malware signal
+    /// at `MalwareSignal`'s default, `high` (was `medium`), and is denied
+    /// under the default profile.
+    #[test]
+    fn an_unstated_severity_on_an_unknown_category_is_high_and_denied() {
+        use batlehub_core::entities::{SecurityPolicy, VerdictState};
+        let mut doc: serde_json::Value = serde_json::from_str(SCAN).unwrap();
+        let f = doc["findings"].as_array_mut().unwrap().last_mut().unwrap();
+        f.as_object_mut().unwrap().remove("severity");
+        f["category"] = "a_category_from_a_newer_postmortem".into();
+        let findings = scanner().map_scan(&doc);
+        let last = findings.last().unwrap();
+        assert_eq!(last.kind, FindingKind::MalwareSignal);
+        assert_eq!(last.severity, Severity::High);
+
+        let now = chrono::Utc::now();
+        let mut package = PackageMetadata::minimal(
+            PackageId::new("npm", "evil-pad", "1.0.0"),
+            serde_json::Value::Null,
+        );
+        package.published_at = Some(now - chrono::Duration::days(30));
+        let mut policy = SecurityPolicy::defaults_for("npm");
+        policy.required_scanners = vec![NAME.into()];
+        let verdict = batlehub_core::services::verdict::evaluate(
+            &package,
+            vec![last.clone()],
+            vec![NAME.into()],
+            &policy,
+            now,
+            Some(now),
+        );
+        assert_eq!(verdict.state, VerdictState::Denied);
+        assert_eq!(verdict.reason_codes, [ReasonCode::MalwareSignal]);
     }
 
     #[test]

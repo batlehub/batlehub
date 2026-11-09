@@ -27,6 +27,27 @@ pub struct PgAdvisoryRepository {
 }
 
 impl PgAdvisoryRepository {
+    async fn live_flags_uncached(
+        &self,
+        registry: &str,
+        name: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<PackageFlag>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT id, source, external_id, registry, package_name, version, kind, effect, severity, summary, url, first_seen, updated_at, expires_at, revoked_at
+             FROM package_flags
+             WHERE registry = $1 AND package_name = $2 AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > $3)",
+        )
+        .bind(registry)
+        .bind(name)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows.iter().map(row_to_flag).collect())
+    }
+
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -70,6 +91,7 @@ fn row_to_flag(r: &sqlx::postgres::PgRow) -> PackageFlag {
 #[async_trait]
 impl AdvisoryRepository for PgAdvisoryRepository {
     async fn upsert_flag(&self, flag: PackageFlag) -> Result<(Uuid, bool), CoreError> {
+        let _clear = crate::db::read_cache::CACHES.flags.clear_after();
         // `xmax = 0` is true for a row this statement inserted and false for
         // one it updated: the one-statement way to learn which happened.
         let row = sqlx::query(
@@ -119,6 +141,7 @@ impl AdvisoryRepository for PgAdvisoryRepository {
         external_id: &str,
         now: DateTime<Utc>,
     ) -> Result<bool, CoreError> {
+        let _clear = crate::db::read_cache::CACHES.flags.clear_after();
         let res = sqlx::query(
             "UPDATE package_flags SET revoked_at = $3, updated_at = $3
              WHERE source = $1 AND external_id = $2 AND revoked_at IS NULL",
@@ -211,19 +234,56 @@ impl AdvisoryRepository for PgAdvisoryRepository {
         name: &str,
         now: DateTime<Utc>,
     ) -> Result<Vec<PackageFlag>, CoreError> {
+        // Cached unexpired as of the read; expiry is re-applied at `now`.
+        let flags = crate::db::read_cache::CACHES
+            .flags
+            .get_or_try(
+                (registry.to_owned(), name.to_owned()),
+                self.live_flags_uncached(registry, name, now),
+            )
+            .await?;
+        Ok(flags
+            .into_iter()
+            .filter(|f| f.expires_at.is_none_or(|e| e > now))
+            .collect())
+    }
+
+    async fn prefetch_live_flags(&self, packages: &[(String, String)], now: DateTime<Utc>) {
+        let c = &crate::db::read_cache::CACHES.flags;
+        let missing = c.missing(packages);
+        if missing.is_empty() {
+            return;
+        }
+        let ticket = c.ticket();
+        let (regs, names): (Vec<&str>, Vec<&str>) = missing
+            .iter()
+            .map(|(r, n)| (r.as_str(), n.as_str()))
+            .unzip();
         let rows = sqlx::query(
             "SELECT id, source, external_id, registry, package_name, version, kind, effect, severity, summary, url, first_seen, updated_at, expires_at, revoked_at
              FROM package_flags
-             WHERE registry = $1 AND package_name = $2 AND revoked_at IS NULL
+             WHERE (registry, package_name) IN (SELECT * FROM UNNEST($1::text[], $2::text[]))
+               AND revoked_at IS NULL
                AND (expires_at IS NULL OR expires_at > $3)",
         )
-        .bind(registry)
-        .bind(name)
+        .bind(&regs)
+        .bind(&names)
         .bind(now)
         .fetch_all(&self.pool)
-        .await
-        .db_err()?;
-        Ok(rows.iter().map(row_to_flag).collect())
+        .await;
+        let Ok(rows) = rows else { return };
+        let mut by_pkg: std::collections::HashMap<(String, String), Vec<PackageFlag>> = missing
+            .into_iter()
+            .map(|k| (k.clone(), Vec::new()))
+            .collect();
+        for flag in rows.iter().map(row_to_flag) {
+            if let Some(v) = by_pkg.get_mut(&(flag.registry.clone(), flag.package_name.clone())) {
+                v.push(flag);
+            }
+        }
+        for (k, v) in by_pkg {
+            c.put(ticket, k, v);
+        }
     }
 
     async fn list_exposure(&self, query: &ExposureQuery) -> Result<ExposurePage, CoreError> {

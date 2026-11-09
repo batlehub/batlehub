@@ -47,6 +47,7 @@ pub mod signature;
 pub mod signed_url;
 pub mod stats_rollup;
 pub mod svg;
+pub mod upgrade_counts;
 pub mod upstream_audit;
 pub mod upstream_detail;
 pub mod verdict;

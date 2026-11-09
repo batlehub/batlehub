@@ -116,6 +116,9 @@ pub struct Scope {
     /// A version this instance does not hold is asked of the upstream
     /// (`proxy`, `hybrid`); `false` for a `local` registry.
     pub falls_through: bool,
+    /// The registry may hold published versions (`local`, `hybrid`); a
+    /// `proxy` registry's download never reads them, so neither does this.
+    pub holds_local: bool,
 }
 
 pub struct PullabilityService {
@@ -174,6 +177,44 @@ impl PullabilityService {
             .await
     }
 
+    /// Warm the read caches for a whole batch: one statement per kind of read
+    /// (block, flags, visibility) instead of one per item. Keys are built as
+    /// the per-item evaluation builds them; a coordinate the cache still
+    /// misses is read on its own, so this only ever saves work.
+    pub async fn prefetch(
+        &self,
+        items: &[PackageId],
+        advisory: Option<&dyn crate::ports::AdvisoryRepository>,
+    ) {
+        let mut ids = Vec::with_capacity(items.len() * 2);
+        let mut packages = Vec::with_capacity(items.len());
+        for item in items {
+            let kind = self.kind_of(&item.registry).await;
+            let mut id = item.clone();
+            if let Some(kind) = kind {
+                id.name = kind.canonical_package_name(&id.name).into_owned();
+            }
+            // The rule chain judges the coordinate the download keys
+            // (`…/tarball`), or the bare version: warm both.
+            if let (None, Some(crate::entities::FetchSupport::ByVersion(a))) =
+                (&id.artifact, kind.map(|k| k.fetchable_by_version()))
+            {
+                ids.push(a.coordinate(&id.registry, &id.name, &id.version));
+            }
+            packages.push((id.registry.clone(), id.name.clone()));
+            ids.push(id);
+        }
+        packages.sort();
+        packages.dedup();
+        self.proxy.repo.prefetch_covering_blocks(&ids).await;
+        if let Some(ns) = &self.local.team_namespace {
+            ns.prefetch_visibility(&packages).await;
+        }
+        if let Some(adv) = advisory {
+            adv.prefetch_live_flags(&packages, chrono::Utc::now()).await;
+        }
+    }
+
     /// The registry's kind, from the live configuration.
     async fn kind_of(&self, registry: &str) -> Option<RegistryKind> {
         self.local
@@ -230,13 +271,16 @@ impl PullabilityService {
         }];
 
         // ── 2. What the download would judge: the local row, else upstream ───
-        let row: Option<PublishedPackage> = self
-            .local
-            .backend
-            .get_versions(registry, name)
-            .await?
-            .into_iter()
-            .find(|p| &p.version == version);
+        let row: Option<PublishedPackage> = if scope.holds_local {
+            self.local
+                .backend
+                .get_versions(registry, name)
+                .await?
+                .into_iter()
+                .find(|p| &p.version == version)
+        } else {
+            None
+        };
         let (metadata, policy) = match &row {
             Some(pkg) => (local_metadata(package, pkg), None),
             // A `local` registry has nothing behind it: no row is a 404 for

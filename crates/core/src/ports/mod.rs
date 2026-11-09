@@ -68,4 +68,6 @@ pub use storage::{
     CacheEntry, CacheStore, S3StorageConfig, StorageAdminRepository, StorageBackend, StorageMeta,
     StoreOutcome, StoredArtifact, STAGING_PREFIX,
 };
-pub use vulnerability::{OsvMatch, VulnerabilityRepository, VulnerabilityScanner};
+pub use vulnerability::{
+    BatchAnswer, LookupFailure, OsvMatch, VulnerabilityRepository, VulnerabilityScanner,
+};

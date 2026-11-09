@@ -1955,6 +1955,17 @@ curl -X POST \
                     <option value="critical">critical</option>
                   </select></label
                 >
+                <label v-if="ns.rules.rule_cve_gate_enabled"
+                  >Judge an unrated advisory as<select
+                    v-model="ns.rules.rule_cve_gate_unknown_severity"
+                  >
+                    <option value="unknown">unknown (never refused)</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                  </select></label
+                >
                 <label class="cg-check">
                   <input
                     type="checkbox"
@@ -3032,6 +3043,17 @@ curl -X POST \
               <label
                 >Minimum severity<select v-model="reg.rule_cve_gate_min_severity">
                   <option value="unknown">Unknown</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select></label
+              >
+              <label
+                >Judge an unrated advisory as<select
+                  v-model="reg.rule_cve_gate_unknown_severity"
+                >
+                  <option value="unknown">Unknown (never refused)</option>
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>

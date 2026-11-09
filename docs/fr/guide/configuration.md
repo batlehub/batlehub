@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: cd922ce26624bd4f
+sourceHash: c6b29ac867ec1f4b
 ---
 
 # Référence de configuration
@@ -2070,6 +2070,7 @@ hold_missing_timestamp = true        # retenir une version que l'amont n'a pas d
 scanners               = ["osv"]     # des noms de [scanners] ; "osv" n'a pas besoin d'être déclaré
 required_scanners      = ["osv"]     # tous doivent avoir répondu avant que la version soit servie
 max_severity           = "high"      # les constats à ce niveau ou au-dessus refusent (block) ou avertissent
+unknown_severity       = "high"      # le niveau auquel est jugé un constat sans gravité déclarée
 require_provenance     = false
 deny_install_hooks     = "warn"      # "deny" | "warn" | "ignore"
 scanner_error          = "quarantine" # "quarantine" | "warn" | "ignore"
@@ -2083,13 +2084,14 @@ on_webhook    = true
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
-| `mode` | chaîne | `"block"` | `block` refuse une version dont le verdict est `quarantined` ou `denied` ; `warn` la sert avec le verdict visible. `BLOCK_LIST` et `SOC_VERDICT` refusent dans les deux modes. |
+| `mode` | chaîne | `"block"` | `block` refuse une version dont le verdict est `quarantined` ou `denied` ; `warn` la sert avec le verdict visible. `BLOCK_LIST`, `SOC_VERDICT` et `KNOWN_MALICIOUS` refusent dans les deux modes. |
 | `min_age_secs` | u64 | `86400` | En dessous de cet âge, une version est retenue (`MIN_AGE_NOT_MET`), quoi que disent les scanners. En dessous de `3600`, c'est une erreur de configuration : une heure est tout l'intérêt de la quarantaine. |
 | `mature_age_secs` | u64 | `86400` | Au-dessus de cet âge, une version dont l'analyse n'est pas revenue est servie `warned` (`SCAN_PENDING`) et analysée derrière la requête. `0` ne sert jamais rien de non analysé. Doit valoir au moins `min_age_secs`. Avec les deux à leur défaut, la fenêtre de retenue par analyse est vide — le profil de production recommandé est 3 jours / 30 jours. |
 | `hold_missing_timestamp` | booléen | `true` | Retient une version que l'amont n'a pas datée (`TIMESTAMP_MISSING`, sans terme : pas d'`available_at`, et le contournement par maturité ne l'atteint pas). `false` lui fait sauter le garde-fou d'âge, comme le fait `release_age_gate` par défaut. Sur les types proxifiés par chemin (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`), aucune version n'est datée : `true` retient donc tout et lève `security.timestamp-hold-unavailable`. `apk` lève le même avertissement — il est adressé par chemin et le contrôle porte sur ce critère — alors même qu'un `APKINDEX` date dans `t:` chaque paquet qu'il liste. |
 | `scanners` | chaîne[] | `["osv"]` | Les scanners que le worker exécute sur ce registre. Chaque nom est une entrée `[scanners.<name>]` ; `osv` est implicite. Tous les types que la RFC nomme sont construits : `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, `yara` (RFC 0036), et les deux services externes `socket` (Socket.dev, un appel par coordonnée, exige une `api_key`) et `mlab` (l'API CVE de mlab.sh, un *enrichissement* : elle attache CVSS, EPSS et CISA KEV aux constats de vulnérabilité produits par les autres et élève une CVE listée au KEV en `critical` ; elle ne crée jamais de constat, donc la lister sous `required_scanners` déclenche un avertissement). Un scanner répond sous sa clé de configuration : un second `osv` pointé vers une autre `api_url` est donc son propre nom. |
 | `required_scanners` | chaîne[] | `["osv"]` | Doivent tous avoir répondu avant que la version soit servie. Doit être un sous-ensemble de `scanners`. Vide avec `mode = "warn"` lève `security.unprotected` : rien ne peut plus jamais retenir une version. |
-| `max_severity` | chaîne | `"high"` | `low`, `medium`, `high` ou `critical`. Un constat à ce niveau ou au-dessus produit `denied` en mode `block` et `warned` en mode `warn`. |
+| `max_severity` | chaîne | `"high"` | `unknown`, `low`, `medium`, `high` ou `critical`. Un constat à ce niveau ou au-dessus produit `denied` en mode `block` et `warned` en mode `warn`. `unknown` est le niveau le plus bas : il fait donc agir tous les constats. |
+| `unknown_severity` | chaîne | `"high"` | Le niveau auquel un constat dont la source ne déclare aucune gravité (`unknown`) est jugé face à `max_severity` : `unknown`, `low`, `medium`, `high` ou `critical` ; toute autre valeur est refusée au chargement. Le constat stocké garde `unknown`, et le verdict montre le substitut sous `judged_as` (`batlehub-cli why`, le panneau de verdict de la console). `"unknown"` rétablit l'ancien comportement, où un constat non noté n'agit jamais. Réglé sous `max_severity` sur un registre `block`, il lève l'avertissement `security.unknown-served`. Un avis OSV `MAL-` vaut `KNOWN_MALICIOUS` et est refusé quoi que dise ce champ. Voir [Les constats non notés](/fr/guide/security-gates#unknown-severity). |
 | `require_provenance` | booléen | `false` | Une version sans attestation de provenance vaut `PROVENANCE_MISSING` (un constat en `high`). N'a de sens qu'avec un scanner qui contrôle la provenance (`sigstore`, phase 3). |
 | `deny_install_hooks` | chaîne | `"warn"` | Ce qu'est un hook d'installation (un `preinstall` npm, un `setup.py` Python) : `deny`, `warn` ou `ignore`. Lu par les scanners d'archive de la phase 3. |
 | `scanner_error` | chaîne | `"quarantine"` | Un scanner qui ne peut pas répondre après `[worker].max_attempts` : `quarantine` retient la version (`SCANNER_ERROR`, borné dans le temps), `warn` la sert avertie, `ignore` abandonne le constat. |
@@ -2290,14 +2292,16 @@ mise en place complète.
 ```toml
 [[registries.rules]]
 kind         = "cve_gate"
-min_severity = "high"        # parmi : low, medium, high, critical (défaut : high)
-bypass_roles = ["admin"]
+min_severity     = "high"    # parmi : low, medium, high, critical (défaut : high)
+unknown_severity = "high"    # le niveau d'un avis non noté (défaut : high)
+bypass_roles     = ["admin"]
 ```
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
 | `kind` | chaîne | — | Doit valoir `"cve_gate"` |
 | `min_severity` | chaîne | `"high"` | La gravité minimale qui déclenche un blocage : `"low"`, `"medium"`, `"high"` ou `"critical"`. |
+| `unknown_severity` | chaîne | `"high"` | Le niveau auquel un avis sans note est jugé face à `min_severity` : `"unknown"`, `"low"`, `"medium"`, `"high"` ou `"critical"`. `"unknown"` n'en refuse jamais. Juge aussi un signalement `gate` poussé sans gravité. Un avis `MAL-` est refusé quoi que dise ce champ. Non lu sur un registre doté de `[registries.security]`, où c'est le `unknown_severity` du profil qui décide (avertissement `security.rule-settings-ignored`). |
 | `bypass_roles` | chaîne[] | `[]` | Les rôles exemptés du garde-fou. Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 
 **`[[registries.rules]]` — le garde-fou de licence :**
@@ -3669,7 +3673,9 @@ est jugé à la `severity` poussée, contre `max_severity` ; `warn` et `inform` 
 enregistrés pour le rapport. Sur un registre qui n'en a pas, `FlagsRule` lit les
 signalements à chaque requête : `hard_block` refuse purement et simplement,
 `gate` emprunte le seuil `cve_gate` du registre (`high` s'il n'est pas
-configuré), et les deux autres ne refusent jamais. Une dérogation d'opérateur est
+configuré) et juge un signalement poussé sans gravité au `unknown_severity` de
+ce `cve_gate` (`high` s'il n'est pas configuré), et les deux autres ne
+refusent jamais. Une dérogation d'opérateur est
 une exemption sur le garde-fou `flags` (`gates:exempt`, bornée dans le temps,
 avec un motif), sur l'un comme sur l'autre type de registre.
 

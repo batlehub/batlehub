@@ -88,6 +88,14 @@ struct FakeOsv {
     /// Scans that arrived with the artifact bytes (phase 3): the worker
     /// fetched them because this scanner says it reads them.
     with_bytes: AtomicUsize,
+    /// RFC 0041 decision 44: this fake declares itself an advisory database,
+    /// and can answer a 429 or hold its breaker open.
+    advisory_db: std::sync::atomic::AtomicBool,
+    rate_limited: Mutex<bool>,
+    open_for: Mutex<Option<Duration>>,
+    /// Off: this fake does not cover the registry's kind, as osv does not
+    /// cover deb or terraform.
+    uncovered: std::sync::atomic::AtomicBool,
 }
 
 impl FakeOsv {
@@ -97,6 +105,10 @@ impl FakeOsv {
             fail: Mutex::new(false),
             scans: AtomicUsize::new(0),
             with_bytes: AtomicUsize::new(0),
+            advisory_db: std::sync::atomic::AtomicBool::new(false),
+            rate_limited: Mutex::new(false),
+            open_for: Mutex::new(None),
+            uncovered: std::sync::atomic::AtomicBool::new(false),
         })
     }
     fn vuln(&self, version: &str, severity: Severity) {
@@ -112,6 +124,21 @@ impl FakeOsv {
             .with_reference("GHSA-test")],
         );
     }
+    /// The shape an older worker stored for a `MAL-` record (RFC 0041 §17
+    /// M1): an unrated vulnerability whose reference is the `MAL-` id.
+    fn unrated_mal(&self, version: &str) {
+        self.findings.lock().unwrap().insert(
+            version.to_owned(),
+            vec![Finding::new(
+                "osv",
+                FindingKind::Vulnerability,
+                ReasonCode::Vulnerability,
+                Severity::Unknown,
+                "MAL-2023-1000",
+            )
+            .with_reference("MAL-2023-1000")],
+        );
+    }
 }
 
 #[async_trait]
@@ -120,13 +147,24 @@ impl ArtifactScanner for FakeOsv {
         "osv"
     }
     fn supports(&self, _: RegistryKind) -> bool {
-        true
+        !self.uncovered.load(Ordering::SeqCst)
     }
     fn needs_artifact(&self) -> bool {
         true
     }
+    fn is_advisory_db(&self) -> bool {
+        self.advisory_db.load(Ordering::SeqCst)
+    }
+    fn unavailable_for(&self) -> Option<Duration> {
+        *self.open_for.lock().unwrap()
+    }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         self.scans.fetch_add(1, Ordering::SeqCst);
+        if *self.rate_limited.lock().unwrap() {
+            return Err(ScannerError::RateLimited {
+                retry_after: Some(Duration::from_secs(30)),
+            });
+        }
         if input
             .artifact
             .as_ref()
@@ -184,8 +222,10 @@ struct Lab {
     sink: Arc<RecordingSink>,
 }
 
-fn policy(mode: SecurityMode) -> SecurityPolicy {
+fn policy(mode: SecurityMode, key: &str) -> SecurityPolicy {
     let mut p = SecurityPolicy::defaults_for(REG);
+    p.scanners = vec![key.to_owned()];
+    p.required_scanners = vec![key.to_owned()];
     p.mode = mode;
     p.min_age = Duration::from_secs(3600);
     p.mature_age = Duration::from_secs(86_400);
@@ -198,6 +238,16 @@ async fn lab(
     mode: SecurityMode,
     ages: HashMap<&'static str, Option<i64>>,
 ) -> (impl TestService, Lab) {
+    lab_keyed(mode, ages, "osv").await
+}
+
+/// [`lab`] with the fake OSV under the config key `key`, as
+/// `[scanners.<key>] type = "osv"` would name it.
+async fn lab_keyed(
+    mode: SecurityMode,
+    ages: HashMap<&'static str, Option<i64>>,
+    key: &str,
+) -> (impl TestService, Lab) {
     let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
     let osv = FakeOsv::new();
     let queue = InMemoryScanQueue::new();
@@ -206,7 +256,7 @@ async fn lab(
         Arc::clone(&verdicts) as Arc<dyn VerdictRepository>,
         Arc::clone(&queue) as Arc<dyn ScanQueue>,
     ));
-    let sec = policy(mode);
+    let sec = policy(mode, key);
     {
         let mut hot = parts.proxy_svc.hot.write().await;
         hot.registries.insert(
@@ -263,7 +313,13 @@ async fn lab(
         hot.grants.insert(REG.to_owned(), Arc::new(grants));
     }
     let mut scanners: HashMap<String, Arc<dyn ArtifactScanner>> = HashMap::new();
-    scanners.insert("osv".into(), Arc::clone(&osv) as Arc<dyn ArtifactScanner>);
+    scanners.insert(
+        key.into(),
+        batlehub_core::services::NamedScanner::wrap(
+            key,
+            Arc::clone(&osv) as Arc<dyn ArtifactScanner>,
+        ),
+    );
     let sink = Arc::new(RecordingSink::default());
     let worker = Arc::new(ScanWorker {
         config: WorkerConfig {
@@ -557,6 +613,107 @@ async fn the_same_finding_serves_in_warn_mode() {
     assert_eq!(stored.reason_codes, vec![ReasonCode::Vulnerability]);
 }
 
+/// RFC 0041 decisions 18 and 36: a finding citing a `MAL-` record is
+/// `KNOWN_MALICIOUS`, refused under `mode = "warn"` too, with npm's error
+/// shape and the reason in the header.
+#[actix_web::test]
+async fn a_mal_finding_is_refused_as_known_malicious_even_in_warn_mode() {
+    let (app, lab) = lab(SecurityMode::Warn, old()).await;
+    lab.osv.unrated_mal("1.1.0");
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("denied"));
+    assert_eq!(header(&resp, HEADER_REASON), Some("KNOWN_MALICIOUS"));
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("KNOWN_MALICIOUS"),
+        "{body}"
+    );
+}
+
+/// An unrated advisory is judged `high` by default: refused in `block` mode.
+#[actix_web::test]
+async fn an_unrated_finding_is_denied_under_the_default_unknown_severity() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Unknown);
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.findings[0].severity,
+        Severity::Unknown,
+        "what the scanner said"
+    );
+    // `judged_as` is never stored: every reader re-judges, the stored-row
+    // fallback of the verdict endpoint and the admin listing included.
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/verdicts/{REG}/pkg/1.1.0"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["findings"][0]["severity"], "unknown", "{body}");
+    assert_eq!(body["findings"][0]["judged_as"], "high", "{body}");
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/admin/verdicts?registry={REG}&state=denied"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(
+        body["items"][0]["findings"][0]["judged_as"], "high",
+        "{body}"
+    );
+}
+
+/// The fallback that answers with the stored row (no metadata at hand) shows
+/// the judgement too: what the real `batlehub-cli why` found missing.
+#[test]
+fn a_stored_row_is_re_judged_for_its_reader() {
+    let mut policy = SecurityPolicy::defaults_for(REG);
+    let stored = batlehub_core::entities::Finding::new(
+        "osv",
+        FindingKind::Vulnerability,
+        ReasonCode::Vulnerability,
+        Severity::Unknown,
+        "GO-2099-0001",
+    );
+    let v = batlehub_core::entities::Verdict {
+        package: PackageId::new(REG, "pkg", "1.1.0"),
+        state: VerdictState::Denied,
+        reason_codes: vec![ReasonCode::Vulnerability],
+        findings: vec![stored],
+        policy_ref: format!("{REG}/default"),
+        available_at: None,
+        evaluated_at: chrono::Utc::now(),
+        last_scanned_at: None,
+        scanners_done: vec!["osv".into()],
+    };
+    let seen = batlehub_core::services::verdict::with_judgement(v.clone(), &policy);
+    assert_eq!(seen.findings[0].judged_as, Some(Severity::High));
+    assert_eq!(
+        seen.state,
+        VerdictState::Denied,
+        "the state is the stored one"
+    );
+    policy.unknown_severity = Severity::Unknown;
+    let seen = batlehub_core::services::verdict::with_judgement(v, &policy);
+    assert_eq!(seen.findings[0].judged_as, None);
+}
+
 /// A version older than `mature_age_secs` is served `warned` while nobody
 /// has looked at it, and the scan still runs behind the request.
 #[actix_web::test]
@@ -633,6 +790,31 @@ async fn an_undated_version_is_held_open_ended() {
     assert_eq!(code, 403, "{body}");
     assert!(body.contains("TIMESTAMP_MISSING"), "{body}");
     assert!(!body.contains("available "), "no clock to wait on: {body}");
+}
+
+/// A required scanner that does not cover the kind counts as answered: it
+/// used to leave every version `SCAN_PENDING` for good (gate_levels.sh on
+/// deb, terraform, the marketplaces…), `mode = "warn"` included.
+#[actix_web::test]
+async fn a_required_scanner_that_does_not_cover_the_kind_does_not_hold_for_good() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.uncovered.store(true, Ordering::SeqCst);
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(body.contains("SCAN_PENDING"), "{body}");
+    lab.worker.run_once().await.unwrap();
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(lab.osv.scans.load(Ordering::SeqCst), 0, "never run");
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.scanners_done, vec!["block_list", "osv"]);
 }
 
 /// A registry without `[security]` is exactly as it was.
@@ -1333,4 +1515,316 @@ async fn why_and_the_download_name_the_same_age_hold() {
     let (code, body) = status(&app, &tarball("1.1.0")).await;
     assert_eq!(code, 403);
     assert!(body.contains("MIN_AGE_NOT_MET"), "{body}");
+}
+
+// ── RFC 0041 decision 44: an advisory database's outage defers ───────────────
+
+/// A scanner that counts its runs and says what the test tells it to.
+struct Probe {
+    scans: AtomicUsize,
+    finding: Mutex<Option<Finding>>,
+}
+
+#[async_trait]
+impl ArtifactScanner for Probe {
+    fn name(&self) -> &str {
+        "probe"
+    }
+    fn supports(&self, _: RegistryKind) -> bool {
+        true
+    }
+    async fn scan(&self, _: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+        self.scans.fetch_add(1, Ordering::SeqCst);
+        Ok(self.finding.lock().unwrap().iter().cloned().collect())
+    }
+}
+
+/// The probe, as an internal scanner of `REG` (behind `block_list`).
+async fn add_probe(lab: &Lab) -> Arc<Probe> {
+    let probe = Arc::new(Probe {
+        scans: AtomicUsize::new(0),
+        finding: Mutex::new(None),
+    });
+    lab.hot
+        .write()
+        .await
+        .internal_scanners
+        .get_mut(REG)
+        .unwrap()
+        .push(Arc::clone(&probe) as Arc<dyn ArtifactScanner>);
+    probe
+}
+
+fn coord(version: &str) -> PackageId {
+    PackageId::new(REG, "pkg", version)
+}
+
+/// Two days old: past `mature_age_secs`, so only a hold the maturity bypass
+/// may not lift keeps it out.
+fn mature() -> HashMap<&'static str, Option<i64>> {
+    HashMap::from([("1.1.0", Some(172_800))])
+}
+
+#[actix_web::test]
+async fn an_osv_rate_limit_defers_a_first_seen_job_before_any_other_scanner_runs() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.advisory_db.store(true, Ordering::SeqCst);
+    *lab.osv.rate_limited.lock().unwrap() = true;
+    let probe = add_probe(&lab).await;
+    status(&app, &tarball("1.1.0")).await;
+
+    let r = lab.worker.run_once().await.unwrap();
+    assert_eq!((r.leased, r.deferred, r.completed), (1, 1, 0), "{r:?}");
+    assert_eq!(
+        probe.scans.load(Ordering::SeqCst),
+        0,
+        "OSV runs first and stops the job"
+    );
+    let jobs = lab.queue.open_jobs().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].attempts, 0, "the attempt is given back");
+    assert!(jobs[0].leased_until.is_some_and(|u| u > Utc::now()));
+    assert!(jobs[0].deferred_since.is_some());
+    // Not leased again before its not-before.
+    assert_eq!(lab.worker.run_once().await.unwrap().leased, 0);
+    // And the version stays held by its first-sight hold.
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(
+        body.contains("SCAN_PENDING") && !body.contains("SCANNER_ERROR"),
+        "{body}"
+    );
+}
+
+/// After 24 hours a first-seen job records the database's error, and the
+/// maturity bypass does not serve it — whatever key the scanner has.
+#[actix_web::test]
+async fn after_the_budget_a_first_seen_job_records_an_error_maturity_does_not_lift() {
+    for key in ["osv", "osv-mirror"] {
+        let (app, lab) = lab_keyed(SecurityMode::Block, mature(), key).await;
+        lab.osv.advisory_db.store(true, Ordering::SeqCst);
+        *lab.osv.rate_limited.lock().unwrap() = true;
+        let (code, _) = status(&app, &tarball("1.1.0")).await;
+        assert_eq!(code, 200, "{key}: a mature version is served while pending");
+
+        lab.worker.run_once().await.unwrap();
+        let job = lab.queue.open_jobs().await.remove(0);
+        lab.queue
+            .backdate_deferral(job.id, Utc::now() - chrono::Duration::hours(25))
+            .await;
+        let r = lab.worker.run_once().await.unwrap();
+        assert_eq!((r.completed, r.deferred), (1, 0), "{key}: {r:?}");
+        let v = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.kind == FindingKind::AdvisoryDbError
+                    && f.code == ReasonCode::ScannerError
+                    && f.scanner == key),
+            "{key}: {v:?}"
+        );
+        let (code, body) = status(&app, &tarball("1.1.0")).await;
+        assert_eq!(code, 403, "{key}: not lifted by maturity: {body}");
+        assert!(body.contains("SCANNER_ERROR"), "{body}");
+    }
+}
+
+/// A rescan out of budget is judged by the other scanners, OSV's stored
+/// findings carried, and no `SCANNER_ERROR` added.
+#[actix_web::test]
+async fn after_the_budget_a_rescan_records_a_new_finding_and_keeps_osvs() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.advisory_db.store(true, Ordering::SeqCst);
+    lab.osv.vuln("1.1.0", Severity::Low);
+    let probe = add_probe(&lab).await;
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(status(&app, &tarball("1.1.0")).await.0, 200);
+
+    *lab.osv.rate_limited.lock().unwrap() = true;
+    *probe.finding.lock().unwrap() = Some(Finding::new(
+        "probe",
+        FindingKind::MalwareSignal,
+        ReasonCode::MalwareSignal,
+        Severity::Critical,
+        "yara: a new rule matched",
+    ));
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    lab.worker.run_once().await.unwrap();
+    let job = lab.queue.open_jobs().await.remove(0);
+    // An outage longer than max_attempts passes leaves the verdict alone.
+    for _ in 0..3 {
+        lab.queue
+            .backdate_deferral(job.id, Utc::now() - chrono::Duration::hours(1))
+            .await;
+        let r = lab.worker.run_once().await.unwrap();
+        assert_eq!(r.deferred, 1, "{r:?}");
+    }
+    assert_eq!(
+        status(&app, &tarball("1.1.0")).await.0,
+        200,
+        "the stored verdict stands"
+    );
+
+    lab.queue
+        .backdate_deferral(job.id, Utc::now() - chrono::Duration::hours(25))
+        .await;
+    lab.worker.run_once().await.unwrap();
+    let v = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+    assert_eq!(v.state, VerdictState::Denied, "{v:?}");
+    assert!(v.reason_codes.contains(&ReasonCode::MalwareSignal));
+    assert!(!v.reason_codes.contains(&ReasonCode::ScannerError), "{v:?}");
+    assert!(
+        v.findings
+            .iter()
+            .any(|f| f.scanner == "osv" && f.code == ReasonCode::Vulnerability),
+        "OSV's stored finding is carried: {v:?}"
+    );
+}
+
+#[actix_web::test]
+async fn a_webhook_on_a_deferred_version_promotes_the_row() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.advisory_db.store(true, Ordering::SeqCst);
+    *lab.osv.rate_limited.lock().unwrap() = true;
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    let job = lab.queue.open_jobs().await.remove(0);
+    assert_eq!(
+        job.trigger,
+        ScanTrigger::FirstSeen,
+        "a rescan does not outrank it"
+    );
+    // Deferred, then a webhook for a rescan-triggered row: promoted, leasable.
+    lab.queue.complete(job.id, None).await.unwrap();
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(lab.worker.run_once().await.unwrap().leased, 0, "deferred");
+    assert!(!lab
+        .queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Webhook)
+        .await
+        .unwrap());
+    let promoted = lab.queue.open_jobs().await.remove(0);
+    assert_eq!(promoted.trigger, ScanTrigger::Webhook);
+    assert!(promoted.leased_until.is_none());
+    let counts = lab.queue.queued().await.unwrap();
+    assert_eq!((counts[0].count, counts[0].deferred), (1, 0));
+}
+
+#[actix_web::test]
+async fn no_job_is_leased_while_the_databases_breaker_is_open() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.advisory_db.store(true, Ordering::SeqCst);
+    status(&app, &tarball("1.1.0")).await;
+    *lab.osv.open_for.lock().unwrap() = Some(Duration::from_secs(60));
+    assert_eq!(lab.worker.run_once().await.unwrap().leased, 0);
+    *lab.osv.open_for.lock().unwrap() = None;
+    assert_eq!(lab.worker.run_once().await.unwrap().leased, 1);
+}
+
+/// Exhaust `id`'s attempts the way crashed workers would.
+async fn exhaust(lab: &Lab) {
+    for _ in 0..2 {
+        lab.queue.lease("crashed", &[], 1, 60, 2).await.unwrap();
+        lab.queue.expire_leases().await;
+    }
+}
+
+/// T16: an exhausted job no longer drops the findings it carried — a denied
+/// version stays denied.
+#[actix_web::test]
+async fn an_exhausted_job_keeps_a_denied_versions_findings() {
+    let (app, lab) = lab(SecurityMode::Block, mature()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(status(&app, &tarball("1.1.0")).await.0, 403);
+
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Webhook)
+        .await
+        .unwrap();
+    exhaust(&lab).await;
+    let r = lab.worker.run_once().await.unwrap();
+    assert_eq!(r.exhausted, 1, "{r:?}");
+    let v = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+    assert_eq!(v.state, VerdictState::Denied, "{v:?}");
+    assert!(v.reason_codes.contains(&ReasonCode::Vulnerability));
+}
+
+#[actix_web::test]
+async fn an_exhausted_rescan_leaves_the_verdict_alone() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let before = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    exhaust(&lab).await;
+    assert_eq!(lab.worker.run_once().await.unwrap().exhausted, 1);
+    assert!(lab.queue.open_jobs().await.is_empty(), "the row closed");
+    let after = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+    assert_eq!(
+        after.evaluated_at, before.evaluated_at,
+        "record_scan was not called"
+    );
+}
+
+// ── RFC 0041 decision 33: release N reads what N+1 writes ─────────────────────
+
+/// A verdict holding a code this release does not know is refused —
+/// `UNRECOGNISED`, under `mode = "warn"` too — and neither the read nor the
+/// worker rewrites the row.
+#[actix_web::test]
+async fn a_code_this_release_does_not_know_is_refused_and_left_alone() {
+    let (app, lab) = lab(SecurityMode::Warn, old()).await;
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let mut v = lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap();
+    v.findings.push(Finding::new(
+        "osv",
+        FindingKind::Vulnerability,
+        ReasonCode::Unrecognised,
+        Severity::Unknown,
+        "written by a newer release",
+    ));
+    v.reason_codes.push(ReasonCode::Unrecognised);
+    lab.verdicts.upsert(&v).await.unwrap();
+
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("denied"));
+    assert!(header(&resp, HEADER_REASON)
+        .unwrap()
+        .contains("UNRECOGNISED"));
+    assert_eq!(
+        lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap(),
+        v,
+        "the read wrote nothing"
+    );
+
+    lab.queue
+        .enqueue(&coord("1.1.0"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(
+        lab.verdicts.get(&coord("1.1.0")).await.unwrap().unwrap(),
+        v,
+        "nor did the worker"
+    );
+    assert!(lab.queue.open_jobs().await.is_empty(), "the job closed");
 }

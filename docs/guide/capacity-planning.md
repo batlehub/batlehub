@@ -42,6 +42,20 @@ BatleHub is I/O-bound, not CPU-bound. Even a 2-core instance handles several hun
 
 Recommended: **2–4 vCPUs** for most deployments.
 
+## What security gates cost a request {#gate-cost}
+
+Measured with `perf/scripts/gate_levels.sh` (2026-11-09, release build, mock upstream, 50 req/s per request shape): the median latency of eight download and metadata requests, at five levels of gating. Each level adds rules to every registry, all set to *allow* the traffic, so the number is the cost of evaluating the gates on a request that passes.
+
+| Level | Rules | Added median latency | First download of a new version |
+| --- | --- | --- | --- |
+| none | — | — (≈ 5 ms per download, 1.3 ms per packument) | served at once |
+| min | `release_age_gate` | +0.0 to +0.2 ms | served at once (if old enough) |
+| medium | + `cve_gate` | +0.0 to +0.4 ms | served at once |
+| high | `[registries.security]` (osv) + `cve_gate` | +0.3 to +0.65 ms | **held until the scan answers: ~9 s** |
+| max | high + `license_gate`, `version_gate`, `require_signed_release`, SBOM | +0.2 to +0.75 ms | **held until the scan answers: ~10 s** |
+
+Run to run, the same level moves by up to ±0.15 ms. The per-request cost of every level is below a millisecond. What a level really costs is the **hold**: a `[registries.security]` profile serves a version only once its required scanners have answered (here, OSV over the network plus the worker's 2-second poll), and a `release_age_gate` or `security.min_age_secs` holds a version younger than its age, which is hours or days by design. Plan for the hold, not for the CPU.
+
 ## Database (PostgreSQL)
 
 - **Connections:** Default `max_connections = 10` is fine for < 50 concurrent requests. Increase to 25–50 for busy deployments. The DB itself should allow at least `max_connections * (number of instances) + 10` headroom.

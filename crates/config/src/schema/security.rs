@@ -48,6 +48,12 @@ pub struct SecurityConfig {
     /// Findings at or above this severity deny (`block`) or warn.
     #[serde(default = "default_max_severity")]
     pub max_severity: String,
+    /// What an unrated (`unknown`) finding is judged at against
+    /// `max_severity` (RFC 0041 §4.5). Absent means `high`; `unknown`
+    /// restores "an unrated finding never acts". An `Option` so a warning can
+    /// tell a chosen value from the default.
+    #[serde(default)]
+    pub unknown_severity: Option<String>,
     #[serde(default)]
     pub require_provenance: bool,
     #[serde(default = "default_install_hooks")]
@@ -63,6 +69,16 @@ pub struct SecurityConfig {
 }
 
 impl SecurityConfig {
+    /// `unknown_severity`, `high` when absent. Validated before use; an
+    /// unparseable one falls to `high` here, which validation makes
+    /// unreachable.
+    pub fn unknown_severity(&self) -> Severity {
+        self.unknown_severity
+            .as_deref()
+            .and_then(Severity::parse)
+            .unwrap_or(Severity::High)
+    }
+
     /// The profile as the evaluator reads it, for registry `name`.
     ///
     /// `max_severity` is validated before this is called; an unparseable one
@@ -87,6 +103,7 @@ impl SecurityConfig {
             scanners: self.scanners.clone(),
             required_scanners: self.required_scanners.clone(),
             max_severity: Severity::parse(&self.max_severity).unwrap_or(Severity::High),
+            unknown_severity: self.unknown_severity(),
             require_provenance: self.require_provenance,
             deny_install_hooks: self.deny_install_hooks,
             scanner_error: self.scanner_error,

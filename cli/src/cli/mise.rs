@@ -502,7 +502,12 @@ async fn seed_one(
 /// does not, or a fetch with nothing to compare against.
 fn judge_seed_fetch(outcome: &mut SeedOutcome, f: &crate::api::SeedFetch, expected: Option<&str>) {
     if f.error.is_some() || f.status >= 400 {
-        outcome.detail = f.error.clone().or(Some(format!("HTTP {}", f.status)));
+        // An empty refusal body (a bare 404) would otherwise print no reason at all.
+        outcome.detail = f
+            .error
+            .clone()
+            .filter(|e| !e.trim().is_empty())
+            .or(Some(format!("HTTP {}", f.status)));
         // A refusal with a verdict is a *judgement*, not a fetch failure, and
         // the two lead an operator to different places.
         if f.verdict.as_deref() == Some("denied") {

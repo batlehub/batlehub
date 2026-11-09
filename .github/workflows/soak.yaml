@@ -84,9 +84,11 @@ on:
 # The `comment` job grants itself the one scope it needs.
 permissions:
   contents: read
-# One soak at a time on this repository. Two would share the Postgres service
-# only by accident, but they would share the runner's CPU — and a resource
-# curve measured next to another soak is a measurement of the runner.
+# One soak at a time per pull request, so two runs never post into the same
+# report. Not for the CPU: every job of a GitHub-hosted runner is its own VM,
+# so a soak beside a profile or a breaking-point run shares nothing with it
+# but the host's other tenants, which no ordering removes. Add the load labels
+# together.
 concurrency:
   # Keyed on the pull request (or the branch, for a dispatch that has none)
   # rather than on `github.ref`: the two ways in produce different refs —

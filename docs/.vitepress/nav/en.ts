@@ -318,6 +318,10 @@ export const sidebar = {
           text: "TD-0003 — The container build time",
           link: "/techdebt/0003-container-build-time",
         },
+        {
+          text: "TD-0004 — Routing, the audit write, the pool",
+          link: "/techdebt/0004-request-routing-and-db-writes",
+        },
       ],
     },
   ],
@@ -377,6 +381,10 @@ export const sidebar = {
         {
           text: "0034 — full-ICU node",
           link: "/rfc/0034-full-icu-node",
+        },
+        {
+          text: "0041 — Test depth and gate scale",
+          link: "/rfc/0041-test-depth-and-security-gate-scale",
         },
       ],
     },

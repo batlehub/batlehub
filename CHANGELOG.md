@@ -8,6 +8,175 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Upgrade checklist (RFC 0041 phase 0 — this is release N)
+
+This release is the first of two. The next one (N+1) judges unrated
+advisories and OSV `MAL-` records more strictly, and writes a reason code
+(`KNOWN_MALICIOUS`) that only this release and later can read.
+
+0. **Run this release on every process before N+1, and never roll back below
+   it.** From N+1 an older binary refuses to start against the database (this
+   release ships an empty marker migration, `065`, which sqlx enforces).
+1. **Check that every worker reaches OSV** (or the configured `api_url`):
+   from this release an unreachable or throttling OSV *holds* a new version
+   instead of reading as "no advisory". A version first seen during an outage
+   waits up to 24 hours on `SCAN_PENDING`, then gets `SCANNER_ERROR`, which the
+   maturity bypass does not serve. `batlehub_scan_jobs_deferred` shows the
+   jobs waiting.
+2. **Read the upgrade counts**: `grep batlehub::upgrade` on the logs. One line
+   per registry, zero included — how many versions and cached artifacts hold
+   an unrated advisory, which N+1 judges by `unknown_severity` (default
+   `high`).
+3. **`scanner_error = "warn"` or `"ignore"`** on a `block` registry now raises
+   the `security.scanner-error-open` config warning: until this release a
+   failing OSV served the version silently, and those settings are now the
+   only way to keep doing so.
+
+### Upgrade checklist (RFC 0041 phase 1 — release N+1)
+
+The second of the two releases. An advisory with no severity is now judged as
+`high`, so under the default `max_severity = "high"` and `mode = "block"` a
+version whose only advisory is unrated is **refused at its next download**,
+not at its next scan. An OSV `MAL-` record is `KNOWN_MALICIOUS` and always
+refused, `mode = "warn"` included. See
+[Security gates § How a finding is rated](https://batlehub.dev/guide/security-gates#severity).
+
+0. **Release N (above) must run on every process first**, and never roll back
+   below it. Finish this rollout quickly: while N and N+1 both serve, a
+   version whose only advisory is unrated is refused by an N+1 replica and
+   served by an N one, and its stored verdict can flip between the two until
+   only N+1 runs.
+1. **Read N's counts**: `grep batlehub::upgrade` on N's logs gives one line per
+   registry, zero included: `<n> versions on <registry> hold an unrated
+   advisory, and <m> cached artifacts carry one in their SBOM scan; from the
+   next release they are judged unknown_severity (default high)`. Those are
+   the versions this release starts refusing.
+2. **Decide `unknown_severity` per registry**, or accept `"high"`. A Go
+   registry is where it is most often lowered: the Go vulnerability database
+   rates nothing, and `golang.org/x/net@0.22.0` alone carries 17 `GO-`
+   records with no rated twin. `unknown_severity = "unknown"` restores the
+   old judgement on the next read, but it does not undo an escalation an
+   unrated finding has already triggered (the escalated severity is stored),
+   nor the new per-kind defaults below.
+3. **Check registries in `mode = "warn"`**: they no longer serve `MAL-`
+   records. The only way to serve one is an administrator's per-version
+   exemption on the gate `security_verdict`, which serves it `warned` with
+   `ADMIN_OVERRIDE`.
+4. **Check `cve_gate` rules with `block = true`**, including on registries
+   without a `[registries.security]` profile (the Helm `values-restricted.yaml`
+   profile has one, now with an explicit `unknown_severity: "high"`): they now
+   refuse unrated advisories, and a `MAL-` advisory whatever `min_severity`
+   says. Set `cve_gate.unknown_severity` to change the first.
+5. **Once every process runs this release, rescan** each registry whose
+   count in item 1 was not zero: `batlehub-cli verdict rescan -r <registry>`,
+   repeated until it queues nothing (it reads 1 000 verdicts per state).
+   It re-runs every scanner of the registry. Advisories with a CVSS vector
+   then take their computed level instead of `high`. That is lower for most,
+   but `critical` for a vector scoring 9 or more, so under
+   `max_severity = "critical"` or `unknown_severity = "unknown"` a rescan can
+   newly refuse a version. Progress is `batlehub_scan_jobs_queued{trigger="rescan"}`.
+   A registry with a `cve_gate` and no security profile has no verdicts
+   (`verdict rescan` answers 404 there). The periodic SBOM re-scan re-scores
+   it instead, every `[vulnerability_scan] interval_secs` (daily by default).
+6. **Rollback** goes back to release N at the earliest, and re-opens the
+   cached `MAL-` versions until this release is back: N reads a stored `MAL-`
+   finding as an unrated vulnerability. Setting `unknown_severity = "unknown"`
+   is the rollback of the new default that keeps the binary.
+
+### Changed
+
+- **Unrated findings are judged as `high`** (RFC 0041 phase 1, decision 13).
+  New key `[registries.security] unknown_severity` (`unknown`, `low`,
+  `medium`, `high` or `critical`; absent means `high`), any other value
+  refused at load. The stored finding keeps `unknown`; the verdict carries
+  the substitute as `judged_as`, shown by the console's verdict panel and
+  `batlehub-cli why`. The same level judges a pushed flag rated `unknown`.
+  Setting it below `max_severity` on a `block` registry raises the config
+  warning `security.unknown-served`; the default under
+  `max_severity = "critical"` does not.
+- **`cve_gate` has its own `unknown_severity`** (default `high`, decision 16).
+  Its refusals now read `blocked: unrated vulnerability GO-… (judged as high
+  by unknown_severity; minimum gated severity: high)` and `blocked: known
+  malicious package MAL-…`. On a registry with a security profile the key is
+  not read, and `security.rule-settings-ignored` names it.
+- **OSV `MAL-` records are `KNOWN_MALICIOUS`** (decisions 18, 31, 36): read
+  from the id and every alias, always denied, `mode = "warn"` included, and
+  lifted only by a per-version `security_verdict` exemption. A finding stored
+  before the upgrade is recognised when read, so cached malware is refused
+  at its next download with no rescan.
+- **OSV severities are read fully** (decision 21): CVSS v2, v3 and v4 vectors
+  are scored; a score of 0.0 is `low`; an informational `RUSTSEC-` record
+  (`unsound`, `unmaintained`, `notice`) is `low`; a `withdrawn` record is
+  dropped; an unrated record takes the rating of its twins (the records it
+  names as aliases or that name it).
+- **One default severity per finding kind** when a scanner states none:
+  malware signals and install hooks `high` (postmortem and socket said
+  `medium`; no setting restores it, decision 19), typosquats and transitions
+  `medium`, everything else `unknown`. Trivy's own `UNKNOWN` is now judged
+  by `unknown_severity`.
+- **The verdict's `policy_ref` ends with ` eval=2`** (decision 45): a version
+  refused on read is saved once under the new evaluator, so listings,
+  `verdict list --state denied`, the rescan by state and the transitions
+  counter see it once the rollout is complete.
+
+### Fixed
+
+- A `[registries.security]` profile whose required scanner does not cover
+  the registry's kind (the default `osv` on deb, rpm, pacman, jetbrains,
+  generic, nodedist, sdkman, terraform, openvsx and the two marketplaces) held
+  every version `SCAN_PENDING` for good, `mode = "warn"` included. Such a
+  scanner now counts as answered, and the server warns at startup that the
+  profile is judged by its other scanners only.
+- **OSV fails closed** (RFC 0041 §6.8). A 429, a 5xx, a 401/403/407, a 200
+  that is not JSON and a transport error used to read as "no advisory", so a
+  throttled or unreachable OSV gave a clean verdict — a known-malicious
+  package included. Only a 400, 404 or 422 is still "no data". A 429 or a 5xx
+  opens a per-process circuit breaker (its `Retry-After`, or 60 s, at most an
+  hour); `next_page_token` is followed, up to 20 pages; an answer over 16 MiB,
+  a 21st page, or an SBOM with more than 2 000 component PURLs is a permanent
+  `SCANNER_ERROR`.
+- **A throttled SBOM re-scan no longer erases stored advisories.** When any
+  component's lookup fails, the stored findings are kept and unioned with the
+  new ones; removal waits for a pass where every PURL answered.
+- **An exhausted scan job no longer drops a denied version's findings.** A
+  required scanner that answered before is carried forward rather than marked
+  done with nothing, so a lone `SCANNER_ERROR` can no longer be served by the
+  maturity bypass. An exhausted rescan or backfill now leaves the verdict as
+  it was.
+- **A transient advisory-database error defers the job** instead of recording
+  `SCANNER_ERROR`: OSV runs first, the job waits (1 minute doubling to 1 hour,
+  or the upstream's `Retry-After`) with its attempt given back, for up to 24
+  hours. A webhook, a flag or a block-list change promotes a deferred job.
+  `batlehub_scan_jobs_queued` now counts only leasable jobs, so a deferral
+  does not hold the worker autoscaler at its maximum.
+- **An unknown stored reason code or severity no longer fails the read.** A
+  code this release does not know reads as `UNRECOGNISED` (always refused,
+  `X-BatleHub-Reason: UNRECOGNISED`, the row left untouched); an unparsable
+  severity reads as `critical`.
+
+### Added
+
+- **A read cache for the per-download lookups**, kept coherent across replicas
+  by Postgres: migration `066` adds triggers that `NOTIFY` a change to a
+  block, a flag, a visibility, a token, a user block or a dedup mapping, and
+  each replica `LISTEN`s and drops what changed. A cached download now costs
+  one statement instead of five to seven, and `POST
+  /api/v1/packages/access/batch` one per kind of read instead of four per item
+  (200 for 50 items). The cache is on only while the listener has seen its own
+  heartbeat delivered; behind a transaction-mode pooler set the new
+  `[database] listen_url` to a direct connection, or the cache stays off
+  (see *High availability*). Gauges `batlehub_read_cache_live`, counter
+  `batlehub_read_cache_invalidations_total`. Without `listen_url` the listener
+  holds one connection of the pool. A silently dead listener is noticed by its
+  10-second heartbeat, so a stale answer lasts 20 s at most;
+  `[database] read_cache = false` turns the cache off.
+- `perf/scripts/gate_levels.sh`: what each level of security gating costs a
+  request, on the profile harness.
+- Reason codes `KNOWN_MALICIOUS` and `UNRECOGNISED`, both always refused, with
+  their sections on the refusals page. This release never writes either.
+- `batlehub_scan_jobs_deferred` gauge; `ScannerError` classes `rate_limited`,
+  `transient` and `permanent` on `batlehub_scanner_errors_total`.
+
 ### Security
 
 - **actix stack**: `actix-http` 3.20.3, `actix-web` 4.18.2 and `actix-files`
@@ -17,6 +186,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Worker images**: Trivy moves to v0.76.2, which carries `golang.org/x/net`
   v0.62.0 (CVE-2026-78661, HTML parser denial of service) and go-jose 4.1.6
   (CVE-2026-116587, whose `.trivyignore.yaml` entry is gone).
+- **The CI supply-chain gate now fails closed** (RFC 0041 phase 2; this
+  repository's CI only, nothing ships). Before, postmortem passed a lockfile
+  when vuln.mlab.sh did not answer, when the scan was cut at 512 packages, or
+  when its only problem was a known-malicious (`MAL-`) package. The verdict now
+  comes from `.github/scripts/postmortem_new_risk.py`, run from the pull
+  request's base. A pull request fails only on advisories against packages it
+  adds or changes. Semgrep `WARNING`s now reach the Security tab. Three `cargo
+  test` steps gained `--locked`, and the `npx` tools are pinned.
+- **Dependency reputation now blocks a pull request** (RFC 0041 phase 4;
+  this repository's CI only, Rust root first, `ui/` a week later). A change
+  that adds a typosquat, a package under 7 days old or one with an install
+  script, or that moves a dependency to a new publisher, a new install script
+  or a release under 7 days old, fails `postmortem — Rust`; a maintainer's
+  approving review of the head turns it into a report. postmortem 2.9.2 exits
+  0 when GitHub does not answer; the gate now fails instead.
+- **Mutation testing on tier 1** (RFC 0041 phase 5; CI only). `mutants.yaml`
+  runs cargo-mutants nightly in 8 shards over the code that decides grant,
+  deny or integrity (`.cargo/mutants.toml`), and on a pull request over the
+  tier-1 lines it changes, reporting the survivors; `task mutants [FILE=…]`
+  runs it locally. Its first finding is fixed: a bare-hex SHA-512 checksum
+  was verified by no test. The coverage holes of §6.6 (the CLI's report
+  renderers, galaxy's client, the JetBrains IDE listings, conda's local
+  mode, the UI composables) gained their tests.
+- **One required check per workflow** (RFC 0041 phase 6; CI only). Sixteen
+  gated workflows now always run, applies its path filter in a first `gate`
+  job, and ends with a `<file>.yaml / required` job, so a required check is
+  never left "Expected". A Dependabot `Cargo.lock` bump without the
+  `full-test` label now fails `test.yaml / required` instead of merging
+  untested. The `main` ruleset that requires these checks is added by the
+  maintainer.
+- **Coverage floors in CI** (RFC 0041 phase 3; CI only). `coverage-report`
+  now fails when a path of `.github/coverage-floors.txt` drops below its
+  floor, the file read from the pull request's base; `task coverage-check`
+  applies the same file. The UI's 80 % now covers the whole of `ui/src`, not
+  only the files that have a test. Every gate script under `.github/scripts/`
+  has tests, which found four silent failures, now fixed: the mise CVE
+  report never asked mise for newer releases (`/dev/null` is not a config
+  file mise accepts), `--write-budget` judged the run against the budget it
+  had just replaced, `slim_sbom.py --chunk 0|-1` wrote an empty SBOM and
+  exited 0, and `vex.py check` read only the first statement of a CVE.
 
 ## [1.9.0] - 2026-11-05
 

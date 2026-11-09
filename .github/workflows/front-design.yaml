@@ -16,23 +16,40 @@ name: Frontend Design Gates
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/**"
-      - "docs/**"
-      - "DESIGN.md"
-      - ".github/workflows/front-design.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/**"
-      - "docs/**"
-      - "DESIGN.md"
-      - ".github/workflows/front-design.yaml"
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/**
+            docs/**
+            DESIGN.md
+            .github/workflows/front-design.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   static:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Static design gates
     runs-on: ubuntu-latest
     steps:
@@ -50,8 +67,11 @@ jobs:
         working-directory: ui
 
       # Anti-pattern rules over source. No LLM, no API key, no network.
+      # `npx` tools are pinned to an exact version at least 14 days old, with
+      # install scripts off — neither needs one (RFC 0041 §6.5, §17 M5);
+      # `postmortem harden` reports an unpinned `npx` as CB-DEP-EXEC-003.
       - name: Impeccable detector
-        run: npx --yes impeccable detect ui/src docs/.vitepress
+        run: npx --yes --ignore-scripts impeccable@4.8.0 detect ui/src docs/.vitepress
 
       # Pinned at 0: a new hardcoded user-visible string fails here.
       - name: No untranslated strings
@@ -128,6 +148,8 @@ jobs:
         working-directory: docs
 
   rendered:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Rendered page gates
     runs-on: ubuntu-latest
     steps:
@@ -176,7 +198,7 @@ jobs:
       - name: Serve the build with a stubbed API
         run: |
           node ui/build/stub-server.mjs --port 4173 --dist ui/dist &
-          npx --yes wait-on http://127.0.0.1:4173 -t 60000
+          npx --yes --ignore-scripts wait-on@9.5.1 http://127.0.0.1:4173 -t 60000
 
       # Two viewports here, four in the rendered harness below. The split is
       # deliberate: these rules are anti-pattern rules over what is on the page,
@@ -201,7 +223,7 @@ jobs:
           for viewport in 1440x900 390x844; do
             for route in / /login /packages /packages/npm/react /setup /tools/access-check /tools/url-mapper; do
               echo "::group::$viewport $route"
-              npx --yes impeccable detect --viewport "$viewport" "http://127.0.0.1:4173$route" || fail=1
+              npx --yes --ignore-scripts impeccable@4.8.0 detect --viewport "$viewport" "http://127.0.0.1:4173$route" || fail=1
               echo "::endgroup::"
             done
           done
@@ -251,6 +273,8 @@ jobs:
         working-directory: ui
 
   docs-rendered:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Rendered page gates — docs site
     runs-on: ubuntu-latest
     # The same class of gate the console has, on the surface every prospective
@@ -289,7 +313,7 @@ jobs:
       - name: Serve the build
         run: |
           pnpm exec vitepress preview --port 4173 >/dev/null 2>&1 &
-          npx --yes wait-on http://127.0.0.1:4173 -t 60000
+          npx --yes --ignore-scripts wait-on@9.5.1 http://127.0.0.1:4173 -t 60000
         working-directory: docs
 
       - name: Start a headless browser
@@ -321,3 +345,22 @@ jobs:
           BASE: http://127.0.0.1:4173
         run: node build/design-routes.mjs
         working-directory: docs
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: front-design.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, static, rendered, docs-rendered]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

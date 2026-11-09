@@ -1,0 +1,23 @@
+{
+  "packages": [
+    {
+      "approval": "pending",
+      "behaviour": "unread",
+      "ecosystem": "node",
+      "findings": [],
+      "name": "esbuild",
+      "severity": null,
+      "version": "0.25.0"
+    }
+  ],
+  "root": "new",
+  "schema_version": 1,
+  "summary": {
+    "approved_but_flagged": 0,
+    "code_scanned": false,
+    "flagged": 0,
+    "pending": 1,
+    "total": 1,
+    "unmanaged_ecosystems": []
+  }
+}

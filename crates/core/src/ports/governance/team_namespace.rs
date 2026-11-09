@@ -54,6 +54,10 @@ pub trait TeamNamespacePort: Send + Sync {
     /// Returns `Visibility::Public` when the package has no published rows yet.
     async fn get_visibility(&self, registry: &str, package: &str) -> Result<Visibility, CoreError>;
 
+    /// Warm whatever cache backs [`Self::get_visibility`] for many packages at
+    /// once. The default does nothing.
+    async fn prefetch_visibility(&self, _packages: &[(String, String)]) {}
+
     /// Return all namespace claims across all registries where `group_id` is
     /// one of the supplied `groups`, ordered by registry then prefix.
     async fn list_namespaces_for_groups(

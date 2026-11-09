@@ -1,0 +1,324 @@
+{
+ "purl": "pkg:cargo/rsa@0.9.6",
+ "recorded": "2026-11-07",
+ "answer": {
+  "vulns": [
+   {
+    "id": "GHSA-4grx-2x9w-596c",
+    "summary": "Marvin Attack: potential key recovery through timing sidechannels",
+    "details": "The [Marvin Attack] is a timing sidechannel vulnerability which allows performing RSA decryption and signing operations as an attacker with the ability to observe only the time of the decryption operation performed withthe private key.\n\nA recent survey of RSA implementations found that the Rust `rsa` crate is one of many implementations vulnerable to this attack.\n\nNo fixed version is available at this time.\n\n[Marvin Attack]: https://people.redhat.com/~hkario/marvin/",
+    "aliases": [
+     "CVE-2023-49092",
+     "GHSA-c38w-74pg-36hr",
+     "RUSTSEC-2023-0071"
+    ],
+    "modified": "2026-09-10T03:50:04.002228238Z",
+    "published": "2023-11-28T23:28:25Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-385"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2023-11-28T23:28:25Z",
+     "nvd_published_at": null
+    },
+    "references": [
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/security/advisories/GHSA-c38w-74pg-36hr"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/issues/19#issuecomment-1822995643"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/issues/626"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/RustCrypto/RSA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2023-0071.html"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "rsa",
+       "ecosystem": "crates.io",
+       "purl": "pkg:cargo/rsa"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "last_affected": "0.9.6"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/11/GHSA-4grx-2x9w-596c/GHSA-4grx-2x9w-596c.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-9c48-w39g-hm26",
+    "summary": "rsa crate has potential panic on a prime being equal to 1",
+    "details": "When creating a RSA private key from its components, the construction panics, instead of returning an error, when one of the primes is `1`. \n\nDiscovered by Christian Reitter from [Radically Open Security](https://www.radicallyopensecurity.com/) during a security review for [Proton AG](https://proton.me/).",
+    "aliases": [
+     "CVE-2026-21895"
+    ],
+    "modified": "2026-09-10T03:50:32.802096391Z",
+    "published": "2026-01-06T18:14:08Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-01-06T18:14:08Z",
+     "nvd_published_at": "2026-01-08T14:15:57Z",
+     "cwe_ids": [
+      "CWE-703"
+     ],
+     "severity": "LOW"
+    },
+    "references": [
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/security/advisories/GHSA-9c48-w39g-hm26"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-21895"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/commit/2926c91bef7cb14a7ccd42220a698cf4b1b692f7"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/RustCrypto/RSA"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "rsa",
+       "ecosystem": "crates.io",
+       "purl": "pkg:cargo/rsa"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.9.10"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "last_known_affected_version_range": "<= 0.9.9",
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/01/GHSA-9c48-w39g-hm26/GHSA-9c48-w39g-hm26.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V4",
+      "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-c38w-74pg-36hr",
+    "summary": "Marvin Attack: potential key recovery through timing sidechannels",
+    "details": "### Impact\nDue to a non-constant-time implementation, information about the private key is leaked through timing information which is observable over the network. An attacker may be able to use that information to recover the key.\n\n### Patches\nNo patch is yet available, however work is underway to migrate to a fully constant-time implementation.\n\n### Workarounds\nThe only currently available workaround is to avoid using the `rsa` crate in settings where attackers are able to observe timing information, e.g. local use on a non-compromised computer is fine.\n\n### References\nThis vulnerability was discovered as part of the \"Marvin Attack\", which revealed several implementations of RSA including OpenSSL had not properly mitigated timing sidechannel attacks.\n\n- https://rustsec.org/advisories/RUSTSEC-2023-0071.html\n- https://people.redhat.com/~hkario/marvin/\n- https://github.com/RustCrypto/RSA/issues/19",
+    "aliases": [
+     "CVE-2023-49092",
+     "GHSA-4grx-2x9w-596c",
+     "RUSTSEC-2023-0071"
+    ],
+    "modified": "2026-09-10T03:49:58.927410760Z",
+    "published": "2023-11-28T23:28:27Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-203",
+      "CWE-385"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2023-11-28T23:28:27Z",
+     "nvd_published_at": "2023-11-28T21:15:08Z"
+    },
+    "references": [
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/security/advisories/GHSA-c38w-74pg-36hr"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-49092"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/issues/19#issuecomment-1822995643"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/issues/626"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/RustCrypto/RSA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2023-0071.html"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "rsa",
+       "ecosystem": "crates.io",
+       "purl": "pkg:cargo/rsa"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "last_affected": "0.9.6"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/11/GHSA-c38w-74pg-36hr/GHSA-c38w-74pg-36hr.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+     }
+    ]
+   },
+   {
+    "id": "RUSTSEC-2023-0071",
+    "summary": "Marvin Attack: potential key recovery through timing sidechannels",
+    "details": "### Impact\nDue to a non-constant-time implementation, information about the private key is leaked through timing information which is observable over the network. An attacker may be able to use that information to recover the key.\n\n### Patches\nNo patch is yet available. The crypto-bigint migration ([RustCrypto/RSA#394](https://github.com/RustCrypto/RSA/pull/394)) did not close this. Tracking is [RustCrypto/RSA#626](https://github.com/RustCrypto/RSA/issues/626) (padding still not constant-time). Implicit rejection work is in [RustCrypto/RSA#680](https://github.com/RustCrypto/RSA/pull/680); default-path blinding is in [RustCrypto/RSA#702](https://github.com/RustCrypto/RSA/pull/702).\n\nStill affected as of 2026-09-12: rsa 0.9.10 (latest stable) and rsa 0.10.0-rc.18 (latest). `patched = []` is intentional.\n\n### Workarounds\nAvoid using the `rsa` crate in settings where attackers can observe timing, for example over the network. Local use on a non-compromised computer is fine.\n\n### References\nThis vulnerability was discovered as part of the \"[Marvin Attack]\", which revealed several implementations of RSA including OpenSSL had not properly mitigated timing sidechannel attacks.\n\n[Marvin Attack]: https://people.redhat.com/~hkario/marvin/",
+    "aliases": [
+     "CVE-2023-49092",
+     "GHSA-4grx-2x9w-596c",
+     "GHSA-c38w-74pg-36hr"
+    ],
+    "modified": "2026-09-14T09:45:02.996132556Z",
+    "published": "2023-11-22T12:00:00Z",
+    "database_specific": {
+     "license": "CC0-1.0"
+    },
+    "references": [
+     {
+      "type": "PACKAGE",
+      "url": "https://crates.io/crates/rsa"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2023-0071.html"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://github.com/RustCrypto/RSA/issues/626"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://github.com/RustCrypto/RSA/issues/19#issuecomment-1822995643"
+     },
+     {
+      "type": "WEB",
+      "url": "https://people.redhat.com/~hkario/marvin/"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/pull/394"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/pull/680"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/RustCrypto/RSA/pull/702"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "rsa",
+       "ecosystem": "crates.io",
+       "purl": "pkg:cargo/rsa"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0.0.0-0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "affects": {
+        "functions": [],
+        "arch": [],
+        "os": []
+       },
+       "affected_functions": null
+      },
+      "database_specific": {
+       "informational": null,
+       "categories": [
+        "crypto-failure"
+       ],
+       "cvss": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+       "source": "https://github.com/rustsec/advisory-db/blob/osv/crates/RUSTSEC-2023-0071.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+     }
+    ]
+   }
+  ]
+ }
+}

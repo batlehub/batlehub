@@ -262,6 +262,16 @@ pub fn embedded_migrator() -> Migrator {
             "oidc_login_states return_to",
             "../migrations/064_oidc_login_states_return_to.sql"
         ),
+        mig!(
+            65,
+            "rfc 0041 release marker",
+            "../migrations/065_rfc0041_release_marker.sql"
+        ),
+        mig!(
+            66,
+            "read cache invalidation",
+            "../migrations/066_read_cache_invalidation.sql"
+        ),
     ])
 }
 

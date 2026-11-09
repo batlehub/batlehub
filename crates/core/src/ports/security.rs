@@ -40,15 +40,25 @@ pub trait VerdictRepository: Send + Sync {
         before: DateTime<Utc>,
         limit: u64,
     ) -> Result<Vec<PackageId>, CoreError>;
+
+    /// Per registry, how many versions hold a finding of severity
+    /// `unknown` — release N's upgrade count (RFC 0041 §6.8). `None` when
+    /// another replica is counting.
+    async fn count_unrated_by_registry(&self) -> Result<Option<Vec<(String, u64)>>, CoreError> {
+        Ok(Some(Vec::new()))
+    }
 }
 
 /// The count of open jobs, per registry and trigger — the
-/// `batlehub_scan_jobs_queued` gauge.
+/// `batlehub_scan_jobs_queued` gauge (leasable rows, what the worker HPA
+/// scales on) and `batlehub_scan_jobs_deferred` (rows waiting out an
+/// advisory database's outage, RFC 0041 decision 44).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedCount {
     pub registry: String,
     pub trigger: ScanTrigger,
     pub count: u64,
+    pub deferred: u64,
 }
 
 /// `scan_jobs` (RFC 0018 §5.4): jobs are leased, not consumed.
@@ -59,7 +69,10 @@ pub struct QueuedCount {
 /// enqueue for a version with an open job is a no-op.
 #[async_trait]
 pub trait ScanQueue: Send + Sync {
-    /// Enqueue, unless an open job for this coordinate already exists.
+    /// Enqueue, unless an open job for this coordinate already exists — in
+    /// which case a job that outranks it promotes it: its trigger and
+    /// priority rise and a deferral is cleared, so a webhook or a flag is
+    /// not lost behind a deferred rescan (RFC 0041 decision 44).
     /// Returns whether a row was created.
     async fn enqueue(
         &self,
@@ -82,12 +95,29 @@ pub trait ScanQueue: Send + Sync {
     /// Extend the lease of a job still being worked on.
     async fn heartbeat(&self, job_id: uuid::Uuid, lease_secs: u64) -> Result<(), CoreError>;
 
-    /// The job is done; the row is closed.
-    async fn complete(&self, job_id: uuid::Uuid) -> Result<(), CoreError>;
+    /// The job is done; the row is closed. With `worker`, only while that
+    /// worker still holds the lease — a stale worker cannot close a row
+    /// another now holds. `None` is the exhausted-jobs sweep, which closes
+    /// rows nobody holds.
+    async fn complete(&self, job_id: uuid::Uuid, worker: Option<&str>) -> Result<(), CoreError>;
 
     /// The attempt failed; the lease is released so another attempt can
     /// happen, or the row is closed once `attempts` reached `max_attempts`.
-    async fn fail(&self, job_id: uuid::Uuid, error: &str) -> Result<(), CoreError>;
+    /// Only while `worker` holds the lease.
+    async fn fail(&self, job_id: uuid::Uuid, worker: &str, error: &str) -> Result<(), CoreError>;
+
+    /// Put a leased job back until `not_before`, giving its attempt back and
+    /// anchoring the deferral's start (RFC 0041 decision 44). Only while
+    /// `worker` holds the lease. The default does nothing: a test stub that
+    /// never defers.
+    async fn defer(
+        &self,
+        _job_id: uuid::Uuid,
+        _worker: &str,
+        _not_before: DateTime<Utc>,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
 
     /// Jobs whose attempts were exhausted and nobody closed — the ones the
     /// worker turns into `SCANNER_ERROR` verdicts.

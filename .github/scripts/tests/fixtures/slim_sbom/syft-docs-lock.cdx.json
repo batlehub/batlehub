@@ -1,0 +1,291 @@
+{
+ "$schema": "http://cyclonedx.org/schema/bom-1.7.schema.json",
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.7",
+ "serialNumber": "urn:uuid:7e750e2d-f719-47e9-a05a-c58ad4c7dfa0",
+ "version": 1,
+ "metadata": {
+  "timestamp": "2026-11-08T09:04:20Z",
+  "tools": {
+   "components": [
+    {
+     "type": "application",
+     "author": "anchore",
+     "name": "syft",
+     "version": "1.56.0"
+    }
+   ]
+  },
+  "component": {
+   "bom-ref": "30bd794549572e47",
+   "type": "file",
+   "name": "pnpm-lock.yaml",
+   "version": "sha256:eec838aff547e4dda1a9ff41cac175430d54351c41a95500d420fd0b57ded1e4"
+  }
+ },
+ "components": [
+  {
+   "bom-ref": "pkg:npm/%40algolia/abtesting@1.27.0?package-id=1c7b62f752ffb6d6",
+   "type": "library",
+   "name": "@algolia/abtesting",
+   "version": "1.27.0",
+   "cpe": "cpe:2.3:a:\\@algolia\\/abtesting:\\@algolia\\/abtesting:1.27.0:*:*:*:*:*:*:*",
+   "purl": "pkg:npm/%40algolia/abtesting@1.27.0",
+   "properties": [
+    {
+     "name": "syft:package:foundBy",
+     "value": "javascript-lock-cataloger"
+    },
+    {
+     "name": "syft:package:language",
+     "value": "javascript"
+    },
+    {
+     "name": "syft:package:type",
+     "value": "npm"
+    },
+    {
+     "name": "syft:package:metadataType",
+     "value": "javascript-pnpm-lock-entry"
+    },
+    {
+     "name": "syft:location:0:path",
+     "value": "/pnpm-lock.yaml"
+    }
+   ]
+  },
+  {
+   "bom-ref": "pkg:npm/%40algolia/autocomplete-core@1.17.7?package-id=60c1f6a739652cbb",
+   "type": "library",
+   "name": "@algolia/autocomplete-core",
+   "version": "1.17.7",
+   "cpe": "cpe:2.3:a:\\@algolia\\/autocomplete-core:\\@algolia\\/autocomplete-core:1.17.7:*:*:*:*:*:*:*",
+   "purl": "pkg:npm/%40algolia/autocomplete-core@1.17.7",
+   "properties": [
+    {
+     "name": "syft:package:foundBy",
+     "value": "javascript-lock-cataloger"
+    },
+    {
+     "name": "syft:package:language",
+     "value": "javascript"
+    },
+    {
+     "name": "syft:package:type",
+     "value": "npm"
+    },
+    {
+     "name": "syft:package:metadataType",
+     "value": "javascript-pnpm-lock-entry"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-core:\\@algolia\\/autocomplete_core:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_core:\\@algolia\\/autocomplete-core:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_core:\\@algolia\\/autocomplete_core:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete-core:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete_core:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:location:0:path",
+     "value": "/pnpm-lock.yaml"
+    }
+   ]
+  },
+  {
+   "bom-ref": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.17.7?package-id=da7c223470b542d0",
+   "type": "library",
+   "name": "@algolia/autocomplete-plugin-algolia-insights",
+   "version": "1.17.7",
+   "cpe": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin-algolia-insights:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*",
+   "purl": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.17.7",
+   "properties": [
+    {
+     "name": "syft:package:foundBy",
+     "value": "javascript-lock-cataloger"
+    },
+    {
+     "name": "syft:package:language",
+     "value": "javascript"
+    },
+    {
+     "name": "syft:package:type",
+     "value": "npm"
+    },
+    {
+     "name": "syft:package:metadataType",
+     "value": "javascript-pnpm-lock-entry"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin-algolia-insights:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin_algolia_insights:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin_algolia_insights:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin-algolia:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin-algolia:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin_algolia:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin_algolia:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-plugin:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_plugin:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete-plugin-algolia-insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete_plugin_algolia_insights:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:location:0:path",
+     "value": "/pnpm-lock.yaml"
+    }
+   ]
+  },
+  {
+   "bom-ref": "pkg:npm/%40algolia/autocomplete-preset-algolia@1.17.7?package-id=51f4ebf2cb30f6d9",
+   "type": "library",
+   "name": "@algolia/autocomplete-preset-algolia",
+   "version": "1.17.7",
+   "cpe": "cpe:2.3:a:\\@algolia\\/autocomplete-preset-algolia:\\@algolia\\/autocomplete-preset-algolia:1.17.7:*:*:*:*:*:*:*",
+   "purl": "pkg:npm/%40algolia/autocomplete-preset-algolia@1.17.7",
+   "properties": [
+    {
+     "name": "syft:package:foundBy",
+     "value": "javascript-lock-cataloger"
+    },
+    {
+     "name": "syft:package:language",
+     "value": "javascript"
+    },
+    {
+     "name": "syft:package:type",
+     "value": "npm"
+    },
+    {
+     "name": "syft:package:metadataType",
+     "value": "javascript-pnpm-lock-entry"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-preset-algolia:\\@algolia\\/autocomplete_preset_algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_preset_algolia:\\@algolia\\/autocomplete-preset-algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_preset_algolia:\\@algolia\\/autocomplete_preset_algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-preset:\\@algolia\\/autocomplete-preset-algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete-preset:\\@algolia\\/autocomplete_preset_algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_preset:\\@algolia\\/autocomplete-preset-algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete_preset:\\@algolia\\/autocomplete_preset_algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete-preset-algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:cpe23",
+     "value": "cpe:2.3:a:\\@algolia\\/autocomplete:\\@algolia\\/autocomplete_preset_algolia:1.17.7:*:*:*:*:*:*:*"
+    },
+    {
+     "name": "syft:location:0:path",
+     "value": "/pnpm-lock.yaml"
+    }
+   ]
+  },
+  {
+   "bom-ref": "c895fb8e872e275f",
+   "type": "file",
+   "name": "/pnpm-lock.yaml",
+   "hashes": [
+    {
+     "alg": "SHA-1",
+     "content": "e99e08e4fbb1b42f106771b9f64a87b1ed34436d"
+    },
+    {
+     "alg": "SHA-256",
+     "content": "eec838aff547e4dda1a9ff41cac175430d54351c41a95500d420fd0b57ded1e4"
+    }
+   ]
+  }
+ ],
+ "dependencies": [
+  {
+   "ref": "pkg:npm/%40algolia/abtesting@1.27.0?package-id=1c7b62f752ffb6d6",
+   "dependsOn": []
+  },
+  {
+   "ref": "pkg:npm/%40algolia/autocomplete-core@1.17.7?package-id=60c1f6a739652cbb",
+   "dependsOn": [
+    "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.17.7?package-id=da7c223470b542d0"
+   ]
+  },
+  {
+   "ref": "pkg:npm/%40algolia/autocomplete-plugin-algolia-insights@1.17.7?package-id=da7c223470b542d0",
+   "dependsOn": []
+  },
+  {
+   "ref": "pkg:npm/%40algolia/autocomplete-preset-algolia@1.17.7?package-id=51f4ebf2cb30f6d9",
+   "dependsOn": []
+  }
+ ]
+}

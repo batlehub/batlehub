@@ -1,0 +1,67 @@
+name: Gate scripts
+# The Python scripts under .github/scripts decide whether a gate passes
+# (RFC 0041 §4.3, tier 4): every exit path of each has a case under
+# .github/scripts/tests, stdlib `unittest`, fixtures recorded from the real
+# tools. Same command as `task test:scripts`.
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+permissions:
+  contents: read
+jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            .github/scripts/**
+            .github/workflows/scripts-test.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
+  unittest:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    name: Gate scripts (unittest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: unittest
+        run: python3 -I -m unittest discover -s .github/scripts/tests -v
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: scripts-test.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, unittest]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

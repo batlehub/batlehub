@@ -1,0 +1,61 @@
+{
+  "added": [
+    {
+      "assessment": {
+        "risk": 0
+      },
+      "ecosystem": "node",
+      "name": "esbuild",
+      "version": "0.25.0"
+    },
+    {
+      "assessment": {
+        "risk": 45,
+        "signals": [
+          "no-repository",
+          "typosquat of lodash (transposed)"
+        ]
+      },
+      "ecosystem": "node",
+      "name": "lodahs",
+      "version": "0.0.1"
+    }
+  ],
+  "changed": [
+    {
+      "assessment": {
+        "risk": 45,
+        "signals": [
+          "dormant-release (728d gap)",
+          "new-publisher"
+        ]
+      },
+      "ecosystem": "node",
+      "from": "2.8.1",
+      "name": "tslib",
+      "to": "2.9.1"
+    },
+    {
+      "assessment": {
+        "risk": 15,
+        "signals": [
+          "fresh-release (3h old)"
+        ]
+      },
+      "ecosystem": "node",
+      "from": "7.0.2",
+      "name": "typescript",
+      "to": "7.1.0-dev.20261108.1"
+    }
+  ],
+  "new": "new",
+  "old": "old",
+  "removed": [],
+  "schema_version": 2,
+  "summary": {
+    "added": 2,
+    "changed": 2,
+    "removed": 0,
+    "unchanged": 1
+  }
+}

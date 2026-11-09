@@ -1,0 +1,22 @@
+{
+  "root": "/work/base2",
+  "ecosystems": [
+    "node"
+  ],
+  "stats": {
+    "total": 1,
+    "direct": 1,
+    "transitive": 0,
+    "max_depth": 1,
+    "deduped": 0
+  },
+  "roots": [
+    {
+      "name": "minimist",
+      "version": "1.2.6",
+      "ecosystem": "node",
+      "direct": true,
+      "children": []
+    }
+  ]
+}

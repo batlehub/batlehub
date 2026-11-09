@@ -30,6 +30,7 @@ impl TokenOwner {
     }
 }
 
+#[derive(Clone)]
 pub struct UserToken {
     pub id: Uuid,
     pub user_id: String,

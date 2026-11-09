@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance.md
-sourceHash: 925c16ca6637d6a2
+sourceHash: 13462c027147b498
 ---
 
 # Conformité
@@ -36,7 +36,7 @@ confirmer par votre conseil juridique avant de vous y fier.
 | Cadre | Oblige | Position de BatleHub | Ce que le projet doit |
 | --- | --- | --- | --- |
 | RGPD (règl. 2016/679) | l'exploitant, responsable du traitement des données de ses utilisateurs | socle | minimisation et limitation de la conservation par défaut (art. 5, 25) ; outillage d'accès et d'effacement (art. 15, 17) ; la sécurité du traitement qu'il offre (art. 32) |
-| ISO/IEC 27001:2022 | le SMSI de l'exploitant | socle | des preuves pour l'annexe A : journalisation (8.15), surveillance (8.16), contrôle d'accès (5.15–5.18, 8.2, 8.5), vulnérabilités (8.8), cryptographie (8.24), développement sécurisé (8.25–8.28), chaîne d'approvisionnement TIC (5.21) |
+| ISO/IEC 27001:2022 | le SMSI de l'exploitant | socle | des preuves pour l'annexe A : journalisation (8.15), surveillance (8.16), contrôle d'accès (5.15–5.18, 8.2, 8.5), vulnérabilités (8.8), cryptographie (8.24), développement sécurisé (8.25–8.28), tests de sécurité en développement et en recette (8.29), chaîne d'approvisionnement TIC (5.21) |
 | Cyber Resilience Act (règl. 2024/2847) | un fabricant qui met un produit sur le marché de l'UE dans le cadre d'une activité commerciale | socle ; **pas encore contraignant** — le projet est non commercial | le traitement des vulnérabilités de l'annexe I, partie II, un SBOM, une période de support ; l'obligation de notification de l'art. 14 (en vigueur depuis le 2026-09-11) dès qu'il devient commercial |
 | NIS2 (dir. 2022/2555) | les entités essentielles et importantes | objectif futur | les contrôles que nomment les mesures de son art. 21(2) : sécurité de la chaîne d'approvisionnement (d), traitement des vulnérabilités (e), contrôle d'accès et MFA (i, j) ; une détection qui rend possibles les notifications à 24 h / 72 h / un mois de l'art. 23 |
 | DORA (règl. 2022/2554) | les entités financières et, par contrat, leurs prestataires TIC | objectif futur | journalisation et détection (art. 9–10), sauvegarde et restauration (art. 12), classification des incidents (art. 18) ; pour une instance hébergée, les clauses contractuelles de l'art. 30 |

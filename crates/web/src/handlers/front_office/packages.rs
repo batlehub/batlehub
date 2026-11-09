@@ -339,6 +339,7 @@ async fn scope_for(
     Scope {
         visible,
         falls_through: modes.get(registry) != batlehub_config::schema::RegistryMode::Local,
+        holds_local: modes.get(registry) != batlehub_config::schema::RegistryMode::Proxy,
     }
 }
 
@@ -453,6 +454,7 @@ pub async fn check_access_batch(
     modes: web::Data<crate::RegistryModeMap>,
     registries: web::Data<crate::RegistryMap>,
     rate_limit: Option<web::Data<Arc<crate::RateLimitService>>>,
+    advisory: Option<web::Data<Arc<dyn batlehub_core::ports::AdvisoryRepository>>>,
 ) -> Result<impl Responder, AppError> {
     let items = body.into_inner().items;
     if items.len() > MAX_ACCESS_BATCH {
@@ -467,6 +469,15 @@ pub async fn check_access_batch(
     let svc = PullabilityService::new(proxy_svc.get_ref().clone(), local_svc.get_ref().clone());
     let hosts = hosts.as_ref().map(|h| h.get_ref());
     let deadline = tokio::time::Instant::now() + ACCESS_BATCH_DEADLINE;
+    let ids: Vec<PackageId> = items
+        .iter()
+        .map(|i| PackageId::new(&i.registry, &i.name, &i.version))
+        .collect();
+    let _ = tokio::time::timeout_at(
+        deadline,
+        svc.prefetch(&ids, advisory.as_ref().map(|a| a.get_ref().as_ref())),
+    )
+    .await;
     let mut answers = Vec::with_capacity(items.len());
     for item in items {
         let pkg = PackageId::new(&item.registry, &item.name, &item.version);

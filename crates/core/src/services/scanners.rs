@@ -58,6 +58,19 @@ impl ArtifactScanner for BlockListScanner {
     }
 }
 
+/// A finding citing a `MAL-` record (`Finding::names_malicious`, the one
+/// place it is recognised) as an OSV-backed scanner states it:
+/// `MalwareSignal`, `KNOWN_MALICIOUS`, critical (RFC 0041 §4.5). Any other
+/// finding is returned unchanged.
+pub fn as_known_malicious(mut f: Finding) -> Finding {
+    if f.names_malicious() {
+        f.kind = FindingKind::MalwareSignal;
+        f.code = ReasonCode::KnownMalicious;
+        f.severity = Severity::Critical;
+    }
+    f
+}
+
 /// The recorded OSV findings for the coordinate, as findings — one per
 /// advisory, each with its own severity, so the threshold judges each.
 pub struct RecordedVulnerabilityScanner {
@@ -72,13 +85,16 @@ impl ArtifactScanner for RecordedVulnerabilityScanner {
     fn supports(&self, _: RegistryKind) -> bool {
         true
     }
+    fn is_advisory_db(&self) -> bool {
+        true
+    }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         let id = &input.package.id;
         let rows = self
             .repo
             .list_for_coordinate(&id.registry, &id.name, &id.version)
             .await
-            .map_err(|e| ScannerError::Upstream(format!("vulnerability store unreadable: {e}")))?;
+            .map_err(|e| ScannerError::Transient(format!("vulnerability store unreadable: {e}")))?;
         Ok(rows
             .into_iter()
             .map(|r| {
@@ -95,6 +111,7 @@ impl ArtifactScanner for RecordedVulnerabilityScanner {
                     "fixed_version": r.fixed_version,
                 }))
             })
+            .map(as_known_malicious)
             .collect())
     }
 }
@@ -400,6 +417,71 @@ mod tests {
         assert_eq!(findings[0].summary, "AGPL-3.0 is denied");
     }
 
+    struct OneRecord(crate::entities::ArtifactVulnerability);
+    #[async_trait]
+    impl VulnerabilityRepository for OneRecord {
+        async fn replace_findings_for_artifact(
+            &self,
+            _: &str,
+            _: Vec<crate::entities::ArtifactVulnerability>,
+        ) -> Result<(), crate::error::CoreError> {
+            Ok(())
+        }
+        async fn list_for_coordinate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<crate::entities::ArtifactVulnerability>, crate::error::CoreError> {
+            Ok(vec![self.0.clone()])
+        }
+    }
+
+    /// RFC 0041 §14: a stored `MAL-` record — the shape M1 stored, unrated —
+    /// on a security registry in `mode = "warn"` is `KNOWN_MALICIOUS` and
+    /// denied, not warned.
+    #[tokio::test]
+    async fn a_stored_mal_record_is_known_malicious_and_denied_under_warn() {
+        use crate::entities::{SecurityMode, SecurityPolicy, VerdictState};
+        let now = chrono::Utc::now();
+        let s = RecordedVulnerabilityScanner {
+            repo: Arc::new(OneRecord(crate::entities::ArtifactVulnerability {
+                id: uuid::Uuid::new_v4(),
+                artifact_key: "artifact:r/p/1.0.0".into(),
+                registry: "r".into(),
+                package_name: "p".into(),
+                version: "1.0.0".into(),
+                osv_id: "MAL-2023-1000".into(),
+                severity: Severity::Unknown,
+                summary: "malicious".into(),
+                fixed_version: None,
+                purl: "pkg:npm/p@1.0.0".into(),
+                detected_at: now,
+            })),
+        };
+        let findings = s.scan(&input()).await.unwrap();
+        assert_eq!(findings[0].code, ReasonCode::KnownMalicious);
+        assert_eq!(findings[0].kind, FindingKind::MalwareSignal);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(findings[0].reference.as_deref(), Some("MAL-2023-1000"));
+
+        let mut policy = SecurityPolicy::defaults_for("r");
+        policy.mode = SecurityMode::Warn;
+        policy.required_scanners = vec!["cve_gate".into()];
+        let mut package = input().package;
+        package.published_at = Some(now - chrono::Duration::days(30));
+        let verdict = crate::services::verdict::evaluate(
+            &package,
+            findings,
+            vec!["cve_gate".into()],
+            &policy,
+            now,
+            Some(now),
+        );
+        assert_eq!(verdict.state, VerdictState::Denied);
+        assert!(verdict.reason_codes.contains(&ReasonCode::KnownMalicious));
+    }
+
     struct Unwrapped;
     #[async_trait]
     impl Rule for Unwrapped {
@@ -459,6 +541,12 @@ impl ArtifactScanner for NamedScanner {
     }
     fn needs_listing(&self) -> bool {
         self.inner.needs_listing()
+    }
+    fn is_advisory_db(&self) -> bool {
+        self.inner.is_advisory_db()
+    }
+    fn unavailable_for(&self) -> Option<std::time::Duration> {
+        self.inner.unavailable_for()
     }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         let mut findings = self.inner.scan(input).await?;

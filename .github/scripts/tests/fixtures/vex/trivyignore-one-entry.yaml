@@ -1,0 +1,25 @@
+# Image-scan suppressions. The stance is the same as `deny.toml`'s: nothing is
+# ignored because it is inconvenient, only because there is no version to move
+# to. Every entry carries an expiry, so the gate reopens on its own and the
+# entry has to be re-justified rather than quietly outliving its reason.
+#
+# Empty since Trivy v0.76.0 (2026-10-14). The four entries this file carried
+# were all advisories against the Trivy release binary the worker image ships
+# (`/usr/local/bin/trivy`, pinned by `TRIVY_VERSION` in `Containerfile.worker`):
+# grpc-go CVE-2026-84304 and CVE-2026-84445, and Go standard-library
+# CVE-2026-78667 and CVE-2026-97031. v0.76.0 is built with Go 1.27.2 against
+# grpc v1.84.0, `x/net` v0.60.0 and containerd v2.4.1, and `trivy rootfs` finds
+# no fixable HIGH/CRITICAL in it. Before adding an entry for that binary again,
+# check the next release's toolchain and `go.mod`:
+#
+#   go version -m /usr/local/bin/trivy | head -1
+#   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod
+vulnerabilities:
+  - id: CVE-2026-116587
+    # go-jose DoS via crafted RSA parameters in a JWK. Fixed in go-jose 4.1.6;
+    # Trivy main carries it, v0.76.1 (the latest release) still has 4.1.5. Trivy
+    # parses JWKs only on its opt-in sigstore/Rekor attestation paths, and the
+    # worker runs it as `trivy … --server <endpoint>` without those flags.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01

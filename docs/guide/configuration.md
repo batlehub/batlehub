@@ -1618,6 +1618,7 @@ hold_missing_timestamp = true        # hold a version the upstream did not date
 scanners               = ["osv"]     # names from [scanners]; "osv" needs no declaration
 required_scanners      = ["osv"]     # all must answer before the version is served
 max_severity           = "high"      # findings at or above this deny (block) or warn
+unknown_severity       = "high"      # how a finding with no stated severity is judged
 require_provenance     = false
 deny_install_hooks     = "warn"      # "deny" | "warn" | "ignore"
 scanner_error          = "quarantine" # "quarantine" | "warn" | "ignore"
@@ -1631,13 +1632,14 @@ on_webhook    = true
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `mode` | string | `"block"` | `block` refuses a version whose verdict is `quarantined` or `denied`; `warn` serves it with the verdict visible. `BLOCK_LIST` and `SOC_VERDICT` deny in both modes. |
+| `mode` | string | `"block"` | `block` refuses a version whose verdict is `quarantined` or `denied`; `warn` serves it with the verdict visible. `BLOCK_LIST`, `SOC_VERDICT` and `KNOWN_MALICIOUS` deny in both modes. |
 | `min_age_secs` | u64 | `86400` | Below this age a version is held (`MIN_AGE_NOT_MET`) whatever the scanners say. Below `3600` is a config error: an hour is the point of the quarantine. |
 | `mature_age_secs` | u64 | `86400` | Above this age a version whose scan has not returned is served `warned` (`SCAN_PENDING`) and scanned behind the request. `0` never serves unscanned. Must be at least `min_age_secs`. With both at their defaults the scan-hold window is empty — the recommended production profile is 3 days / 30 days. |
 | `hold_missing_timestamp` | bool | `true` | Hold a version the upstream did not date (`TIMESTAMP_MISSING`, open-ended: no `available_at`, and the maturity bypass does not reach it). `false` skips the age gate for it, as `release_age_gate` does by default. On the path-proxy kinds (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`) no version is dated, so `true` holds everything and raises `security.timestamp-hold-unavailable`. `apk` raises the same warning — it is path-addressed and the check keys on that — even though an `APKINDEX` does date every package it lists in `t:`. |
 | `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. Every type the RFC names is built: `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, `yara` (RFC 0036), and the two external services `socket` (Socket.dev, one call per coordinate, needs `api_key`) and `mlab` (mlab.sh's CVE API, an *enrichment*: it attaches CVSS, EPSS and CISA KEV to the vulnerability findings the others produced and raises a KEV-listed CVE to `critical`; it never creates a finding, so listing it under `required_scanners` warns). A scanner answers under its config key, so a second `osv` pointed at another `api_url` is its own name. |
 | `required_scanners` | string[] | `["osv"]` | Must all have answered before the version is served. Must be a subset of `scanners`. Empty with `mode = "warn"` raises `security.unprotected`: nothing can ever hold a version. |
-| `max_severity` | string | `"high"` | `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. |
+| `max_severity` | string | `"high"` | `unknown`, `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. `unknown` is the lowest level, so it makes every finding act. |
+| `unknown_severity` | string | `"high"` | The level a finding whose source states no severity (`unknown`) is judged at against `max_severity`: `unknown`, `low`, `medium`, `high` or `critical`; any other value is refused at load. The stored finding keeps `unknown`, and the verdict shows the substitute as `judged_as` (`batlehub-cli why`, the console's verdict panel). `"unknown"` restores the old behaviour, where an unrated finding never acts. Set below `max_severity` on a `block` registry, it raises the warning `security.unknown-served`. An OSV `MAL-` record is `KNOWN_MALICIOUS` and refused whatever this says. See [Unrated findings](/guide/security-gates#unknown-severity). |
 | `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
 | `deny_install_hooks` | string | `"warn"` | What an install hook (npm `preinstall`, a Python `setup.py`) is: `deny`, `warn` or `ignore`. Read by the archive scanners of phase 3. |
 | `scanner_error` | string | `"quarantine"` | A scanner that cannot answer after `[worker].max_attempts`: `quarantine` holds the version (`SCANNER_ERROR`, time-bound), `warn` serves it warned, `ignore` drops the finding. |
@@ -1747,14 +1749,16 @@ Denies downloads of versions with a recorded vulnerability finding at or above a
 ```toml
 [[registries.rules]]
 kind         = "cve_gate"
-min_severity = "high"        # one of: low, medium, high, critical (default: high)
-bypass_roles = ["admin"]
+min_severity     = "high"    # one of: low, medium, high, critical (default: high)
+unknown_severity = "high"    # how an unrated advisory is judged (default: high)
+bypass_roles     = ["admin"]
 ```
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `kind` | string | — | Must be `"cve_gate"` |
 | `min_severity` | string | `"high"` | Minimum severity that triggers a block: `"low"`, `"medium"`, `"high"`, or `"critical"`. |
+| `unknown_severity` | string | `"high"` | The level an advisory with no rating is judged at against `min_severity`: `"unknown"`, `"low"`, `"medium"`, `"high"` or `"critical"`. `"unknown"` never refuses one. Also judges a `gate` flag pushed without a severity. A `MAL-` advisory is refused whatever this says. Not read on a registry with `[registries.security]`, where the profile's own `unknown_severity` decides (warning `security.rule-settings-ignored`). |
 | `bypass_roles` | string[] | `[]` | Roles exempt from the gate. When multiple roles are listed the least-privileged one sets the access floor. |
 
 **`[[registries.rules]]` — Licence gate:**
@@ -2916,8 +2920,9 @@ that follows re-derives the same answer; `gate` is judged at the pushed
 `severity` against `max_severity`; `warn` and `inform` are recorded for the
 report. On a registry without one, `FlagsRule` reads the flags on every
 request: `hard_block` refuses outright, `gate` borrows the registry's
-`cve_gate` threshold (`high` when none is configured), the other two never
-refuse. An operator override is a gate exemption on the gate `flags`
+`cve_gate` threshold (`high` when none is configured) and judges a flag
+pushed without a severity at that `cve_gate`'s `unknown_severity` (`high`
+when none is configured), the other two never refuse. An operator override is a gate exemption on the gate `flags`
 (`gates:exempt`, time-boxed, with a reason), on either kind of registry.
 
 **What a flag can name.** One exact `version`, or `version_range = "*"` for

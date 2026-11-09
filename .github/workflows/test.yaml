@@ -12,21 +12,12 @@ name: Test
 # that matter here: a route can be present, tested and answering `200` with a
 # document no client can use (RFC 0009 §5.1). Only the client is the oracle.
 on:
+  # No workflow-level `paths:` (RFC 0041 decision 28): a pull request it
+  # skipped would leave `Test / required` "Expected" forever. The `gate` job
+  # applies the same path list instead, and `required` is the one check the
+  # `main` ruleset requires.
   push:
     branches: ["main"]
-    paths:
-      - "crates/**"
-      - "server/**"
-      - "cli/**"
-      - "fuzz/**"
-      - "tests/heavy/**"
-      - "docs/guide/admin-policies.md"
-      - "docs/guide/hot-reload.md"
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/test.yaml"
-      - ".github/scripts/merge_coverage.py"
-      - "deploy/siem/**"
   pull_request:
     branches: ["main"]
     # No `labeled`: GitHub shows the newest check of each name on a pull
@@ -34,19 +25,6 @@ on:
     # skipped would mask the real run on the same commit, and count as passing.
     # The `full-test` label is read on the next push instead; on a dependabot
     # pull request, label it and comment `@dependabot recreate`.
-    paths:
-      - "crates/**"
-      - "server/**"
-      - "cli/**"
-      - "fuzz/**"
-      - "tests/heavy/**"
-      - "docs/guide/admin-policies.md"
-      - "docs/guide/hot-reload.md"
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/test.yaml"
-      - ".github/scripts/merge_coverage.py"
-      - "deploy/siem/**"
   # Nightly as well as per-PR, for the heavy client jobs: what they drive is not
   # all in this repository. They install Bundler and npm from their own
   # registries, pinned IDE, Terraform, .NET and micromamba builds, and several
@@ -76,7 +54,7 @@ jobs:
   # answer is to *ask* for the run rather than to buy it forty times a week.
   #
   # So this job is the one gate the rest of the workflow hangs off: on a
-  # `dependabot/*` head branch every job below is skipped unless the pull
+  # pull request opened by `dependabot[bot]` every job below is skipped unless the pull
   # request carries the **`full-test`** label. Nothing else changes — a human
   # branch, a push to `main`, the nightly schedule and `workflow_dispatch` all
   # run the full suite as before, because `github.head_ref` is empty outside a
@@ -89,26 +67,65 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      reason: ${{ steps.decide.outputs.reason }}
+      lockfile: ${{ steps.decide.outputs.lockfile }}
     steps:
+      # Blobless and full-depth: `git diff --name-only base...head` needs the
+      # merge base and the trees, never a file's content.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
       - id: decide
         env:
           HEAD_REF: ${{ github.head_ref }}
+          # The author, not the branch name: anyone can push `dependabot/…`,
+          # and the skip turns the required check green.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          gate=.github/scripts/required_gate.py
+          # The path filter first (decision 41): a pull request it skips stays
+          # green whatever its branch.
+          relevant=$(python3 -I "$gate" changed --event "$EVENT" --base "$BASE" --head "$HEAD" -- \
+            'crates/**' 'server/**' 'cli/**' 'fuzz/**' 'tests/heavy/**' \
+            docs/guide/admin-policies.md docs/guide/hot-reload.md \
+            docs/guide/access-control.md docs/guide/configuration.md \
+            docs/use/refused-downloads.md docs/fr/use/refused-downloads.md \
+            docs/use/cli.md docs/fr/use/cli.md docs/operations/incident-response.md \
+            'docs/rfc/0002-*.md' 'config.example*.toml' 'perf/**' ui/openapi.json \
+            'tests/fixtures/**' 'examples/**' \
+            '**/Cargo.toml' '**/Cargo.lock' .github/workflows/test.yaml \
+            .github/scripts/merge_coverage.py .github/scripts/required_gate.py \
+            .github/coverage-floors.txt 'deploy/siem/**')
+          lockfile=$(python3 -I "$gate" changed --event "$EVENT" --base "$BASE" --head "$HEAD" -- \
+            Cargo.lock fuzz/Cargo.lock)
           run=true
+          reason=""
           why=""
-          if [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+          if [[ "$relevant" != "true" ]]; then
             run=false
-            why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
+            reason=filter
+            why="no path this workflow tests changed"
+          elif [[ "$PR_AUTHOR" == "dependabot[bot]" && "$FULL_TEST" != "true" ]]; then
+            run=false
+            reason=dependabot
+            why="\`$HEAD_REF\` is a Dependabot pull request not labelled \`full-test\`"
           fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
+          { echo "run=$run"; echo "reason=$reason"; echo "lockfile=$lockfile"; } >> "$GITHUB_OUTPUT"
           if [[ "$run" == "false" ]]; then
             {
               echo "### Test suite skipped"
               echo
               echo "Skipped because $why."
-              echo
-              echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
+              if [[ "$reason" == "dependabot" ]]; then
+                echo
+                echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -343,12 +360,12 @@ jobs:
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
       # llvm-cov cannot instrument doctests on stable — run them uninstrumented.
       - name: Doc tests
-        run: cargo test --workspace --doc
+        run: cargo test --locked --workspace --doc
       # `merge_layers` sorts keys itself so its output (and a consumer's hash
       # of it) holds when a consumer's graph turns `toml::Table` into an
       # insertion-ordered map (RFC 0037 §6.2). Nothing here enables it.
       - name: Config tests with toml/preserve_order
-        run: cargo test -p batlehub-config --lib --features toml/preserve_order
+        run: cargo test --locked -p batlehub-config --lib --features toml/preserve_order
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-unit
@@ -1682,8 +1699,54 @@ jobs:
             authz-rubygems=coverage-authz-rubygems.lcov \
             authz-terraform=coverage-authz-terraform.lcov \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      # The floors are read from the base (RFC 0041 §6.1, decision 39), so a
+      # pull request cannot lower its own; the script itself runs from the
+      # head, whose interface changes with the floors — the required review is
+      # what covers that. Computed on unit + integration only.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/coverage-floors.txt
+          sparse-checkout-cone-mode: false
+      - name: Coverage floors
+        shell: bash
+        run: |
+          floors=base/.github/coverage-floors.txt
+          if [ ! -f "$floors" ]; then
+            # Only on the pull request that adds the file (RFC 0041 phase 3).
+            echo "::warning::the base has no .github/coverage-floors.txt — reading the head's copy"
+            floors=.github/coverage-floors.txt
+          fi
+          python3 .github/scripts/merge_coverage.py --output /dev/null --floors-file "$floors" \
+            unit=coverage-unit.lcov integration=coverage-integration.lcov \
+            2>&1 >/dev/null | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
           name: coverage-merged
           path: coverage-merged.lcov
           if-no-files-found: error
+
+  # The one check the `main` ruleset requires (RFC 0041 decisions 28, 41). It
+  # fails unless every job succeeded, or the gate skipped the suite: by the
+  # path filter (green), or on a Dependabot branch without `full-test` (green,
+  # unless Cargo.lock or fuzz/Cargo.lock changed — then red, asking for the
+  # label). `heavy-authz-live` runs on schedule only and is not waited for.
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: test.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, lint, siem, fuzz, unit, integration, heavy-marketplace, heavy-vsx-extension, heavy-backends, heavy-browser, heavy-bundler, heavy-client, heavy-authz, heavy-closed-world, coverage-report]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

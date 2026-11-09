@@ -36,8 +36,8 @@ are in [`[registries.security]`](/guide/configuration#registries-security) and
 
 ::: warning Settings the verdict does not read
 On a `[security]` registry, `bypass_roles` on the four wrapped gates,
-`block = false` on `cve_gate` and `license_gate`, `cve_gate.min_severity`, and
-any namespace override of those four gates have no effect. A reload reports
+`block = false` on `cve_gate` and `license_gate`, `cve_gate.min_severity`,
+`cve_gate.unknown_severity`, and any namespace override of those four gates have no effect. A reload reports
 each of them as `security.rule-settings-ignored`, rather than leaving them in
 the file looking as though they did something.
 :::
@@ -210,9 +210,10 @@ Refuses versions with a recorded vulnerability at or above a severity.
 ```toml
 [[registries.rules]]
 kind         = "cve_gate"
-min_severity = "high"   # unknown | low | medium | high | critical
-block        = true     # the default is false: report only, never refuse
-bypass_roles = ["admin"]
+min_severity     = "high"   # unknown | low | medium | high | critical
+unknown_severity = "high"   # how an unrated advisory is judged; the default is "high"
+block            = true     # the default is false: report only, never refuse
+bypass_roles     = ["admin"]
 ```
 
 - **Reads:** the vulnerabilities recorded for the version by the SBOM rescan
@@ -222,11 +223,22 @@ bypass_roles = ["admin"]
 - **Default `block = false`:** findings appear in the console and the gate
   refuses nothing.
 - **Store error:** fails open, with a `WARN` log line.
-- **Refusal:** `blocked: known <severity> vulnerability <id> (minimum gated severity: …)`.
+- **Unrated advisories** are judged at `unknown_severity`, `high` by default,
+  so with `block = true` an advisory nobody rated is refused like a `high`
+  one. `"unknown"` restores the old behaviour, where an unrated advisory never
+  refused. See [Unrated findings](#unknown-severity).
+- **`MAL-` advisories** are refused whatever `min_severity` says, as long as
+  `block = true`. `bypass_roles` still lifts it, so the guarantee that a known
+  malicious package is never served belongs to the `[security]` profile, not
+  to this rule.
+- **Refusal:** `blocked: known <severity> vulnerability <id> (minimum gated severity: …)`,
+  `blocked: unrated vulnerability GO-… (judged as high by unknown_severity; minimum gated severity: high)`,
+  or `blocked: known malicious package MAL-…`.
 - **It also sets the threshold of the [flags](#flags) gate.** With `block =
   false`, `gate` flags stop refusing too.
 - **Under `[security]`:** recorded vulnerabilities become `VULNERABILITY`
-  findings. `min_severity`, `block` and `bypass_roles` are not read. The
+  findings. `min_severity`, `unknown_severity`, `block` and `bypass_roles` are
+  not read: the profile's own `max_severity` and `unknown_severity` decide. The
   `osv` scanner usually answers first in that regime anyway.
 
 ### `license_gate` {#license-gate}
@@ -289,7 +301,8 @@ Flags pushed by a `[[flag_sources]]` entry (see
 | `gate` | Refused at or above the `cve_gate` threshold (`high` when no `cve_gate` is declared), and only while that `cve_gate` has `block = true` |
 | `warn`, `inform` | Never refuse |
 
-There is no bypass. A store error fails open on the request path. The scanner
+A `gate` flag pushed with severity `unknown` is judged at the `cve_gate`'s
+`unknown_severity`, `high` when no `cve_gate` is declared. There is no bypass. A store error fails open on the request path. The scanner
 used on a `[security]` registry fails closed instead.
 
 ### Forge refs and raw content {#forge-refs}
@@ -329,6 +342,144 @@ Every reason code a verdict can carry is listed, with what it means and what to
 do about it, on [Why a download was refused](/use/refused-downloads#codes).
 The upstream-presence audit adds one more on these registries,
 `UNPUBLISHED_UPSTREAM`, for a version its upstream no longer lists.
+
+---
+
+## How a finding is rated {#severity}
+
+On a `[security]` registry every finding carries a severity, and
+`max_severity` decides what it does: at or above it, `denied` in `block` mode
+and `warned` in `warn` mode. This section says where that severity comes from,
+and what happens when nobody gave one.
+
+### Unrated findings: `unknown_severity` {#unknown-severity}
+
+A finding whose source states no severity is stored as `unknown`.
+`unknown_severity` says how it is judged against `max_severity`:
+
+```toml
+[registries.security]
+mode             = "block"
+max_severity     = "high"
+unknown_severity = "high"   # unknown | low | medium | high | critical; the default is "high"
+```
+
+- **Absent means `"high"`.** Under the default `max_severity = "high"`, a
+  version whose only advisory is unrated is refused: an advisory nobody has
+  rated yet is not a reason to serve.
+- **`"unknown"` restores the old behaviour**, where an unrated finding never
+  acted. Set it explicitly, so the choice shows in the file.
+- **The stored severity is not rewritten.** The finding keeps `unknown`, and
+  the verdict records the substitute beside it as `judged_as`.
+  `batlehub-cli why` and the verdict panel on the package page show both:
+  severity unknown, judged as high by `unknown_severity`. Like every finding,
+  this is visible to callers holding `findings:read`.
+- **It is recomputed on every read.** Changing `unknown_severity` takes
+  effect at the next download, with no rescan. The exception is an
+  [escalation](#escalation) an unrated finding already triggered: that one
+  wrote its new severity into the stored finding, and stays.
+- **It is judged everywhere a severity meets an operator's threshold:**
+  `max_severity`, an escalation's `from`, and a pushed [flag](#flags).
+- Setting it below `max_severity` on a `block` registry raises
+  `security.unknown-served` at load: unrated advisories are then served. The
+  default `"high"` under `max_severity = "critical"` raises nothing, because
+  nobody chose it.
+
+Registries without a profile set the same key on their
+[`cve_gate`](#cve-gate), with the same default.
+
+### Known malicious packages: `MAL-` {#known-malicious}
+
+An OSV record whose id or any alias starts with `MAL-` is not a vulnerability
+with a severity. It is a database's statement that the package is malware, and
+the finding is `KNOWN_MALICIOUS`:
+
+- **Always denied**, under `mode = "warn"` too, whatever `max_severity` and
+  `unknown_severity` say, like `BLOCK_LIST` and `SOC_VERDICT`.
+- **Nothing lowers it.** It is decided first, from the id and every alias,
+  before any of the rating rules below.
+- **Cached versions are covered without a rescan.** A finding stored before
+  the upgrade that names a `MAL-` record is recognised when it is read, so
+  that version is refused at its next download.
+- **The one way out** is an administrator's per-version exemption on the gate
+  `security_verdict` (`batlehub-cli exemption add … --gate security_verdict`).
+  It serves the version as `warned` with `ADMIN_OVERRIDE`, visible in the
+  response headers and the audit log. It exists for a false `MAL-` listing.
+
+On a registry without a profile, `cve_gate` refuses a `MAL-` advisory only
+while `block = true`, and a `bypass_roles` caller still passes.
+
+### What each scanner reports {#scanner-severity}
+
+A scanner that states a severity is never overridden. When its output states
+none, the finding takes the default of its kind:
+
+| Finding kind | When the scanner states no severity |
+| --- | --- |
+| `MALWARE_SIGNAL`, `INSTALL_HOOK` | `high` |
+| `TYPOSQUAT_SUSPECT`, the transition codes | `medium` |
+| `VULNERABILITY`, every other kind | `unknown`, then judged by `unknown_severity` |
+
+Scanner by scanner:
+
+| Scanner | Where the severity comes from |
+| --- | --- |
+| `osv` | A `MAL-` id or alias: `KNOWN_MALICIOUS`, `critical`. Otherwise, in order: the record's own `database_specific.severity` (GitHub's `MODERATE` is `medium`); else the highest such rating among its *twins*, the records it names as aliases or that name it; else the highest CVSS base score computed from the `severity[]` vectors (v2, v3, v4) or bare numbers of the record and its twins, a score of `0.0` being `low`. A `RUSTSEC-` record marked informational (`unsound`, `unmaintained`, `notice`) is `low`. A `withdrawn` record is ignored. A record with none of these is `unknown` |
+| `trivy` | Trivy's own `Severity`. Its `UNKNOWN` is `unknown`, judged by `unknown_severity` |
+| `postmortem` | The finding's `severity`. Without one: malware signals and install hooks `high`, typosquats `medium`. Timeline transitions are `medium`; a version missing from the release history is `high` |
+| `socket` | The alert's `severity`. Without one, the default of the alert's kind |
+| `guarddog` | By rule family: install and exec rules `high`, exfiltration and steganography `high`, typosquat `medium`, any other rule `medium` |
+| `yara` | The rule's `severity` meta, `high` when it has none |
+| `sigstore` | `PROVENANCE_MISSING` `high`; `PROVENANCE_INVALID` `high`, `critical` when a cited log entry does not exist |
+| `mlab` | Creates nothing. It raises a vulnerability listed in CISA KEV to `critical` |
+
+Before this release, postmortem and socket rated an unstated malware signal `medium`,
+and no setting brings that back: an unrated malware signal is what the
+threshold is for.
+
+### Go registries {#go}
+
+A `goproxy` registry is where unrated advisories are most common, and so where
+`unknown_severity` is most often lowered. The Go vulnerability database rates
+nothing: a `GO-` record takes a rating only from a twin, usually a GitHub
+advisory, and many have none. `golang.org/x/net@0.22.0` carries 17 `GO-`
+records with no rated twin, so under the defaults it is refused.
+
+The choice per registry:
+
+```toml
+# Keep the default, refuse what nobody rated, and excuse a version at a time
+# with a security_verdict exemption.
+
+# Or serve unrated Go advisories, and accept the load-time warning
+# security.unknown-served that says so.
+[registries.security]
+max_severity     = "high"
+unknown_severity = "medium"
+```
+
+`MAL-` records are refused either way.
+
+### Raising a combination: escalation {#escalation}
+
+`[scanners.<name>.escalation]` raises a scanner's findings when enough of them
+land on one version. It is not set by default. One documented use is
+postmortem's timeline on npm: a publisher change on its own is common, but a
+publisher change in the same release that adds an install hook is how a taken
+over account usually ships its payload.
+
+```toml
+[scanners.postmortem.escalation]
+kinds = ["transition"]   # publisher_changed, install_hook_added, repository_moved, …
+count = 2                # two transitions at the same version…
+from  = "medium"
+to    = "high"           # …are both raised to high, which max_severity = "high" refuses
+```
+
+Escalation counts finding kinds, not codes: any two transitions at one version
+qualify, `repository_moved` with `dormant_release` included. Measure how often
+that fires on your own cache before turning it on. An escalated finding is
+stored at its new severity.
 
 ---
 
@@ -428,6 +579,8 @@ A reload reports these without refusing the file:
 | `security.unprotected` | `mode = "warn"` with no `required_scanners`: nothing can hold a version |
 | `security.timestamp-hold-unavailable` | `hold_missing_timestamp = true` on a kind that has no publish date: every version is held |
 | `security.enrichment-required` | A `required_scanners` entry that never produces findings of its own (`mlab`) |
+| `security.unknown-served` | `mode = "block"` with `unknown_severity` set below `max_severity` (`"unknown"` included): unrated advisories are served. `MAL-` records are still refused. See [Unrated findings](#unknown-severity) |
+| `security.scanner-error-open` | `mode = "block"` with `scanner_error = "warn"` or `"ignore"`: a scanner that cannot answer — an advisory database down or throttling included — serves the version |
 | `license-gate.sbom-disabled`, `license-gate.no-extractor`, `license-gate.denies-everything` | `license_gate` with nothing to read |
 | `require-signed-release.unsigned-publishes` | The gate on a registry that accepts unsigned publishes |
 | `flag-source.can-hard-block` | A flag source that can refuse downloads with no threshold |

@@ -362,7 +362,20 @@ impl PackageRepository for PgPackageRepository {
     }
 
     async fn covering_block(&self, pkg: &PackageId) -> Result<Option<String>, CoreError> {
-        crud::covering_block_impl(&self.pool, pkg).await
+        let key = (
+            pkg.registry.clone(),
+            pkg.name.clone(),
+            pkg.version.clone(),
+            pkg.artifact.clone(),
+        );
+        crate::db::read_cache::CACHES
+            .blocks
+            .get_or_try(key, crud::covering_block_impl(&self.pool, pkg))
+            .await
+    }
+
+    async fn prefetch_covering_blocks(&self, pkgs: &[PackageId]) {
+        crud::prefetch_covering_blocks(&self.pool, pkgs).await
     }
 
     async fn blocked_versions(&self, registry: &str, name: &str) -> Result<Vec<String>, CoreError> {
@@ -385,11 +398,16 @@ impl PackageRepository for PgPackageRepository {
     }
 
     async fn set_status(&self, pkg: &PackageId, status: PackageStatus) -> Result<(), CoreError> {
-        crud::set_status_impl(&self.pool, pkg, status).await
+        let r = crud::set_status_impl(&self.pool, pkg, status).await;
+        // This replica's next read must not wait for its own notification.
+        crate::db::read_cache::CACHES.blocks.clear();
+        r
     }
 
     async fn delete_package(&self, pkg: &PackageId) -> Result<bool, CoreError> {
-        crud::delete_package_impl(&self.pool, pkg).await
+        let r = crud::delete_package_impl(&self.pool, pkg).await;
+        crate::db::read_cache::CACHES.blocks.clear();
+        r
     }
 
     async fn list_packages(&self, filter: PackageFilter) -> Result<Vec<PackageSummary>, CoreError> {

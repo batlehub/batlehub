@@ -37,6 +37,9 @@ pub struct FlagsRule {
     /// Whether a `gate` flag over the threshold denies (the `cve_gate`
     /// rule's `block`, when one is configured; else `true`).
     pub gate_blocks: bool,
+    /// What a pushed flag rated `unknown` is judged at (RFC 0041 §4.5): the
+    /// registry's `cve_gate.unknown_severity`, else `high`.
+    pub unknown_severity: Severity,
 }
 
 impl FlagsRule {
@@ -45,7 +48,13 @@ impl FlagsRule {
             repo,
             gate_min_severity: Severity::High,
             gate_blocks: true,
+            unknown_severity: Severity::High,
         }
+    }
+
+    pub fn with_unknown_severity(mut self, unknown_as: Severity) -> Self {
+        self.unknown_severity = unknown_as;
+        self
     }
 
     pub fn with_gate(mut self, min_severity: Severity, blocks: bool) -> Self {
@@ -96,13 +105,13 @@ impl Rule for FlagsRule {
         let worst = covering
             .iter()
             .filter(|f| f.effect == FlagEffect::Gate)
-            .filter(|f| f.gate_severity() >= self.gate_min_severity)
-            .max_by_key(|f| f.gate_severity());
+            .filter(|f| f.gate_severity().judged(self.unknown_severity) >= self.gate_min_severity)
+            .max_by_key(|f| f.gate_severity().judged(self.unknown_severity));
         match worst {
             Some(f) => RuleDecision::Deny {
                 reason: format!(
                     "blocked: {} {} flagged by {} ({}) (minimum gated severity: {})",
-                    f.gate_severity().as_str(),
+                    f.gate_severity().judged(self.unknown_severity).as_str(),
                     f.kind.as_str(),
                     f.source,
                     f.external_id,

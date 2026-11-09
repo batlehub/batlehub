@@ -1,0 +1,191 @@
+{
+ "SchemaVersion": 2,
+ "Trivy": {
+  "Version": "0.76.1"
+ },
+ "CreatedAt": "2026-11-08T09:03:33.947727269Z",
+ "ArtifactName": "/home/runner/.local/share/mise/installs",
+ "ArtifactType": "filesystem",
+ "Results": [
+  {
+   "Target": "helm-docs/1.14.2/helm-docs",
+   "Class": "lang-pkgs",
+   "Type": "gobinary",
+   "Vulnerabilities": [
+    {
+     "VulnerabilityID": "CVE-2024-24790",
+     "PkgID": "stdlib@v1.22.1",
+     "PkgName": "stdlib",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/stdlib@v1.22.1",
+      "UID": "a3dcb35117af73c4"
+     },
+     "InstalledVersion": "v1.22.1",
+     "FixedVersion": "1.21.11, 1.22.4",
+     "Status": "fixed",
+     "SeveritySource": "nvd",
+     "Title": "golang: net/netip: Unexpected behavior from Is methods for IPv4-mapped IPv6 addresses",
+     "Severity": "CRITICAL"
+    },
+    {
+     "VulnerabilityID": "CVE-2025-68121",
+     "PkgID": "stdlib@v1.22.1",
+     "PkgName": "stdlib",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/stdlib@v1.22.1",
+      "UID": "a3dcb35117af73c4"
+     },
+     "InstalledVersion": "v1.22.1",
+     "FixedVersion": "1.24.13, 1.25.7, 1.26.0-rc.3",
+     "Status": "fixed",
+     "SeveritySource": "nvd",
+     "Title": "crypto/tls: crypto/tls: Incorrect certificate validation during TLS session resumption",
+     "Severity": "CRITICAL"
+    },
+    {
+     "VulnerabilityID": "CVE-2024-45337",
+     "PkgID": "golang.org/x/crypto@v0.21.0",
+     "PkgName": "golang.org/x/crypto",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/golang.org/x/crypto@v0.21.0",
+      "UID": "371c7c502da6c85c"
+     },
+     "InstalledVersion": "v0.21.0",
+     "FixedVersion": "0.31.0",
+     "Status": "fixed",
+     "Title": "golang.org/x/crypto/ssh: Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass in golang.org/x/crypto",
+     "Severity": "HIGH"
+    },
+    {
+     "VulnerabilityID": "CVE-2025-22869",
+     "PkgID": "golang.org/x/crypto@v0.21.0",
+     "PkgName": "golang.org/x/crypto",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/golang.org/x/crypto@v0.21.0",
+      "UID": "371c7c502da6c85c"
+     },
+     "InstalledVersion": "v0.21.0",
+     "FixedVersion": "0.35.0",
+     "Status": "fixed",
+     "Title": "golang.org/x/crypto/ssh: Denial of Service in the Key Exchange of golang.org/x/crypto/ssh",
+     "Severity": "HIGH"
+    },
+    {
+     "VulnerabilityID": "CVE-2025-47914",
+     "PkgID": "golang.org/x/crypto@v0.21.0",
+     "PkgName": "golang.org/x/crypto",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/golang.org/x/crypto@v0.21.0",
+      "UID": "371c7c502da6c85c"
+     },
+     "InstalledVersion": "v0.21.0",
+     "FixedVersion": "0.45.0",
+     "Status": "fixed",
+     "Title": "golang.org/x/crypto/ssh/agent: SSH Agent servers: Denial of Service due to malformed messages",
+     "Severity": "MEDIUM"
+    },
+    {
+     "VulnerabilityID": "CVE-2024-45341",
+     "PkgID": "stdlib@v1.22.1",
+     "PkgName": "stdlib",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/stdlib@v1.22.1",
+      "UID": "a3dcb35117af73c4"
+     },
+     "InstalledVersion": "v1.22.1",
+     "FixedVersion": "1.22.11, 1.23.5, 1.24.0-rc.2",
+     "Status": "fixed",
+     "Title": "golang: crypto/x509: crypto/x509: usage of IPv6 zone IDs can bypass URI name constraints",
+     "Severity": "LOW"
+    }
+   ]
+  },
+  {
+   "Target": "lazydocker/0.25.2/lazydocker",
+   "Class": "lang-pkgs",
+   "Type": "gobinary",
+   "Vulnerabilities": [
+    {
+     "VulnerabilityID": "CVE-2025-15558",
+     "PkgID": "github.com/docker/cli@v27.1.1+incompatible",
+     "PkgName": "github.com/docker/cli",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/github.com/docker/cli@v27.1.1%2Bincompatible",
+      "UID": "307d64f13a6f99c2"
+     },
+     "InstalledVersion": "v27.1.1+incompatible",
+     "FixedVersion": "29.2.0",
+     "Status": "fixed",
+     "SeveritySource": "ghsa",
+     "Title": "docker/cli: Docker CLI for Windows: Privilege escalation via malicious plugin binaries",
+     "Severity": "HIGH"
+    },
+    {
+     "VulnerabilityID": "CVE-2026-56851",
+     "PkgID": "golang.org/x/text@v0.16.0",
+     "PkgName": "golang.org/x/text",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/golang.org/x/text@v0.16.0",
+      "UID": "180e5623308c061f"
+     },
+     "InstalledVersion": "v0.16.0",
+     "FixedVersion": "0.41.0",
+     "Status": "fixed",
+     "Title": "golang.org/x/text: golang.org/x/text: Denial of Service via out-of-bounds slice error in Nickname profile",
+     "Severity": "HIGH"
+    },
+    {
+     "VulnerabilityID": "CVE-2026-41567",
+     "PkgID": "github.com/docker/docker@v28.5.2+incompatible",
+     "PkgName": "github.com/docker/docker",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/github.com/docker/docker@v28.5.2%2Bincompatible",
+      "UID": "408c17070c2f446"
+     },
+     "InstalledVersion": "v28.5.2+incompatible",
+     "Status": "affected",
+     "SeveritySource": "ghsa",
+     "Title": "docker: Moby/Docker Engine: Arbitrary Code Execution via malicious container image and compressed archive upload",
+     "Severity": "HIGH"
+    }
+   ]
+  },
+  {
+   "Target": "k9s/0.51.0/k9s",
+   "Class": "lang-pkgs",
+   "Type": "gobinary",
+   "Vulnerabilities": [
+    {
+     "VulnerabilityID": "CVE-2026-53488",
+     "PkgID": "github.com/containerd/containerd@v1.7.32",
+     "PkgName": "github.com/containerd/containerd",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/github.com/containerd/containerd@v1.7.32",
+      "UID": "a35e209fa208bb7d"
+     },
+     "InstalledVersion": "v1.7.32",
+     "FixedVersion": "1.7.33",
+     "Status": "fixed",
+     "SeveritySource": "ghsa",
+     "Title": "github.com/containerd/containerd: containerd: Host-root command execution via unvalidated image config labels in CRI plugin",
+     "Severity": "HIGH"
+    },
+    {
+     "VulnerabilityID": "CVE-2026-53488",
+     "PkgID": "github.com/containerd/containerd/v2@v2.2.4",
+     "PkgName": "github.com/containerd/containerd/v2",
+     "PkgIdentifier": {
+      "PURL": "pkg:golang/github.com/containerd/containerd/v2@v2.2.4",
+      "UID": "c0cf8bfb88196cdc"
+     },
+     "InstalledVersion": "v2.2.4",
+     "FixedVersion": "2.0.10, 2.1.9, 2.2.5, 2.3.2",
+     "Status": "fixed",
+     "SeveritySource": "ghsa",
+     "Title": "github.com/containerd/containerd: containerd: Host-root command execution via unvalidated image config labels in CRI plugin",
+     "Severity": "HIGH"
+    }
+   ]
+  }
+ ]
+}

@@ -44,6 +44,10 @@ pub trait AdvisoryRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> Result<Vec<PackageFlag>, CoreError>;
 
+    /// Warm whatever cache backs [`Self::live_flags_for_package`] for many
+    /// packages at once. The default does nothing.
+    async fn prefetch_live_flags(&self, _packages: &[(String, String)], _now: DateTime<Utc>) {}
+
     /// The exposure report page (RFC 0002 §4.6): allowed downloads in the
     /// window joined to the flags covering them, one row per consumer ×
     /// coordinate × flag, `last_pull DESC`.

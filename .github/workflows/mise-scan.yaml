@@ -36,12 +36,6 @@ name: Development toolchain CVEs (mise)
 on:
   pull_request:
     branches: ["main"]
-    paths:
-      - "mise.toml"
-      - "mise.lock"
-      - ".github/mise-cve-budget.json"
-      - ".github/scripts/mise_cve_report.py"
-      - ".github/workflows/mise-scan.yaml"
   # Weekly, and not daily: the advisory database moves, but so does nothing else
   # here between tool bumps, and installing the whole toolchain is minutes of
   # runner time. Monday morning, before the week's work starts on it.
@@ -54,7 +48,35 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            mise.toml
+            mise.lock
+            .github/mise-cve-budget.json
+            .github/scripts/mise_cve_report.py
+            .github/workflows/mise-scan.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   scan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: Toolchain CVEs
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -170,3 +192,22 @@ jobs:
             mise-cve-report.md
             mise-cve-report.json
           retention-days: 14
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: mise-scan.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, scan]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

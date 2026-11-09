@@ -1,0 +1,414 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": "file:///work/head/"
+        }
+      },
+      "results": [
+        {
+          "level": "none",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "event-stream@3.3.6 [—] — no-repository"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "450664816f297ffa"
+          },
+          "properties": {
+            "dep": 0,
+            "repo": null,
+            "risk": 0,
+            "security-severity": "1.0",
+            "stars": null
+          },
+          "ruleId": "postmortem.dependency-risk"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "left-pad@1.3.0 [stevemao/left-pad] — stale (2759d idle), archived"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "fccf057ee3967fc1"
+          },
+          "properties": {
+            "dep": 0,
+            "repo": "stevemao/left-pad",
+            "risk": 50,
+            "security-severity": "5.0",
+            "stars": 1303
+          },
+          "ruleId": "postmortem.dependency-risk"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "lodash@4.17.20 [lodash/lodash] — new-publisher"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "930f79d2e4076dfb"
+          },
+          "properties": {
+            "dep": 0,
+            "repo": "lodash/lodash",
+            "risk": 25,
+            "security-severity": "5.0",
+            "stars": 61264
+          },
+          "ruleId": "postmortem.dependency-risk"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "minimist@1.2.5 [substack/minimist] — dangling-repo (substack/minimist not found)"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "e7dd925c1c959c22"
+          },
+          "properties": {
+            "dep": 0,
+            "repo": "substack/minimist",
+            "risk": 25,
+            "security-severity": "5.0",
+            "stars": null
+          },
+          "ruleId": "postmortem.dependency-risk"
+        },
+        {
+          "level": "none",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "ynodejs_mod_log@10.0.1 [—] — no-repository"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "cddc1bc678aec07c"
+          },
+          "properties": {
+            "dep": 0,
+            "repo": null,
+            "risk": 0,
+            "security-severity": "1.0",
+            "stars": null
+          },
+          "ruleId": "postmortem.dependency-risk"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "event-stream@3.3.6: GHSA-mh6f-8j2x-4483 — Critical severity vulnerability that affects event-stream and flatmap-stream"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "9b48766622d0aba5"
+          },
+          "properties": {
+            "advisory": "GHSA-mh6f-8j2x-4483",
+            "security-severity": "9.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "lodash@4.17.20: GHSA-29mw-wpgm-hmr9 — Regular Expression Denial of Service (ReDoS) in lodash"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "549e82b572b637c9"
+          },
+          "properties": {
+            "advisory": "GHSA-29mw-wpgm-hmr9",
+            "security-severity": "5.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "lodash@4.17.20: GHSA-35jh-r3h4-6jhm — Command Injection in lodash"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "6d86a751b72ee0c1"
+          },
+          "properties": {
+            "advisory": "GHSA-35jh-r3h4-6jhm",
+            "security-severity": "7.5"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "lodash@4.17.20: GHSA-r5fr-rjxr-66jc — lodash vulnerable to Code Injection via `_.template` imports key names"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "658f5bb2416a729e"
+          },
+          "properties": {
+            "advisory": "GHSA-r5fr-rjxr-66jc",
+            "security-severity": "7.5"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "lodash@4.17.20: GHSA-xxjr-mmjv-4gpg — Lodash has Prototype Pollution Vulnerability in `_.unset`, `_.omit`, and `_.pullAt` functions"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "26826319b0e962a4"
+          },
+          "properties": {
+            "advisory": "GHSA-xxjr-mmjv-4gpg",
+            "security-severity": "5.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "minimist@1.2.5: GHSA-xvch-5gv4-984h — Prototype Pollution in minimist"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "ea6bf2bd494ba087"
+          },
+          "properties": {
+            "advisory": "GHSA-xvch-5gv4-984h",
+            "security-severity": "9.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "ynodejs_mod_log@10.0.1: MAL-2023-1000 — Malicious code in ynodejs_mod_log (npm)"
+          },
+          "partialFingerprints": {
+            "postmortem/tree-fingerprint": "617a603ea5270480"
+          },
+          "properties": {
+            "advisory": "MAL-2023-1000",
+            "security-severity": "5.0"
+          },
+          "ruleId": "postmortem.known-vulnerability"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://github.com/mlab-sh/postmortem",
+          "name": "postmortem",
+          "rules": [
+            {
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "fullDescription": {
+                "text": "The dependency raised one or more supply-chain reputation or identity signals — low stars, a freshly-created or transferred repository, a typosquat of a popular name, a newly-added install script, a dormant release, or a new publisher."
+              },
+              "help": {
+                "markdown": "See the [postmortem README](https://github.com/mlab-sh/postmortem#--online-reputation--the-riskdep-scores) for how `tree --online` scores reputation.",
+                "text": "See https://github.com/mlab-sh/postmortem#--online-reputation--the-riskdep-scores for how tree scores reputation."
+              },
+              "id": "postmortem.dependency-risk",
+              "name": "postmortem.dependency-risk",
+              "properties": {
+                "precision": "medium",
+                "tags": [
+                  "security",
+                  "supply-chain",
+                  "reputation"
+                ]
+              },
+              "shortDescription": {
+                "text": "Dependency reputation / identity risk"
+              }
+            },
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "A dependency version matches a published advisory (OSV / GHSA / CVE) from the mlab SBOM scan."
+              },
+              "help": {
+                "markdown": "See the [postmortem README](https://github.com/mlab-sh/postmortem#--vulns-known-vulnerabilities) for the vulnerability source.",
+                "text": "See https://github.com/mlab-sh/postmortem#--vulns-known-vulnerabilities for the vulnerability source."
+              },
+              "id": "postmortem.known-vulnerability",
+              "name": "postmortem.known-vulnerability",
+              "properties": {
+                "precision": "high",
+                "tags": [
+                  "security",
+                  "supply-chain",
+                  "vulnerability"
+                ]
+              },
+              "shortDescription": {
+                "text": "Known vulnerability in dependency"
+              }
+            }
+          ],
+          "semanticVersion": "2.9.2",
+          "version": "2.9.2"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

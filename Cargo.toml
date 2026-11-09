@@ -230,3 +230,6 @@ aws-config = { version = "1", default-features = false }
 paste       = { path = "patches/paste" }
 sqlx-macros = { path = "patches/sqlx-macros" }
 sqlx-mysql  = { path = "patches/sqlx-mysql" }
+# sqlx-sqlite: same shape, an optional dep never compiled that still put
+# libsqlite3-sys 0.37 (RUSTSEC-2026-0459, bundled SQLite < 3.54) in the lock file.
+sqlx-sqlite = { path = "patches/sqlx-sqlite" }

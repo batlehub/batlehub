@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: 7360757901fe0164
+sourceHash: 529f9b3b9dc21735
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -165,6 +165,13 @@ en existe une. Si la vulnérabilité ne peut pas toucher votre usage du paquet,
 votre administrateur peut consigner ce jugement sous forme d'exemption, avec un
 motif et une date de fin.
 
+L'avis peut être **non noté** : certaines bases, la base de vulnérabilités Go
+en tête, publient des avis sans gravité. Le registre le juge alors à son
+niveau `unknown_severity`, `high` sauf si votre administrateur l'a modifié : un
+avis non noté est donc refusé comme un avis `high`. `batlehub-cli why` le
+montre en gravité `unknown`, jugée `high` par `unknown_severity`. Voir
+[Les constats non notés](/fr/guide/security-gates#unknown-severity).
+
 #### `MALWARE_SIGNAL` {#malware-signal}
 
 Un scanner a trouvé du code qui se comporte comme un malware : exécution
@@ -173,6 +180,19 @@ identifiants lus puis envoyés ailleurs, ou correspondance avec l'une des règle
 propres à votre organisation. **Ne contournez pas celui-ci.** Prévenez votre
 administrateur ou votre équipe sécurité, et utilisez une version qui n'en
 porte pas.
+
+#### `KNOWN_MALICIOUS` {#known-malicious}
+
+Une base d'avis de sécurité répertorie cette version comme malveillante — un
+avis OSV `MAL-` : un paquet publié pour voler des identifiants, miner, ou
+ouvrir une porte dérobée. C'est toujours refusé, quels que soient le mode du
+registre et son seuil de gravité. **Ne contournez pas celui-ci.** Retirez le
+paquet de votre projet, et prévenez votre équipe sécurité s'il a déjà été
+installé : ce qu'il a exécuté à l'installation a déjà eu lieu. Si le
+signalement est erroné, seul un administrateur peut servir cette version
+précise, avec une exemption sur le garde-fou `security_verdict`
+(`batlehub-cli exemption add … --gate security_verdict`). Elle est alors
+servie en `warned`, avec `ADMIN_OVERRIDE` parmi ses motifs.
 
 #### `INSTALL_HOOK` {#install-hook}
 
@@ -316,6 +336,17 @@ ou refuse. Vérifiez le script, et épinglez-le à un commit.
 
 ---
 
+### Un code que ce serveur ne connaît pas {#unknown-code}
+
+#### `UNRECOGNISED` {#unrecognised}
+
+Le verdict de cette version a été écrit par une version du serveur plus
+récente que celle qui vous a répondu, et porte une raison que celle-ci ne sait
+pas lire. Elle refuse plutôt que de deviner. Cela n'arrive que pendant le
+déploiement d'une mise à jour, ou après un retour arrière : réessayez dans
+quelques minutes et, si cela persiste, prévenez votre administrateur — le
+réplica qui a répondu est plus ancien que la base qu'il lit.
+
 ## Les refus à message simple {#plain-messages}
 
 Ils viennent de registres sans profil de chaîne d'approvisionnement. Le message
@@ -333,6 +364,8 @@ est toute la réponse, et `batlehub-cli why` n'a rien à y ajouter.
 | `cannot verify the publisher` | Le contrôle d'éditeur est actif, et ce type de registre ne sait pas indiquer d'éditeur | La configuration de votre administrateur doit être corrigée |
 | `this release is not signed` | Seules les releases signées sont servies | Utilisez une version signée |
 | `blocked: known … vulnerability` | Une vulnérabilité enregistrée au seuil ou au-dessus | Mettez à jour, ou demandez une exemption |
+| `blocked: unrated vulnerability` | Un avis sans gravité, jugé au `unknown_severity` du registre | Mettez à jour, ou demandez une exemption |
+| `blocked: known malicious package` | Un avis OSV `MAL-` répertorie cette version comme malware | Retirez-la de votre projet ; voir [`KNOWN_MALICIOUS`](#known-malicious) |
 | `blocked: licence '…'` / `blocked: no declared licence` | La politique de licences | Adressez-vous au responsable de la politique de licences |
 | `blocked: … flagged by …` | Votre équipe sécurité l'a signalée | Utilisez une autre version |
 | tout autre texte | Très probablement un blocage par un administrateur, dans ses propres mots | Adressez-vous à l'administrateur |

@@ -68,37 +68,61 @@ tasks:
       # into the published site) are still audited.
       - pnpm audit --prod --audit-level high
 
-  postmortem:rust:
-    desc: "Dependency supply-chain gate for the Rust workspace — source-repo reputation + known vulns, from Cargo.lock"
+  # The local half of .github/workflows/postmortem.yaml. postmortem's own
+  # --fail-on-vuln passes when vuln.mlab.sh does not answer (RFC 0041 §17
+  # M18), so the verdict comes from postmortem_new_risk.py reading the JSON,
+  # never from postmortem's exit code. Export VULN_MLAB_TOKEN: an anonymous
+  # scan reads 512 packages and the Rust root and ui/ are over it, which the
+  # script reports as a failure rather than a clean scan (decision 50).
+  # Export GITHUB_TOKEN to raise the 60/h anonymous limit of --online.
+  postmortem:gate:
+    internal: true
+    requires:
+      vars: [ROOT, FAIL_ON]
     cmds:
-      # Rebuilds the dependency forest from the lockfile (no install, no
-      # lifecycle scripts), resolves each dep to its source repo and scores it
-      # (stars, age, last activity, archived, typosquat), then cross-checks
-      # vuln.mlab.sh. --fail-on-vuln high is the same bar as `pnpm audit
-      # --audit-level high` and the Trivy image gate; the reputation thresholds
-      # (--max-risk/--max-dep/--max-high/--max-sus) are deliberately unset until
-      # a baseline exists. Keep in sync with .github/workflows/postmortem.yaml.
-      #
-      # `postmortem` detects only the lockfiles sitting directly in the scanned
-      # directory — hence one task per dependency root. Export GITHUB_TOKEN to
-      # raise the 60/h anonymous limit on the reputation lookups.
-      - postmortem tree . --online --vulns --fail-on-vuln high
+      - mkdir -p .postmortem-out
+      - postmortem tree {{.ROOT}} --vulns --json --no-progress -o .postmortem-out/{{.NAME}}-tree.json
+      - python3 -I .github/scripts/postmortem_new_risk.py --root {{.ROOT}} --tree .postmortem-out/{{.NAME}}-tree.json --fail-on {{.FAIL_ON}}
+
+  postmortem:rust:
+    desc: "Dependency supply-chain gate for the Rust workspace — known vulns and MAL- packages, from Cargo.lock"
+    cmds:
+      - task: postmortem:gate
+        vars: { ROOT: ".", NAME: rust, FAIL_ON: high }
 
   postmortem:ui:
-    desc: "Dependency supply-chain gate for the frontend — source-repo reputation + known vulns, from ui/pnpm-lock.yaml"
-    dir: ui
+    desc: "Dependency supply-chain gate for the frontend — known vulns and MAL- packages, from ui/pnpm-lock.yaml"
     cmds:
-      - postmortem tree . --online --vulns --fail-on-vuln high
+      - task: postmortem:gate
+        vars: { ROOT: ui, NAME: ui, FAIL_ON: high }
 
   postmortem:docs:
-    desc: "Dependency supply-chain report for the documentation site (report-only, like `task docs:audit`'s --prod carve-out)"
-    dir: docs
+    desc: "Dependency supply-chain gate for the documentation site — blocks at critical, the docs tree only builds (RFC 0041 decision 3)"
     cmds:
-      # No --fail-on-vuln, for the same reason docs:audit runs with --prod:
-      # vitepress and its transitive build tooling carry advisories with no
-      # upstream fix for 1.x, and none of it ships or runs as a service.
-      # postmortem has no prod-only filter, so report-only is the equivalent.
-      - postmortem tree . --online --vulns
+      - task: postmortem:gate
+        vars: { ROOT: docs, NAME: docs, FAIL_ON: critical }
+
+  postmortem:new-risk:
+    desc: "What this branch adds to one dependency root against origin/main, judged as a pull request is (ROOT=. | ui | docs)"
+    requires:
+      vars: [ROOT]
+    cmds:
+      - rm -rf .postmortem-out/base && mkdir -p .postmortem-out
+      - git worktree add --detach .postmortem-out/base origin/main
+      - defer: git worktree remove --force .postmortem-out/base
+      - timeout 300 postmortem diff .postmortem-out/base/{{.ROOT}} {{.ROOT}} --json --no-progress -o .postmortem-out/diff.json
+      - postmortem tree {{.ROOT}} --vulns --json --no-progress -o .postmortem-out/tree.json
+      # Reputation (RFC 0041 phase 4): online, so it needs GITHUB_TOKEN for a
+      # useful answer; without one GitHub rate-limits it and the gate says so.
+      - timeout 300 postmortem diff .postmortem-out/base/{{.ROOT}} {{.ROOT}} --online --json --no-progress -o .postmortem-out/online.json
+      - postmortem scripts .postmortem-out/base/{{.ROOT}} --json --no-progress -o .postmortem-out/scripts-base.json
+      - postmortem scripts {{.ROOT}} --json --no-progress -o .postmortem-out/scripts-head.json
+      - >-
+        python3 -I .github/scripts/postmortem_new_risk.py --root {{.ROOT}}
+        --tree .postmortem-out/tree.json --diff .postmortem-out/diff.json
+        --online-diff .postmortem-out/online.json
+        --scripts-base .postmortem-out/scripts-base.json --scripts-head .postmortem-out/scripts-head.json
+        --fail-on {{if eq .ROOT "docs"}}critical{{else}}high{{end}}
 
   postmortem:
     desc: "Run the dependency supply-chain gate over every dependency root (Rust, UI, Website)"

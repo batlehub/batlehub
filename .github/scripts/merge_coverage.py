@@ -2,7 +2,8 @@
 """Merge per-job LCOV files and emit a markdown coverage table.
 
 Usage:
-    merge_coverage.py [--output merged.lcov] NAME=PATH [NAME=PATH ...]
+    merge_coverage.py [--output merged.lcov] [--floors-file FILE] [--floor PATH=PCT ...]
+                      [--floor-from NAME[,NAME...]] NAME=PATH [NAME=PATH ...]
 
 Each NAME=PATH pair is one test category (e.g. `unit=coverage-unit.lcov`).
 The markdown report goes to stdout (append it to $GITHUB_STEP_SUMMARY); the
@@ -11,6 +12,13 @@ row instead of failing, so a partially-run pipeline still reports.
 
 Merging rule: per (file, line) and per (file, function), execution counts are
 summed across categories — the standard LCOV aggregation.
+
+Floors (RFC 0041 §6.1): `--floor PATH=PCT` and the `PATH=PCT` lines of
+`--floors-file` (`#` comments allowed) set a minimum line coverage for `total`
+or a path prefix, computed on the `--floor-from` categories only (default
+`unit,integration`). Each breach prints one `coverage floor:` line and the run
+exits 1; a `--floor-from` category without its LCOV also exits 1 (fail closed).
+A prefix the LCOV does not contain is skipped with a warning, not read as 0 %.
 """
 
 from __future__ import annotations
@@ -116,6 +124,72 @@ def component_of(path: str) -> str:
     return "other"
 
 
+def rel_path(path: str) -> str:
+    """The repository-relative path of an LCOV `SF:` (cargo-llvm-cov writes it absolute)."""
+    for marker in ("crates/", "server/", "cli/", "fuzz/"):
+        if path.startswith(marker):
+            return path
+        idx = path.find("/" + marker)
+        if idx >= 0:
+            return path[idx + 1 :]
+    return path
+
+
+def parse_floor(spec: str) -> tuple[str, float]:
+    path, sep, value = spec.partition("=")
+    try:
+        pct_value = float(value)
+    except ValueError:
+        pct_value = -1.0
+    if not sep or not path.strip() or not 0 <= pct_value <= 100:
+        raise ValueError(f"bad floor {spec!r}: expected PATH=PCT, PCT in 0..100")
+    return path.strip(), pct_value
+
+
+def read_floors_file(path: Path) -> list[tuple[str, float]]:
+    floors = []
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            floors.append(parse_floor(line))
+    return floors
+
+
+REPRODUCE = (
+    "reproduce: `cargo llvm-cov -p <crate> --lcov --output-path lcov.info "
+    '--ignore-filename-regex "$COVERAGE_EXCLUDE"`, then `merge_coverage.py '
+    "--floors-file .github/coverage-floors.txt --floor-from local local=lcov.info` "
+    "(one crate: a lower bound for a crates/core file, which crates/web/tests also "
+    "covers in CI); the full run is `task coverage-check` (Podman: Postgres, RustFS, Redis)"
+)
+
+
+def check_floors(lines: Lines, floors: list[tuple[str, float]]) -> list[str]:
+    """One message per breached floor; prints a warning for a prefix absent from `lines`."""
+    per_file = {rel_path(f): (sum(1 for c in v.values() if c > 0), len(v)) for f, v in lines.items()}
+    breaches = []
+    for prefix, floor in floors:
+        if prefix == "total":
+            files = per_file
+        else:
+            base = prefix.rstrip("/")
+            files = {f: v for f, v in per_file.items() if f == base or f.startswith(base + "/")}
+        hit = sum(h for h, _ in files.values())
+        total = sum(t for _, t in files.values())
+        if not total:
+            print(f"coverage floor: warning: `{prefix}` is not in the LCOV, skipped", file=sys.stderr)
+            continue
+        got = 100.0 * hit / total
+        if got + 1e-9 < floor:
+            worst = sorted(files.items(), key=lambda kv: (kv[1][0] / kv[1][1] if kv[1][1] else 1.0, kv[0]))[:3]
+            names = ", ".join(f"{f} {pct(h, t)}" for f, (h, t) in worst)
+            breaches.append(
+                f"coverage floor: `{prefix}` at {got:.2f}% lines ({hit}/{total}), floor {floor:g}% "
+                f"— least covered: {names}; {REPRODUCE}"
+            )
+    return breaches
+
+
 def write_lcov(path: Path, lines: Lines, funcs: Funcs) -> None:
     with path.open("w") as out:
         for f in sorted(set(lines) | set(funcs)):
@@ -138,8 +212,22 @@ def write_lcov(path: Path, lines: Lines, funcs: Funcs) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--output", default="merged.lcov")
+    ap.add_argument("--floor", action="append", default=[], metavar="PATH=PCT")
+    ap.add_argument("--floors-file", type=Path)
+    ap.add_argument("--floor-from", default="unit,integration", metavar="NAME[,NAME...]")
     ap.add_argument("inputs", nargs="+", metavar="NAME=PATH")
     args = ap.parse_args()
+
+    try:
+        floors = [parse_floor(f) for f in args.floor]
+        if args.floors_file is not None:
+            floors += read_floors_file(args.floors_file)
+    except (OSError, ValueError) as err:
+        print(f"coverage floor: {err}", file=sys.stderr)
+        return 1
+    floor_from = {n for n in args.floor_from.split(",") if n}
+    floor_lines: Lines = defaultdict(dict)
+    absent: list[str] = []
 
     merged_lines: Lines = defaultdict(dict)
     merged_funcs: Funcs = defaultdict(dict)
@@ -150,11 +238,15 @@ def main() -> int:
         path = Path(path_s)
         if not path_s or not path.is_file():
             rows.append((name, "—", "absent", "—", "absent"))
+            if name in floor_from:
+                absent.append(name)
             continue
         lines, funcs = parse_lcov(path)
         lh, lf, fnh, fnf = totals(lines, funcs)
         rows.append((name, pct(lh, lf), f"{lh}/{lf}", pct(fnh, fnf), f"{fnh}/{fnf}"))
         merge_into(merged_lines, merged_funcs, lines, funcs)
+        if name in floor_from:
+            merge_into(floor_lines, defaultdict(dict), lines, {})
 
     lh, lf, fnh, fnf = totals(merged_lines, merged_funcs)
     rows.append(("**merged**", f"**{pct(lh, lf)}**", f"{lh}/{lf}", f"**{pct(fnh, fnf)}**", f"{fnh}/{fnf}"))
@@ -189,6 +281,25 @@ def main() -> int:
 
     write_lcov(Path(args.output), merged_lines, merged_funcs)
     print(f"\n<!-- merged lcov written to {args.output} -->", file=sys.stderr)
+
+    if not floors:
+        return 0
+    given = {spec.partition("=")[0] for spec in args.inputs}
+    breaches = [
+        f"coverage floor: category `{n}` has no LCOV — see job `{n}`" for n in sorted(set(absent) | (floor_from - given))
+    ]
+    if not breaches:
+        breaches = check_floors(floor_lines, floors)
+    if breaches:
+        print()
+        print("### Coverage floors")
+        print()
+        for line in breaches:
+            print(f"- {line}")
+            print(line, file=sys.stderr)
+        return 1
+    print()
+    print(f"Coverage floors: {len(floors)} met (on {', '.join(sorted(floor_from))}).")
     return 0
 
 

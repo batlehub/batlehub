@@ -1,0 +1,11 @@
+-- RFC 0041 decision 48 — the release-N marker. No schema change.
+--
+-- Release N reads `KNOWN_MALICIOUS` (and any reason code it does not know)
+-- without writing it; release N+1 writes it. A binary older than N cannot
+-- read what N+1 writes, so it must never run against a database N+1 has
+-- used. sqlx refuses to start a binary whose embedded migrations lack one the
+-- database has applied (`VersionMissing`, no `ignore_missing` — RFC 0041 §17
+-- M16), so this empty migration is the check: once N has migrated a
+-- database, a skipped N or a `helm rollback` below it is a loud boot failure
+-- instead of a refused version per row.
+SELECT 1;

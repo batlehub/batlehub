@@ -121,6 +121,16 @@ pub enum ReasonCode {
     AssetReplaced,
     PinnedRefRequired,
     RawScript,
+    /// An advisory database names the version as malicious (an OSV `MAL-`
+    /// record). Always denied. RFC 0041 decision 33: release N reads it and
+    /// never writes it, so the release that does is readable by the one
+    /// before it.
+    KnownMalicious,
+    /// A stored code this release does not know — written by a newer one.
+    /// Always denied, never emitted, and outside [`ReasonCode::ALL`]: a read
+    /// that met one answers a refusal instead of an error, and the row is
+    /// left for the release that wrote it (RFC 0041 decision 33).
+    Unrecognised,
 }
 
 impl ReasonCode {
@@ -155,6 +165,7 @@ impl ReasonCode {
         Self::AssetReplaced,
         Self::PinnedRefRequired,
         Self::RawScript,
+        Self::KnownMalicious,
     ];
 
     /// The SCREAMING_SNAKE wire form.
@@ -189,6 +200,8 @@ impl ReasonCode {
             Self::AssetReplaced => "ASSET_REPLACED",
             Self::PinnedRefRequired => "PINNED_REF_REQUIRED",
             Self::RawScript => "RAW_SCRIPT",
+            Self::KnownMalicious => "KNOWN_MALICIOUS",
+            Self::Unrecognised => "UNRECOGNISED",
         }
     }
 
@@ -203,7 +216,21 @@ impl ReasonCode {
 
     /// `denied` regardless of `mode`: an administrator's or the SOC's word.
     pub fn is_always_denied(&self) -> bool {
-        matches!(self, Self::BlockList | Self::SocVerdict)
+        matches!(
+            self,
+            Self::BlockList | Self::SocVerdict | Self::KnownMalicious | Self::Unrecognised
+        )
+    }
+
+    /// A stored wire form, read leniently: a code this release does not know
+    /// is [`ReasonCode::Unrecognised`] with a `WARN`, never a read error — an
+    /// error would fail every download and every listing of the version, and
+    /// nothing would repair the row (RFC 0041 decision 33).
+    pub fn parse_stored(s: &str) -> Self {
+        s.parse().unwrap_or_else(|e| {
+            tracing::warn!(code = s, error = %e, "security: stored reason code not known to this release; read as UNRECOGNISED");
+            Self::Unrecognised
+        })
     }
 
     /// The codes the maturity bypass may downgrade to `warned`: a version
@@ -268,6 +295,10 @@ pub enum FindingKind {
     Pending,
     SocVerdict,
     ScannerError,
+    /// A `ScannerError` from a scanner that is an advisory database (RFC 0041
+    /// decision 44): the maturity bypass does not lift it on a version the
+    /// database never answered for.
+    AdvisoryDbError,
     BlockList,
     Ref,
 }
@@ -296,8 +327,34 @@ impl FindingKind {
             Self::Pending => "pending",
             Self::SocVerdict => "soc_verdict",
             Self::ScannerError => "scanner_error",
+            Self::AdvisoryDbError => "advisory_db_error",
             Self::BlockList => "block_list",
             Self::Ref => "ref",
+        }
+    }
+}
+
+impl FindingKind {
+    /// The severity an adapter gives a finding of this kind when the
+    /// scanner's output states none (RFC 0041 §4.5). Exhaustive, so a new
+    /// kind cannot be added without deciding it. A scanner that states a
+    /// severity is never overridden by this.
+    pub fn default_severity(&self) -> Severity {
+        match self {
+            Self::MalwareSignal | Self::InstallHook => Severity::High,
+            Self::Typosquat | Self::Transition => Severity::Medium,
+            Self::Vulnerability
+            | Self::Provenance
+            | Self::Signature
+            | Self::License
+            | Self::Publisher
+            | Self::Age
+            | Self::Pending
+            | Self::SocVerdict
+            | Self::ScannerError
+            | Self::AdvisoryDbError
+            | Self::BlockList
+            | Self::Ref => Severity::Unknown,
         }
     }
 }
@@ -319,6 +376,7 @@ impl std::str::FromStr for FindingKind {
             "pending" => Self::Pending,
             "soc_verdict" => Self::SocVerdict,
             "scanner_error" => Self::ScannerError,
+            "advisory_db_error" => Self::AdvisoryDbError,
             "block_list" => Self::BlockList,
             "ref" => Self::Ref,
             other => return Err(format!("unknown finding kind '{other}'")),
@@ -346,7 +404,15 @@ pub struct Finding {
     /// The scanner's own output, untouched. Hostile data: never interpolated.
     #[serde(default)]
     pub raw: serde_json::Value,
+    /// The level an unrated finding was judged at, under the registry's
+    /// `unknown_severity` (RFC 0041 §4.5). Recomputed by every evaluation,
+    /// never stored: `severity` keeps what the scanner said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged_as: Option<Severity>,
 }
+
+/// The prefix of an OSV malicious-package record.
+const MALICIOUS_PREFIX: &str = "MAL-";
 
 impl Finding {
     /// A finding with only the fields every one has.
@@ -367,7 +433,26 @@ impl Finding {
             confidence: None,
             available_at: None,
             raw: serde_json::Value::Null,
+            judged_as: None,
         }
+    }
+
+    /// Whether this finding cites a known-malicious record (OSV `MAL-`), by
+    /// its reference or by an id or alias in its raw record. The one place
+    /// `MAL-` is recognised (RFC 0041 §6.8): a finding stored before the
+    /// worker emitted `KNOWN_MALICIOUS` is refused on read by this.
+    pub fn names_malicious(&self) -> bool {
+        let mal = |s: &str| s.starts_with(MALICIOUS_PREFIX);
+        if self.reference.as_deref().is_some_and(mal) {
+            return true;
+        }
+        let raw_names = |v: &serde_json::Value| {
+            v.get("id").and_then(|i| i.as_str()).is_some_and(mal)
+                || v.get("aliases")
+                    .and_then(|a| a.as_array())
+                    .is_some_and(|a| a.iter().filter_map(|x| x.as_str()).any(mal))
+        };
+        raw_names(&self.raw)
     }
 
     pub fn with_reference(mut self, reference: impl Into<String>) -> Self {
@@ -542,6 +627,10 @@ pub struct SecurityPolicy {
     pub scanners: Vec<String>,
     pub required_scanners: Vec<String>,
     pub max_severity: Severity,
+    /// What an unrated (`unknown`) finding is judged at against
+    /// `max_severity` (RFC 0041 §4.5). Default `high`; `unknown` restores
+    /// the old "an unrated finding never acts".
+    pub unknown_severity: Severity,
     pub require_provenance: bool,
     pub deny_install_hooks: InstallHookMode,
     pub scanner_error: ScannerErrorMode,
@@ -570,6 +659,7 @@ impl SecurityPolicy {
             scanners: vec!["osv".to_owned()],
             required_scanners: vec!["osv".to_owned()],
             max_severity: Severity::High,
+            unknown_severity: Severity::High,
             require_provenance: false,
             deny_install_hooks: InstallHookMode::Warn,
             scanner_error: ScannerErrorMode::Quarantine,
@@ -639,6 +729,11 @@ pub struct ScanJob {
     pub attempts: u32,
     pub leased_until: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// When the job was first deferred on an advisory database's transient
+    /// error (RFC 0041 decision 44): the anchor of the 24-hour budget,
+    /// surviving a worker restart.
+    #[serde(default)]
+    pub deferred_since: Option<DateTime<Utc>>,
 }
 
 /// The package URL a coordinate is looked up under, per registry kind.
@@ -693,7 +788,20 @@ mod tests {
                 format!("\"{}\"", code.as_str())
             );
         }
-        assert_eq!(ReasonCode::ALL.len(), 29);
+        assert_eq!(ReasonCode::ALL.len(), 30);
+        assert!(!ReasonCode::ALL.contains(&ReasonCode::Unrecognised));
+    }
+
+    #[test]
+    fn a_stored_code_this_release_does_not_know_is_unrecognised_and_denied() {
+        assert_eq!(
+            ReasonCode::parse_stored("KNOWN_MALICIOUS"),
+            ReasonCode::KnownMalicious
+        );
+        let unknown = ReasonCode::parse_stored("SOMETHING_NEWER");
+        assert_eq!(unknown, ReasonCode::Unrecognised);
+        assert!(unknown.is_always_denied() && ReasonCode::KnownMalicious.is_always_denied());
+        assert_eq!(serde_json::to_string(&unknown).unwrap(), "\"UNRECOGNISED\"");
     }
 
     /// Every code the CLI and the console link to has its section, in both
@@ -712,7 +820,9 @@ mod tests {
             ),
         ];
         for (lang, page) in pages {
-            for code in ReasonCode::ALL {
+            // `UNRECOGNISED` is outside `ALL` (nothing emits it) but a reader
+            // can still be refused with it, so it has its section too.
+            for code in ReasonCode::ALL.iter().chain([&ReasonCode::Unrecognised]) {
                 let url = reason_code_docs_url(code.as_str());
                 let anchor = url.rsplit('#').next().unwrap();
                 assert!(

@@ -31,6 +31,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 | **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
 | **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
+| **Gate scripts** | `.github/scripts/tests/test_*.py` | none — stdlib `unittest`, fixtures recorded from the real scanners | `task test:scripts` (CI: `scripts-test.yaml`) |
 
 The in-process layer is the workhorse: every test there spins up a real
 actix-web application wired to `InMemoryPackageRepository`,
@@ -113,7 +114,7 @@ task test:authz-heavy         # …plus signed-URL expiry/rotation and each real
 
 # Coverage (starts Postgres + RustFS + Redis; HTML report in coverage/html/)
 task coverage
-task coverage-check           # fails if line coverage < 80%
+task coverage-check           # fails if line coverage < 80% or a .github/coverage-floors.txt floor is breached
 
 # Fuzz
 task fuzz:check               # every target still compiles — the per-PR gate
@@ -1223,8 +1224,47 @@ stopped.
 
 ## 11. Coverage
 
-- **Gate: 80% lines.** `task coverage-check` runs
-  `cargo llvm-cov report --fail-under-lines 80`.
+- **Gate: 80% lines overall, plus per-path floors** (RFC 0041 §4.3, §6.1).
+  `task coverage-check` runs `cargo llvm-cov report --fail-under-lines 80`,
+  then `merge_coverage.py --floors-file .github/coverage-floors.txt` on the
+  same run. The floors file lists `total` and the tier-1 paths (grant, deny,
+  integrity) at 90 % lines, and only paths a recorded run showed at their
+  floor: a tier-1 path enters the day it reaches 90 %.
+- **In CI**, `test.yaml`'s `coverage-report` applies the same file to the
+  `unit` + `integration` LCOVs, reading it from the pull request's **base**,
+  so a pull request cannot lower its own floor. A breach prints one
+  `coverage floor:` line naming the three least-covered files and the
+  one-crate command that reproduces it, and the job goes red. It is
+  **reported red in CI** today and **blocks a merge from RFC 0041 phase 6**,
+  when the required checks land.
+- **Mutation testing on tier 1** (RFC 0041 §6.4): coverage says a line ran,
+  a surviving mutant says no test noticed it changed. `.cargo/mutants.toml`
+  names the scope (the tier-1 paths, and only the mapping functions of the
+  scanner adapters) and the equivalent mutants, each with its reason.
+  `task mutants FILE=crates/core/src/rules/rbac.rs` runs one file;
+  `task mutants` runs all of tier 1, in two invocations: the `crates/core`
+  paths with `--test-workspace=true`, because `crates/web`'s suites prove
+  their refusals too, and the rest per package. It calls cargo-mutants and
+  yara-x's `yr` by `mise which`, never the shims: a shim passes
+  `command_exists` and fails in cargo-mutants' scratch copy, and without a
+  real `yr` the test that kills `yara.rs`'s matching mutants skips itself.
+  **In CI**, `mutants.yaml` runs tier 1 nightly in 8 shards (red on a red
+  baseline or an empty shard, never on a survivor; the `MISSED` list is in
+  the job summary and a red night opens the `mutants-nightly` issue) and,
+  on a pull request touching a tier-1 file, the mutants on its changed
+  lines (`--in-diff`), with the binaries and the config from the base. The
+  pull request job fits in its hour: each mutant is tested by its own
+  package's suite (a `crates/core` mutant otherwise rebuilds every crate's
+  tests, about five minutes each — PR #297's 67 mutants were five hours), at
+  most 40 mutants spread by `--shard`, in a 40-minute budget whose remainder
+  is reported, not failed (`MUTANTS_PR_BUDGET`/`MUTANTS_PR_MAX` in
+  `mutants_run.sh`). A mutant only `crates/web`'s suites kill can read
+  MISSED there; the nightly runs the workspace. The pull request job
+  reports until the nightly list is empty, then blocks a new survivor.
+- **UI (tier 3)**: `pnpm run coverage` measures the whole of `ui/src` (minus
+  the generated client, tests, `main.ts`, barrels and `.d.ts`), so a file
+  nobody tests counts at 0 %; Vitest fails below 80 % on any of lines,
+  branches, functions and statements.
 - `task coverage` aggregates the workspace tests **plus** each adapter
   integration test explicitly (pg_cache, pg_vulnerability, local_registry,
   artifact_meta, pg_rate_limit, storage_router, s3_storage [+`storage-s3`],
@@ -1323,16 +1363,20 @@ stopped.
   question.
 
   **A new job in this file must declare `needs: gate` and
-  `if: needs.gate.outputs.run == 'true'`** — a job that forgets it is a job
-  dependabot still pays for, and nothing fails the build over it.
+  `if: needs.gate.outputs.run == 'true'`, and be listed in the `needs:` of
+  `required`** — the one check the `main` ruleset requires (RFC 0041
+  decision 28; [the required checks](./security-scanning.md#required-checks)).
+  The first rule is what keeps Dependabot from paying for it; the second is
+  enforced by `test_required_gate.py`, which fails when a gated workflow's
+  `required` does not wait for every other job.
 - **`soak.yaml`** — the two soak suites, **started by hand only**: a
   `workflow_dispatch`, or the `soak` label on a pull request. No push, no cron,
   and no pull request without that label. Inputs for the duration, the arrival rate, the
   heavy suite's round count and all four growth thresholds, so a run can be
   made stricter from the dispatch form. Two jobs (`k6-soak`, `heavy-soak`),
-  selectable, with a `concurrency` group so two soaks never share a runner's
-  CPU — a resource curve measured beside another soak is a measurement of the
-  runner. The samples and the report are uploaded on failure as well as on
+  selectable, with a `concurrency` group so two soaks of one pull request never
+  post into the same report (each hosted job is its own VM, so it is not about
+  the CPU). The samples and the report are uploaded on failure as well as on
   success, because that is when they are worth reading.
 - **`perf-report.yaml`** — on every release tag, runs scenarios 01–07 against a
   freshly built server, diffs the result against the previous published
@@ -1364,3 +1408,30 @@ The `.github` workflows start their own Postgres/RustFS/Redis service containers
 in YAML; the `task test:*` targets are the local-dev equivalents (Podman).
 `.forgejo/workflows/` handles image builds, Helm, the website, and updatecli —
 the Rust test matrix runs on the GitHub side.
+
+### The pull-request labels {#pr-labels}
+
+Five labels change what CI does on a pull request. Four of them *start* a
+workflow that nothing else runs on a pull request, and remove themselves when
+it finishes, so adding one again re-runs it. `full-test` is a condition, not
+a trigger (see the gate above).
+
+| Label | Workflow | What it runs | When to add it |
+| --- | --- | --- | --- |
+| `full-test` | `test.yaml`, `sonar.yaml` | the whole suite on a `dependabot/` branch, on the next push | a bump that could break a client: `actix-web`, `sqlx`, `aws-sdk-s3`, anything `CLAUDE.md`'s security constraints name |
+| `soak` | `soak.yaml` | both soak suites (§7-quater), about an hour | a streaming, caching or pooling path changed |
+| `profile` | `profile.yaml` | the CPU profile of every soak arm (`perf/scripts/profile.sh`), compared with the last `main` profile; report-only except for the route inventory | the request path or a per-request cost changed |
+| `breaking-point` | `breaking-point.yaml` | escalating load per backend until it breaks | a storage or cache backend, the request path, the pool or an allocator setting changed |
+| `image` | `pr-image.yaml` | `ghcr.io/<repo>:pr-<number>` (amd64 + arm64), Trivy-scanned, linked in a comment | someone has to run the branch outside CI |
+
+Each posts its result as one comment on the pull request, edited in place on
+a re-run. Add them **after** the push's `test.yaml` run is green: a red build
+makes their numbers moot. They can all go on at once: each job of a
+GitHub-hosted runner is its own VM, so `soak`, `profile` and `breaking-point`
+do not measure each other. The exception is `image`: every label wakes every
+`labeled` workflow, and `pr-image.yaml` cancels its run in progress when it
+wakes again, so a label added while the image builds kills the build. Add
+`image` alone, or last. A label is
+the way in on a branch because a `workflow_dispatch`-only workflow does not
+exist until it has landed on `main`; once it has, the Actions tab's dispatch
+form does the same with every input exposed.

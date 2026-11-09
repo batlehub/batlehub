@@ -608,6 +608,15 @@ async fn main() -> Result<()> {
         .context("connecting to database")?,
     );
     repo.run_migrations().await.context("running migrations")?;
+    // The per-download reads are cached only while this listener is connected
+    // (migration 066's triggers keep every replica's copy coherent).
+    // `read_cache = false`: never live, so every read goes to the database.
+    if config.database.read_cache {
+        batlehub_adapters::db::read_cache::spawn_invalidation_listener(
+            repo.pool(),
+            config.database.listen_url.clone(),
+        );
+    }
     stores::spawn_db_pool_gauge_sampler(repo.pool());
     stores::spawn_db_housekeeping(repo.pool());
     allocator::spawn_allocator_gauge_sampler();
@@ -755,6 +764,23 @@ async fn main() -> Result<()> {
             )) as Arc<dyn batlehub_core::ports::UpstreamStatusPort>
         }),
     };
+
+    // RFC 0041 §6.8: how many versions and artifacts hold an unrated
+    // advisory the next release will judge by `unknown_severity` — once per
+    // process start, one replica (an advisory transaction lock), off the
+    // start-up path.
+    if let Some(verdicts) = security_stores.verdicts.clone() {
+        let vulns = Arc::clone(&vuln_repo);
+        let names = registry_names.clone();
+        tokio::spawn(async move {
+            batlehub_core::services::upgrade_counts::log_unrated_upgrade_counts(
+                verdicts.as_ref(),
+                vulns.as_ref(),
+                &names,
+            )
+            .await;
+        });
+    }
 
     let (
         init_hot,

@@ -84,7 +84,7 @@ async fn two_workers_never_lease_the_same_job_and_priority_orders_them() {
     );
     assert_eq!(b[0].package.version, "1.0.0");
 
-    q.complete(a[0].id).await.unwrap();
+    q.complete(a[0].id, Some("w-a")).await.unwrap();
     // Now the coordinate is free for a new job.
     assert!(q.enqueue(&p2, None, ScanTrigger::Rescan).await.unwrap());
     let counts = q.queued().await.unwrap();
@@ -132,7 +132,7 @@ async fn an_expired_lease_returns_to_the_queue_and_spent_attempts_are_reported()
         .await
         .unwrap()
         .is_empty());
-    q.fail(second[0].id, "crashed").await.unwrap();
+    q.fail(second[0].id, "w2", "crashed").await.unwrap();
     // attempts == max_attempts: no longer leasable, reported as exhausted.
     assert!(q
         .lease("w4", std::slice::from_ref(&reg), 1, 60, 2)
@@ -141,7 +141,7 @@ async fn an_expired_lease_returns_to_the_queue_and_spent_attempts_are_reported()
         .is_empty());
     let spent = q.exhausted(2, 10).await.unwrap();
     assert!(spent.iter().any(|j| j.package == p));
-    q.complete(second[0].id).await.unwrap();
+    q.complete(second[0].id, None).await.unwrap();
     assert!(q
         .exhausted(2, 10)
         .await
@@ -221,6 +221,89 @@ async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
         .await
         .unwrap();
     assert!(workers.live_count(60).await.unwrap() >= 1);
+}
+
+/// RFC 0041 decision 33: a row a newer release wrote — a reason code this
+/// one does not know, a severity it cannot parse — is read, not a read
+/// error: the code as `UNRECOGNISED`, the severity as `critical`, and a list
+/// over the row still answers. And the release-N upgrade count sees it.
+#[tokio::test]
+async fn a_row_a_newer_release_wrote_is_read_leniently_and_counted() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let repo = PgVerdictRepository::new(pool.clone());
+    let pkg = PackageId::new(&reg, "pkg", "1.0.0");
+    repo.upsert(&Verdict {
+        package: pkg.clone(),
+        state: VerdictState::Denied,
+        reason_codes: vec![ReasonCode::Vulnerability],
+        findings: vec![
+            Finding::new(
+                "osv",
+                FindingKind::Vulnerability,
+                ReasonCode::Vulnerability,
+                Severity::High,
+                "GHSA-1",
+            ),
+            Finding::new(
+                "osv",
+                FindingKind::Vulnerability,
+                ReasonCode::Vulnerability,
+                Severity::Unknown,
+                "MAL-2023-1000",
+            ),
+        ],
+        policy_ref: format!("{reg}/default"),
+        available_at: None,
+        evaluated_at: Utc::now(),
+        last_scanned_at: Some(Utc::now()),
+        scanners_done: vec!["osv".into()],
+    })
+    .await
+    .unwrap();
+    let counts = repo
+        .count_unrated_by_registry()
+        .await
+        .unwrap()
+        .expect("not contended");
+    assert!(counts.contains(&(reg.clone(), 1)), "{counts:?}");
+
+    sqlx::query(
+        "UPDATE artifact_verdicts SET reason_codes = ARRAY['FROM_THE_FUTURE']
+         WHERE registry = $1",
+    )
+    .bind(&reg)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE artifact_findings SET severity = 'bogus', code = 'FROM_THE_FUTURE'
+         WHERE registry = $1 AND summary = 'GHSA-1'",
+    )
+    .bind(&reg)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let back = repo.get(&pkg).await.unwrap().expect("read, not an error");
+    assert_eq!(back.reason_codes, vec![ReasonCode::Unrecognised]);
+    let f = back
+        .findings
+        .iter()
+        .find(|f| f.summary == "GHSA-1")
+        .unwrap();
+    assert_eq!(
+        (f.code, f.severity),
+        (ReasonCode::Unrecognised, Severity::Critical)
+    );
+    let listed = repo
+        .list_by_state(&reg, VerdictState::Denied, 10)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
 }
 
 // ── RFC 0018 phase 4 ─────────────────────────────────────────────────────────

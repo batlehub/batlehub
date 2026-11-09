@@ -1,0 +1,181 @@
+name: Supply chain (postmortem) — fork pull request
+# RFC 0041 decision 50. A fork's pull request never receives
+# `VULN_MLAB_TOKEN`, so its postmortem jobs are red by construction: the Rust
+# root and ui/ hold more packages than an anonymous scan reads. A maintainer
+# who has reviewed the pull request's head runs this with its number and the
+# head SHA they reviewed. It runs the same gate with the token, and posts each
+# verdict as a commit status on that SHA.
+#
+# **No code from the head runs.** Only the lockfiles and manifests of the
+# head commit are checked out, sparsely, with symlinks written as plain files.
+# The workflow, the composite action, postmortem (from mise.lock) and
+# postmortem_new_risk.py all come from the default branch. The log lists every
+# file checked out from the head.
+#
+# Shortcut: RFC 0041 wants this triggered by the maintainer's approving review.
+# GitHub's `pull_request_review` event runs with a fork's read-only token and
+# no secrets, so it cannot run this. A manual run by someone with write access,
+# bound to the exact SHA they read, is that review's decision made explicit.
+# The binding to an `APPROVED` review on `head.sha` is decision 46 (phase 4).
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      sha:
+        description: The head commit you reviewed (full SHA)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    name: postmortem — fork PR #${{ inputs.pr }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Read-only: this job runs postmortem over the fork's lockfiles and hands
+    # it the token for its GitHub lookups, so the token must not write. The
+    # verdicts are posted by `post`, which never touches the fork's content.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      verified: ${{ steps.pr.outputs.verified }}
+      rust: ${{ steps.rust.outcome }}
+      ui: ${{ steps.ui.outcome }}
+      docs: ${{ steps.docs.outcome }}
+    steps:
+      - name: The pull request is still at the reviewed head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$PR" in ''|*[!0-9]*) echo "::error::pr must be a number"; exit 1 ;; esac
+          case "$SHA" in *[!0-9a-f]*) echo "::error::sha must be a full hex SHA"; exit 1 ;; esac
+          [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be a full 40-character SHA"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          head=$(jq -r .head.sha "$RUNNER_TEMP/pr.json")
+          if [ "$head" != "$SHA" ]; then
+            echo "::error::the pull request's head is $head, not the reviewed $SHA — review the new head and run again"
+            exit 1
+          fi
+          {
+            echo "verified=true"
+            echo "repo=$(jq -r .head.repo.clone_url "$RUNNER_TEMP/pr.json")"
+            echo "base=$(jq -r .base.sha "$RUNNER_TEMP/pr.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      # The trusted tree: the pull request's base commit, from this repository.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ steps.pr.outputs.base }}
+          persist-credentials: false
+
+      - name: Lockfiles and manifests of the head, nothing else
+        env:
+          REPO: ${{ steps.pr.outputs.repo }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git init -q head
+          cd head
+          git config core.symlinks false
+          git remote add origin "$REPO"
+          git sparse-checkout set --no-cone \
+            '/Cargo.lock' '/Cargo.toml' '/**/Cargo.toml' \
+            '/ui/package.json' '/ui/pnpm-lock.yaml' '/ui/pnpm-workspace.yaml' \
+            '/docs/package.json' '/docs/pnpm-lock.yaml' '/docs/pnpm-workspace.yaml'
+          git fetch -q --depth 1 --filter=blob:none origin "$SHA"
+          git checkout -q --detach FETCH_HEAD
+          echo "Checked out from $SHA:"
+          find . -path ./.git -prune -o -type f -print | sort
+
+      - name: Rust
+        id: rust
+        continue-on-error: true
+        uses: ./base/.github/actions/postmortem-gate
+        with:
+          root: "."
+          fail-on: high
+          diff: "true"
+          # The same reputation block-new as postmortem.yaml (phase 4); an
+          # approval of this head lifts it, as on a branch pull request.
+          online: "true"
+          pr: ${{ inputs.pr }}
+          out: pm-out/rust
+          vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
+          github-token: ${{ github.token }}
+      - name: UI
+        id: ui
+        continue-on-error: true
+        uses: ./base/.github/actions/postmortem-gate
+        with:
+          root: ui
+          fail-on: high
+          diff: "true"
+          # The same reputation block-new as postmortem.yaml (phase 4); an
+          # approval of this head lifts it, as on a branch pull request.
+          online: "true"
+          pr: ${{ inputs.pr }}
+          out: pm-out/ui
+          vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
+          github-token: ${{ github.token }}
+      - name: Website
+        id: docs
+        continue-on-error: true
+        uses: ./base/.github/actions/postmortem-gate
+        with:
+          root: docs
+          fail-on: critical
+          out: pm-out/docs
+          vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
+          github-token: ${{ github.token }}
+
+  # The only job holding `statuses: write`. It checks nothing out and runs
+  # nothing from the fork: it reads the three outcomes and posts them.
+  post:
+    name: post the verdicts on the reviewed head
+    needs: gate
+    # Only once the head was checked against the reviewed SHA.
+    if: ${{ !cancelled() && needs.gate.outputs.verified == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Post the verdicts on the reviewed head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUST: ${{ needs.gate.outputs.rust }}
+          UI: ${{ needs.gate.outputs.ui }}
+          DOCS: ${{ needs.gate.outputs.docs }}
+        run: |
+          set -euo pipefail
+          red=0
+          for pair in "Rust:$RUST" "UI:$UI" "Website:$DOCS"; do
+            name=${pair%%:*}; outcome=${pair#*:}
+            state=failure; [ "$outcome" = success ] && state=success
+            [ "$state" = success ] || red=1
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+              -f state="$state" -f context="postmortem-fork / $name" \
+              -f target_url="$RUN" -f description="postmortem gate, $outcome" >/dev/null
+            echo "postmortem-fork / $name: $state"
+          done
+          # The required check itself (decision 28): a fork's own postmortem.yaml
+          # run has no VULN_MLAB_TOKEN and is red by construction, so this
+          # verdict, on the head the maintainer reviewed, is the one that counts.
+          agg=success; [ "$red" -eq 0 ] || agg=failure
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$agg" -f context="postmortem.yaml / required" \
+            -f target_url="$RUN" -f description="postmortem-fork verdict on the reviewed head" >/dev/null
+          echo "postmortem.yaml / required: $agg"
+          exit "$red"

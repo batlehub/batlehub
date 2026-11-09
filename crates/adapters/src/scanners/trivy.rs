@@ -78,7 +78,7 @@ impl TrivyScanner {
                     .and_then(|s| s.as_str())
                     .map(|s| s.to_ascii_lowercase())
                     .and_then(|s| Severity::parse(&s))
-                    .unwrap_or(Severity::Unknown);
+                    .unwrap_or_else(|| FindingKind::Vulnerability.default_severity());
                 let pkg = v.get("PkgName").and_then(|s| s.as_str()).unwrap_or("");
                 let title = v.get("Title").and_then(|s| s.as_str()).unwrap_or("");
                 let fixed = v

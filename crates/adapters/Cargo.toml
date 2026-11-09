@@ -30,6 +30,9 @@ base64.workspace = true
 batlehub-core = { path = "../core" }
 bytes.workspace = true
 chrono.workspace = true
+# OSV's CVSS vectors scored (RFC 0041 §4.5): the RustSec project's parser.
+# `std` is what `Cvss::score` needs; no `serde`.
+cvss = { version = "3.0.0", default-features = false, features = ["std", "v2", "v3", "v4"] }
 bzip2 = { version = "0.6", optional = true }
 flate2 = { version = "1", optional = true }
 toml = { workspace = true, optional = true }

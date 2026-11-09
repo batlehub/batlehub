@@ -1,0 +1,5224 @@
+{
+ "purl": "pkg:golang/golang.org/x/crypto@0.16.0",
+ "recorded": "2026-11-07",
+ "answer": {
+  "vulns": [
+   {
+    "id": "GHSA-45gg-vh54-h5m9",
+    "summary": "golang.org/x/crypto vulnerable to invoking bypass of certificate restrictions",
+    "details": "When an SSH server authentication callback returned PartialSuccessError with non-nil Permissions, those permissions were silently discarded, potentially dropping certificate restrictions such as force-command after a second factor succeeded. Returning non-nil Permissions with PartialSuccessError now results in a connection error.",
+    "aliases": [
+     "CVE-2026-39828",
+     "GO-2026-5014"
+    ],
+    "modified": "2026-09-10T03:51:07.761861882Z",
+    "published": "2026-06-25T22:14:38Z",
+    "database_specific": {
+     "github_reviewed_at": "2026-06-25T22:14:38Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z",
+     "cwe_ids": [
+      "CWE-281",
+      "CWE-295"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39828"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40119"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40969"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40972"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40974"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41055"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-39828"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480687"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781621"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79562"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5014"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-39828.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26546"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26547"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36105"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36167"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36207"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36319"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36625"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36808"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37268"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37271"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37272"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37278"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37286"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37296"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-45gg-vh54-h5m9/GHSA-45gg-vh54-h5m9.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-45x7-px36-x8w8",
+    "summary": "Prefix Truncation Attack against ChaCha20-Poly1305 and Encrypt-then-MAC aka Terrapin",
+    "details": "### Summary\n\nTerrapin is a prefix truncation attack targeting the SSH protocol. More precisely, Terrapin breaks the integrity of SSH's secure channel. By carefully adjusting the sequence numbers during the handshake, an attacker can remove an arbitrary amount of messages sent by the client or server at the beginning of the secure channel without the client or server noticing it.\n\n### Mitigations\n\nTo mitigate this protocol vulnerability, OpenSSH suggested a so-called \"strict kex\" which alters the SSH handshake to ensure a Man-in-the-Middle attacker cannot introduce unauthenticated messages as well as convey sequence number manipulation across handshakes.\n\n**Warning: To take effect, both the client and server must support this countermeasure.** \n\nAs a stop-gap measure, peers may also (temporarily) disable the affected algorithms and use unaffected alternatives like AES-GCM instead until patches are available.\n\n### Details\n\nThe SSH specifications of ChaCha20-Poly1305 (chacha20-poly1305@openssh.com) and Encrypt-then-MAC (*-etm@openssh.com MACs) are vulnerable against an arbitrary prefix truncation attack (a.k.a. Terrapin attack). This allows for an extension negotiation downgrade by stripping the SSH_MSG_EXT_INFO sent after the first message after SSH_MSG_NEWKEYS, downgrading security, and disabling attack countermeasures in some versions of OpenSSH. When targeting Encrypt-then-MAC, this attack requires the use of a CBC cipher to be practically exploitable due to the internal workings of the cipher mode. Additionally, this novel attack technique can be used to exploit previously unexploitable implementation flaws in a Man-in-the-Middle scenario.\n\nThe attack works by an attacker injecting an arbitrary number of SSH_MSG_IGNORE messages during the initial key exchange and consequently removing the same number of messages just after the initial key exchange has concluded. This is possible due to missing authentication of the excess SSH_MSG_IGNORE messages and the fact that the implicit sequence numbers used within the SSH protocol are only checked after the initial key exchange.\n\nIn the case of ChaCha20-Poly1305, the attack is guaranteed to work on every connection as this cipher does not maintain an internal state other than the message's sequence number. In the case of Encrypt-Then-MAC, practical exploitation requires the use of a CBC cipher; while theoretical integrity is broken for all ciphers when using this mode, message processing will fail at the application layer for CTR and stream ciphers.\n\nFor more details see [https://terrapin-attack.com](https://terrapin-attack.com). \n\n### Impact\n\nThis attack targets the specification of ChaCha20-Poly1305 (chacha20-poly1305@openssh.com) and Encrypt-then-MAC (*-etm@openssh.com), which are widely adopted by well-known SSH implementations and can be considered de-facto standard. These algorithms can be practically exploited; however, in the case of Encrypt-Then-MAC, we additionally require the use of a CBC cipher. As a consequence, this attack works against all well-behaving SSH implementations supporting either of those algorithms and can be used to downgrade (but not fully strip) connection security in case SSH extension negotiation (RFC8308) is supported. The attack may also enable attackers to exploit certain implementation flaws in a man-in-the-middle (MitM) scenario.",
+    "aliases": [
+     "CVE-2023-48795",
+     "GO-2023-2402",
+     "PYSEC-2026-1758"
+    ],
+    "modified": "2026-09-10T03:49:59.287342396Z",
+    "published": "2023-12-18T19:22:09Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2023-12-18T19:22:09Z",
+     "nvd_published_at": "2023-12-18T16:15:10Z",
+     "cwe_ids": [
+      "CWE-345",
+      "CWE-354"
+     ],
+     "severity": "MODERATE"
+    },
+    "references": [
+     {
+      "type": "WEB",
+      "url": "https://github.com/warp-tech/russh/security/advisories/GHSA-45x7-px36-x8w8"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/ssh-mitm/ssh-mitm/issues/165"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/hierynomus/sshj/issues/916"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/janmojzis/tinyssh/issues/81"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/cyd01/KiTTY/issues/520"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/proftpd/proftpd/issues/456"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/apache/mina-sshd/issues/445"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/paramiko/paramiko/issues/2337#issuecomment-1887642773"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/paramiko/paramiko/issues/2337"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/PowerShell/Win32-OpenSSH/issues/2189"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/mwiede/jsch/issues/457"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/libssh2/libssh2/pull/1291"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/NixOS/nixpkgs/pull/275249"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/mwiede/jsch/pull/461"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/TeraTermProject/teraterm/commit/7279fbd6ef4d0c8bdd6a90af4ada2899d786eec0"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/mscdex/ssh2/commit/97b223f8891b96d6fc054df5ab1d5a1a545da2a3"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/connectbot/sshlib/commit/5c8b534f6e97db7ac0e0e579331213aa25c173ab"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/jtesta/ssh-audit/commit/8e972c5e94b460379fe0c7d20209c16df81538a5"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/warp-tech/russh/commit/1aa340a7df1d5be1c0f4a9e247aade76dfdd2951"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/golang/crypto/commit/9d2ee975ef9fe627bf0a6f01c1f69e8ef1d4f05d"
+     },
+     {
+      "type": "WEB",
+      "url": "https://oryx-embedded.com/download/#changelog"
+     },
+     {
+      "type": "WEB",
+      "url": "https://nova.app/releases/#v11.8"
+     },
+     {
+      "type": "WEB",
+      "url": "https://news.ycombinator.com/item?id=38732005"
+     },
+     {
+      "type": "WEB",
+      "url": "https://psirt.global.sonicwall.com/vuln-detail/SNWLID-2024-0002"
+     },
+     {
+      "type": "WEB",
+      "url": "https://roumenpetrov.info/secsh/#news20231220"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security-tracker.debian.org/tracker/CVE-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security-tracker.debian.org/tracker/source-package/libssh2"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/ronf/asyncssh/blob/develop/docs/changes.rst"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/KMZCVGUGJZZVDPCVDA7TEB22VUCNEXDD"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/L5Y6MNNVAPIJSXJERQ6PKZVCIUXSNJK7"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/LZQVUHWVWRH73YBXUQJOD6CKHDQBU3DM"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/MKQRBF3DWMWPH36LBCOBUTSIZRTPEZXB"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/QI3EHAHABFQK7OABNCSF5GMYP6TONTI7"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/33XHJUB6ROFUOH2OQNENFROTVH6MHSHA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/3JIMLVBDWOP4FUPXPTB4PGHHIOMGFLQE"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/3YQLUQWLIHDB5QCXQEX7HXHAWMOKPP5O"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/6Y74KVCPEPT4MVU3LHDWCNNOXOE5ZLUR"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/APYIXIQOVDCRWLHTGB4VYMAUIAQLKYJ3"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/C3AFMZ6MH2UHHOPIWT5YLSFV3D2VB3AC"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/HYEDEXIKFKTUJIN43RG4B7T5ZS6MHUSP"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/I724O3LSRCPO4WNVIXTZCT4VVRMXMMSG"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/L5Y6MNNVAPIJSXJERQ6PKZVCIUXSNJK7"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/LZQVUHWVWRH73YBXUQJOD6CKHDQBU3DM"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/MKQRBF3DWMWPH36LBCOBUTSIZRTPEZXB"
+     },
+     {
+      "type": "WEB",
+      "url": "https://matt.ucc.asn.au/dropbear/CHANGES"
+     },
+     {
+      "type": "WEB",
+      "url": "https://nest.pijul.com/pijul/thrussh/changes/D6H7OWTTMHHX6BTB3B6MNBOBX2L66CBL4LGSEUSAI2MCRCJDQFRQC"
+     },
+     {
+      "type": "WEB",
+      "url": "https://news.ycombinator.com/item?id=38684904"
+     },
+     {
+      "type": "WEB",
+      "url": "https://news.ycombinator.com/item?id=38685286"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.vicarius.io/vsociety/posts/cve-2023-48795-mitigate-openssh-vulnerability"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.vicarius.io/vsociety/posts/cve-2023-48795-detect-openssh-vulnerabilit"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.vandyke.com/products/securecrt/history.txt"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.theregister.com/2023/12/20/terrapin_attack_ssh"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.terrapin-attack.com"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.suse.com/c/suse-addresses-the-ssh-v2-protocol-terrapin-attack-aka-cve-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.reddit.com/r/sysadmin/comments/18idv52/cve202348795_why_is_this_cve_still_undisclosed"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.paramiko.org/changelog.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.openwall.com/lists/oss-security/2023/12/20/3"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.openwall.com/lists/oss-security/2023/12/18/2"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.openssh.com/txt/release-9.6"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.openssh.com/openbsd.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.netsarang.com/en/xshell-update-history"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.lancom-systems.de/service-support/allgemeine-sicherheitshinweise#c243508"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.freebsd.org/security/advisories/FreeBSD-SA-23:19.openssh.asc"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.debian.org/security/2023/dsa-5588"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.debian.org/security/2023/dsa-5586"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.crushftp.com/crush10wiki/Wiki.jsp?page=Update"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.chiark.greenend.org.uk/~sgtatham/putty/changes.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.bitvise.com/ssh-server-version-history"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.bitvise.com/ssh-client-version-history#933"
+     },
+     {
+      "type": "WEB",
+      "url": "https://winscp.net/eng/docs/history#6.2.2"
+     },
+     {
+      "type": "WEB",
+      "url": "https://ubuntu.com/security/CVE-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://twitter.com/TrueSkrillor/status/1736774389725565005"
+     },
+     {
+      "type": "WEB",
+      "url": "https://thorntech.com/cve-2023-48795-and-sftp-gateway"
+     },
+     {
+      "type": "WEB",
+      "url": "https://support.apple.com/kb/HT214084"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20240105-0004"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.gentoo.org/glsa/202312-17"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.gentoo.org/glsa/202312-16"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security-tracker.debian.org/tracker/source-package/trilead-ssh2"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security-tracker.debian.org/tracker/source-package/proftpd-dfsg"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/rapier1/hpn-ssh/releases"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/proftpd/proftpd/blob/master/RELEASE_NOTES"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/proftpd/proftpd/blob/d21e7a2e47e9b38f709bec58e3fa711f759ad0e1/RELEASE_NOTES"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/proftpd/proftpd/blob/0a7ea9b0ba9fcdf368374a226370d08f10397d99/RELEASE_NOTES"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/openssh/openssh-portable/commits/master"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/net-ssh/net-ssh/blob/2e65064a52d73396bfc3806c9196fc8108f33cd8/CHANGES.txt#L14-L16"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/mwiede/jsch/compare/jsch-0.2.14...jsch-0.2.15"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/mkj/dropbear/blob/17657c36cce6df7716d5ff151ec09a665382d5dd/CHANGES#L25"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/erlang/otp/releases/tag/OTP-26.2.1"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/erlang/otp/blob/d1b43dc0f1361d2ad67601169e90a7fc50bb0369/lib/ssh/doc/src/notes.xml#L39-L42"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/drakkan/sftpgo/releases/tag/v2.5.6"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/connectbot/sshlib/compare/2.2.21...2.2.22"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://github.com/advisories/GHSA-45x7-px36-x8w8"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/TeraTermProject/teraterm/releases/tag/v5.1"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/PowerShell/Win32-OpenSSH/releases/tag/v9.5.0.0p1-Beta"
+     },
+     {
+      "type": "WEB",
+      "url": "https://git.libssh.org/projects/libssh.git/commit/?h=stable-0.10&id=10e09e273f69e149389b3e0e5d44b8c221c2e7f6"
+     },
+     {
+      "type": "WEB",
+      "url": "https://forum.netgate.com/topic/184941/terrapin-ssh-attack"
+     },
+     {
+      "type": "WEB",
+      "url": "https://filezilla-project.org/versions.php"
+     },
+     {
+      "type": "WEB",
+      "url": "https://crates.io/crates/thrussh/versions"
+     },
+     {
+      "type": "WEB",
+      "url": "https://cert-portal.siemens.com/productcert/html/ssa-915275.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://cert-portal.siemens.com/productcert/html/ssa-794697.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://cert-portal.siemens.com/productcert/html/ssa-769027.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://cert-portal.siemens.com/productcert/html/ssa-364175.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://cert-portal.siemens.com/productcert/html/ssa-082556.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.suse.com/show_bug.cgi?id=1217950"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2254210"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugs.gentoo.org/920280"
+     },
+     {
+      "type": "WEB",
+      "url": "https://arstechnica.com/security/2023/12/hackers-can-break-ssh-channel-integrity-using-novel-data-corruption-attack"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/cve-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/KEOTKBUPZXHE3F352JBYNTSNRXYLWD6P"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/I724O3LSRCPO4WNVIXTZCT4VVRMXMMSG"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/HYEDEXIKFKTUJIN43RG4B7T5ZS6MHUSP"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/F7EYCFQCTSGJXWO3ZZ44MGKFC5HA7G3Y"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/CHHITS4PUOZAKFIUBQAQZC7JWXMOYE4B"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/C3AFMZ6MH2UHHOPIWT5YLSFV3D2VB3AC"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/BL5KTLOSLH2KHRN4HCXJPK3JUVLDGEL6"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/APYIXIQOVDCRWLHTGB4VYMAUIAQLKYJ3"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/6Y74KVCPEPT4MVU3LHDWCNNOXOE5ZLUR"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/3YQLUQWLIHDB5QCXQEX7HXHAWMOKPP5O"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/3JIMLVBDWOP4FUPXPTB4PGHHIOMGFLQE"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/3CAYYW35MUTNO65RVAELICTNZZFMT2XS"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/33XHJUB6ROFUOH2OQNENFROTVH6MHSHA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2025/04/msg00028.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2024/11/msg00032.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2024/09/msg00042.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2024/04/msg00016.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2024/01/msg00014.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2024/01/msg00013.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://lists.debian.org/debian-lts-announce/2023/12/msg00017.html"
+     },
+     {
+      "type": "WEB",
+      "url": "https://jadaptive.com/important-java-ssh-security-update-new-ssh-vulnerability-discovered-cve-2023-48795"
+     },
+     {
+      "type": "WEB",
+      "url": "https://help.panic.com/releasenotes/transmit5"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/qA3XtxvMUyg"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/-n5WqVC18LQ"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/64784"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/550715"
+     },
+     {
+      "type": "WEB",
+      "url": "https://gitlab.com/libssh/libssh-mirror/-/tags"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/warp-tech/russh/releases/tag/v0.40.2"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/warp-tech/russh"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/ronf/asyncssh/tags"
+     },
+     {
+      "type": "WEB",
+      "url": "http://packetstormsecurity.com/files/176280/Terrapin-SSH-Connection-Weakening.html"
+     },
+     {
+      "type": "WEB",
+      "url": "http://seclists.org/fulldisclosure/2024/Mar/21"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2023/12/18/3"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2023/12/19/5"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2023/12/20/3"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2024/03/06/3"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2024/04/17/8"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "russh",
+       "ecosystem": "crates.io",
+       "purl": "pkg:cargo/russh"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.40.2"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/12/GHSA-45x7-px36-x8w8/GHSA-45x7-px36-x8w8.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0.1.0"
+         },
+         {
+          "fixed": "0.17.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/12/GHSA-45x7-px36-x8w8/GHSA-45x7-px36-x8w8.json"
+      }
+     },
+     {
+      "package": {
+       "name": "paramiko",
+       "ecosystem": "PyPI",
+       "purl": "pkg:pypi/paramiko"
+      },
+      "ranges": [
+       {
+        "type": "ECOSYSTEM",
+        "events": [
+         {
+          "introduced": "2.5.0"
+         },
+         {
+          "fixed": "3.4.0"
+         }
+        ]
+       }
+      ],
+      "versions": [
+       "2.10.0",
+       "2.10.1",
+       "2.10.2",
+       "2.10.3",
+       "2.10.4",
+       "2.10.5",
+       "2.10.6",
+       "2.11.0",
+       "2.11.1",
+       "2.12.0",
+       "2.5.0",
+       "2.5.1",
+       "2.6.0",
+       "2.7.0",
+       "2.7.1",
+       "2.7.2",
+       "2.8.0",
+       "2.8.1",
+       "2.9.0",
+       "2.9.1",
+       "2.9.2",
+       "2.9.3",
+       "2.9.4",
+       "2.9.5",
+       "3.0.0",
+       "3.1.0",
+       "3.2.0",
+       "3.3.0",
+       "3.3.1",
+       "3.3.2"
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/12/GHSA-45x7-px36-x8w8/GHSA-45x7-px36-x8w8.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.0.0-20231218163308-9d2ee975ef9f"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2023/12/GHSA-45x7-px36-x8w8/GHSA-45x7-px36-x8w8.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-5cgq-3rg8-m6cv",
+    "summary": "golang.org/x/crypto vulnerable to auth bypass via unenforced @revoked status",
+    "details": "Previously, a revoked 'SignatureKey' belonging to a CA was not correctly checked for revocation. Now, both the 'key' and 'key.SignatureKey' are checked for @revoked.",
+    "aliases": [
+     "CVE-2026-42508",
+     "GO-2026-5021"
+    ],
+    "modified": "2026-09-10T03:50:48.271021372Z",
+    "published": "2026-06-25T22:22:04Z",
+    "database_specific": {
+     "severity": "CRITICAL",
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:22:04Z",
+     "nvd_published_at": "2026-05-22T04:16:25Z",
+     "cwe_ids": [
+      "CWE-295"
+     ]
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-42508"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-42508.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5021"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79568"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781220"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480688"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-42508"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41064"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40138"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37123"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37072"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36808"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:35833"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26547"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26546"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:23264"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:23262"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-5cgq-3rg8-m6cv/GHSA-5cgq-3rg8-m6cv.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-78mq-xcr3-xm33",
+    "summary": "golang.org/x/crypto is vulnerable to invoking server panic during CheckHostKey/Authenticate flow",
+    "details": "SSH servers which use CertChecker as a public key callback without setting IsUserAuthority or IsHostAuthority could be caused to panic by a client presenting a certificate. CertChecker now returns an error instead of panicking when these callbacks are nil.",
+    "aliases": [
+     "CVE-2026-39835",
+     "GO-2026-5015"
+    ],
+    "modified": "2026-09-11T15:45:36.488635295Z",
+    "published": "2026-06-25T22:15:17Z",
+    "database_specific": {
+     "github_reviewed_at": "2026-06-25T22:15:17Z",
+     "nvd_published_at": "2026-05-22T04:16:24Z",
+     "cwe_ids": [
+      "CWE-295",
+      "CWE-476"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39835"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26546"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43052"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43692"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:46885"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:47735"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:47949"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:48151"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:51033"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:51036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:51038"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52857"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52910"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:54525"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:57194"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:59467"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:59593"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:60520"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:62260"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:65126"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:66022"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:66521"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-39835"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480680"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781660"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79563"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5015"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-39835.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26547"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36199"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36207"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36319"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36625"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37072"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37123"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37268"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37271"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37272"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37286"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37296"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37410"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:38504"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40969"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40972"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40974"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42146"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-78mq-xcr3-xm33/GHSA-78mq-xcr3-xm33.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-89gr-r52h-f8rx",
+    "summary": "golang.org/x/crypto: FIDO/U2F security key physical presence check can be bypassed",
+    "details": "The Verify() method for FIDO/U2F security key types (sk-ecdsa-sha2-nistp256@openssh.com, sk-ssh-ed25519@openssh.com) did not check the User Presence flag. Signatures generated without physical touch were accepted, allowing unattended use of a hardware security key. To restore the previous behavior, return a \"no-touch-required\" extension in Permissions.Extensions from PublicKeyCallback.",
+    "aliases": [
+     "CVE-2026-39831",
+     "GO-2026-5019"
+    ],
+    "modified": "2026-09-10T03:50:48.773810556Z",
+    "published": "2026-06-25T22:21:12Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-862"
+     ],
+     "severity": "CRITICAL",
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:21:12Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39831"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781662"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79566"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5019"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-89gr-r52h-f8rx/GHSA-89gr-r52h-f8rx.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-9m57-25v3-79x9",
+    "summary": "golang.org/x/crypto: Invoking pathological inputs can lead to client panic",
+    "details": "For certain crafted inputs, a 'ed25519.PrivateKey' was created by casting malformed wire bytes, leading to a panic when used.",
+    "aliases": [
+     "CVE-2026-46598",
+     "GO-2026-5033"
+    ],
+    "modified": "2026-09-10T03:50:55.369516615Z",
+    "published": "2026-06-25T22:12:52Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:12:52Z",
+     "nvd_published_at": "2026-05-22T04:16:26Z",
+     "cwe_ids": [
+      "CWE-129"
+     ],
+     "severity": "MODERATE"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-46598"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781360"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79596"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5033"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-9m57-25v3-79x9/GHSA-9m57-25v3-79x9.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-f5wc-c3c7-36mc",
+    "summary": "golang.org/x/crypto doesn't drop invoking agent constraints when forwarding keys",
+    "details": "When adding a key to a remote agent constraint extensions such as restrict-destination-v00@openssh.com were not serialized in the request. Destination restrictions were silently stripped when forwarding keys, allowing unrestricted use of the key on the remote host. The client now serializes all constraint extensions. Additionally, the in-memory keyring returned by NewKeyring() now rejects keys with unsupported constraint extensions instead of silently ignoring them.",
+    "aliases": [
+     "CVE-2026-39832",
+     "GO-2026-5006"
+    ],
+    "modified": "2026-09-10T03:50:49.274413517Z",
+    "published": "2026-06-25T22:14:00Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-281",
+      "CWE-502"
+     ],
+     "severity": "CRITICAL",
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:14:00Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39832"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:35833"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42146"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43052"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43692"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:49944"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52857"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52910"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-39832"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480685"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/778642"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79435"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5006"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-39832.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36199"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36319"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36625"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37072"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37123"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37271"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37410"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40972"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-f5wc-c3c7-36mc/GHSA-f5wc-c3c7-36mc.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-f6x5-jh6r-wrfv",
+    "summary": "golang.org/x/crypto/ssh/agent vulnerable to panic if message is malformed due to out of bounds read",
+    "details": "SSH Agent servers do not validate the size of messages when processing new identity requests, which may cause the program to panic if the message is malformed due to an out of bounds read.",
+    "aliases": [
+     "CVE-2025-47914",
+     "GO-2025-4135"
+    ],
+    "modified": "2026-09-10T03:50:30.884151926Z",
+    "published": "2025-11-19T23:16:40Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-125"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2025-11-19T23:16:40Z",
+     "nvd_published_at": "2025-11-19T21:15:50Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-47914"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/721960"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/76364"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.googlesource.com/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2025-4135"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/11/GHSA-f6x5-jh6r-wrfv/GHSA-f6x5-jh6r-wrfv.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-hcg3-q754-cr77",
+    "summary": "golang.org/x/crypto Vulnerable to Denial of Service (DoS) via Slow or Incomplete Key Exchange",
+    "details": "SSH servers which implement file transfer protocols are vulnerable to a denial of service attack from clients which complete the key exchange slowly, or not at all, causing pending content to be read into memory, but never transmitted.",
+    "aliases": [
+     "CVE-2025-22869",
+     "GO-2025-3487"
+    ],
+    "modified": "2026-09-10T03:50:23.913440018Z",
+    "published": "2025-04-12T00:30:26Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-770"
+     ],
+     "severity": "HIGH",
+     "github_reviewed": true,
+     "github_reviewed_at": "2025-04-14T15:38:58Z",
+     "nvd_published_at": "2025-02-26T08:14:24Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-22869"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/golang/crypto/commit/7292932d45d55c7199324ab0027cc86e8198aa22"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/golang/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go-review.googlesource.com/c/crypto/+/652135"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/652135"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/71931"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2025-3487"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20250411-0010"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.35.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/04/GHSA-hcg3-q754-cr77/GHSA-hcg3-q754-cr77.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-j5w8-q4qc-rx2x",
+    "summary": "golang.org/x/crypto/ssh allows an attacker to cause unbounded memory consumption",
+    "details": "SSH servers parsing GSSAPI authentication requests do not validate the number of mechanisms specified in the request, allowing an attacker to cause unbounded memory consumption.",
+    "aliases": [
+     "CVE-2025-58181",
+     "GO-2025-4134"
+    ],
+    "modified": "2026-09-10T03:50:30.983878807Z",
+    "published": "2025-11-19T23:01:20Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-770"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2025-11-19T23:01:20Z",
+     "nvd_published_at": "2025-11-19T21:15:50Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-58181"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/721961"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/76363"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2025-4134"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2025/11/GHSA-j5w8-q4qc-rx2x/GHSA-j5w8-q4qc-rx2x.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-jppx-rxg9-jmrx",
+    "summary": "golang.org/x/crypto doesn't enforce invoking key constraints",
+    "details": "The in-memory keyring returned by NewKeyring() silently accepted keys with the ConfirmBeforeUse constraint but never enforced it. The key would sign without any confirmation prompt, with no indication to the caller that the constraint was not in effect. NewKeyring() now returns an error when unsupported constraints are requested.",
+    "aliases": [
+     "CVE-2026-39833",
+     "GO-2026-5005"
+    ],
+    "modified": "2026-09-10T03:50:50.029914620Z",
+    "published": "2026-06-25T22:13:31Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-862"
+     ],
+     "severity": "CRITICAL",
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:13:31Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39833"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/778640"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/778641"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79436"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5005"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-jppx-rxg9-jmrx/GHSA-jppx-rxg9-jmrx.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-q4h4-gmj2-qvw2",
+    "summary": "golang.org/x/crypto: Invoking byte arithmetic causes underflow and panic",
+    "details": "An incorrectly placed cast from bytes to int allowed for server-side panic in the AES-GCM packet decoder for well-crafted inputs.",
+    "aliases": [
+     "CVE-2026-46597",
+     "GO-2026-5013"
+    ],
+    "modified": "2026-09-10T03:50:50.202568323Z",
+    "published": "2026-06-25T22:14:22Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:14:22Z",
+     "nvd_published_at": "2026-05-22T04:16:26Z",
+     "cwe_ids": [
+      "CWE-704"
+     ],
+     "severity": "HIGH"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-46597"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781620"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79561"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5013"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-q4h4-gmj2-qvw2/GHSA-q4h4-gmj2-qvw2.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-qpw4-5x99-6vjp",
+    "summary": "golang.org/x/crypto: Invoking memory leak when rejecting channels can lead to DoS",
+    "details": "An authenticated SSH client that repeatedly opened channels which were rejected by the server caused unbounded memory growth, eventually crashing the server process and affecting all connected users. Rejected channels are now properly removed from the connection's internal state and released for garbage collection.",
+    "aliases": [
+     "CVE-2026-39827",
+     "GO-2026-5016"
+    ],
+    "modified": "2026-09-10T03:50:50.295705701Z",
+    "published": "2026-06-25T22:15:43Z",
+    "database_specific": {
+     "cwe_ids": [
+      "CWE-924"
+     ],
+     "severity": "MODERATE",
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:15:43Z",
+     "nvd_published_at": "2026-05-22T04:16:21Z"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39827"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781320"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/35127"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5016"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-qpw4-5x99-6vjp/GHSA-qpw4-5x99-6vjp.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-rm3j-f69w-wqmq",
+    "summary": "golang.org/x/crypto vulnerable to infinite loop on large channel writes",
+    "details": "When writing data larger than 4GB in a single Write call on an SSH channel, an integer overflow in the internal payload size calculation caused the write loop to spin indefinitely, sending empty packets without making progress. The size comparison now uses int64 to prevent truncation.",
+    "aliases": [
+     "CVE-2026-39834",
+     "GO-2026-5020"
+    ],
+    "modified": "2026-09-10T03:50:50.499928973Z",
+    "published": "2026-06-25T22:21:40Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2026-06-25T22:21:40Z",
+     "nvd_published_at": "2026-05-22T04:16:24Z",
+     "cwe_ids": [
+      "CWE-190"
+     ],
+     "severity": "CRITICAL"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39834"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781663"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79567"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5020"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-rm3j-f69w-wqmq/GHSA-rm3j-f69w-wqmq.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-v778-237x-gjrc",
+    "summary": "Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass in golang.org/x/crypto",
+    "details": "Applications and libraries which misuse the ServerConfig.PublicKeyCallback callback may be susceptible to an authorization bypass.\n\nThe documentation for ServerConfig.PublicKeyCallback says that \"A call to this function does not guarantee that the key offered is in fact used to authenticate.\" Specifically, the SSH protocol allows clients to inquire about whether a public key is acceptable before proving control of the corresponding private key. PublicKeyCallback may be called with multiple keys, and the order in which the keys were provided cannot be used to infer which key the client successfully authenticated with, if any. Some applications, which store the key(s) passed to PublicKeyCallback (or derived information) and make security relevant determinations based on it once the connection is established, may make incorrect assumptions.\n\nFor example, an attacker may send public keys A and B, and then authenticate with A. PublicKeyCallback would be called only twice, first with A and then with B. A vulnerable application may then make authorization decisions based on key B for which the attacker does not actually control the private key.\n\nSince this API is widely misused, as a partial mitigation golang.org/x/crypto@v0.31.0 enforces the property that, when successfully authenticating via public key, the last key passed to ServerConfig.PublicKeyCallback will be the key used to authenticate the connection. PublicKeyCallback will now be called multiple times with the same key, if necessary. Note that the client may still not control the last key passed to PublicKeyCallback if the connection is then authenticated with a different method, such as PasswordCallback, KeyboardInteractiveCallback, or NoClientAuth.\n\nUsers should be using the Extensions field of the Permissions return value from the various authentication callbacks to record data associated with the authentication attempt instead of referencing external state. Once the connection is established the state corresponding to the successful authentication attempt can be retrieved via the ServerConn.Permissions field. Note that some third-party libraries misuse the Permissions type by sharing it across authentication attempts; users of third-party libraries should refer to the relevant projects for guidance.",
+    "aliases": [
+     "CVE-2024-45337",
+     "GO-2024-3321"
+    ],
+    "modified": "2026-09-10T03:50:56.265546165Z",
+    "published": "2024-12-11T22:03:04Z",
+    "database_specific": {
+     "github_reviewed": true,
+     "github_reviewed_at": "2024-12-11T22:03:04Z",
+     "nvd_published_at": "2024-12-12T02:02:07Z",
+     "cwe_ids": [
+      "CWE-285"
+     ],
+     "severity": "CRITICAL"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-45337"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/golang/crypto/commit/b4f1988a35dee11ec3e05d6bf3e90b695fbd8909"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://github.com/golang/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/635315"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/70779"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/-nPEi39gI4Q/m/cGVPJCqdAQAJ"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2024-3321"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.netapp.com/advisory/ntap-20250131-0007"
+     },
+     {
+      "type": "WEB",
+      "url": "http://www.openwall.com/lists/oss-security/2024/12/11/2"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.31.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/12/GHSA-v778-237x-gjrc/GHSA-v778-237x-gjrc.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-vgwf-h737-ff37",
+    "summary": "golang.org/x/crypto: Invoking client can cause server deadlock on unexpected responses",
+    "details": "A malicious SSH peer could send unsolicited global request responses to fill an internal buffer, blocking the connection's read loop. The blocked goroutine could not be released by calling Close(), resulting in a resource leak per connection. Unsolicited global responses are now discarded.",
+    "aliases": [
+     "CVE-2026-39830",
+     "GO-2026-5017"
+    ],
+    "modified": "2026-09-15T12:45:34.863978347Z",
+    "published": "2026-06-25T22:18:17Z",
+    "database_specific": {
+     "github_reviewed_at": "2026-06-25T22:18:17Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z",
+     "cwe_ids": [
+      "CWE-119",
+      "CWE-772"
+     ],
+     "severity": "CRITICAL",
+     "github_reviewed": true
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39830"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43052"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:43692"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:46885"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:47735"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:48151"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:49944"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:51033"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52857"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:52910"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:54400"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:54531"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:57194"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:57801"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:59467"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:60520"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:61314"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:65964"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:66022"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:66521"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:67450"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-39830"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480684"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781640"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781664"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79564"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5017"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-39830.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:29455"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:35833"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36199"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36207"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36319"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36625"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36808"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37072"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37268"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37271"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37272"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37275"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37278"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37286"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37296"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40969"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40972"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40974"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:42146"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-vgwf-h737-ff37/GHSA-vgwf-h737-ff37.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-w879-237q-wc7r",
+    "summary": "golang.org/x/crypto: Invoking pathological RSA/DSA parameters may cause DoS",
+    "details": "The RSA and DSA public key parsers did not enforce size limits on key parameters. A crafted public key with an excessively large modulus or DSA parameter could cause several minutes of CPU consumption during signature verification. This could be triggered by unauthenticated clients during public key authentication. RSA moduli are now limited to 8192 bits, and DSA parameters are validated per FIPS 186-2.",
+    "aliases": [
+     "CVE-2026-39829",
+     "GO-2026-5018"
+    ],
+    "modified": "2026-09-10T03:50:50.833802829Z",
+    "published": "2026-06-25T22:18:43Z",
+    "database_specific": {
+     "github_reviewed_at": "2026-06-25T22:18:43Z",
+     "nvd_published_at": "2026-05-22T04:16:22Z",
+     "cwe_ids": [
+      "CWE-1284",
+      "CWE-347"
+     ],
+     "severity": "HIGH",
+     "github_reviewed": true
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-39829"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40119"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40262"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40969"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40972"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40974"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41031"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41055"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41066"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-39829"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480681"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781641"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781661"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79565"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5018"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-39829.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26546"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26547"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:29455"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:35833"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36199"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36207"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36319"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36625"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36808"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36820"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36883"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37072"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37123"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37268"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37271"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37272"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37278"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37286"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37296"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-w879-237q-wc7r/GHSA-w879-237q-wc7r.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+     }
+    ]
+   },
+   {
+    "id": "GHSA-x527-x647-q7gg",
+    "summary": "golang.org/x/crypto: Invoking VerifiedPublicKeyCallback permissions skip enforcement",
+    "details": "Previously, CVE-2024-45337 fixed an authorization bypass for misused ssh server configurations; if any other type of callback is passed other than public key, then the source-address validation would be skipped.",
+    "aliases": [
+     "CVE-2026-46595",
+     "GO-2026-5023"
+    ],
+    "modified": "2026-09-10T03:50:51.157351033Z",
+    "published": "2026-06-25T22:23:16Z",
+    "database_specific": {
+     "github_reviewed_at": "2026-06-25T22:23:16Z",
+     "nvd_published_at": "2026-05-22T04:16:25Z",
+     "cwe_ids": [
+      "CWE-303",
+      "CWE-863"
+     ],
+     "severity": "CRITICAL",
+     "github_reviewed": true
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-46595"
+     },
+     {
+      "type": "ADVISORY",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-45337"
+     },
+     {
+      "type": "WEB",
+      "url": "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-46595.json"
+     },
+     {
+      "type": "WEB",
+      "url": "https://pkg.go.dev/vuln/GO-2026-5023"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/79570"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/cl/781642"
+     },
+     {
+      "type": "PACKAGE",
+      "url": "https://cs.opensource.google/go/x/crypto"
+     },
+     {
+      "type": "WEB",
+      "url": "https://bugzilla.redhat.com/show_bug.cgi?id=2480689"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/security/cve/CVE-2026-46595"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41036"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:41019"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40945"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:40118"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37387"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:37275"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36820"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36808"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36797"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36796"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36648"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:36207"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:33531"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:33524"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:30651"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:30650"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26547"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:26546"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:23264"
+     },
+     {
+      "type": "WEB",
+      "url": "https://access.redhat.com/errata/RHSA-2026:23262"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "database_specific": {
+       "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2026/06/GHSA-x527-x647-q7gg/GHSA-x527-x647-q7gg.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "severity": [
+     {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:L"
+     }
+    ]
+   },
+   {
+    "id": "GO-2023-2402",
+    "summary": "Man-in-the-middle attacker can compromise integrity of secure channel in golang.org/x/crypto",
+    "details": "A protocol weakness allows a MITM attacker to compromise the integrity of the secure channel before it is established, allowing the attacker to prevent transmission of a number of messages immediately after the secure channel is established without either side being aware.\n\nThe impact of this attack is relatively limited, as it does not compromise confidentiality of the channel. Notably this attack would allow an attacker to prevent the transmission of the SSH2_MSG_EXT_INFO message, disabling a handful of newer security features.\n\nThis protocol weakness was also fixed in OpenSSH 9.6.",
+    "aliases": [
+     "CVE-2023-48795",
+     "GHSA-45x7-px36-x8w8",
+     "PYSEC-2026-1758"
+    ],
+    "modified": "2026-07-07T17:57:21.107610647Z",
+    "published": "2023-12-18T21:18:26Z",
+    "related": [
+     "CGA-7wrr-m3pv-pq78"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2023-2402",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/64784"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/550715"
+     },
+     {
+      "type": "FIX",
+      "url": "https://github.com/golang/crypto/commit/9d2ee975ef9fe627bf0a6f01c1f69e8ef1d4f05d"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/qA3XtxvMUyg"
+     },
+     {
+      "type": "WEB",
+      "url": "https://www.openssh.com/txt/release-9.6"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.17.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Client.Dial",
+          "Client.DialContext",
+          "Client.DialTCP",
+          "Client.Listen",
+          "Client.ListenTCP",
+          "Client.ListenUnix",
+          "Client.NewSession",
+          "Dial",
+          "DiscardRequests",
+          "NewClient",
+          "NewClientConn",
+          "NewServerConn",
+          "Request.Reply",
+          "Session.Close",
+          "Session.CombinedOutput",
+          "Session.Output",
+          "Session.RequestPty",
+          "Session.RequestSubsystem",
+          "Session.Run",
+          "Session.SendRequest",
+          "Session.Setenv",
+          "Session.Shell",
+          "Session.Signal",
+          "Session.Start",
+          "Session.WindowChange",
+          "channel.Accept",
+          "channel.Close",
+          "channel.CloseWrite",
+          "channel.Read",
+          "channel.ReadExtended",
+          "channel.Reject",
+          "channel.SendRequest",
+          "channel.Write",
+          "channel.WriteExtended",
+          "connectionState.readPacket",
+          "connectionState.writePacket",
+          "curve25519sha256.Client",
+          "curve25519sha256.Server",
+          "dhGEXSHA.Client",
+          "dhGEXSHA.Server",
+          "dhGroup.Client",
+          "dhGroup.Server",
+          "ecdh.Client",
+          "ecdh.Server",
+          "extChannel.Read",
+          "extChannel.Write",
+          "handshakeTransport.enterKeyExchange",
+          "handshakeTransport.readLoop",
+          "handshakeTransport.sendKexInit",
+          "mux.OpenChannel",
+          "mux.SendRequest",
+          "sessionStdin.Close",
+          "sshClientKeyboardInteractive.Challenge",
+          "tcpListener.Accept",
+          "tcpListener.Close",
+          "transport.readPacket",
+          "transport.writePacket",
+          "unixListener.Accept",
+          "unixListener.Close"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2023-2402.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Fabian B\u00e4umer (Ruhr University Bochum)"
+     },
+     {
+      "name": "Marcus Brinkmann (Ruhr University Bochum)"
+     },
+     {
+      "name": "J\u00f6rg Schwenk (Ruhr University Bochum)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2024-3321",
+    "summary": "Misuse of connection.serverAuthenticate may cause authorization bypass in golang.org/x/crypto",
+    "details": "Applications and libraries which misuse connection.serverAuthenticate (via callback field ServerConfig.PublicKeyCallback) may be susceptible to an authorization bypass.\n\nThe documentation for ServerConfig.PublicKeyCallback says that \"A call to this function does not guarantee that the key offered is in fact used to authenticate.\" Specifically, the SSH protocol allows clients to inquire about whether a public key is acceptable before proving control of the corresponding private key. PublicKeyCallback may be called with multiple keys, and the order in which the keys were provided cannot be used to infer which key the client successfully authenticated with, if any. Some applications, which store the key(s) passed to PublicKeyCallback (or derived information) and make security relevant determinations based on it once the connection is established, may make incorrect assumptions.\n\nFor example, an attacker may send public keys A and B, and then authenticate with A. PublicKeyCallback would be called only twice, first with A and then with B. A vulnerable application may then make authorization decisions based on key B for which the attacker does not actually control the private key.\n\nSince this API is widely misused, as a partial mitigation golang.org/x/cry...@v0.31.0 enforces the property that, when successfully authenticating via public key, the last key passed to ServerConfig.PublicKeyCallback will be the key used to authenticate the connection. PublicKeyCallback will now be called multiple times with the same key, if necessary. Note that the client may still not control the last key passed to PublicKeyCallback if the connection is then authenticated with a different method, such as PasswordCallback, KeyboardInteractiveCallback, or NoClientAuth.\n\nUsers should be using the Extensions field of the Permissions return value from the various authentication callbacks to record data associated with the authentication attempt instead of referencing external state. Once the connection is established the state corresponding to the successful authentication attempt can be retrieved via the ServerConn.Permissions field. Note that some third-party libraries misuse the Permissions type by sharing it across authentication attempts; users of third-party libraries should refer to the relevant projects for guidance.",
+    "aliases": [
+     "CVE-2024-45337",
+     "GHSA-v778-237x-gjrc"
+    ],
+    "modified": "2026-08-08T10:26:52.108556744Z",
+    "published": "2024-12-11T18:40:19Z",
+    "related": [
+     "CGA-4v8q-2mqp-2558",
+     "RHEA-2025:4438"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2024-3321",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://github.com/golang/crypto/commit/b4f1988a35dee11ec3e05d6bf3e90b695fbd8909"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/635315"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/70779"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/-nPEi39gI4Q/m/cGVPJCqdAQAJ"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.31.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "NewServerConn",
+          "ServerConfig.PublicKeyCallback",
+          "connection.serverAuthenticate"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2024-3321.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Damien Tournoud (Platform.sh / Upsun)"
+     },
+     {
+      "name": "Patrick Dawkins (Platform.sh / Upsun)"
+     },
+     {
+      "name": "Vince Parker (Platform.sh / Upsun)"
+     },
+     {
+      "name": "Jules Duvivier (Platform.sh / Upsun)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-3487",
+    "summary": "Potential denial of service in golang.org/x/crypto",
+    "details": "SSH servers which implement file transfer protocols are vulnerable to a denial of service attack from clients which complete the key exchange slowly, or not at all, causing pending content to be read into memory, but never transmitted.",
+    "aliases": [
+     "CVE-2025-22869",
+     "GHSA-hcg3-q754-cr77"
+    ],
+    "modified": "2026-02-05T01:28:49.657684Z",
+    "published": "2025-02-26T02:51:51Z",
+    "related": [
+     "CGA-299c-rxpx-5x42",
+     "RHSA-2025:3165",
+     "RHSA-2025:3175",
+     "RHSA-2025:3184",
+     "RHSA-2025:3185",
+     "RHSA-2025:3186",
+     "RHSA-2025:3210",
+     "RHSA-2025:3266",
+     "RHSA-2025:3268",
+     "RHSA-2025:3336",
+     "RHSA-2025:3685",
+     "RHSA-2025:3833",
+     "RHSA-2025:7391",
+     "RHSA-2025:7416",
+     "RHSA-2025:7462",
+     "RHSA-2025:7484"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2025-3487"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/652135"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/71931"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.35.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Client.Dial",
+          "Client.DialContext",
+          "Client.DialTCP",
+          "Client.Listen",
+          "Client.ListenTCP",
+          "Client.ListenUnix",
+          "Client.NewSession",
+          "Dial",
+          "DiscardRequests",
+          "NewClient",
+          "NewClientConn",
+          "NewServerConn",
+          "Request.Reply",
+          "Session.Close",
+          "Session.CombinedOutput",
+          "Session.Output",
+          "Session.RequestPty",
+          "Session.RequestSubsystem",
+          "Session.Run",
+          "Session.SendRequest",
+          "Session.Setenv",
+          "Session.Shell",
+          "Session.Signal",
+          "Session.Start",
+          "Session.WindowChange",
+          "channel.Accept",
+          "channel.Close",
+          "channel.CloseWrite",
+          "channel.Read",
+          "channel.ReadExtended",
+          "channel.Reject",
+          "channel.SendRequest",
+          "channel.Write",
+          "channel.WriteExtended",
+          "connection.SendAuthBanner",
+          "curve25519sha256.Client",
+          "curve25519sha256.Server",
+          "dhGEXSHA.Client",
+          "dhGEXSHA.Server",
+          "dhGroup.Client",
+          "dhGroup.Server",
+          "ecdh.Client",
+          "ecdh.Server",
+          "extChannel.Read",
+          "extChannel.Write",
+          "handshakeTransport.kexLoop",
+          "handshakeTransport.recordWriteError",
+          "handshakeTransport.writePacket",
+          "mux.OpenChannel",
+          "mux.SendRequest",
+          "newHandshakeTransport",
+          "sessionStdin.Close",
+          "sshClientKeyboardInteractive.Challenge",
+          "tcpListener.Accept",
+          "tcpListener.Close",
+          "unixListener.Accept",
+          "unixListener.Close"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-3487.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.3",
+    "credits": [
+     {
+      "name": "Yuichi Watanabe"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-4116",
+    "summary": "Potential denial of service in golang.org/x/crypto/ssh/agent",
+    "details": "SSH clients receiving SSH_AGENT_SUCCESS when expecting a typed response will panic and cause early termination of the client process.",
+    "aliases": [
+     "CVE-2025-47913",
+     "GHSA-56w8-48fp-6mgv"
+    ],
+    "modified": "2026-05-21T10:29:29.799885348Z",
+    "published": "2025-11-13T21:12:03Z",
+    "related": [
+     "CGA-w3q9-xwjj-575v",
+     "RHSA-2026:0436",
+     "RHSA-2026:0437",
+     "RHSA-2026:0470",
+     "RHSA-2026:0545",
+     "RHSA-2026:0753",
+     "RHSA-2026:10703",
+     "RHSA-2026:1084",
+     "RHSA-2026:11749",
+     "RHSA-2026:12030",
+     "RHSA-2026:14868",
+     "RHSA-2026:16102",
+     "RHSA-2026:16701",
+     "RHSA-2026:16702",
+     "RHSA-2026:19634",
+     "RHSA-2026:2769",
+     "RHSA-2026:4532",
+     "RHSA-2026:4693",
+     "RHSA-2026:5167",
+     "RHSA-2026:5222",
+     "RHSA-2026:8325"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2025-4116",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/700295"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/75178"
+     },
+     {
+      "type": "WEB",
+      "url": "https://github.com/advisories/GHSA-56w8-48fp-6mgv"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.43.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh/agent",
+         "symbols": [
+          "agentKeyringSigner.Sign",
+          "agentKeyringSigner.SignWithAlgorithm",
+          "client.List",
+          "client.Sign",
+          "client.SignWithFlags",
+          "client.Signers"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-4116.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Jakub Ciolek"
+     },
+     {
+      "name": "Nicola Murino"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-4134",
+    "summary": "Unbounded memory consumption in golang.org/x/crypto/ssh",
+    "details": "SSH servers parsing GSSAPI authentication requests do not validate the number of mechanisms specified in the request, allowing an attacker to cause unbounded memory consumption.",
+    "aliases": [
+     "CVE-2025-58181",
+     "GHSA-j5w8-q4qc-rx2x"
+    ],
+    "modified": "2026-05-15T10:59:24.784913658Z",
+    "published": "2025-11-19T20:11:57Z",
+    "related": [
+     "CGA-r6rp-rr52-3cqp",
+     "RHSA-2026:7291",
+     "RHSA-2026:7385"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2025-4134"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/721961"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/76363"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "NewServerConn",
+          "parseGSSAPIPayload"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-4134.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Jakub Ciolek"
+     }
+    ]
+   },
+   {
+    "id": "GO-2025-4135",
+    "summary": "Malformed constraint may cause denial of service in golang.org/x/crypto/ssh/agent",
+    "details": "SSH Agent servers do not validate the size of messages when processing new identity requests, which may cause the program to panic if the message is malformed due to an out of bounds read.",
+    "aliases": [
+     "CVE-2025-47914",
+     "GHSA-f6x5-jh6r-wrfv"
+    ],
+    "modified": "2026-05-15T10:59:23.314668850Z",
+    "published": "2025-11-19T20:11:57Z",
+    "related": [
+     "CGA-g95w-h5g8-rhqq",
+     "RHSA-2026:7291",
+     "RHSA-2026:7385"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2025-4135"
+    },
+    "references": [
+     {
+      "type": "ADVISORY",
+      "url": "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/721960"
+     },
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/76364"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.45.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh/agent",
+         "symbols": [
+          "ForwardToAgent",
+          "ServeAgent",
+          "parseConstraints"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2025-4135.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Jakub Ciolek"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5005",
+    "summary": "Invoking key constraints not enforced in golang.org/x/crypto/ssh/agent",
+    "details": "The in-memory keyring returned by NewKeyring() silently accepted keys with the ConfirmBeforeUse constraint but never enforced it. The key would sign without any confirmation prompt, with no indication to the caller that the constraint was not in effect. NewKeyring() now returns an error when unsupported constraints are requested.",
+    "aliases": [
+     "CVE-2026-39833",
+     "GHSA-jppx-rxg9-jmrx"
+    ],
+    "modified": "2026-08-11T21:30:12.082532165Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "CGA-h9w7-6ppp-6fx8"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5005",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79436"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/778642"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh/agent",
+         "symbols": [
+          "keyring.Add"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5005.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5006",
+    "summary": "Invoking agent constraints dropped when forwarding keys in golang.org/x/crypto/ssh/agent",
+    "details": "When adding a key to a remote agent constraint extensions such as restrict-destination-v00@openssh.com were not serialized in the request. Destination restrictions were silently stripped when forwarding keys, allowing unrestricted use of the key on the remote host. The client now serializes all constraint extensions. Additionally, the in-memory keyring returned by NewKeyring() now rejects keys with unsupported constraint extensions instead of silently ignoring them.",
+    "aliases": [
+     "CVE-2026-39832",
+     "GHSA-f5wc-c3c7-36mc"
+    ],
+    "modified": "2026-09-15T10:41:37.126500086Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:35833",
+     "RHSA-2026:36199",
+     "RHSA-2026:36796",
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:37410",
+     "RHSA-2026:41019",
+     "RHSA-2026:49944",
+     "RHSA-2026:67450"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5006",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79435"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/778640"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/778641"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "client.Add",
+          "keyring.Add"
+         ],
+         "path": "golang.org/x/crypto/ssh/agent"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5006.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5013",
+    "summary": "Invoking byte arithmetic causes underflow and panic in golang.org/x/crypto/ssh",
+    "details": "An incorrectly placed cast from bytes to int allowed for server-side panic in the AES-GCM packet decoder for well-crafted inputs.",
+    "aliases": [
+     "CVE-2026-46597",
+     "GHSA-q4h4-gmj2-qvw2"
+    ],
+    "modified": "2026-09-17T10:41:36.216580513Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:51036",
+     "RHSA-2026:67450",
+     "RHSA-2026:68334"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5013"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79561"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781620"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Dial",
+          "NewClientConn",
+          "NewServerConn",
+          "curve25519sha256.Client",
+          "curve25519sha256.Server",
+          "dhGEXSHA.Client",
+          "dhGEXSHA.Server",
+          "dhGroup.Client",
+          "dhGroup.Server",
+          "ecdh.Client",
+          "ecdh.Server",
+          "gcmCipher.readCipherPacket",
+          "mlkem768WithCurve25519sha256.Client",
+          "mlkem768WithCurve25519sha256.Server"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5013.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Maciej Kawka"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5014",
+    "summary": "Invoking bypass of certificate restrictions in golang.org/x/crypto/ssh",
+    "details": "When an SSH server authentication callback returned PartialSuccessError with non-nil Permissions, those permissions were silently discarded, potentially dropping certificate restrictions such as force-command after a second factor succeeded. Returning non-nil Permissions with PartialSuccessError now results in a connection error.",
+    "aliases": [
+     "CVE-2026-39828",
+     "GHSA-45gg-vh54-h5m9"
+    ],
+    "modified": "2026-07-17T10:29:28.281906633Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "CGA-382c-27vm-3c8m",
+     "RHSA-2026:36796",
+     "RHSA-2026:41019"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5014",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79562"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781621"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "NewServerConn",
+          "connection.serverAuthenticate"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5014.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5015",
+    "summary": "Invoking server panic during CheckHostKey/Authenticate in golang.org/x/crypto/ssh",
+    "details": "SSH servers which use CertChecker as a public key callback without setting IsUserAuthority or IsHostAuthority could be caused to panic by a client presenting a certificate. CertChecker now returns an error instead of panicking when these callbacks are nil.",
+    "aliases": [
+     "CVE-2026-39835",
+     "GHSA-78mq-xcr3-xm33"
+    ],
+    "modified": "2026-09-22T10:41:48.922257369Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:36199",
+     "RHSA-2026:36796",
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:37410",
+     "RHSA-2026:38504",
+     "RHSA-2026:41019",
+     "RHSA-2026:51036",
+     "RHSA-2026:62391",
+     "RHSA-2026:66561"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5015"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79563"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781660"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "CertChecker.Authenticate",
+          "CertChecker.CheckHostKey"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5015.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5016",
+    "summary": "Invoking memory leak when rejecting channels can lead to DoS in golang.org/x/crypto/ssh",
+    "details": "An authenticated SSH client that repeatedly opened channels which were rejected by the server caused unbounded memory growth, eventually crashing the server process and affecting all connected users. Rejected channels are now properly removed from the connection's internal state and released for garbage collection.",
+    "aliases": [
+     "CVE-2026-39827",
+     "GHSA-qpw4-5x99-6vjp"
+    ],
+    "modified": "2026-09-22T10:41:47.670428128Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:62391",
+     "RHSA-2026:66561"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5016"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/35127"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781320"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "channel.Reject"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5016.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "Ziyan Zhou"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5017",
+    "summary": "Invoking client can cause server deadlock on unexpected responses in golang.org/x/crypto/ssh",
+    "details": "A malicious SSH peer could send unsolicited global request responses to fill an internal buffer, blocking the connection's read loop. The blocked goroutine could not be released by calling Close(), resulting in a resource leak per connection. Unsolicited global responses are now discarded.",
+    "aliases": [
+     "CVE-2026-39830",
+     "GHSA-vgwf-h737-ff37"
+    ],
+    "modified": "2026-09-23T10:41:39.176153896Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:29455",
+     "RHSA-2026:35833",
+     "RHSA-2026:36199",
+     "RHSA-2026:36796",
+     "RHSA-2026:37072",
+     "RHSA-2026:41019",
+     "RHSA-2026:49944",
+     "RHSA-2026:67450",
+     "RHSA-2026:69961"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5017"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79564"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781640"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781664"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Client.Listen",
+          "Client.ListenTCP",
+          "Client.ListenUnix",
+          "Dial",
+          "NewClientConn",
+          "NewServerConn",
+          "Session.CombinedOutput",
+          "Session.Output",
+          "Session.RequestPty",
+          "Session.RequestSubsystem",
+          "Session.Run",
+          "Session.SendRequest",
+          "Session.Setenv",
+          "Session.Shell",
+          "Session.Signal",
+          "Session.Start",
+          "Session.WindowChange",
+          "channel.SendRequest",
+          "channel.handlePacket",
+          "mux.SendRequest",
+          "mux.handleGlobalPacket",
+          "tcpListener.Close",
+          "unixListener.Close"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5017.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5018",
+    "summary": "Invoking pathological RSA/DSA parameters may cause DoS in golang.org/x/crypto/ssh",
+    "details": "The RSA and DSA public key parsers did not enforce size limits on key parameters. A crafted public key with an excessively large modulus or DSA parameter could cause several minutes of CPU consumption during signature verification. This could be triggered by unauthenticated clients during public key authentication. RSA moduli are now limited to 8192 bits, and DSA parameters are validated per FIPS 186-2.",
+    "aliases": [
+     "CVE-2026-39829",
+     "GHSA-w879-237q-wc7r"
+    ],
+    "modified": "2026-09-15T10:41:37.191404367Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:29455",
+     "RHSA-2026:35833",
+     "RHSA-2026:36199",
+     "RHSA-2026:36796",
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:41019",
+     "RHSA-2026:49944",
+     "RHSA-2026:67450"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5018",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79565"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781641"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781661"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "Dial",
+          "NewClientConn",
+          "NewServerConn",
+          "NewSignerFromKey",
+          "ParseAuthorizedKey",
+          "ParseKnownHosts",
+          "ParsePrivateKey",
+          "ParsePrivateKeyWithPassphrase",
+          "ParsePublicKey",
+          "ParseRawPrivateKey",
+          "ParseRawPrivateKeyWithPassphrase",
+          "checkDSAParams",
+          "parseDSA",
+          "parseRSA"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5018.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5019",
+    "summary": "Invoking bypass of FIDO/U2F security keys physical interaction in golang.org/x/crypto/ssh",
+    "details": "The Verify() method for FIDO/U2F security key types (sk-ecdsa-sha2-nistp256@openssh.com, sk-ssh-ed25519@openssh.com) did not check the User Presence flag. Signatures generated without physical touch were accepted, allowing unattended use of a hardware security key. To restore the previous behavior, return a \"no-touch-required\" extension in Permissions.Extensions from PublicKeyCallback.",
+    "aliases": [
+     "CVE-2026-39831",
+     "GHSA-89gr-r52h-f8rx"
+    ],
+    "modified": "2026-09-17T10:41:36.871169141Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:67450",
+     "RHSA-2026:68334"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5019",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79566"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781662"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "CertChecker.Authenticate",
+          "CertChecker.CheckCert",
+          "CertChecker.CheckHostKey",
+          "Certificate.Verify",
+          "Dial",
+          "NewClientConn",
+          "NewServerConn",
+          "connection.serverAuthenticate",
+          "skECDSAPublicKey.Verify",
+          "skEd25519PublicKey.Verify"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5019.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5020",
+    "summary": "Invoking infinite loop on large channel writes in golang.org/x/crypto/ssh",
+    "details": "When writing data larger than 4GB in a single Write call on an SSH channel, an integer overflow in the internal payload size calculation caused the write loop to spin indefinitely, sending empty packets without making progress. The size comparison now uses int64 to prevent truncation.",
+    "aliases": [
+     "CVE-2026-39834",
+     "GHSA-rm3j-f69w-wqmq"
+    ],
+    "modified": "2026-09-22T10:41:48.726876657Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:62391",
+     "RHSA-2026:66561"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5020"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79567"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781663"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Dial",
+          "NewClientConn",
+          "NewServerConn",
+          "Session.CombinedOutput",
+          "Session.Output",
+          "Session.Run",
+          "Session.Shell",
+          "Session.Start",
+          "channel.Write",
+          "channel.WriteExtended",
+          "curve25519sha256.Client",
+          "curve25519sha256.Server",
+          "dhGEXSHA.Client",
+          "dhGEXSHA.Server",
+          "dhGroup.Client",
+          "dhGroup.Server",
+          "ecdh.Client",
+          "ecdh.Server",
+          "extChannel.Write",
+          "mlkem768WithCurve25519sha256.Client",
+          "mlkem768WithCurve25519sha256.Server"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5020.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5021",
+    "summary": "Invoking auth bypass via unenforced @revoked status in golang.org/x/crypto/ssh/knownhosts",
+    "details": "Previously, a revoked 'SignatureKey' belonging to a CA was not correctly checked for revocation. Now, both the 'key' and 'key.SignatureKey' are checked for @revoked.",
+    "aliases": [
+     "CVE-2026-42508",
+     "GHSA-5cgq-3rg8-m6cv"
+    ],
+    "modified": "2026-09-15T10:41:37.077781877Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:23262",
+     "RHSA-2026:23264",
+     "RHSA-2026:35833",
+     "RHSA-2026:36796",
+     "RHSA-2026:37072",
+     "RHSA-2026:37123",
+     "RHSA-2026:41019",
+     "RHSA-2026:49944",
+     "RHSA-2026:51288",
+     "RHSA-2026:67450"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5021",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79568"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781220"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh/knownhosts",
+         "symbols": [
+          "hostKeyDB.IsRevoked"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5021.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Omar Khaleel Ibrahim - mr3okk"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5023",
+    "summary": "Invoking VerifiedPublicKeyCallback permissions skip enforcement in golang.org/x/crypto/ssh",
+    "details": "Previously, CVE-2024-45337 fixed an authorization bypass for misused ssh server configurations; if any other type of callback is passed other than public key, then the source-address validation would be skipped.",
+    "aliases": [
+     "CVE-2026-46595",
+     "GHSA-x527-x647-q7gg"
+    ],
+    "modified": "2026-07-17T10:29:28.571176407Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "CGA-33qc-7m28-fvwr",
+     "RHSA-2026:23262",
+     "RHSA-2026:23264",
+     "RHSA-2026:36796",
+     "RHSA-2026:41019"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5023"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79570"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781642"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "NewServerConn",
+          "connection.serverAuthenticate"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5023.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5"
+   },
+   {
+    "id": "GO-2026-5033",
+    "summary": "Invoking pathological inputs can lead to client panic in golang.org/x/crypto/ssh/agent",
+    "details": "For certain crafted inputs, a 'ed25519.PrivateKey' was created by casting malformed wire bytes, leading to a panic when used.",
+    "aliases": [
+     "CVE-2026-46598",
+     "GHSA-9m57-25v3-79x9"
+    ],
+    "modified": "2026-09-22T10:41:48.813027241Z",
+    "published": "2026-05-22T02:08:34Z",
+    "related": [
+     "RHSA-2026:62391",
+     "RHSA-2026:66561"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-5033"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/79596"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/781360"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/a082jnz-LvI"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.52.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh/agent",
+         "symbols": [
+          "ForwardToAgent",
+          "ServeAgent",
+          "parseEd25519Cert",
+          "parseEd25519Key"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5033.json"
+      }
+     }
+    ],
+    "schema_version": "1.7.5",
+    "credits": [
+     {
+      "name": "NCC Group Cryptography Services, sponsored by Teleport"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-5932",
+    "summary": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues",
+    "details": "The golang.org/x/crypto/openpgp package is unsafe by design, has numerous known security issues, is not maintained, and should not be used.\n\nIf you are required to interoperate with OpenPGP systems and need a maintained package, consider github.com/ProtonMail/go-crypto/openpgp which is a maintained fork that aims to be a drop-in replacement for this package.",
+    "modified": "2026-11-02T22:15:06.677088389Z",
+    "published": "2026-07-07T22:15:29Z",
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-5932",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/44226"
+     },
+     {
+      "type": "WEB",
+      "url": "https://go.dev/issue/81227"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.58.1-0.20261009181718-2f1f834330b2"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/openpgp"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/packet"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/armor"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/clearsign"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/errors"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/elgamal"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/s2k"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5932.json"
+      }
+     },
+     {
+      "package": {
+       "name": "golang.org/x/crypto/openpgp",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto/openpgp"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/openpgp"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/packet"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/armor"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/clearsign"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/errors"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/elgamal"
+        },
+        {
+         "path": "golang.org/x/crypto/openpgp/s2k"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-5932.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.2"
+   },
+   {
+    "id": "GO-2026-6303",
+    "summary": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
+    "details": "The source-address critical option in the Permissions returned by an authentication callback was only enforced for the PublicKeyCallback and VerifiedPublicKeyCallback paths, extending the fix for CVE-2026-46595. Permissions returned by the PasswordCallback, KeyboardInteractiveCallback, NoClientAuthCallback, and GSSAPIWithMICConfig.AllowLogin callbacks were not validated against the client's remote address, so a source-address restriction set by those callbacks was silently ignored. The check is now applied to the Permissions returned by any authentication callback.",
+    "aliases": [
+     "CVE-2026-56854"
+    ],
+    "modified": "2026-08-29T10:10:52.440319762Z",
+    "published": "2026-08-28T14:47:45Z",
+    "related": [
+     "CGA-gppf-q4hh-4rj4"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6303",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/80213"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/797040"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.55.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "symbols": [
+          "NewServerConn",
+          "connection.serverAuthenticate"
+         ],
+         "path": "golang.org/x/crypto/ssh"
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6303.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Longwei Wang (@gn00295120)"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6354",
+    "summary": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
+    "details": "Previously, a channel registered in the mux's chanList is not usable until it is established. A malicious peer was able flood the channel's incomingRequests, deadlocking the entire connection.\n\nNow, we add an atomic established state, set when a channel becomes usable. Until such a time, handlePacket drops every packet other than the open confirmation/failure, without blocking and without tearing down the connection.",
+    "aliases": [
+     "CVE-2026-78662"
+    ],
+    "modified": "2026-09-03T10:10:55.147673102Z",
+    "published": "2026-09-02T19:12:04Z",
+    "related": [
+     "CGA-r4x5-7v6j-hmfg"
+    ],
+    "database_specific": {
+     "review_status": "REVIEWED",
+     "url": "https://pkg.go.dev/vuln/GO-2026-6354"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81316"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/826504"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/1y3fb2np35U"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.56.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Dial",
+          "NewClientConn",
+          "NewControlClientConn",
+          "NewServerConn",
+          "channel.Accept",
+          "channel.handlePacket",
+          "channel.responseMessageReceived"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6354.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Will Mortensen"
+     }
+    ]
+   },
+   {
+    "id": "GO-2026-6355",
+    "summary": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
+    "details": "Previously, after a channel has been established, a malicious peer could send crafted messages that would deadlock the entire connection.\n\nNow, we handle all RFC 4254 channel messages; global requests are handled explicitly. Then, treat all other messages as a protocol error and tear the connection down instead of buffering and blocking.",
+    "aliases": [
+     "CVE-2026-56855"
+    ],
+    "modified": "2026-09-24T10:41:42.556134596Z",
+    "published": "2026-09-02T19:12:04Z",
+    "related": [
+     "RHSA-2026:70640"
+    ],
+    "database_specific": {
+     "url": "https://pkg.go.dev/vuln/GO-2026-6355",
+     "review_status": "REVIEWED"
+    },
+    "references": [
+     {
+      "type": "REPORT",
+      "url": "https://go.dev/issue/81317"
+     },
+     {
+      "type": "FIX",
+      "url": "https://go.dev/cl/826524"
+     },
+     {
+      "type": "WEB",
+      "url": "https://groups.google.com/g/golang-announce/c/1y3fb2np35U"
+     }
+    ],
+    "affected": [
+     {
+      "package": {
+       "name": "golang.org/x/crypto",
+       "ecosystem": "Go",
+       "purl": "pkg:golang/golang.org/x/crypto"
+      },
+      "ranges": [
+       {
+        "type": "SEMVER",
+        "events": [
+         {
+          "introduced": "0"
+         },
+         {
+          "fixed": "0.56.0"
+         }
+        ]
+       }
+      ],
+      "ecosystem_specific": {
+       "imports": [
+        {
+         "path": "golang.org/x/crypto/ssh",
+         "symbols": [
+          "Dial",
+          "NewClientConn",
+          "NewControlClientConn",
+          "NewServerConn",
+          "channel.handlePacket"
+         ]
+        }
+       ]
+      },
+      "database_specific": {
+       "source": "https://vuln.go.dev/ID/GO-2026-6355.json"
+      }
+     }
+    ],
+    "schema_version": "1.9.0",
+    "credits": [
+     {
+      "name": "Will Mortensen"
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -9,6 +9,10 @@
 //! Jobs are leased, not consumed. A lease that expires while a scanner is
 //! still running returns the job to the queue; after `max_attempts` the job
 //! is closed and the verdict carries `SCANNER_ERROR`.
+//!
+//! An advisory database (OSV) runs first, and a transient error from it
+//! *defers* the job instead (RFC 0041 decision 44): the row waits, its
+//! attempt given back, until the database answers or 24 hours have passed.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,8 +22,8 @@ use chrono::Utc;
 
 use crate::entities::{
     coordinate_purl, Finding, FindingKind, NotificationEvent, NotificationEventType,
-    PackageMetadata, ReasonCode, RegistryKind, ScanJob, SecurityPolicy, Severity, Verdict,
-    VerdictState,
+    PackageMetadata, ReasonCode, RegistryKind, ScanJob, ScanTrigger, SecurityPolicy, Severity,
+    Verdict, VerdictState,
 };
 use crate::error::CoreError;
 use crate::ports::{
@@ -99,6 +103,45 @@ const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(30);
 /// The actor the worker's own events carry (RFC 0014 decision 12's form).
 pub const WORKER_ACTOR: &str = "system:security-worker";
 
+/// How long a job may wait out an advisory database's outage before it is
+/// judged without it (RFC 0041 decision 44).
+pub const DEFERRAL_BUDGET: Duration = Duration::from_secs(24 * 3600);
+
+/// The first wait of a deferred job, and the longest.
+const DEFER_MIN: Duration = Duration::from_secs(60);
+const DEFER_MAX: Duration = Duration::from_secs(3600);
+
+/// When a job deferred at `now` is leased again: 1 minute doubling to 1 hour
+/// (the wait so far is the next wait, which doubles it), ±20 % jitter, or
+/// the upstream's `Retry-After` when longer — capped at 1 hour either way.
+pub fn defer_until(
+    now: chrono::DateTime<Utc>,
+    deferred_since: Option<chrono::DateTime<Utc>>,
+    retry_after: Option<Duration>,
+) -> chrono::DateTime<Utc> {
+    let waited = deferred_since
+        .and_then(|at| (now - at).to_std().ok())
+        .unwrap_or_default();
+    let base = waited.clamp(DEFER_MIN, DEFER_MAX);
+    // ±20 %: a uniform draw from a v4 UUID's random bits, so a burst of
+    // deferrals does not come back as one burst.
+    let draw = (uuid::Uuid::new_v4().as_u128() % 4001) as f64 / 10_000.0; // 0.0..=0.4
+    let jittered = base.mul_f64(0.8 + draw);
+    let wait = retry_after
+        .map_or(jittered, |r| r.max(jittered))
+        .min(DEFER_MAX);
+    now + chrono::Duration::from_std(wait).unwrap_or_else(|_| chrono::Duration::hours(1))
+}
+
+/// What running a job came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobOutcome {
+    /// Recorded (or dropped): the row closes.
+    Done,
+    /// An advisory database could not answer, transiently: the row waits.
+    Defer(Option<Duration>),
+}
+
 /// What one pass over the queue did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PassReport {
@@ -106,6 +149,7 @@ pub struct PassReport {
     pub completed: usize,
     pub failed: usize,
     pub exhausted: usize,
+    pub deferred: usize,
 }
 
 impl ScanWorker {
@@ -126,27 +170,72 @@ impl ScanWorker {
         for c in counts {
             metrics::gauge!(
                 "batlehub_scan_jobs_queued",
-                "registry" => c.registry,
+                "registry" => c.registry.clone(),
                 "trigger" => c.trigger.as_str(),
             )
             .set(c.count as f64);
+            metrics::gauge!(
+                "batlehub_scan_jobs_deferred",
+                "registry" => c.registry,
+                "trigger" => c.trigger.as_str(),
+            )
+            .set(c.deferred as f64);
         }
     }
 
     /// Run one leased job and close its row, whichever way it went.
     async fn run_and_close(&self, job: &ScanJob, report: &mut PassReport) {
-        let Err(e) = self.run_job(job).await else {
-            report.completed += 1;
-            if let Err(e) = self.queue.complete(job.id).await {
-                tracing::warn!(job = %job.id, error = %e, "security worker: could not close job");
+        let worker = self.config.worker_id.as_str();
+        match self.run_job(job).await {
+            Ok(JobOutcome::Done) => {
+                report.completed += 1;
+                if let Err(e) = self.queue.complete(job.id, Some(worker)).await {
+                    tracing::warn!(job = %job.id, error = %e, "security worker: could not close job");
+                }
             }
-            return;
-        };
-        report.failed += 1;
-        tracing::warn!(job = %job.id, package = %job.package, error = %e, "security worker: job failed");
-        if let Err(e) = self.queue.fail(job.id, &e.to_string()).await {
-            tracing::warn!(job = %job.id, error = %e, "security worker: could not record failure");
+            Ok(JobOutcome::Defer(retry_after)) => {
+                report.deferred += 1;
+                let not_before = defer_until(Utc::now(), job.deferred_since, retry_after);
+                tracing::info!(job = %job.id, package = %job.package, %not_before, "security worker: advisory database unavailable; job deferred");
+                if let Err(e) = self.queue.defer(job.id, worker, not_before).await {
+                    tracing::warn!(job = %job.id, error = %e, "security worker: could not defer job");
+                }
+            }
+            Err(e) => {
+                report.failed += 1;
+                tracing::warn!(job = %job.id, package = %job.package, error = %e, "security worker: job failed");
+                if let Err(e) = self.queue.fail(job.id, worker, &e.to_string()).await {
+                    tracing::warn!(job = %job.id, error = %e, "security worker: could not record failure");
+                }
+            }
         }
+    }
+
+    /// Which registries this pass may lease from: all of the configured ones,
+    /// except — while an advisory database's circuit breaker is open — those
+    /// whose profile names it, so the other scanners are not re-run for a
+    /// job that will only defer. `None` when that leaves nothing.
+    async fn lease_scope(&self) -> Option<Vec<String>> {
+        let blocked: Vec<&String> = self
+            .scanners
+            .iter()
+            .filter(|(_, s)| s.unavailable_for().is_some())
+            .map(|(name, _)| name)
+            .collect();
+        if blocked.is_empty() {
+            return Some(self.config.registries.clone());
+        }
+        let hot = self.hot.read().await;
+        let open: Vec<String> = hot
+            .security
+            .iter()
+            .filter(|(reg, _)| {
+                self.config.registries.is_empty() || self.config.registries.contains(reg)
+            })
+            .filter(|(_, policy)| !policy.scanners.iter().any(|s| blocked.contains(&s)))
+            .map(|(reg, _)| reg.clone())
+            .collect();
+        (!open.is_empty()).then_some(open)
     }
 
     /// Lease and run one batch, then close out any job whose attempts are
@@ -165,16 +254,20 @@ impl ScanWorker {
             self.report_liveness().await;
         }
 
-        let jobs = self
-            .queue
-            .lease(
-                &self.config.worker_id,
-                &self.config.registries,
-                self.config.max_concurrent,
-                self.config.job_timeout.as_secs(),
-                self.config.max_attempts,
-            )
-            .await?;
+        let jobs = match self.lease_scope().await {
+            Some(registries) => {
+                self.queue
+                    .lease(
+                        &self.config.worker_id,
+                        &registries,
+                        self.config.max_concurrent,
+                        self.config.job_timeout.as_secs(),
+                        self.config.max_attempts,
+                    )
+                    .await?
+            }
+            None => Vec::new(),
+        };
         report.leased = jobs.len();
         metrics::gauge!("batlehub_scan_jobs_leased", "worker" => self.config.worker_id.clone())
             .set(jobs.len() as f64);
@@ -249,31 +342,48 @@ impl ScanWorker {
         Some((policy, kind, scanners))
     }
 
-    async fn run_job(&self, job: &ScanJob) -> Result<(), CoreError> {
+    async fn run_job(&self, job: &ScanJob) -> Result<JobOutcome, CoreError> {
         let Some((policy, kind, scanners)) = self.plan(&job.package.registry).await else {
             // The registry left `[security]` (or the config) since the job
             // was queued: nothing to judge, and nothing to hold.
             tracing::info!(package = %job.package, "security worker: registry has no security profile any more; dropping job");
-            return Ok(());
+            return Ok(JobOutcome::Done);
         };
         let package = self.dated_metadata(job).await;
-        let applicable: Vec<Arc<dyn ArtifactScanner>> =
+        // A required scanner that does not cover this kind can never answer
+        // here: left out of `done`, it held every version SCAN_PENDING for
+        // good (an undated one never matures). It counts as answered, with no
+        // findings; server startup warns about such a profile.
+        let uncovered: Vec<String> = scanners
+            .iter()
+            .filter(|s| !s.supports(kind))
+            .map(|s| s.name().to_owned())
+            .filter(|n| policy.required_scanners.contains(n))
+            .collect();
+        let mut applicable: Vec<Arc<dyn ArtifactScanner>> =
             scanners.into_iter().filter(|s| s.supports(kind)).collect();
+        // Advisory databases first: a transient error from one stops the job
+        // before anything else has run for nothing (RFC 0041 decision 44).
+        applicable.sort_by_key(|s| !s.is_advisory_db());
         let input = self.scan_input(job, kind, &package, &applicable).await;
         let artifact_unavailable = input.artifact.is_none();
 
         let mut findings: Vec<Finding> = Vec::new();
         let mut done: Vec<String> = Vec::new();
         for scanner in applicable {
-            self.run_scanner(
-                job,
-                &scanner,
-                &input,
-                artifact_unavailable,
-                &mut findings,
-                &mut done,
-            )
-            .await;
+            if let Some(retry_after) = self
+                .run_scanner(
+                    job,
+                    &scanner,
+                    &input,
+                    artifact_unavailable,
+                    &mut findings,
+                    &mut done,
+                )
+                .await
+            {
+                return Ok(JobOutcome::Defer(retry_after));
+            }
             if let Err(e) = self
                 .queue
                 .heartbeat(job.id, self.config.job_timeout.as_secs())
@@ -283,7 +393,19 @@ impl ScanWorker {
             }
         }
         self.enrich(job, &policy, &mut findings, &mut done).await;
-        self.record(job, &package, &policy, findings, done).await
+        for n in uncovered {
+            if !done.contains(&n) {
+                done.push(n);
+            }
+        }
+        self.record(job, &package, &policy, findings, done).await?;
+        Ok(JobOutcome::Done)
+    }
+
+    /// Whether this job has waited out its deferral budget.
+    fn deferral_spent(job: &ScanJob) -> bool {
+        job.deferred_since
+            .is_some_and(|at| (Utc::now() - at).to_std().unwrap_or_default() >= DEFERRAL_BUDGET)
     }
 
     /// The version's metadata, resolved and dated.
@@ -380,7 +502,9 @@ impl ScanWorker {
         }
     }
 
-    /// One scanner: what it found, or why it did not answer.
+    /// One scanner: what it found, or why it did not answer. `Some` asks to
+    /// defer the job (with the upstream's `Retry-After`, if it gave one): an
+    /// advisory database failed transiently, inside the deferral budget.
     async fn run_scanner(
         &self,
         job: &ScanJob,
@@ -389,7 +513,7 @@ impl ScanWorker {
         artifact_unavailable: bool,
         findings: &mut Vec<Finding>,
         done: &mut Vec<String>,
-    ) {
+    ) -> Option<Option<Duration>> {
         // A scanner that reads bytes it could not be given did not run:
         // `SCANNER_UNSUPPORTED` names the reason without pretending the scan
         // happened (RFC 0018 §11 q1).
@@ -401,7 +525,7 @@ impl ScanWorker {
                 Severity::High,
                 "the artifact bytes could not be obtained for scanning",
             ));
-            return;
+            return None;
         }
         let started = Instant::now();
         let outcome = tokio::time::timeout(self.config.job_timeout, scanner.scan(input))
@@ -418,7 +542,7 @@ impl ScanWorker {
             Ok(found) => {
                 findings.extend(found);
                 done.push(scanner.name().to_owned());
-                return;
+                return None;
             }
             Err(e) => e,
         };
@@ -429,17 +553,41 @@ impl ScanWorker {
         )
         .increment(1);
         tracing::warn!(package = %job.package, scanner = scanner.name(), error = %e, "security worker: scanner did not answer");
+        let advisory_db = scanner.is_advisory_db();
+        if advisory_db && e.is_deferrable() {
+            if !Self::deferral_spent(job) {
+                let retry_after = match e {
+                    ScannerError::RateLimited { retry_after } => retry_after,
+                    _ => None,
+                };
+                return Some(retry_after);
+            }
+            // Out of budget. A rescan is judged by the other scanners, the
+            // database's stored findings carried forward by `record_scan`
+            // because it is not `done` — a new refusal is not lost to the
+            // outage, and no `SCANNER_ERROR` is added. A first sight gets the
+            // error, which the maturity bypass does not lift.
+            if matches!(job.trigger, ScanTrigger::Rescan | ScanTrigger::Backfill) {
+                return None;
+            }
+        }
         let code = match e {
             ScannerError::Unsupported(_) => ReasonCode::ScannerUnsupported,
             _ => ReasonCode::ScannerError,
         };
+        let kind = if advisory_db {
+            FindingKind::AdvisoryDbError
+        } else {
+            FindingKind::ScannerError
+        };
         findings.push(Finding::new(
             scanner.name(),
-            FindingKind::ScannerError,
+            kind,
             code,
             Severity::High,
             e.to_string(),
         ));
+        None
     }
 
     /// Enrichment, over everything the scanners said. A registry names an
@@ -682,6 +830,16 @@ impl ScanWorker {
 
     /// A job whose attempts are spent: every required scanner that never
     /// answered becomes `SCANNER_ERROR`, and the row closes.
+    ///
+    /// Reached only for errors outside a scanner (a database write): a
+    /// scanner's own error is recorded by `run_scanner`. A `Rescan` or a
+    /// `Backfill` row closes without touching the verdict, which stands. A
+    /// required scanner with an earlier answer is *not* passed as done, so
+    /// `record_scan` carries its stored findings — passing it as done dropped
+    /// them, and a lone `SCANNER_ERROR` was then served by the maturity
+    /// bypass (RFC 0041 §6.8). On a version never scanned there is nothing
+    /// to carry, and an empty `done` would hold it as pending whatever
+    /// `scanner_error` says, so there every required scanner stays done.
     async fn close_exhausted(&self, job: &ScanJob) {
         metrics::counter!(
             "batlehub_scan_jobs_expired_total",
@@ -689,7 +847,8 @@ impl ScanWorker {
             "scanner" => "job",
         )
         .increment(1);
-        if let Some((policy, _, _)) = self.plan(&job.package.registry).await {
+        let judge = !matches!(job.trigger, ScanTrigger::Rescan | ScanTrigger::Backfill);
+        if let Some((policy, _, _)) = self.plan(&job.package.registry).await.filter(|_| judge) {
             let mut package =
                 PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
             package.published_at = job.published_at;
@@ -710,7 +869,25 @@ impl ScanWorker {
                     )
                 })
                 .collect();
-            let done = policy.required_scanners.clone();
+            let answered_before: Vec<String> = match self
+                .verdicts
+                .verdicts
+                .get(&crate::services::verdict::coordinate_key(&job.package))
+                .await
+            {
+                Ok(Some(prev)) => prev.scanners_done,
+                Ok(None) => Vec::new(),
+                Err(e) => {
+                    tracing::warn!(package = %job.package, error = %e, "security worker: could not read the verdict to close an exhausted job; left for the next sweep");
+                    return;
+                }
+            };
+            let done: Vec<String> = policy
+                .required_scanners
+                .iter()
+                .filter(|s| !answered_before.contains(s))
+                .cloned()
+                .collect();
             if let Err(e) = self
                 .verdicts
                 .record_scan(&package, &policy, findings, done, Utc::now())
@@ -719,7 +896,7 @@ impl ScanWorker {
                 tracing::warn!(package = %job.package, error = %e, "security worker: could not record SCANNER_ERROR");
             }
         }
-        if let Err(e) = self.queue.complete(job.id).await {
+        if let Err(e) = self.queue.complete(job.id, None).await {
             tracing::warn!(job = %job.id, error = %e, "security worker: could not close exhausted job");
         }
     }

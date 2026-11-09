@@ -102,7 +102,7 @@ impl YaraScanner {
                 .and_then(|meta| meta.get("severity"))
                 .and_then(|s| s.as_str())
                 .and_then(Severity::parse)
-                .unwrap_or(Severity::High);
+                .unwrap_or_else(|| FindingKind::MalwareSignal.default_severity());
             let mut raw = m.clone();
             raw["file"] = serde_json::Value::String(file.clone());
             out.push(

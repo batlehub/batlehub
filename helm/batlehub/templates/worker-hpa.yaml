@@ -2,7 +2,10 @@
 # RFC 0018 phase 5: the workers scale on the queue. `batlehub_scan_jobs_queued`
 # is the gauge every process exports (per registry and trigger); a metrics
 # adapter turns it into the External metric this object reads, and the
-# target is the average number of open jobs one replica should own.
+# target is the average number of open jobs one replica should own. It counts
+# leasable jobs only (RFC 0041 decision 44): a job waiting out an advisory
+# database's outage is in `batlehub_scan_jobs_deferred` instead, so an OSV
+# outage does not hold the workers at maxReplicas with nothing to lease.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

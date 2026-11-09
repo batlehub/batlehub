@@ -1,0 +1,95 @@
+{
+ "about": "Packages a quarantined registry must refuse or serve, one per failure shape of RFC 0041. `why` says what the case exercises; `expect` is the verdict under the default [registries.security] profile (max_severity = high, mode = block) once RFC 0041 phase 1 lands. Recorded OSV answers live in osv/<slug>.json (probe_osv_severity.py --record refreshes them).",
+ "cases": [
+  {
+   "purl": "pkg:npm/ynodejs_mod_log@10.0.1",
+   "expect": "denied",
+   "why": "MAL- only, no severity (OpenSSF malicious-packages); npm now serves 0.0.1-security"
+  },
+  {
+   "purl": "pkg:pypi/etherreeum@1.0.0",
+   "expect": "denied",
+   "why": "MAL- only, no alias, no severity; removed from PyPI"
+  },
+  {
+   "purl": "pkg:cargo/rustdecimal@1.23.1",
+   "expect": "denied",
+   "why": "MAL- plus a GHSA rated HIGH: refused today already (control)"
+  },
+  {
+   "purl": "pkg:npm/ua-parser-js@0.7.29",
+   "expect": "denied",
+   "why": "hijacked release (2021)"
+  },
+  {
+   "purl": "pkg:npm/event-stream@3.3.6",
+   "expect": "denied",
+   "why": "flatmap-stream backdoor (2018)"
+  },
+  {
+   "purl": "pkg:npm/node-ipc@10.1.1",
+   "expect": "denied",
+   "why": "protestware (2022)"
+  },
+  {
+   "purl": "pkg:npm/minimist@1.2.5",
+   "expect": "denied",
+   "why": "GHSA CRITICAL with database_specific severity (quarantine.sh's own case)"
+  },
+  {
+   "purl": "pkg:npm/lodash@4.17.20",
+   "expect": "denied",
+   "why": "GHSA HIGH and MODERATE"
+  },
+  {
+   "purl": "pkg:pypi/requests@2.25.0",
+   "expect": "allowed",
+   "why": "GHSA MODERATE with PYSEC twins"
+  },
+  {
+   "purl": "pkg:pypi/idna@3.6",
+   "expect": "allowed",
+   "why": "GHSA MODERATE (curated) vs its PYSEC twin's NVD vector (7.5 high): the curated rating wins (decision 21)"
+  },
+  {
+   "purl": "pkg:pypi/jinja2@2.11.2",
+   "expect": "allowed",
+   "why": "GHSA/PYSEC mix"
+  },
+  {
+   "purl": "pkg:cargo/rsa@0.9.6",
+   "expect": "allowed",
+   "why": "GHSA MODERATE/LOW plus RUSTSEC-2023-0071 vector-only twin (5.9, medium)"
+  },
+  {
+   "purl": "pkg:cargo/time@0.1.43",
+   "expect": "allowed",
+   "why": "RUSTSEC with no GHSA severity"
+  },
+  {
+   "purl": "pkg:golang/golang.org/x/net@0.22.0",
+   "expect": "denied",
+   "why": "4 GHSA MODERATE plus 21 GO- with no severity, 17 with no rated twin: still unrated, judged high (decisions 13, 22)"
+  },
+  {
+   "purl": "pkg:golang/golang.org/x/crypto@0.16.0",
+   "expect": "denied",
+   "why": "GHSA + GO- mix"
+  },
+  {
+   "purl": "pkg:cargo/memmap2@0.5.10",
+   "expect": "allowed",
+   "why": "RUSTSEC-2026-0186, informational (unsound): judged low (decision 21); a dependency of this repository"
+  },
+  {
+   "purl": "pkg:npm/left-pad@1.3.0",
+   "expect": "allowed",
+   "why": "clean control"
+  },
+  {
+   "purl": "pkg:npm/minimist@1.2.8",
+   "expect": "allowed",
+   "why": "clean control (quarantine.sh's clean version)"
+  }
+ ]
+}

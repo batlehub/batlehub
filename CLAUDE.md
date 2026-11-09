@@ -36,7 +36,7 @@ cargo fmt --all
 
 # Coverage (requires Podman — starts Postgres + RustFS)
 task coverage        # HTML report in coverage/html/
-task coverage-check  # fails if line coverage < 80%
+task coverage-check  # fails if line coverage < 80% or a .github/coverage-floors.txt floor is breached
 
 # Integration tests that need real Postgres (via Podman)
 task test:pg-cache
@@ -60,6 +60,10 @@ task dump-spec                # refresh ui/openapi.json from running server
 
 # Docs: every `batlehub-cli …` example parses with the CLI as built, none deprecated
 task docs:cli-commands
+
+# Mutation testing on tier 1 (.cargo/mutants.toml; CI: mutants.yaml, nightly + changed lines of a PR)
+task mutants FILE=crates/core/src/rules/rbac.rs # one file
+task mutants                                    # all of tier 1 — hours; the nightly shards it
 
 # Fuzz
 task fuzz:check                                 # every target compiles — the per-PR CI gate
@@ -172,7 +176,7 @@ For **local/hybrid mode**, additionally implement `get_<name>_versions` (and rel
 
 Consequence: packages published via the local-registry HTTP endpoint do **not** appear in `GET /api/v1/packages` (which queries `AdminService`). Use `TestServer::seed_package()` to inject entries directly into `InMemoryPackageRepository` when testing commands like `package list`. To verify yank/unyank/delete state, query the registry-specific endpoints (e.g. the NuGet flat-index at `/proxy/{reg}/nuget/v3/flat/{id}/index.json`) rather than `package list`.
 
-Coverage is enforced at 80% lines. Excluded paths (DB adapters, some registry clients, auth/OIDC handlers, server main) are listed in the `COVERAGE_EXCLUDE` variable in `.tasks/coverage.yaml`.
+Coverage is checked at 80% lines by `task coverage-check`, plus the per-path floors of `.github/coverage-floors.txt` (tier 1 at 90 %), which `test.yaml`'s `coverage-report` also applies, read from the PR's base: reported red in CI, blocking a merge from RFC 0041 phase 6. The UI's 80 % covers the whole of `ui/src`, not only files that have a test. Excluded paths (DB adapters, some registry clients, auth/OIDC handlers, server main) are listed in the `COVERAGE_EXCLUDE` variable in `.tasks/coverage.yaml`.
 
 ### Storage keys
 
@@ -184,7 +188,7 @@ SQL migrations live in `crates/adapters/migrations/`. They are embedded via `cra
 
 ### Security constraints
 
-`sqlx-macros` and `sqlx-mysql` are patched to empty stubs in `[patch.crates-io]` (Cargo.toml) to remove the `rsa` crate (RUSTSEC-2023-0071) from the dependency tree. Do not add `features = ["macros"]` to the `sqlx` dependency or re-enable `sqlx-macros`/`sqlx-mysql`.
+`sqlx-macros` and `sqlx-mysql` are patched to empty stubs in `[patch.crates-io]` (Cargo.toml) to remove the `rsa` crate (RUSTSEC-2023-0071) from the dependency tree. Do not add `features = ["macros"]` to the `sqlx` dependency or re-enable `sqlx-macros`/`sqlx-mysql`. `sqlx-sqlite` is stubbed the same way, to keep `libsqlite3-sys` (RUSTSEC-2026-0459, bundled SQLite) out of the lock file, and `libsqlite3-sys` is in `deny.toml`'s bans.
 
 `aws-sdk-s3` and `aws-config` use `default-features = false` to avoid `legacy-rustls-ring` (RUSTSEC-2026-0098/0099/0104). Do not enable default features on these crates.
 
@@ -204,11 +208,13 @@ CVE detection runs continuously across every layer; see `docs/contributing/secur
 
 - **Rust deps**: `cargo audit` (RUSTSEC) + `cargo deny` (advisories/bans/licenses/sources) — `.github/workflows/back-dep-audit.yaml`.
 - **JS deps**: `pnpm audit --audit-level high` — `.github/workflows/dep-audit-frontend.yaml`.
-- **Dependency supply chain**: [postmortem](https://github.com/mlab-sh/postmortem) (source-repo reputation + vulns from lockfiles) — `.github/workflows/postmortem.yaml`, one job per dependency root (Rust `.`, `ui/`, `docs/`), SARIF to Code Scanning.
+- **Dependency supply chain**: [postmortem](https://github.com/mlab-sh/postmortem) (source-repo reputation + vulns from lockfiles) — `.github/workflows/postmortem.yaml`, one job per dependency root (Rust `.`, `ui/`, `docs/`), SARIF to Code Scanning. The verdict is `.github/scripts/postmortem_new_risk.py`'s, run from the PR's base checkout, never postmortem's exit code: postmortem 2.9.2 exits 0 with an empty SARIF when vuln.mlab.sh does not answer, ranks `MAL-` as `medium`, and the service silently cuts an anonymous scan at 512 packages (Rust and `ui/` are over it — `VULN_MLAB_TOKEN` is required). Fork PRs go through `postmortem-fork.yaml`, run by a maintainer on the reviewed head.
 - **Lockfile CVEs (advisory)**: [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) against vuln.mlab.sh — `.github/workflows/vuln-scan.yaml`, all four roots on every PR, posting one comment edited in place. `ui/`/`docs/` have no pnpm parser upstream, so they go via a syft CycloneDX SBOM reduced and split by `.github/scripts/slim_sbom.py` (896 KB is a 413; the endpoint reads 512 components per request and `ui/` has 691). **Report-only on findings** (the job still goes red if a scan could not run — 401/429 — so a scan that never happened is not mistaken for a clean one): RUSTSEC findings all come back `severity: unknown` and the only two here are withdrawn `unmaintained` advisories, so no `fail-on` threshold is meaningful. Costs 5 of the 8 anonymous scans/hour — set `VULN_MLAB_TOKEN`.
 - **Container/OS**: Trivy on the built images — the proxy image (`Containerfile`), the scan-worker image (`Containerfile.worker`, RFC 0018) and its GuardDog variant (`Containerfile.worker-guarddog`) — blocking on fixable HIGH/CRITICAL — `.github/workflows/image-scan.yaml` (GitHub, daily rebuild+rescan) and `.forgejo/workflows/build.yaml` (the fallback build when GitHub is down: proxy, hardened and worker images, amd64, to Harbor, unsigned).
 - **SBOM**: CycloneDX for the Rust workspace and the image, attached/attested on release (`.github/workflows/build.yaml`).
 - **SAST / secrets / lint**: CodeQL, Semgrep (`semgrep.yaml`), gitleaks (`secret-scan.yaml`, config `gitleaks.toml`), and the clippy/fmt `lint` job in `test.yaml`.
+
+**A new CI scanner is placed on the grid of `docs/contributing/security-scanning.md` § The scale** (RFC 0041 §4): severity, root class (`ships` / `builds` / `dev`) and gate action (`block` / `block-new` / `report` / `budget`) — not decided one workflow at a time. A gate script under `.github/scripts/` lands with its tests in `.github/scripts/tests/` (`task test:scripts`, the `scripts-test.yaml` job), fixtures recorded from the real tool.
 
 Stance is **no suppressions**: keep `advisories.ignore = []` in `deny.toml` and `.cargo/audit.toml` empty; fix or patch rather than ignore.
 

@@ -252,6 +252,8 @@ export interface RulePolicy {
   rule_version_gate_bypass_roles: string;
   rule_cve_gate_enabled: boolean;
   rule_cve_gate_min_severity: string;
+  /** How an unrated advisory is judged against min_severity (RFC 0041 §4.5). */
+  rule_cve_gate_unknown_severity: string;
   rule_cve_gate_block: boolean;
   rule_cve_gate_bypass_roles: string;
   rule_trusted_publisher_enabled: boolean;
@@ -1114,6 +1116,7 @@ export function rulesToToml(r: RulePolicy, table: string): string[] {
     open();
     out.push(`kind = "cve_gate"`);
     out.push(`min_severity = ${q(r.rule_cve_gate_min_severity)}`);
+    out.push(`unknown_severity = ${q(r.rule_cve_gate_unknown_severity)}`);
     if (r.rule_cve_gate_block) out.push(`block = true`);
     bypass(r.rule_cve_gate_bypass_roles);
   }
@@ -1154,6 +1157,7 @@ export function blankRulePolicy(): RulePolicy {
     rule_version_gate_bypass_roles: "admin",
     rule_cve_gate_enabled: false,
     rule_cve_gate_min_severity: "high",
+    rule_cve_gate_unknown_severity: "high",
     rule_cve_gate_block: false,
     rule_cve_gate_bypass_roles: "admin",
     rule_trusted_publisher_enabled: false,

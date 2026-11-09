@@ -21,18 +21,124 @@ you have already deployed.
 | Rust advisories | `cargo audit` (RUSTSEC) | `back-dep-audit.yaml` (PR + daily) | block |
 | Rust advisories + bans + licenses + sources | `cargo deny` (`deny.toml`) | `back-dep-audit.yaml` | block |
 | JS dependencies | `pnpm audit --audit-level high` | `dep-audit-frontend.yaml` (PR + daily) | block on high/critical |
-| Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
+| Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | Rust, UI: block on high/critical vulns, `block-new` on a pull request; Website: block at critical; any `MAL-`: block — see [the scale](#the-scale) |
 | Lockfile CVEs, second opinion | [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) (vuln.mlab.sh) | `vuln-scan.yaml` (PR) — all four roots: `Cargo.lock`, `mise.lock`, and `ui/` + `docs/` via a syft CycloneDX SBOM | **report-only**, comments on the PR — see below |
 | Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the fallback build: proxy, hardened and worker images, amd64, to Harbor) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Development toolchain | Trivy (`rootfs` over the installed tools) | `mise-scan.yaml` (PR touching `mise.toml`/`mise.lock`, weekly) | budget on fixable HIGH/CRITICAL — see below |
-| Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
+| Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL `block-new` (a repository ruleset) / Semgrep block on ERROR, WARNING reported |
 | API surface (OAS + OWASP API Top 10 auth rules) | Spectral (`.spectral.yaml`) | `openapi-lint.yaml` (PR touching `ui/openapi.json` or the ruleset) | block on error |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |
 
+The Gate column is a summary. [The scale](#the-scale) below is the canonical grid: what each
+finding blocks, on which root, at which threshold, and why.
+
 The **daily** schedules are what turn this from a build-time snapshot into *future* CVE detection: a
 CVE disclosed against a pinned dependency or a base-image layer **after** the last commit still trips
 CI the next morning, with nothing in the repo having changed.
+
+## The scale {#the-scale}
+
+RFC 0041 §4 places every CI scanner on one scale, so a new scanner is placed by the same two rules
+rather than decided one workflow at a time.
+
+**Severity** is the worker's own `Severity`: `unknown < low < medium < high < critical`. A
+scanner's own vocabulary is mapped onto it once, here: Semgrep `ERROR` → high, `WARNING` → medium;
+CodeQL `security-severity` by its CVSS bucket. **`unknown` ranks as high on a `ships` root** when
+the source never rates (RUSTSEC). **Fixable** means a version without the finding exists.
+
+**Root class** — what a dependency root ends up in:
+
+| Class | Means | Roots |
+| --- | --- | --- |
+| `ships` | in a released binary, image or chart | `Cargo.lock`, `ui/` production dependencies, the three images |
+| `builds` | runs in CI or at build time, never shipped | `ui/` dev dependencies, `docs/`, CI actions, `npx` tools |
+| `dev` | a contributor's local toolchain | `mise.lock` |
+
+**Gate actions**:
+
+| Action | A matching finding… |
+| --- | --- |
+| `block` | fails the job, on every event |
+| `block-new` | fails a pull request only when the pull request introduces it; on `main` it is `report` |
+| `report` | reaches SARIF, the job summary or a PR comment, never fails |
+| `budget` | fails when the count exceeds a recorded number (`mise-cve-budget.json`) |
+
+| Scanner | Finding | Root class | Action | Threshold |
+| --- | --- | --- | --- | --- |
+| `cargo audit` | vulnerability, unmaintained, yanked | ships | block | any (`unknown` = high) |
+| `cargo deny` | advisory, ban, licence, source | ships | block | any |
+| `pnpm audit` (`ui/`) | vulnerability | ships + builds | block | ≥ high |
+| `pnpm audit --prod` (`docs/`) | vulnerability in what the published site bundles | ships | block | ≥ high, prod deps |
+| postmortem vulns (Rust, UI) | vulnerability | ships | block on push and schedule, `block-new` on pull requests | ≥ high |
+| postmortem vulns (docs) | vulnerability in the whole docs tree | builds | block | critical |
+| `MAL-` check (Rust, UI, docs) | known-malicious package | all | block | any `MAL-` id |
+| postmortem reputation | an added or changed dependency's signals | ships | `block-new` on pull requests (Rust; UI a week later), report on push and schedule; lifted by a maintainer's approval of the head | typosquat, newborn < 7 d, install script; on a version change new-publisher, new install script, release < 7 d |
+| `postmortem harden .` | CIRSEC CB-DEP control | repo | report | `fail` controls |
+| vuln-scan | vulnerability | all | report | — |
+| Trivy (three images) | OS / library CVE | ships | block | fixable ≥ high |
+| Trivy (`mise-scan`) | CVE in a tool | dev | budget | fixable ≥ high, count ≤ budget |
+| Semgrep | rule match | code | block / report | `ERROR` block, `WARNING` report |
+| CodeQL | security alert | code | `block-new` | `security-severity` ≥ high, via a repository ruleset |
+| Spectral | OAS / OWASP API rule | API | block | ≥ warn |
+| gitleaks | secret | all | block | any |
+| clippy | lint | code | block | any warning |
+| SonarCloud | quality gate | code | block | *Sonar way* on new code |
+
+Two rules explain every row, and a new scanner is placed by them:
+
+- **What ships blocks on what is fixable and serious; what only builds is reported, and blocks
+  only at critical.** `pnpm audit` and postmortem cannot filter on fixability, so a `builds` root
+  blocks at critical whether a fix exists or not.
+- **A signal that cannot be made clean today gates on change, not on state.** That is `block-new`,
+  and it is the only way reputation and CodeQL can block without failing every pull request or never
+  failing at all. `block-new` hides nothing: the finding stays in `main`'s SARIF.
+
+A secret or a known-malicious package blocks whatever the root. **vuln-scan stays `report`** until
+two consecutive weekly runs show no withdrawn advisory among its findings and a rated severity on
+every RUSTSEC finding; it is then promoted to `block` on `ships` roots.
+
+**CodeQL's `block-new` is not in any workflow.** It is a repository ruleset on `main` ("code
+scanning merge protection", tool **CodeQL**, alerts ≥ high), set by the maintainer. Scoped to CodeQL
+and not to all tools, or the Semgrep `WARNING`s in the Security tab would block too.
+
+### Required checks {#required-checks}
+
+A `block` gate blocks a merge only once its check is required on `main` (RFC 0041 decisions 28 and
+41). Each gated workflow ends with **one aggregate job, `<file>.yaml / required`**, and that is the
+only check the ruleset names. The job names are unique because a ruleset matches a check by name,
+not by workflow:
+
+`test.yaml`, `back-dep-audit.yaml`, `dep-audit-frontend.yaml`, `postmortem.yaml`, `image-scan.yaml`,
+`semgrep.yaml`, `openapi-lint.yaml`, `secret-scan.yaml`, `front-lint.yaml`, `front-test.yaml`,
+`front-design.yaml` (the only CI type-check of `ui/src`, and the generated-docs drift),
+`docs-cli-commands.yaml`, `repo-interop.yaml`, `mise-scan.yaml`, `scripts-test.yaml`,
+`helm-lint.yaml`, each followed by ` / required`. `test_required_gate.py` fails when one of them
+does not wait for every other job of its workflow.
+
+- **No workflow-level `paths:`.** A pull request it skipped would leave the required check
+  "Expected — waiting for status" forever. The workflow always runs; a first `gate` job applies the
+  same path list (`.github/actions/required-gate`, from `git diff --no-renames --name-only base...head`, so a
+  file moved out of a watched tree counts under its old name) and the
+  other jobs hang off it. A schedule, a manual run or a push whose `before` is gone is a full run.
+- **The verdict** is `.github/scripts/required_gate.py verdict`: red unless every job succeeded, or
+  the gate skipped them all. A job skipped any other way is a failure, so a stub cannot mask a job.
+- **Dependabot** (`test.yaml` only, recognised by the author `dependabot[bot]`, never by the branch
+  name anyone can push): without the `full-test` label the Rust suite is skipped, and
+  `test.yaml / required` is green — unless `Cargo.lock` or `fuzz/Cargo.lock` changed, when it fails
+  with *"Cargo.lock changed but the Rust suite was skipped — add the full-test label"*. The path
+  filter runs first, so a bump that touches nothing `test.yaml` covers stays green whatever its
+  branch.
+- **A fork's pull request**: its own `postmortem.yaml` run has no `VULN_MLAB_TOKEN` and is red by
+  construction; `postmortem-fork.yaml`, run by a maintainer on the reviewed head, posts the verdict
+  as a commit status named `postmortem.yaml / required`. That this status satisfies the ruleset
+  beside the failed check of the same name is not yet observed on a real fork PR.
+- **Not aggregated**: CodeQL (the ruleset above), vuln-scan (`report`), SonarCloud (an external
+  app), and the label- or schedule-driven workflows.
+
+The ruleset itself is a repository setting the maintainer adds: these checks, CodeQL merge
+protection, and one approval of the most recent push with the maintainer in the bypass list
+(decision 47).
 
 Dependabot waits seven days (`cooldown`) before it proposes a version bump. Security updates
 don't wait. One pin is invisible to it: the `rustfs/rustfs` test image. The `github-actions`
@@ -50,45 +156,90 @@ reputation and provenance signals — stars, age, last activity, archived/abando
 typosquatted names — on top of a vulnerability cross-check against `vuln.mlab.sh` (OSV/GHSA/CVE).
 
 Its `detect()` only looks at the lockfiles sitting **directly** in the scanned directory, so
-`postmortem.yaml` runs one job per dependency root — `.` (`Cargo.lock`), `ui/`, `website/` — each
-uploading its own SARIF.
+`postmortem.yaml` runs one job per dependency root — `.` (`Cargo.lock`), `ui/`, `docs/` — each
+uploading its own SARIF. They are three **separate jobs, not a matrix**: postmortem stamps every SARIF
+result with `artifactLocation.uri = "."`, so the uploads are told apart only by the Code Scanning
+category `upload-sarif` derives from the job id. Read the alert message
+(`<pkg>@<version> [<repo>] — <signal>`) for the target.
 
-Those are three **separate jobs, not a matrix**, and deliberately so. postmortem stamps every SARIF
-result with `artifactLocation.uri = "."` regardless of what it scanned, so the three uploads are
-distinguishable only by their Code Scanning category — which `upload-sarif` derives from `GITHUB_JOB`
-plus its `matrix` input, and that input's <code v-pre>${{ toJson(matrix) }}</code> default does not resolve when the
-upload runs from inside a composite action, as it does here. Matrix legs would therefore share one
-category and supersede one another, leaving only the last job's alerts. Distinct job ids cannot
-collide. The same quirk means every alert is anchored at the repository root rather than at the
-offending lockfile; read the alert message (`<pkg>@<version> [<repo>] — <signal>`) for the target.
+**The verdict is `postmortem_new_risk.py`'s, never postmortem's exit code** (RFC 0041 §6.5). Each job
+runs the mise-pinned postmortem twice over its root — `tree --vulns --json`, then `tree --online
+--vulns --sarif` (which reuses the local vulnerability cache) — and, on a pull request, an offline
+`diff` against the base. The script then fails the job on any of:
 
-The scan runs with `soft-fail` on so the action always reaches its SARIF upload; a separate `Gate`
-step then fails the job on the scan's exit code (`0` pass, `1` gate tripped, `2` misconfigured / no
-ecosystem detected) — the same report-then-gate shape as `semgrep.yaml`. The reputation thresholds
-(`max-risk` / `max-dep` / `max-high` / `max-sus`) are intentionally left unset for now: scores are
-reported in SARIF, and the numbers should be picked from a real baseline rather than guessed.
+- a lookup that did not complete. postmortem 2.9.2 exits `0` and writes an empty SARIF when
+  `vuln.mlab.sh` does not answer, `--fail-on-vuln` included; only the JSON's `vuln_scan_failed`
+  diagnostic says so. A SARIF holding a different number of advisories than the JSON fails too;
+- a root with more packages than the vuln.mlab.sh tier reads: **512 anonymously, 1 024 with
+  `VULN_MLAB_TOKEN`**. The service cuts a larger scan and says nothing about the rest; the Rust root
+  (671) and `ui/` (675) are both over 512;
+- any `MAL-` advisory in the tree, on every event, existing packages included. postmortem ranks a
+  `MAL-` record `medium`, so `fail-on-vuln: high` alone passes it. The match is on the advisory id,
+  never the message, so a package *named* `MAL-…` blocks nothing;
+- on push and schedule, any advisory ≥ `high` (Rust, UI) or `critical` (docs); `unknown` counts as
+  high;
+- on a pull request (Rust, UI): an advisory ≥ high against a package the change **adds or
+  changes** (`block-new`). An advisory published today against a package already on `main` does not
+  fail an unrelated pull request: `main`'s own run reports it. A root the base does not have, or more
+  than 50 added packages, fails and needs a maintainer;
+- on a pull request (Rust; UI a week later): the **reputation** of what the change adds or changes,
+  from `postmortem diff --online` and `postmortem scripts` on both sides (`block-new`). An added
+  package blocks on `typosquat`, on `newborn-package` under 7 days, or on an install script; a
+  version change blocks on `new-publisher`, on an install script the old version did not have, or
+  on a target version published under 7 days ago (`fresh-release`). Every other signal is printed
+  and blocks nothing. A Cargo `build.rs` or proc-macro is not an install script. A `stats-failed`
+  signal — GitHub did not answer — fails the job: postmortem itself exits 0 on it.
+
+**A maintainer's approving review of the head lifts a reputation block.** The job reads the pull
+request's reviews and accepts an `APPROVED` one whose commit is the pull request's current head, from
+an account with the `admin` or `maintain` role that is not the author; the review re-runs the job
+(`pull_request_review`), which then reports the block instead of failing on it. A push voids it. The
+same review lifts "new or moved dependency root". It never lifts a `MAL-` package, an advisory, or
+a lookup that did not complete. An API error, or a call over 30 s, is red.
+
+`ui/` and `docs/` resolve with pnpm 9, whose lockfile no longer records which packages build, so
+`postmortem scripts` sees no install script there without `node_modules`. What stops one is pnpm's
+own `allowBuilds:` in `pnpm-workspace.yaml`, which `pr-checklist.yaml` lists as a gate input.
+
+Every package name or version the script prints is escaped, so a lockfile cannot issue a workflow
+command.
+
+**A pull request cannot pick the binary or the script that judge it.** The base commit is checked
+out into `base/` and the pull request into `head/`. postmortem is installed from `base/mise.toml`
+and `base/mise.lock` (checksum verified, `MISE_TRUSTED_CONFIG_PATHS` limited to `base/`) and called
+by absolute path. `base/.github/scripts/postmortem_new_risk.py` judges. A change to the script
+therefore takes effect one pull request later, and the job summary says so. A pull request can still
+rewrite the workflow or `.github/actions/postmortem-gate`; review is the gate for that, and
+`pr-checklist.yaml` lists such changes from `pull_request_target`, where the pull request cannot
+edit the check.
+
+The Rust job also adds `postmortem harden .` (CIRSEC CB-DEP controls) to its job summary, as
+`report`. On push and schedule the reputation scores reach SARIF and block nothing.
 
 One caveat when reading its vulnerability list: `vuln.mlab.sh` also serves advisories that RustSec has
 since **withdrawn** — `RUSTSEC-2020-0053` (`dirs` unmaintained, withdrawn 2021) and `RUSTSEC-2025-0007`
 (`ring` unmaintained, withdrawn 2025) both still show up against this tree, and neither is actionable.
 Check `withdrawn` on the OSV record (`https://api.osv.dev/v1/vulns/<id>`) before chasing one. Don't
-allowlist them — the suppression stance below applies, and the count is harmless as long as the gate
-keys on severity.
+allowlist them — the suppression stance below applies.
 
-When a blocking gate (Rust, UI) trips on a push to `main` or the daily run, the action opens an issue
-labelled `postmortem-rust` / `postmortem-ui` listing the offending packages. Later failures on the same
-branch update that issue instead of opening another, and it closes itself once the gate passes. Pull
-requests never open one — the failed check is the report there.
+When a job fails on a push to `main` or the daily run, the `issue` job opens an issue labelled
+`postmortem-rust`, `postmortem-ui` or `postmortem-docs`. Later failures comment on it, and the next
+green run closes it. Pull requests never open one; the failed check is the report there.
 
-Two rate limits apply. Repository reputation is read from the GitHub API — CI passes `github.token`
-automatically; locally, export `GITHUB_TOKEN` or every dependency comes back `stats-failed`.
+**`VULN_MLAB_TOKEN` is required**, as a repository secret **and** as a Dependabot secret: runs
+triggered by Dependabot do not receive repository secrets. Without it the Rust and UI jobs fail on the
+512-package cut, by design. The service allows one scan per 10 s per IP anonymously and one per 5 s
+with a token, and postmortem waits out that cooldown itself. `vuln-scan.yaml` reads the same secret.
 
-Vulnerability lookups go to `vuln.mlab.sh`, capped at **8 scans/hour anonymously**, and **that budget
-is shared with `vuln-scan.yaml`** — one `VULN_MLAB_TOKEN`, one quota, two workflows. postmortem
-spends 3 per run and vuln-scan 5, so a single pull-request push costs the whole anonymous hour and
-anything after it is throttled. `VULN_MLAB_TOKEN` is therefore no longer optional in practice: set it
-once as a repository secret and both workflows pick it up, with no per-workflow configuration.
-Locally, export `VULN_MLAB_TOKEN` in your shell or put `vuln_token` in `~/.postmortem/config.yml`.
+**A fork's pull request never receives the secret**, so its Rust and UI jobs are red. A maintainer
+who has reviewed its head runs `postmortem-fork.yaml` (Actions → *Run workflow*) with the pull
+request number and the head SHA they reviewed. It refuses a head that has moved since. It checks
+out only the head's lockfiles and manifests, runs the same gate with the token, and posts
+`postmortem-fork / Rust`, `/ UI` and `/ Website` as commit statuses on that SHA.
+
+Repository reputation is read from the GitHub API: CI passes `github.token`; locally, export
+`GITHUB_TOKEN` or every dependency comes back `stats-failed`. Locally, export `VULN_MLAB_TOKEN` in your
+shell or put `vuln_token` in `~/.postmortem/config.yml`.
 
 ### vuln-scan-action (lockfile CVEs, advisory)
 
@@ -153,10 +304,14 @@ task deny            # just the cargo-deny supply-chain gate
 task audit           # just cargo audit
 task ui:audit        # just the frontend audit
 task postmortem      # dependency supply chain, all three roots (Rust, UI, Website)
-task postmortem:rust # just one root — also postmortem:ui / postmortem:website
+task postmortem:rust # just one root — also postmortem:ui / postmortem:docs
+task postmortem:new-risk ROOT=ui  # what this branch adds to a root, judged as its pull request would be
+task test:scripts    # the gate scripts' own tests (.github/scripts/tests)
 ```
 
-`postmortem` is provisioned by `mise install`, pinned to the same version the CI action runs.
+`postmortem` is provisioned by `mise install`, pinned in `mise.lock` to the version CI installs.
+The tasks run `postmortem_new_risk.py` like CI does, so a scan cut at 512 packages fails locally too:
+export `VULN_MLAB_TOKEN`.
 
 Image scanning, secret scanning and SAST need their own tools (all provisioned by `mise install`):
 

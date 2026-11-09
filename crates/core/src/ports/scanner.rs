@@ -49,6 +49,20 @@ pub enum ScannerError {
     Unsupported(String),
     #[error("{0}")]
     Other(String),
+    /// The upstream asked to be left alone (a 429, or an open circuit
+    /// breaker). Deferrable (RFC 0041 decision 44).
+    #[error("scanner upstream is rate limiting")]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+    },
+    /// A failure the next attempt may not meet: a 5xx, a transport error, an
+    /// answer that is not JSON. Deferrable.
+    #[error("scanner upstream failed transiently: {0}")]
+    Transient(String),
+    /// The same answer next time — an oversized body, too many pages, too
+    /// many components. Never deferred: `SCANNER_ERROR` at once.
+    #[error("scanner upstream failed permanently: {0}")]
+    Permanent(String),
 }
 
 impl ScannerError {
@@ -61,7 +75,20 @@ impl ScannerError {
             Self::Crashed(_) => "crashed",
             Self::Unsupported(_) => "unsupported",
             Self::Other(_) => "other",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::Transient(_) => "transient",
+            Self::Permanent(_) => "permanent",
         }
+    }
+
+    /// Whether an advisory database's job waits for this error to clear
+    /// instead of recording it (RFC 0041 decision 44). A timeout is a slow
+    /// upstream, so it waits too.
+    pub fn is_deferrable(&self) -> bool {
+        matches!(
+            self,
+            Self::RateLimited { .. } | Self::Transient(_) | Self::Timeout
+        )
     }
 }
 
@@ -87,6 +114,20 @@ pub trait ArtifactScanner: Send + Sync {
     /// Whether this scanner reads the package's listing document.
     fn needs_listing(&self) -> bool {
         false
+    }
+
+    /// Whether this scanner is an advisory database (RFC 0041 decision 44):
+    /// it runs first, and a transient error from it defers the job rather
+    /// than recording a `SCANNER_ERROR`. Declared by the scanner, not read
+    /// from its name — `[scanners.<key>]` can call an OSV anything.
+    fn is_advisory_db(&self) -> bool {
+        false
+    }
+
+    /// While the scanner's circuit breaker is open: how long until it
+    /// closes. The worker leases no job that needs it meanwhile.
+    fn unavailable_for(&self) -> Option<std::time::Duration> {
+        None
     }
 
     /// Scan. An empty `Ok` is a clean answer; an `Err` is not an answer.

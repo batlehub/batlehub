@@ -2,20 +2,8 @@ name: Frontend dependency audit
 on:
   push:
     branches: ["main"]
-    paths:
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "docs/package.json"
-      - "docs/pnpm-lock.yaml"
-      - ".github/workflows/dep-audit-frontend.yaml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "ui/package.json"
-      - "ui/pnpm-lock.yaml"
-      - "docs/package.json"
-      - "docs/pnpm-lock.yaml"
-      - ".github/workflows/dep-audit-frontend.yaml"
   # Daily so a CVE disclosed against an already-pinned dependency trips CI even
   # when nothing in the repo changed.
   schedule:
@@ -24,7 +12,35 @@ on:
 permissions:
   contents: read
 jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            ui/package.json
+            ui/pnpm-lock.yaml
+            docs/package.json
+            docs/pnpm-lock.yaml
+            .github/workflows/dep-audit-frontend.yaml
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
   audit:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: pnpm audit — ${{ matrix.workspace }}
     runs-on: ubuntu-latest
     strategy:
@@ -58,3 +74,22 @@ jobs:
       # fails the job on any high/critical advisory.
       - name: pnpm audit
         run: pnpm audit --audit-level high ${{ matrix.audit-args }}
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: dep-audit-frontend.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, audit]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

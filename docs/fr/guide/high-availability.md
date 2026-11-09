@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: f57aadaca0e63e48
+sourceHash: 2cacc5adcf12d068
 ---
 
 # Haute disponibilité
@@ -132,6 +132,45 @@ réplica derrière un PgBouncer, ou laissez le défaut (10) en connexion directe
 type            = "postgresql"
 url             = "postgresql://batlehub:changeme@postgres:5432/batlehub"
 max_connections = 5   # recommandé par réplica avec un pooler de connexions
+```
+
+#### Le cache de lecture et `LISTEN` {#config-db-listen}
+
+Chaque réplica garde en mémoire les lectures que chaque téléchargement répète — le blocage du
+paquet, ses flags, sa visibilité, le jeton présenté, le blocage de l'utilisateur, l'endroit où
+l'artefact est stocké — et Postgres prévient chaque réplica quand l'une d'elles change
+(`LISTEN/NOTIFY`, alimenté par des triggers). Un blocage ou un jeton révoqué s'applique donc
+sur tous les réplicas dans le temps d'une notification, pas au bout d'un délai.
+
+Le cache ne s'active qu'une fois que le réplica a vu revenir une notification qu'il a lui-même
+envoyée, et se coupe dès qu'une n'arrive pas. **Derrière un pooler en mode transaction**
+(`pool_mode = transaction` de PgBouncer), les notifications n'atteignent jamais le listener :
+le cache reste coupé, chaque lecture va à la base comme avant, et le journal le dit une fois.
+Pour garder le cache, donnez au listener une connexion directe ou en mode session :
+
+```toml
+[database]
+url        = "postgresql://batlehub:changeme@pgbouncer:6432/batlehub"
+listen_url = "postgresql://batlehub:changeme@postgres:5432/batlehub"  # directe, pour LISTEN seulement
+```
+
+Sans `listen_url`, le listener occupe une connexion du pool. `batlehub_read_cache_live`
+(1 ou 0) indique si le cache est actif ; `batlehub_read_cache_invalidations_total` compte
+les notifications reçues.
+
+Un listener dont la connexion meurt sans reset (une partition réseau) est repéré par son
+heartbeat, envoyé toutes les 10 s : une réponse peut alors être périmée 20 s au plus, et
+chaque entrée est de toute façon abandonnée au bout de 5 minutes. Une écriture faite *par* un
+réplica vide la copie de ce réplica au commit, sans attendre la notification.
+
+Le cache est actif par défaut, y compris avec un seul réplica : le scan worker
+(`--roles worker`), un autre réplica ou une requête SQL d'un opérateur écrivent les mêmes
+lignes, et seule la notification en informe ce processus. Pour le couper — chaque lecture va
+à la base, et aucun listener n'est démarré :
+
+```toml
+[database]
+read_cache = false
 ```
 
 ### CORS {#config-cors}

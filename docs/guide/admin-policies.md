@@ -673,3 +673,9 @@ have allowed it: `release_age_gate`, `deny_latest`, `version_gate`,
 next to the block list above and the flags a SOC pushes. What each one reads,
 what it does when that data is missing, and how the set changes on a registry
 with `[registries.security]` are on [Security gates](/guide/security-gates).
+
+`cve_gate` judges an advisory with no severity at its `unknown_severity`, `high`
+when absent, so a `cve_gate` with `block = true` refuses unrated advisories
+too. That is most visible on Go registries, and `"unknown"` restores the old
+behaviour: see [Unrated findings](/guide/security-gates#unknown-severity). A
+`MAL-` advisory is refused whatever either level says.
