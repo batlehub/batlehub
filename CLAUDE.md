@@ -188,7 +188,7 @@ SQL migrations live in `crates/adapters/migrations/`. They are embedded via `cra
 
 ### Security constraints
 
-`sqlx-macros` and `sqlx-mysql` are patched to empty stubs in `[patch.crates-io]` (Cargo.toml) to remove the `rsa` crate (RUSTSEC-2023-0071) from the dependency tree. Do not add `features = ["macros"]` to the `sqlx` dependency or re-enable `sqlx-macros`/`sqlx-mysql`.
+`sqlx-macros` and `sqlx-mysql` are patched to empty stubs in `[patch.crates-io]` (Cargo.toml) to remove the `rsa` crate (RUSTSEC-2023-0071) from the dependency tree. Do not add `features = ["macros"]` to the `sqlx` dependency or re-enable `sqlx-macros`/`sqlx-mysql`. `sqlx-sqlite` is stubbed the same way, to keep `libsqlite3-sys` (RUSTSEC-2026-0459, bundled SQLite) out of the lock file, and `libsqlite3-sys` is in `deny.toml`'s bans.
 
 `aws-sdk-s3` and `aws-config` use `default-features = false` to avoid `legacy-rustls-ring` (RUSTSEC-2026-0098/0099/0104). Do not enable default features on these crates.
 

@@ -170,6 +170,8 @@ deny = [
     { name = "rsa" },
     { name = "sqlx-mysql" },
     { name = "sqlx-macros-core" },
+    # RUSTSEC-2026-0459 — bundled SQLite, via sqlx-sqlite. Removed by its stub patch.
+    { name = "libsqlite3-sys" },
     # Legacy rustls stack — RUSTSEC-2026-0098/0099/0104. We use the
     # rustls-aws-lc / hyper 1.x path instead (see aws-sdk notes in Cargo.toml).
     { name = "rustls", version = "=0.21" },

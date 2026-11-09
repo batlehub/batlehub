@@ -222,7 +222,12 @@ def measure(base, log, factory, expect):
         end = settle(log)
         with open(log, "rb") as f:
             f.seek(start)
-            queries = parse(f.read(end - start).decode("utf-8", "replace"))
+            # The read cache's heartbeat runs on its own clock, every 10 s:
+            # not this request's work, it lands in a window by chance.
+            queries = [
+                q for q in parse(f.read(end - start).decode("utf-8", "replace"))
+                if not (q["spawned"] and q["sql"].startswith("SELECT pg_notify("))
+            ]
         rows.append({"status": status, "queries": queries})
     bad = [r["status"] for r in rows if r["status"] not in (expect, 201)]
     return rows, bad

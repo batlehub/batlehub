@@ -1,0 +1,24 @@
+[package]
+name = "sqlx-sqlite"
+version = "0.9.0"
+edition = "2021"
+description = "Local stub — replaces crates.io sqlx-sqlite to remove libsqlite3-sys (RUSTSEC-2026-0459) from the lock file. SQLite is not used in this project; this stub satisfies Cargo's optional-dep resolution."
+
+[features]
+default = []
+any = []
+bundled = []
+chrono = []
+deserialize = []
+json = []
+load-extension = []
+migrate = []
+offline = []
+preupdate-hook = []
+regexp = []
+sqlx-toml = []
+time = []
+unbundled = []
+unlock-notify = []
+_unstable-docs = []
+uuid = []
