@@ -1798,7 +1798,10 @@ version — already public on the registry, now in a public CI log too.
   0, knows `KNOWN_MALICIOUS` as always denied, reads any code it does not
   know as always denied without re-saving the row, and never writes it;
   release N+1 (phase 1) writes it. Every process must run N or later before
-  N+1 is deployed. `SecurityConfig` and `CveGateConfig` carry no
+  N+1 is deployed. *(Amended 2026-11-09: N and N+1 shipped together as
+  1.10.0, so the upgrade from 1.9.x stops every process instead of rolling;
+  the marker migration still makes a rollback below 1.10.0 a boot failure.
+  See the 1.10.0 upgrade checklist in `CHANGELOG.md`.)* `SecurityConfig` and `CveGateConfig` carry no
   `deny_unknown_fields`, so an old binary ignores `unknown_severity` (T13).
   While N and N+1 both serve, a version whose only advisory is unrated is
   refused by N+1 and served by N, depending on the replica; decision 45

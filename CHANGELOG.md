@@ -8,80 +8,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Upgrade checklist (RFC 0041 phase 0 — this is release N)
+Nothing yet.
 
-This release is the first of two. The next one (N+1) judges unrated
-advisories and OSV `MAL-` records more strictly, and writes a reason code
-(`KNOWN_MALICIOUS`) that only this release and later can read.
+## [1.10.0] - 2026-11-09
 
-0. **Run this release on every process before N+1, and never roll back below
-   it.** From N+1 an older binary refuses to start against the database (this
-   release ships an empty marker migration, `065`, which sqlx enforces).
-1. **Check that every worker reaches OSV** (or the configured `api_url`):
-   from this release an unreachable or throttling OSV *holds* a new version
-   instead of reading as "no advisory". A version first seen during an outage
-   waits up to 24 hours on `SCAN_PENDING`, then gets `SCANNER_ERROR`, which the
-   maturity bypass does not serve. `batlehub_scan_jobs_deferred` shows the
-   jobs waiting.
-2. **Read the upgrade counts**: `grep batlehub::upgrade` on the logs. One line
-   per registry, zero included — how many versions and cached artifacts hold
-   an unrated advisory, which N+1 judges by `unknown_severity` (default
-   `high`).
-3. **`scanner_error = "warn"` or `"ignore"`** on a `block` registry now raises
+### Upgrade checklist (RFC 0041 — read before upgrading from 1.9.x)
+
+RFC 0041 planned two releases, one that *reads* the new reason codes and one
+that *writes* them, so that a rolling upgrade never had an old replica meet a
+code it does not know. Both ship together in 1.10.0, so the upgrade from 1.9.x
+is **not rolling**.
+
+0. **Stop every process of 1.9.x — proxies and workers — before starting
+   1.10.0, and never roll back below 1.10.0.** A 1.9.x replica beside a 1.10.0
+   one reads `KNOWN_MALICIOUS`, which only 1.10.0 writes, as a read error, and
+   serves an unrated advisory that 1.10.0 refuses. Migration `065` is a marker
+   and `066` adds the read cache's triggers: once 1.10.0 has migrated the
+   database, a 1.9.x binary refuses to start against it, so a `helm rollback`
+   is a loud boot failure rather than a silent downgrade.
+1. **Check that every worker reaches OSV** (or the configured `api_url`): an
+   unreachable or throttling OSV now *holds* a new version instead of reading
+   as "no advisory". A version first seen during an outage waits up to 24
+   hours on `SCAN_PENDING`, then gets `SCANNER_ERROR`, which the maturity
+   bypass does not serve. `batlehub_scan_jobs_deferred` shows the jobs
+   waiting.
+2. **Decide `unknown_severity` per registry before starting**, or accept
+   `"high"`. An advisory with no severity is now judged as `high`, so under
+   the default `max_severity = "high"` and `mode = "block"` a version whose
+   only advisory is unrated is **refused at its next download**, not at its
+   next scan (see
+   [Security gates § How a finding is rated](https://batlehub.dev/guide/security-gates#severity)).
+   A Go registry is where it is most often lowered: the Go vulnerability
+   database rates nothing, and `golang.org/x/net@0.22.0` alone carries 17
+   `GO-` records with no rated twin. `unknown_severity = "unknown"` restores
+   the old judgement on the next read, but it does not undo an escalation an
+   unrated finding has already triggered (the escalated severity is stored),
+   nor the new per-kind defaults below.
+3. **Read the upgrade counts** at the first start: `grep batlehub::upgrade` on
+   the logs gives one line per registry, zero included — how many versions
+   and cached artifacts hold an unrated advisory. Those are the versions this
+   release refuses under `unknown_severity = "high"`.
+4. **Check registries in `mode = "warn"`**: they no longer serve OSV `MAL-`
+   records, which are `KNOWN_MALICIOUS` and always refused. The only way to
+   serve one is an administrator's per-version exemption on the gate
+   `security_verdict`, which serves it `warned` with `ADMIN_OVERRIDE`.
+5. **Check `cve_gate` rules with `block = true`**, including on registries
+   without a `[registries.security]` profile (the Helm
+   `values-restricted.yaml` profile has one, now with an explicit
+   `unknown_severity: "high"`): they now refuse unrated advisories, and a
+   `MAL-` advisory whatever `min_severity` says. Set
+   `cve_gate.unknown_severity` to change the first.
+6. **`scanner_error = "warn"` or `"ignore"`** on a `block` registry now raises
    the `security.scanner-error-open` config warning: until this release a
    failing OSV served the version silently, and those settings are now the
    only way to keep doing so.
-
-### Upgrade checklist (RFC 0041 phase 1 — release N+1)
-
-The second of the two releases. An advisory with no severity is now judged as
-`high`, so under the default `max_severity = "high"` and `mode = "block"` a
-version whose only advisory is unrated is **refused at its next download**,
-not at its next scan. An OSV `MAL-` record is `KNOWN_MALICIOUS` and always
-refused, `mode = "warn"` included. See
-[Security gates § How a finding is rated](https://batlehub.dev/guide/security-gates#severity).
-
-0. **Release N (above) must run on every process first**, and never roll back
-   below it. Finish this rollout quickly: while N and N+1 both serve, a
-   version whose only advisory is unrated is refused by an N+1 replica and
-   served by an N one, and its stored verdict can flip between the two until
-   only N+1 runs.
-1. **Read N's counts**: `grep batlehub::upgrade` on N's logs gives one line per
-   registry, zero included: `<n> versions on <registry> hold an unrated
-   advisory, and <m> cached artifacts carry one in their SBOM scan; from the
-   next release they are judged unknown_severity (default high)`. Those are
-   the versions this release starts refusing.
-2. **Decide `unknown_severity` per registry**, or accept `"high"`. A Go
-   registry is where it is most often lowered: the Go vulnerability database
-   rates nothing, and `golang.org/x/net@0.22.0` alone carries 17 `GO-`
-   records with no rated twin. `unknown_severity = "unknown"` restores the
-   old judgement on the next read, but it does not undo an escalation an
-   unrated finding has already triggered (the escalated severity is stored),
-   nor the new per-kind defaults below.
-3. **Check registries in `mode = "warn"`**: they no longer serve `MAL-`
-   records. The only way to serve one is an administrator's per-version
-   exemption on the gate `security_verdict`, which serves it `warned` with
-   `ADMIN_OVERRIDE`.
-4. **Check `cve_gate` rules with `block = true`**, including on registries
-   without a `[registries.security]` profile (the Helm `values-restricted.yaml`
-   profile has one, now with an explicit `unknown_severity: "high"`): they now
-   refuse unrated advisories, and a `MAL-` advisory whatever `min_severity`
-   says. Set `cve_gate.unknown_severity` to change the first.
-5. **Once every process runs this release, rescan** each registry whose
-   count in item 1 was not zero: `batlehub-cli verdict rescan -r <registry>`,
-   repeated until it queues nothing (it reads 1 000 verdicts per state).
-   It re-runs every scanner of the registry. Advisories with a CVSS vector
-   then take their computed level instead of `high`. That is lower for most,
-   but `critical` for a vector scoring 9 or more, so under
-   `max_severity = "critical"` or `unknown_severity = "unknown"` a rescan can
-   newly refuse a version. Progress is `batlehub_scan_jobs_queued{trigger="rescan"}`.
-   A registry with a `cve_gate` and no security profile has no verdicts
-   (`verdict rescan` answers 404 there). The periodic SBOM re-scan re-scores
-   it instead, every `[vulnerability_scan] interval_secs` (daily by default).
-6. **Rollback** goes back to release N at the earliest, and re-opens the
-   cached `MAL-` versions until this release is back: N reads a stored `MAL-`
-   finding as an unrated vulnerability. Setting `unknown_severity = "unknown"`
-   is the rollback of the new default that keeps the binary.
+7. **Rescan** each registry whose count in item 3 was not zero:
+   `batlehub-cli verdict rescan -r <registry>`, repeated until it queues
+   nothing (it reads 1 000 verdicts per state). It re-runs every scanner of
+   the registry. Advisories with a CVSS vector then take their computed level
+   instead of `high`. That is lower for most, but `critical` for a vector
+   scoring 9 or more, so under `max_severity = "critical"` or
+   `unknown_severity = "unknown"` a rescan can newly refuse a version.
+   Progress is `batlehub_scan_jobs_queued{trigger="rescan"}`. A registry with
+   a `cve_gate` and no security profile has no verdicts (`verdict rescan`
+   answers 404 there); the periodic SBOM re-scan re-scores it instead, every
+   `[vulnerability_scan] interval_secs` (daily by default).
+8. **Behind a transaction-mode pooler** (PgBouncer), set
+   `[database] listen_url` to a direct connection, or the new read cache
+   stays off (see *High availability*). `[database] read_cache = false`
+   turns it off on purpose.
 
 ### Changed
 
@@ -2232,7 +2227,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.9.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.10.0...HEAD
+[1.10.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.9.0...v1.10.0
 [1.9.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.3...v1.9.0
 [1.8.3]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.2...v1.8.3
 [1.8.2]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...v1.8.2
