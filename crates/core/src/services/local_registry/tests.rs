@@ -4589,3 +4589,54 @@ mod storage_key_collisions {
         }
     }
 }
+
+/// `?` and `#` reach a handler decoded from `%3F` / `%23` and pass
+/// `validate_path_safe`; in a coordinate they are refused, so the name the
+/// rules judge is the name the upstream is asked about.
+#[test]
+fn a_url_delimiter_in_any_coordinate_part_is_refused() {
+    use crate::services::{validate_coordinate, validate_package_name};
+    for (name, version, artifact) in [
+        ("left-pad?x=1", "1.0.0", None),
+        ("left-pad#x", "1.0.0", None),
+        ("left-pad", "1.0.0?x", None),
+        ("left-pad", "1.0.0", Some("a?b.tgz")),
+    ] {
+        assert!(
+            matches!(
+                validate_coordinate(name, version, artifact),
+                Err(CoreError::InvalidInput(_))
+            ),
+            "{name} {version} {artifact:?}"
+        );
+    }
+    assert!(validate_package_name("org/secret?").is_err());
+    // What ecosystems do use stays valid.
+    validate_coordinate(
+        "@scope/left-pad",
+        "1.0.0+build.1",
+        Some("left-pad-1.0.0.tgz"),
+    )
+    .unwrap();
+    validate_coordinate("org.example:lib", "1.0-SNAPSHOT", Some("lib-1.0.jar")).unwrap();
+}
+
+/// `#` in a version is a git ref on a forge and a fragment anywhere else.
+#[test]
+fn a_hash_in_a_version_is_a_tag_on_a_forge_only() {
+    use crate::services::{reject_hash_in_version, validate_coordinate};
+    validate_coordinate("o/r", "release#2", None).unwrap();
+    for forge in ["github", "forgejo", "gitlab"] {
+        reject_hash_in_version(forge, "release#2", Some("tarball/release#2")).unwrap();
+    }
+    for kind in ["npm", "pypi", "maven", "generic"] {
+        assert!(
+            reject_hash_in_version(kind, "1.0.0#x", None).is_err(),
+            "{kind}"
+        );
+        assert!(
+            reject_hash_in_version(kind, "1.0.0", Some("a#b.tgz")).is_err(),
+            "{kind}"
+        );
+    }
+}

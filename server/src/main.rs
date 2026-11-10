@@ -4,6 +4,8 @@ mod db_metrics;
 mod explain;
 mod grants;
 mod hot_config;
+#[cfg(test)]
+mod name_injection_probe;
 #[cfg(feature = "profiling")]
 mod profiling;
 mod server_factory;
