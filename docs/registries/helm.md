@@ -18,7 +18,7 @@ OCI chart registries (`helm pull oci://…`) are not a chart repository and are 
 | **Default upstream** | none — a registry is one chart repository, and you name it |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | one package per chart, one version per index entry, the `.tgz` and its `.prov` as files of it |
-| **Private publish** | ✅ ChartMuseum's `POST api/charts` (`curl`, `helm cm-push`) |
+| **Private publish** | yes — ChartMuseum's `POST api/charts` (`curl`, `helm cm-push`) |
 | **Client switch** | `helm repo add` |
 
 ## Proxy setup

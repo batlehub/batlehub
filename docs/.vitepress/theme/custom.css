@@ -510,14 +510,6 @@
   border-color: var(--rule-strong);
 }
 
-:root .VPFeature .icon {
-  border: 1px solid var(--rule-soft);
-  background: var(--ground-raised);
-  /* The feature glyphs are emoji, so this is an icon size rather than a step in
-     the ramp; it takes the Head step so it is still a size the system names. */
-  font-size: var(--t-head);
-}
-
 .VPFeature .title {
   font-family: var(--face-display);
   font-weight: 700;

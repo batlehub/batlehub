@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/conda.md
-sourceHash: 151dc73946f27b43
+sourceHash: a398c8ea19d8de8c
 ---
 
 # Conda
@@ -18,7 +18,7 @@ paquets publiés localement sont fusionnés dans le `repodata.json` de l'amont.
 | **Amont par défaut** | `conda.anaconda.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `curl -X POST …/{platform}/` |
+| **Publication privée** | oui — `curl -X POST …/{platform}/` |
 | **Coupure réseau** | hors ligne, le `repodata.json` de chaque sous-répertoire est composé à partir des paquets détenus, chaque entrée depuis son propre `info/index.json` lu à l'import ; un sous-répertoire sans rien de détenu répond vide, et `micromamba` s'y résout |
 
 ## Mise en place du proxy

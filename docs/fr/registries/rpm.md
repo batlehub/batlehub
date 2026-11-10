@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rpm.md
-sourceHash: 2348c087195c9ba5
+sourceHash: a0603fc9e1e4fc76
 ---
 
 # RPM / YUM (DNF)
@@ -18,7 +18,7 @@ vôtre : publiez des paquets `.rpm` et BatleHub régénère `repodata/`, en sign
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par chemin |
-| **Publication privée** | ✅ `curl -X PUT … /rpm/upload` |
+| **Publication privée** | oui — `curl -X PUT … /rpm/upload` |
 | **Coupure réseau** | pas d'index composé hors ligne : un `repomd.xml` signé ne peut pas être re-signé ici ; un fichier détenu est servi par chemin |
 
 ## Mise en place du proxy

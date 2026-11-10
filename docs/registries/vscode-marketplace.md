@@ -10,7 +10,7 @@ Proxy and cache VS Code extension VSIX downloads from Microsoft's [Visual Studio
 | **Default upstream** | `marketplace.visualstudio.com` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Private publish** | yes — VSIX upload (`PUT …/vsix`) |
 | **Air gap** | no composed listing offline: a gallery answers by query |
 | **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 

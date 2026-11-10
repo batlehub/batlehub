@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/devfile.md
-sourceHash: f0965a871198f94b
+sourceHash: 15a701edb7161314
 ---
 
 # Registre devfile (Che, odo)
@@ -24,7 +24,7 @@ Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est l
 | **Amont par défaut** | `registry.devfile.io` |
 | **Modes** | proxy, local, hybride |
 | **Adressage** | un paquet par pile, une version par version de pile, un artefact par fichier de celle-ci |
-| **Publication privée** | ✅ `batlehub-cli publish <répertoire de pile>` — un paquet défini par ce serveur, l'amont n'ayant pas de protocole de publication |
+| **Publication privée** | oui — `batlehub-cli publish <répertoire de pile>` — un paquet défini par ce serveur, l'amont n'ayant pas de protocole de publication |
 | **Commutateur client** | Che : `externalDevfileRegistries` ; `registry-library`/`odo` : l'URL du registre |
 
 ## Donnez-lui un hôte dédié

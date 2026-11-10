@@ -10,7 +10,7 @@ Cache JetBrains IDE installer archives. The first download is streamed from `dow
 | **Default upstream** | `download.jetbrains.com` |
 | **Modes** | proxy-only |
 | **Addressing** | path-addressed |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | no composed index offline; a held file is served by path |
 
 ## Proxy setup

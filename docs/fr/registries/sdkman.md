@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/sdkman.md
-sourceHash: 1ef6f94e629eb273
+sourceHash: 73dbd78d94f4d085
 ---
 
 # SDKMAN
@@ -22,7 +22,7 @@ JDK de 200 Mo est mis en cache ici plutôt que renvoyé ailleurs.
 | **Amont par défaut** | `api.sdkman.io/2` (API des candidats) · `broker.sdkman.io` (`broker_url`) |
 | **Modes** | proxy seul |
 | **Adressage** | `{candidate}/{version}/{platform}` — une archive par plateforme |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | hors ligne, `versions/all` et `candidates/default` sont composés à partir des archives de candidats détenues pour la plateforme |
 
 ## Mise en place du proxy

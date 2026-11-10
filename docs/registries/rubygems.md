@@ -10,7 +10,7 @@ Proxy and cache rubygems.org for Bundler and the `gem` CLI, or host private gems
 | **Default upstream** | `rubygems.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `gem push` |
+| **Private publish** | yes — `gem push` |
 | **Air gap** | offline, the compact index (`/versions`, `/info/{gem}`, `/names`) and the versions JSON API are composed from the held gems, each gem's dependencies read off its gemspec at import; `bundle install` resolves against it |
 
 ## Proxy setup

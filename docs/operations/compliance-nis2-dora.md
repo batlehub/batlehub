@@ -11,7 +11,7 @@ when the first regulated operator needs it.
 The rows under *What phase 7 adds* are **not built**. They are listed so that a
 regulated operator can see the gap before adopting BatleHub, and so the
 baseline (GDPR, ISO 27001, the CRA) does not have to be rebuilt to reach them.
-"✅ Implemented" means the control exists in the code, at the place named in
+"Implemented" means the control exists in the code, at the place named in
 the Evidence column. See [Compliance](./compliance.md).
 :::
 
@@ -23,10 +23,10 @@ the Evidence column. See [Compliance](./compliance.md).
 |---------|------------------|--------|----------|
 | (b) – Incident handling | Incident playbook; audit stream and Sigma rules for detection | Documented | [Incident response](./incident-response.md), [SIEM integration](./siem.md) |
 | (c) – Business continuity, backup | Backup and restore runbooks; stateless replicas | Documented | [Disaster recovery](./disaster-recovery.md), [High availability](../guide/high-availability.md) |
-| (d) – Supply-chain security | Scanning, SOC flags, verdicts and release-age gates on every proxied artifact; an exposure report of who pulled a flagged version | ✅ Implemented | [Scan worker](./scan-worker.md), `batlehub-cli exposure list` |
+| (d) – Supply-chain security | Scanning, SOC flags, verdicts and release-age gates on every proxied artifact; an exposure report of who pulled a flagged version | Implemented | [Scan worker](./scan-worker.md), `batlehub-cli exposure list` |
 | (e) – Vulnerability handling and disclosure | The project's private reporting, targets and advisories | Documented | `SECURITY.md`, [CRA mapping](./compliance-cra.md) |
-| (h) – Cryptography | Ed25519 signatures on publishes and on the audit seal chain | ✅ Implemented | `crates/core/src/services/signature.rs`, `[audit] seal_signing_key` |
-| (i) – Access control | Grants and verbs; every authentication event audited | ✅ Implemented | [Access control](../guide/access-control.md), [ISO 27001 mapping](./compliance-iso27001.md) |
+| (h) – Cryptography | Ed25519 signatures on publishes and on the audit seal chain | Implemented | `crates/core/src/services/signature.rs`, `[audit] seal_signing_key` |
+| (i) – Access control | Grants and verbs; every authentication event audited | Implemented | [Access control](../guide/access-control.md), [ISO 27001 mapping](./compliance-iso27001.md) |
 | (j) – Multi-factor authentication | Enforced at your IdP; BatleHub does not check it | Manual process | phase 7 below |
 
 ## NIS2 — Art. 23 reporting
@@ -38,17 +38,17 @@ the evidence the reports are written from.
 
 | Obligation | BatleHub control | Status | Evidence |
 |------------|------------------|--------|----------|
-| Becoming aware | Sigma rules over the audit stream; Prometheus alerts | ✅ Implemented | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |
-| The facts of the incident | Audit log for the window, exported | ✅ Implemented | `batlehub-cli audit export --from <start> --to <end>` |
-| The facts were not altered | The seal chain verifies for the window, and its head matches the SIEM's copy | ✅ Implemented | `batlehub-cli audit verify --from <start> --to <end> --head <digest>` |
+| Becoming aware | Sigma rules over the audit stream; Prometheus alerts | Implemented | `deploy/siem/sigma/`, `deploy/prometheus-alerts.yaml` |
+| The facts of the incident | Audit log for the window, exported | Implemented | `batlehub-cli audit export --from <start> --to <end>` |
+| The facts were not altered | The seal chain verifies for the window, and its head matches the SIEM's copy | Implemented | `batlehub-cli audit verify --from <start> --to <end> --head <digest>` |
 | The reports themselves | 24 h / 72 h / one month | Manual process | [Incident response § NIS2 Art. 23](./incident-response.md#nis2-reporting) |
 
 ## DORA — Art. 9–12, 18, 30
 
 | Article | BatleHub control | Status | Evidence |
 |---------|------------------|--------|----------|
-| 9 – Protection and prevention | Access control, IP blocking, rate limiting, hashed tokens | ✅ Implemented | [Production hardening](./production-hardening.md) |
-| 10 – Detection | Audit stream, Sigma rules, Prometheus alerts | ✅ Implemented | [SIEM integration](./siem.md) |
+| 9 – Protection and prevention | Access control, IP blocking, rate limiting, hashed tokens | Implemented | [Production hardening](./production-hardening.md) |
+| 10 – Detection | Audit stream, Sigma rules, Prometheus alerts | Implemented | [SIEM integration](./siem.md) |
 | 11 – Response and recovery | Incident playbook | Documented | [Incident response](./incident-response.md) |
 | 12 – Backup and restoration | Backup and restore runbooks | Documented | [Disaster recovery](./disaster-recovery.md) |
 | 12 – Restoration tested, with an RPO/RTO | — | Not built | phase 7 below |

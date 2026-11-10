@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/github.md
-sourceHash: da01c0fb7d3a476c
+sourceHash: 1c893cd95c2aa632
 ---
 
 # GitHub
@@ -19,7 +19,7 @@ publication privée.
 | **Amont par défaut** | `api.github.com` |
 | **Modes** | proxy seul |
 | **Adressage** | par paquet |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | hors ligne, la liste des releases et la release par tag sont composées à partir des assets détenus ; un `mise install` figé fonctionne sans verrou |
 
 ## Mise en place du proxy

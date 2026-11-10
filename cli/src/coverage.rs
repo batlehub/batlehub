@@ -2,7 +2,7 @@
 //!
 //! An exhaustive `match` over `RegistryKind` per capability, with no wildcard
 //! arm: a new kind does not compile until somebody writes its cells. The tests
-//! below are the gate — every ✅ and **print** cell names a test
+//! below are the gate — every **yes** and **print** cell names a test
 //! `<kind>_<capability>` in `cli/tests/`, and the table in the CLI reference
 //! pages is generated from here (`task docs:cli-matrix`).
 
@@ -250,7 +250,7 @@ mod tests {
             out.push_str(&format!("| {} |", kind.as_str()));
             for cap in Capability::ALL {
                 let text = match cell(*kind, cap) {
-                    Done(what) => format!("✅ {what}"),
+                    Done(what) => format!("yes — {what}"),
                     Print(why) => format!("print — {why}"),
                     NotApplicable(why) => format!("n.a. — {why}"),
                 };
@@ -276,7 +276,7 @@ mod tests {
         all
     }
 
-    /// The gate (§6.6): every ✅ and **print** cell names an integration test
+    /// The gate (§6.6): every **yes** and **print** cell names an integration test
     /// that exists, as `fn <name>(` or as a row of a `*_case!` table.
     #[test]
     fn every_claimed_cell_has_its_test() {

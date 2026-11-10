@@ -10,7 +10,7 @@ Proxy and cache Packagist for PHP Composer, or host private packages. BatleHub i
 | **Default upstream** | `repo.packagist.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `curl -X POST …/api/upload` |
+| **Private publish** | yes — `curl -X POST …/api/upload` |
 | **Air gap** | offline, `p2` is composed from the held dists, each entry its `composer.json` read at import; the `~dev` variant answers empty |
 
 ## Proxy setup

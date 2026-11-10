@@ -10,7 +10,7 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 | **Default upstream** | `open-vsx.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Private publish** | yes — VSIX upload (`PUT …/vsix`) |
 | **Air gap** | no composed listing offline: a gallery answers by query |
 | **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 

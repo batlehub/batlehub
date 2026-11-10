@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: 7eb8b51d9bf71464
+sourceHash: 22f54024a2a0e09b
 ---
 
 # Cache binaire Nix
@@ -17,7 +17,7 @@ Le protocole *substituter* de Nix est relayé et mis en cache comme un registre 
 | **Amont par défaut** | `cache.nixos.org` |
 | **Modes** | proxy · local · hybride |
 | **Adressage** | le nom du store est la coordonnée — `hello-1.0.0.2-doc` donne `hello` en `1.0.0.2-doc` — et le hash de 32 caractères est l'artefact |
-| **Publication privée** | ✅ `nix copy --to` |
+| **Publication privée** | oui — `nix copy --to` |
 | **Réglage client** | `substituters` dans `nix.conf` |
 
 ## Configuration du proxy

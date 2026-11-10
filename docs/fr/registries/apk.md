@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/apk.md
-sourceHash: a68378b9db782a07
+sourceHash: e3fb715be5c41ad3
 ---
 
 # Alpine (apk)
@@ -24,7 +24,7 @@ un `.rpm`, que le proxy ne sait adresser que par chemin.
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par chemin, avec une coordonnée sur chaque `.apk` |
-| **Publication privée** | ✅ `curl -X PUT … /apk/upload` |
+| **Publication privée** | oui — `curl -X PUT … /apk/upload` |
 | **Coupure réseau** | prévu : l'index composé est le document de cette instance, donc contrairement aux autres systèmes il *peut* être resigné hors ligne |
 
 ## L'index est relayé octet pour octet, et pourquoi

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains-marketplace.md
-sourceHash: f29a48cd9deea0e5
+sourceHash: 1284f3cd1cedf343
 ---
 
 # Place de marché JetBrains
@@ -22,7 +22,7 @@ archives d'IDE.
 | **Amont par défaut** | `plugins.jetbrains.com` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi compatible place de marché |
+| **Publication privée** | oui — envoi compatible place de marché |
 | **Coupure réseau** | pas de listing composé hors ligne : une galerie répond à des requêtes |
 
 ## Mise en place du proxy

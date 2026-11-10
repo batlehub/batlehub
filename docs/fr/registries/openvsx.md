@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/openvsx.md
-sourceHash: 87a9f2cd7d903e91
+sourceHash: 0aada629d13d33fb
 ---
 
 # OpenVSX
@@ -20,7 +20,7 @@ l'interroger. Les identifiants d'extension suivent la convention
 | **Amont par défaut** | `open-vsx.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi de VSIX (`PUT …/vsix`) |
+| **Publication privée** | oui — envoi de VSIX (`PUT …/vsix`) |
 | **Coupure réseau** | pas de listing composé hors ligne : une galerie répond à des requêtes |
 | **Signatures** | le registre signe ce qu'il héberge (`[registries.vsx_signing]`), relaie celle de l'amont pour ce dont il fait proxy, et conserve celle attachée à une version republiée |
 

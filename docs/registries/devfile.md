@@ -19,7 +19,7 @@ The container images a devfile names are **not** proxied: the cluster pulls thos
 | **Default upstream** | `registry.devfile.io` |
 | **Modes** | proxy, local, hybrid |
 | **Addressing** | one package per stack, one version per stack version, one artifact per file of it |
-| **Private publish** | ✅ `batlehub-cli publish <stack dir>` — a bundle this server defines, since upstream has no publish protocol |
+| **Private publish** | yes — `batlehub-cli publish <stack dir>` — a bundle this server defines, since upstream has no publish protocol |
 | **Client switch** | Che: `externalDevfileRegistries`; `registry-library`/`odo`: the registry URL |
 
 ## Give it a host of its own

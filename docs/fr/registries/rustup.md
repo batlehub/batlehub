@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rustup.md
-sourceHash: 0912620ac93fc36e
+sourceHash: a038c3cd5675ebc9
 ---
 
 # Chaîne d'outils Rust (rustup)
@@ -17,7 +17,7 @@ Il s'agit de la chaîne d'outils, pas des caisses. `cargo` résout ses dépendan
 | **Amont par défaut** | `static.rust-lang.org` |
 | **Modes** | proxy seul |
 | **Adressage** | un paquet par canal, une version par publication, un fichier par triplet cible |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Commutateur client** | `RUSTUP_DIST_SERVER` (et `RUSTUP_UPDATE_ROOT` pour les mises à jour de rustup lui-même) |
 
 ## Mise en place du proxy

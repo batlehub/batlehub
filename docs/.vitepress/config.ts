@@ -351,7 +351,7 @@ const config = withMermaid(defineConfig({
         notFound: { linkLabel: "Take me home", linkText: "Take me home" },
         footer: {
           message:
-            "Released under the Apache 2.0 License. Made with ❤️ and too much ☕.",
+            "Released under the Apache 2.0 License. Made with care and too much coffee.",
           copyright: "Copyright © 2026 Batleforc",
         },
       },
@@ -384,7 +384,7 @@ const config = withMermaid(defineConfig({
         },
         footer: {
           message:
-            "Publié sous licence Apache 2.0. Fait avec ❤️ et beaucoup trop de ☕.",
+            "Publié sous licence Apache 2.0. Fait avec soin et beaucoup trop de café.",
           copyright: "Copyright © 2026 Batleforc",
         },
       },

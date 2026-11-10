@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rubygems.md
-sourceHash: 0292e71730c36358
+sourceHash: 93cd207af7eedd41
 ---
 
 # RubyGems
@@ -18,7 +18,7 @@ publication.
 | **Amont par défaut** | `rubygems.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `gem push` |
+| **Publication privée** | oui — `gem push` |
 | **Coupure réseau** | hors ligne, l'index compact (`/versions`, `/info/{gem}`, `/names`) et l'API JSON des versions sont composés à partir des gems détenues, les dépendances de chaque gem étant lues dans sa gemspec à l'import ; `bundle install` s'y résout |
 
 ## Mise en place du proxy

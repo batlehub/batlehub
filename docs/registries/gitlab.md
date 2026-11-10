@@ -10,7 +10,7 @@ Proxy and cache releases, release-link assets, and source archives from a GitLab
 | **Default upstream** | `gitlab.com` |
 | **Modes** | proxy-only |
 | **Addressing** | per-package |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | offline, the release listing and the release by tag are composed from the held download links |
 
 ## Proxy setup

@@ -12,7 +12,7 @@ Proxy and cache a Nix *binary cache* — the substituter protocol — as a typed
 | **Default upstream** | `cache.nixos.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | the store name is the coordinate — `hello-1.0.0.2-doc` is `hello` at `1.0.0.2-doc` — and the 32-character store hash is the artifact |
-| **Private publish** | ✅ `nix copy --to` |
+| **Private publish** | yes — `nix copy --to` |
 | **Client switch** | `substituters` in `nix.conf` |
 
 ## Proxy setup

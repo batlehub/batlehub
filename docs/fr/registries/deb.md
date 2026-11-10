@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/deb.md
-sourceHash: 634bea4cf9235c78
+sourceHash: b2bdbd20ede95120
 ---
 
 # Debian / APT
@@ -18,7 +18,7 @@ héberge le vôtre : publiez des paquets `.deb` et BatleHub régénère les inde
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par chemin |
-| **Publication privée** | ✅ `curl -X PUT … /deb/pool/{suite}/{component}/upload` |
+| **Publication privée** | oui — `curl -X PUT … /deb/pool/{suite}/{component}/upload` |
 | **Coupure réseau** | pas d'index composé hors ligne : un fichier `Packages` signé ne peut pas être re-signé ici ; un fichier détenu est servi par chemin |
 
 ## Mise en place du proxy
