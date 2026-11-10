@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
 import BulkActionBar from "@/components/admin/BulkActionBar.vue";
+import PackageFilterBar from "@/components/admin/PackageFilterBar.vue";
 import { useRowSelection } from "@/composables/useRowSelection";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
@@ -28,8 +29,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Announcer } from "@/components/ui/announcer";
@@ -559,30 +558,12 @@ async function runPending(): Promise<void> {
         <div class="flex flex-row items-center justify-end space-y-0">
           <Button variant="outline" size="sm" @click="reload"> {{ t("common.refresh") }} </Button>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <Input
-            v-model="search"
-            :placeholder="t('adminPackages.filterByNameRegistry')"
-            :aria-label="t('adminPackages.filterPackages')"
-            class="max-w-sm h-8 text-sm"
-          />
-          <!-- Both go to the server. `blocked_only` answers half this page's
-               question and had no control at all. -->
-          <Label for="ap-registry" class="sr-only">{{ t("common.registry") }}</Label>
-          <Select
-            id="ap-registry"
-            v-model="registryFilter"
-            :options="[
-              { value: '', label: t('adminPackages.allRegistries') },
-              ...(registries ?? []).map((r) => ({ value: r.name, label: r.name })),
-            ]"
-            class="h-8 w-auto"
-          />
-          <div class="flex items-center gap-2 h-8">
-            <Switch id="ap-blocked" v-model="blockedOnly" />
-            <Label for="ap-blocked" class="text-sm">{{ t("adminPackages.blockedOnly") }}</Label>
-          </div>
-        </div>
+        <PackageFilterBar
+          v-model:search="search"
+          v-model:registry-filter="registryFilter"
+          v-model:blocked-only="blockedOnly"
+          :registries="registries"
+        />
       </CardHeader>
       <CardContent class="p-0">
         <p v-if="actionError" class="px-6 pt-4 text-sm text-destructive">
