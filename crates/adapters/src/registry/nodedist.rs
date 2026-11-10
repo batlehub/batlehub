@@ -40,8 +40,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, fetch_json_document, fetch_text_document, new_http_client,
-    to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, fetch_json_document, fetch_text_document,
+    new_http_client, to_registry_error, UpstreamHttpOptions,
 };
 
 /// How long one fetched `index.tab` answers `resolve_metadata` before it is
@@ -92,7 +92,12 @@ impl NodeDistRegistryClient {
     }
 
     fn file_url(&self, version: &str, file: &str) -> String {
-        format!("{}/{version}/{file}", self.base_url)
+        format!(
+            "{}/{}/{}",
+            self.base_url,
+            encode_path(version),
+            encode_path(file)
+        )
     }
 
     /// The index rows, from the in-process copy when it is fresh.

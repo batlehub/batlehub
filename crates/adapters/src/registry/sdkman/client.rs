@@ -24,6 +24,7 @@
 //! (`grep '^X-Sdkman'`, case-sensitive) matching nothing over the HTTP/2
 //! lower-cased names the API sends today.
 
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -120,8 +121,10 @@ impl RegistryClient for SdkmanRegistryClient {
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let platform = Self::platform_of(pkg)?;
         let url = self.api(&format!(
-            "candidates/validate/{}/{}/{platform}",
-            pkg.name, pkg.version
+            "candidates/validate/{}/{}/{}",
+            encode_path(&pkg.name),
+            encode_path(&pkg.version),
+            encode_path(platform)
         ));
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;
         let status = resp.status();
@@ -222,8 +225,9 @@ impl RegistryClient for SdkmanRegistryClient {
             DocumentKind::Versions => {
                 let platform = platform_or_reject(coord.platform)?;
                 let url = self.api(&format!(
-                    "candidates/{}/{platform}/versions/all",
-                    coord.candidate
+                    "candidates/{}/{}/versions/all",
+                    encode_path(coord.candidate),
+                    encode_path(platform)
                 ));
                 fetch_text_document(
                     self.get(&url),
@@ -234,7 +238,7 @@ impl RegistryClient for SdkmanRegistryClient {
             }
             DocumentKind::SDKMAN_DEFAULT => {
                 let candidate = candidate_of(package);
-                let url = self.api(&format!("candidates/default/{candidate}"));
+                let url = self.api(&format!("candidates/default/{}", encode_path(candidate)));
                 fetch_text_document(
                     self.get(&url),
                     &format!("SDKMAN default version for '{candidate}'"),
@@ -248,8 +252,9 @@ impl RegistryClient for SdkmanRegistryClient {
                 // absent query is sent as the empty pair the client sends.
                 let query = coord.query.unwrap_or("current=&installed=");
                 let url = self.api(&format!(
-                    "candidates/{}/{platform}/versions/list?{query}",
-                    coord.candidate
+                    "candidates/{}/{}/versions/list?{query}",
+                    encode_path(coord.candidate),
+                    encode_path(platform)
                 ));
                 fetch_text_document(
                     self.get(&url),

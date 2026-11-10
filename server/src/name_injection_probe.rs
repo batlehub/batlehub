@@ -7,7 +7,8 @@
 //! inside its path, or not at all.
 //!
 //! The clients are the ones `build_registry_client` returns, behind
-//! `CoordinateGuard`. Without it, 22 of 29 kinds failed this (333 requests).
+//! `CoordinateGuard`, and each kind's own client without it: before TD-0005,
+//! 22 of 29 kinds failed unguarded (333 requests).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -151,13 +152,20 @@ fn registry(kind: &str, url: &str) -> batlehub_config::schema::RegistryConfig {
 }
 
 /// Per kind: every misrouted request target, or why its client did not build.
-async fn probe() -> Vec<(String, String)> {
+/// `guarded` builds the clients `build_registry_client` returns; without it,
+/// each kind's own client, so only its own encoding stands (TD-0005).
+async fn probe(guarded: bool) -> Vec<(String, String)> {
     let mut findings = Vec::new();
     let mut total = 0;
     for kind in RegistryKind::ALL {
         let (url, seen) = recorder().await;
         let reg = registry(kind.as_str(), &url);
-        let client = match super::builders::build_registry_client(&reg, None, None, false) {
+        let built = if guarded {
+            super::builders::build_registry_client(&reg, None, None, false)
+        } else {
+            super::builders::build_unguarded_client(&reg)
+        };
+        let client = match built {
             Ok(c) => c,
             Err(e) => {
                 findings.push((kind.as_str().to_owned(), format!("build: {e}")));
@@ -212,7 +220,22 @@ async fn probe() -> Vec<(String, String)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_client_sends_a_probe_outside_its_own_path_segment() {
-    let findings = probe().await;
+    let findings = probe(true).await;
+    for (k, t) in &findings {
+        eprintln!("FINDING {k:24} {t}");
+    }
+    assert!(
+        findings.is_empty(),
+        "{} misrouted request(s), see FINDING lines",
+        findings.len()
+    );
+}
+
+/// TD-0005: the guard is defence in depth, not the only defence. Every
+/// kind's own client keeps a probe inside its path segment.
+#[tokio::test(flavor = "multi_thread")]
+async fn no_unguarded_client_sends_a_probe_outside_its_own_path_segment() {
+    let findings = probe(false).await;
     for (k, t) in &findings {
         eprintln!("FINDING {k:24} {t}");
     }

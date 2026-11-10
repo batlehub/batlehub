@@ -14,8 +14,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, ensure_same_origin, new_http_client, percent_encode,
-    to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, ensure_same_origin, new_http_client,
+    percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 
 /// npm registry client (registry.npmjs.org or compatible).
@@ -380,7 +380,7 @@ impl RegistryClient for NpmRegistryClient {
 }
 
 fn encode_npm_name(name: &str) -> String {
-    name.replace('/', "%2F")
+    encode_path(name).replace('/', "%2F")
 }
 
 /// Resolve a dist-tag (e.g. `"latest"`) to a concrete version string.

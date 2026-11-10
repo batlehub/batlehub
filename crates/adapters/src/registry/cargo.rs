@@ -10,8 +10,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, fetch_text_document, new_http_client, percent_encode,
-    to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, fetch_text_document, new_http_client,
+    percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 
 /// crates.io (or compatible) registry client.
@@ -177,7 +177,7 @@ impl RegistryClient for CargoRegistryClient {
         let url = format!(
             "{}/{}",
             index.trim_end_matches('/'),
-            sparse_index_path(package)
+            encode_path(&sparse_index_path(package))
         );
         fetch_text_document(
             self.get(&url),
@@ -288,7 +288,7 @@ impl CargoRegistryClient {
     }
 
     async fn fetch_crate_info(&self, name: &str) -> Result<CratesIoResponse, CoreError> {
-        let url = format!("{}/api/v1/crates/{}", self.base_url, name);
+        let url = format!("{}/api/v1/crates/{}", self.base_url, encode_path(name));
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {

@@ -11,8 +11,9 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, ensure_same_origin, fetch_linked_text, new_http_client,
-    no_redirect_client_pair, percent_encode, to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, ensure_same_origin, fetch_linked_text,
+    new_http_client, no_redirect_client_pair, percent_encode, to_registry_error,
+    UpstreamHttpOptions,
 };
 
 /// OpenVSX registry client (open-vsx.org or compatible).
@@ -430,7 +431,12 @@ impl OpenVsxRegistryClient {
     /// upstream older than the endpoint answers `404`, and the listing must not
     /// fail for it.
     async fn version_references(&self, publisher: &str, name: &str) -> Option<serde_json::Value> {
-        let base = format!("{}/api/{}/{}", self.base_url, publisher, name);
+        let base = format!(
+            "{}/api/{}/{}",
+            self.base_url,
+            encode_path(publisher),
+            encode_path(name)
+        );
         let mut refs = self
             .version_reference_pages(&format!("{base}/universal/version-references"))
             .await?;
@@ -497,9 +503,20 @@ impl OpenVsxRegistryClient {
         version: &str,
     ) -> Result<OpenVsxExtension, CoreError> {
         let url = if version == "latest" {
-            format!("{}/api/{}/{}", self.base_url, publisher, name)
+            format!(
+                "{}/api/{}/{}",
+                self.base_url,
+                encode_path(publisher),
+                encode_path(name)
+            )
         } else {
-            format!("{}/api/{}/{}/{}", self.base_url, publisher, name, version)
+            format!(
+                "{}/api/{}/{}/{}",
+                self.base_url,
+                encode_path(publisher),
+                encode_path(name),
+                encode_path(version)
+            )
         };
 
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;

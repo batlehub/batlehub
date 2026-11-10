@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use serde::Deserialize;
@@ -101,7 +102,7 @@ impl NugetRegistryClient {
             versions: Vec<String>,
         }
 
-        let url = format!("{}/{}/index.json", self.flat_url, id);
+        let url = format!("{}/{}/index.json", self.flat_url, encode_path(id));
         let resp =
             self.get(&url).send().await.map_err(|e| {
                 CoreError::Registry(format!("NuGet flat index request failed: {e}"))
@@ -164,7 +165,11 @@ impl NugetRegistryClient {
     ) -> Option<chrono::DateTime<chrono::Utc>> {
         let url = format!(
             "{}/{}/{}/{}.{}.nupkg",
-            self.flat_url, id, version, id, version
+            self.flat_url,
+            encode_path(id),
+            encode_path(version),
+            encode_path(id),
+            encode_path(version)
         );
         let resp = self.head(&url).send().await.ok()?;
         if !resp.status().is_success() {
@@ -197,11 +202,11 @@ impl RegistryClient for NugetRegistryClient {
         let id = normalize_id(package);
         let (url, what) = match kind {
             DocumentKind::Versions => (
-                format!("{}/{}/index.json", self.flat_url, id),
+                format!("{}/{}/index.json", self.flat_url, encode_path(&id)),
                 format!("NuGet flat index for '{id}'"),
             ),
             DocumentKind::REGISTRATION => (
-                format!("{}/{}/index.json", self.reg_url, id),
+                format!("{}/{}/index.json", self.reg_url, encode_path(&id)),
                 format!("NuGet registration for '{id}'"),
             ),
             other => {
@@ -218,7 +223,7 @@ impl RegistryClient for NugetRegistryClient {
 
         match pkg.version.as_str() {
             "__index__" => {
-                let url = format!("{}/{}/index.json", self.flat_url, id);
+                let url = format!("{}/{}/index.json", self.flat_url, encode_path(id));
                 let cache_control = self
                     .fetch_cache_control(&url, &format!("flat index for '{id}'"))
                     .await?;
@@ -234,7 +239,7 @@ impl RegistryClient for NugetRegistryClient {
             }
 
             "__registration__" => {
-                let url = format!("{}/{}/index.json", self.reg_url, id);
+                let url = format!("{}/{}/index.json", self.reg_url, encode_path(id));
                 let cache_control = self
                     .fetch_cache_control(&url, &format!("registration for '{id}'"))
                     .await?;
@@ -262,7 +267,11 @@ impl RegistryClient for NugetRegistryClient {
 
                 let download_url = Some(format!(
                     "{}/{}/{}/{}.{}.nupkg",
-                    self.flat_url, id, version, id, version
+                    self.flat_url,
+                    encode_path(id),
+                    encode_path(version),
+                    encode_path(id),
+                    encode_path(version)
                 ));
 
                 Ok(PackageMetadata {
@@ -281,15 +290,25 @@ impl RegistryClient for NugetRegistryClient {
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let id = &pkg.name;
         let url = match (pkg.version.as_str(), pkg.artifact.as_deref()) {
-            ("__index__", _) => format!("{}/{}/index.json", self.flat_url, id),
-            ("__registration__", _) => format!("{}/{}/index.json", self.reg_url, id),
+            ("__index__", _) => format!("{}/{}/index.json", self.flat_url, encode_path(id)),
+            ("__registration__", _) => format!("{}/{}/index.json", self.reg_url, encode_path(id)),
             (version, Some(filename)) => {
-                format!("{}/{}/{}/{}", self.flat_url, id, version, filename)
+                format!(
+                    "{}/{}/{}/{}",
+                    self.flat_url,
+                    encode_path(id),
+                    encode_path(version),
+                    encode_path(filename)
+                )
             }
             (version, None) => {
                 format!(
                     "{}/{}/{}/{}.{}.nupkg",
-                    self.flat_url, id, version, id, version
+                    self.flat_url,
+                    encode_path(id),
+                    encode_path(version),
+                    encode_path(id),
+                    encode_path(version)
                 )
             }
         };

@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use serde::Deserialize;
@@ -526,7 +527,7 @@ impl RegistryClient for RubyGemsRegistryClient {
 
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{base}/api/v1/versions/{package}.json");
+        let url = format!("{base}/api/v1/versions/{}.json", encode_path(package));
 
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;
 

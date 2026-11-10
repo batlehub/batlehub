@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use chrono::DateTime;
 use futures::TryStreamExt;
@@ -381,8 +382,9 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             format!(
                 "{base}/_apis/public/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage",
                 base = self.base_url,
-                name = ext_name,
-                version = pkg.version,
+                publisher = encode_path(publisher),
+                name = encode_path(ext_name),
+                version = encode_path(&pkg.version),
             )
         };
 

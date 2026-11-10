@@ -467,6 +467,28 @@ pub(super) fn build_registry_client(
     }
 }
 
+/// One upstream's client as `make_one` builds it, without `CoordinateGuard`:
+/// what `name_injection_probe.rs` aims at to prove each client encodes its
+/// own segments (TD-0005).
+#[cfg(test)]
+pub(super) fn build_unguarded_client(
+    reg: &RegistryConfig,
+) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+    let kind: RegistryKind = reg.registry_type.parse().map_err(anyhow::Error::msg)?;
+    make_one(
+        kind,
+        &default_upstreams(kind, reg)[0],
+        &upstream_options(reg, None),
+        &reg.path_allow,
+        &cargo_index_url(reg),
+        batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE,
+        &reg.name,
+        None,
+        Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
+        reg.roles.unwrap_or_default(),
+    )
+}
+
 /// Parse a rule's `bypass_roles` list, failing loudly on the first unrecognized
 /// entry rather than silently dropping it to `anonymous` (see `parse_role`).
 fn parse_bypass_roles(roles: &[String]) -> anyhow::Result<Vec<Role>> {
