@@ -4,7 +4,7 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `openvsx` |
 | **Default upstream** | `open-vsx.org` |

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/maven.md
-sourceHash: c89e1694124d77fe
+sourceHash: 93fb9aa6264c8eb4
 ---
 
 # Maven
@@ -12,7 +12,7 @@ protocole de dépôt Maven.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `maven` |
 | **Amont par défaut** | `repo1.maven.org` |

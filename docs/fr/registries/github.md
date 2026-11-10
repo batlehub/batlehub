@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/github.md
-sourceHash: 347fe4a58e17053d
+sourceHash: da01c0fb7d3a476c
 ---
 
 # GitHub
@@ -13,7 +13,7 @@ publication privée.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `github` |
 | **Amont par défaut** | `api.github.com` |

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/gitlab.md
-sourceHash: 6e64c1bcd63a1b31
+sourceHash: c3325ff6d1a9d8a3
 ---
 
 # GitLab
@@ -13,7 +13,7 @@ les URL de GitLab. L'API Packages de GitLab est également proxifiée sous
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `gitlab` |
 | **Amont par défaut** | `gitlab.com` |

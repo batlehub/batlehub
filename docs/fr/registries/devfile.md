@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/devfile.md
-sourceHash: ad340d78ae3d5ecc
+sourceHash: f0965a871198f94b
 ---
 
 # Registre devfile (Che, odo)
@@ -18,7 +18,7 @@ Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est l
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `devfile` |
 | **Amont par défaut** | `registry.devfile.io` |

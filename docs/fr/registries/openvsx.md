@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/openvsx.md
-sourceHash: 753fab8bebc35006
+sourceHash: 87a9f2cd7d903e91
 ---
 
 # OpenVSX
@@ -14,7 +14,7 @@ l'interroger. Les identifiants d'extension suivent la convention
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `openvsx` |
 | **Amont par défaut** | `open-vsx.org` |

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/galaxy.md
-sourceHash: b75d9cc1b7d45c52
+sourceHash: 074dc8c4f96580fc
 ---
 
 # Ansible Galaxy
@@ -11,7 +11,7 @@ Les rôles — l'ancienne API v1 — sont servis en lecture seule, et l'étendue
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de config** | `galaxy` |
 | **Amont par défaut** | `https://galaxy.ansible.com/api/` |

@@ -6,7 +6,7 @@ This is the one member of the OS family whose artifacts carry a **coordinate**. 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `apk` |
 | **Default upstream** | none — set `upstreams` explicitly for proxy/hybrid |

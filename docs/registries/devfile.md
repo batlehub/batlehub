@@ -13,7 +13,7 @@ The container images a devfile names are **not** proxied: the cluster pulls thos
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `devfile` |
 | **Default upstream** | `registry.devfile.io` |

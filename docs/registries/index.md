@@ -1,6 +1,6 @@
 # Registries
 
-BatleHub proxies, caches, and privately hosts **23 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
+BatleHub proxies, caches, and privately hosts **29 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
 
 Every registry type can run in one of three **modes**, set per registry in the config:
 

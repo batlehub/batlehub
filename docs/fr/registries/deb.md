@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/deb.md
-sourceHash: 3cfaf209d52ee15b
+sourceHash: 634bea4cf9235c78
 ---
 
 # Debian / APT
@@ -12,7 +12,7 @@ héberge le vôtre : publiez des paquets `.deb` et BatleHub régénère les inde
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `deb` |
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |

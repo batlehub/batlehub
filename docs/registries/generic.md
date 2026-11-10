@@ -4,7 +4,7 @@ A proxy-only, path-addressed mirror of any plain HTTP file tree — for upstream
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `generic` |
 | **Default upstream** | none — set `upstreams` explicitly (mandatory) |

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/pypi.md
-sourceHash: e8325e5fb7087441
+sourceHash: eda38db5468c4cb1
 ---
 
 # PyPI
@@ -12,7 +12,7 @@ cache les wheels et les distributions source après le premier téléchargement.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `pypi` |
 | **Amont par défaut** | `pypi.org` |

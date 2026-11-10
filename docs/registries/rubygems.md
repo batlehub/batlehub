@@ -4,7 +4,7 @@ Proxy and cache rubygems.org for Bundler and the `gem` CLI, or host private gems
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `rubygems` |
 | **Default upstream** | `rubygems.org` |

@@ -4,7 +4,7 @@ Proxy an Arch Linux mirror and, in `local`/`hybrid` mode, host your own: publish
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `pacman` |
 | **Default upstream** | none — set `upstreams` explicitly for proxy/hybrid |

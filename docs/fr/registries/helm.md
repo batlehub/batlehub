@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: f33b54e665249cfe
+sourceHash: f929cabf897464e5
 ---
 
 # Helm
@@ -17,7 +17,7 @@ Les registres de charts OCI (`helm pull oci://…`) ne sont pas un dépôt de ch
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `helm` |
 | **Amont par défaut** | aucun — un registre est un dépôt de charts, et c'est vous qui le nommez |

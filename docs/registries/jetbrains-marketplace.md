@@ -4,7 +4,7 @@ Proxy and cache the JetBrains plugin ecosystem ([plugins.jetbrains.com](https://
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `jetbrains-marketplace` |
 | **Default upstream** | `plugins.jetbrains.com` |

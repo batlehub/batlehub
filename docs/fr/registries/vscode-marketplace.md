@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/vscode-marketplace.md
-sourceHash: 44ab88c2014f12c2
+sourceHash: e7919ebb12a3a6cf
 ---
 
 # Place de marché VS Code
@@ -13,7 +13,7 @@ aussi héberger des extensions privées.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `vscode-marketplace` |
 | **Amont par défaut** | `marketplace.visualstudio.com` |

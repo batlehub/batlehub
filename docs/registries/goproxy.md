@@ -4,7 +4,7 @@ Proxy and cache Go modules via the [GOPROXY protocol](https://go.dev/ref/mod#gop
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `goproxy` |
 | **Default upstream** | `proxy.golang.org` |

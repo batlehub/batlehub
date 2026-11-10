@@ -4,7 +4,7 @@ Proxy a Maven Central-compatible repository — POMs, JARs, source/Javadoc JARs,
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `maven` |
 | **Default upstream** | `repo1.maven.org` |

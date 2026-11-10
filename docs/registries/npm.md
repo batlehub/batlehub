@@ -4,7 +4,7 @@ Proxy and cache the npm registry, or host private npm packages. BatleHub serves 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `npm` |
 | **Default upstream** | `registry.npmjs.org` |

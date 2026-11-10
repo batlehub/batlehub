@@ -20,7 +20,7 @@ hero:
 features:
   - icon: ⚡
     title: Cache what you already pull
-    details: Every artifact is fetched from upstream once and served from disk or S3 after that. Twenty-one ecosystems, one server, no change to how your build tools are invoked.
+    details: Every artifact is fetched from upstream once and served from disk or S3 after that. Twenty-nine ecosystems, one server, no change to how your build tools are invoked.
     link: /guide/caching
     linkText: How caching works
   - icon: 🔒
@@ -35,7 +35,7 @@ features:
     linkText: Access control
 ---
 
-BatleHub proxies, caches and privately hosts **21 registry types** — from npm and
+BatleHub proxies, caches and privately hosts **29 registry types** — from npm and
 Cargo to Debian, Terraform and the VS Code marketplace. See the
 **[Registries reference](/registries/)** for the feature matrix and a setup page
 for each one, or the **[full feature list](/guide/features)** for everything the

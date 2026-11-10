@@ -1,11 +1,11 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 7d4e94de6cc0528a
+sourceHash: 35217c526f5b423b
 ---
 
 # Registres
 
-BatleHub sert par proxy, met en cache et héberge en privé **23 types de
+BatleHub sert par proxy, met en cache et héberge en privé **29 types de
 registres** — des gestionnaires de paquets par langage aux dépôts de paquets
 système, en passant par les places de marché d'extensions d'éditeur et les
 miroirs de fichiers génériques.

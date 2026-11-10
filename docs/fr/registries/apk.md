@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/apk.md
-sourceHash: 4f37773b341e9554
+sourceHash: a68378b9db782a07
 ---
 
 # Alpine (apk)
@@ -18,7 +18,7 @@ un `.rpm`, que le proxy ne sait adresser que par chemin.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `apk` |
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |

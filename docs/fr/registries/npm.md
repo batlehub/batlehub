@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/npm.md
-sourceHash: d410201111a4c812
+sourceHash: 4cb097dd8a2dbca0
 ---
 
 # npm
@@ -12,7 +12,7 @@ travers le proxy.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `npm` |
 | **Amont par défaut** | `registry.npmjs.org` |

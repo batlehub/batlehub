@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/composer.md
-sourceHash: 31011f6dae4929be
+sourceHash: 35449b24905731bf
 ---
 
 # Composer (PHP)
@@ -12,7 +12,7 @@ natif — sous contrôle du RBAC et du garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `composer` |
 | **Amont par défaut** | `repo.packagist.org` |

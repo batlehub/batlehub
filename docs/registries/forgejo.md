@@ -4,7 +4,7 @@ Proxy and cache release assets, source archives, and raw files from a [Forgejo](
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `forgejo` |
 | **Default upstream** | `codeberg.org` |

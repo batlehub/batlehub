@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nodedist.md
-sourceHash: f91bed3572acdaa5
+sourceHash: ce02e87a6a84fe37
 ---
 
 # Distributions Node (nvm, fnm, n, mise)
@@ -15,7 +15,7 @@ d'eux.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nodedist` |
 | **Amont par défaut** | `nodejs.org/dist` (io.js demande un second registre pointé vers `iojs.org/dist`) |

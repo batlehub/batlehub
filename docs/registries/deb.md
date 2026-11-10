@@ -4,7 +4,7 @@ Proxy a Debian/Ubuntu APT repository and, in `local`/`hybrid` mode, host your ow
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `deb` |
 | **Default upstream** | none — set `upstreams` explicitly for proxy/hybrid |

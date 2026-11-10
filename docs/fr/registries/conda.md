@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/conda.md
-sourceHash: da6a0aa7e1e996e1
+sourceHash: 151dc73946f27b43
 ---
 
 # Conda
@@ -12,7 +12,7 @@ paquets publiés localement sont fusionnés dans le `repodata.json` de l'amont.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `conda` |
 | **Amont par défaut** | `conda.anaconda.org` |

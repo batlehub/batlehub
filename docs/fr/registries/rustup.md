@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rustup.md
-sourceHash: 5dbde37b974b5f8b
+sourceHash: 0912620ac93fc36e
 ---
 
 # Chaîne d'outils Rust (rustup)
@@ -11,7 +11,7 @@ Il s'agit de la chaîne d'outils, pas des caisses. `cargo` résout ses dépendan
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `rustup` |
 | **Amont par défaut** | `static.rust-lang.org` |

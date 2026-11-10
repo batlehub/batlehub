@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains-marketplace.md
-sourceHash: 1ca357e8f430afc3
+sourceHash: f29a48cd9deea0e5
 ---
 
 # Place de marché JetBrains
@@ -16,7 +16,7 @@ archives d'IDE.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `jetbrains-marketplace` |
 | **Amont par défaut** | `plugins.jetbrains.com` |

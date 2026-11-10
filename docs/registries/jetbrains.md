@@ -4,7 +4,7 @@ Cache JetBrains IDE installer archives. The first download is streamed from `dow
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `jetbrains` |
 | **Default upstream** | `download.jetbrains.com` |

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains.md
-sourceHash: 9499a08130a4b000
+sourceHash: 5d2fa093b3a4634c
 ---
 
 # IDE JetBrains
@@ -13,7 +13,7 @@ n'y a pas de modèle de publication privée pour les archives d'IDE.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `jetbrains` |
 | **Amont par défaut** | `download.jetbrains.com` |

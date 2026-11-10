@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rubygems.md
-sourceHash: d0fa2c89dde7a4a7
+sourceHash: 0292e71730c36358
 ---
 
 # RubyGems
@@ -12,7 +12,7 @@ publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `rubygems` |
 | **Amont par défaut** | `rubygems.org` |

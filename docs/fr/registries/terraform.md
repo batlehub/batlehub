@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/terraform.md
-sourceHash: fb34f620b39a8858
+sourceHash: 261d39f05273d40f
 ---
 
 # Terraform
@@ -13,7 +13,7 @@ modules, sous contrôle du RBAC et du garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `terraform` |
 | **Amont par défaut** | `registry.terraform.io` |

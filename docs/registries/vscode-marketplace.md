@@ -4,7 +4,7 @@ Proxy and cache VS Code extension VSIX downloads from Microsoft's [Visual Studio
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `vscode-marketplace` |
 | **Default upstream** | `marketplace.visualstudio.com` |

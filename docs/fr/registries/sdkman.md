@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/sdkman.md
-sourceHash: e5c7b93519002f07
+sourceHash: 1ef6f94e629eb273
 ---
 
 # SDKMAN
@@ -16,7 +16,7 @@ JDK de 200 Mo est mis en cache ici plutôt que renvoyé ailleurs.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `sdkman` |
 | **Amont par défaut** | `api.sdkman.io/2` (API des candidats) · `broker.sdkman.io` (`broker_url`) |

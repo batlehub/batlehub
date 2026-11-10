@@ -4,7 +4,7 @@ Proxy and cache crates.io, or host private crates. BatleHub implements the Cargo
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `cargo` |
 | **Default upstream** | `crates.io` |

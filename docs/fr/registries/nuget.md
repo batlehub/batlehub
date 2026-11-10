@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nuget.md
-sourceHash: 42383ab70e0689df
+sourceHash: 8a82f4fce86e3398
 ---
 
 # NuGet (.NET)
@@ -12,7 +12,7 @@ garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nuget` |
 | **Amont par défaut** | `api.nuget.org` |

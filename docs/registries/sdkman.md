@@ -4,7 +4,7 @@ Proxy and cache SDKMAN — the JDK, Gradle, Maven, Kotlin and every other candid
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `sdkman` |
 | **Default upstream** | `api.sdkman.io/2` (candidates API) · `broker.sdkman.io` (`broker_url`) |

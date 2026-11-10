@@ -6,7 +6,7 @@ This is the toolchain, not the crates. `cargo` resolves dependencies against a s
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `rustup` |
 | **Default upstream** | `static.rust-lang.org` |

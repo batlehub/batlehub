@@ -6,7 +6,7 @@ Roles — the older v1 API — are served read-only, and how much of that surfac
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `galaxy` |
 | **Default upstream** | `https://galaxy.ansible.com/api/` |

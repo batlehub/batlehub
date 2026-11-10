@@ -4,7 +4,7 @@ Proxy and cache the GitHub REST API — release listings and metadata, release a
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `github` |
 | **Default upstream** | `api.github.com` |

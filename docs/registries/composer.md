@@ -4,7 +4,7 @@ Proxy and cache Packagist for PHP Composer, or host private packages. BatleHub i
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `composer` |
 | **Default upstream** | `repo.packagist.org` |

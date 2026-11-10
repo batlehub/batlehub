@@ -12,7 +12,7 @@ OCI chart registries (`helm pull oci://…`) are not a chart repository and are 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `helm` |
 | **Default upstream** | none — a registry is one chart repository, and you name it |

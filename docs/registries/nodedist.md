@@ -4,7 +4,7 @@ Proxy and cache the `nodejs.org/dist` tree as a *typed* registry, so a Node rele
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `nodedist` |
 | **Default upstream** | `nodejs.org/dist` (io.js takes a second registry pointed at `iojs.org/dist`) |

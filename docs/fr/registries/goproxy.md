@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/goproxy.md
-sourceHash: 7021356d815f56fe
+sourceHash: 94b0e8933a35fe24
 ---
 
 # Modules Go
@@ -13,7 +13,7 @@ sorte que `govulncheck` fonctionne sans accès direct à Internet.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `goproxy` |
 | **Amont par défaut** | `proxy.golang.org` |

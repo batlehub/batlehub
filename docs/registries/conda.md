@@ -4,7 +4,7 @@ Proxy and cache a conda channel, or host private conda packages. BatleHub serves
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `conda` |
 | **Default upstream** | `conda.anaconda.org` |

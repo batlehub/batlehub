@@ -4,7 +4,7 @@ Proxy and cache PyPI through BatleHub for pip, uv, Poetry, and other Python pack
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `pypi` |
 | **Default upstream** | `pypi.org` |

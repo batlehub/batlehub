@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rpm.md
-sourceHash: d1472016b8479eb6
+sourceHash: 2348c087195c9ba5
 ---
 
 # RPM / YUM (DNF)
@@ -12,7 +12,7 @@ vôtre : publiez des paquets `.rpm` et BatleHub régénère `repodata/`, en sign
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `rpm` |
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |

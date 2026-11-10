@@ -4,7 +4,7 @@ Proxy and cache the Terraform provider and module registry protocol (v1 API), or
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `terraform` |
 | **Default upstream** | `registry.terraform.io` |

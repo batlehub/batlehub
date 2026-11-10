@@ -4,7 +4,7 @@ Proxy and cache the NuGet gallery for `dotnet`, or host private packages. BatleH
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `nuget` |
 | **Default upstream** | `api.nuget.org` |

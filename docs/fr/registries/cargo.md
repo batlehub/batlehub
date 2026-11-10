@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/cargo.md
-sourceHash: ed751e26fd208c43
+sourceHash: c255ee2b3ee33f45
 ---
 
 # Cargo
@@ -13,7 +13,7 @@ en cache : la vérification continue donc de fonctionner.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `cargo` |
 | **Amont par défaut** | `crates.io` |

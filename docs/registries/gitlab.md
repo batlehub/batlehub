@@ -4,7 +4,7 @@ Proxy and cache releases, release-link assets, and source archives from a GitLab
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `gitlab` |
 | **Default upstream** | `gitlab.com` |

@@ -183,7 +183,7 @@ export const sidebar = {
       items: [
         { text: "Ce que fait BatleHub", link: "/fr/guide/features" },
         { text: "Installation", link: "/fr/guide/installation" },
-        { text: "Configuration", link: "/fr/guide/configuration" },
+        { text: "Référence de configuration", link: "/fr/guide/configuration" },
         {
           text: "Exemples commentés",
           link: "/fr/guide/configuration-examples",
@@ -195,7 +195,7 @@ export const sidebar = {
       text: "Administration",
       items: [
         { text: "Vue d'ensemble", link: "/fr/guide/administration" },
-        { text: "Configuration", link: "/fr/guide/admin-config" },
+        { text: "Configuration du serveur", link: "/fr/guide/admin-config" },
         { text: "Stockage et santé", link: "/fr/guide/admin-storage-health" },
         { text: "Politiques et paquets", link: "/fr/guide/admin-policies" },
         { text: "Accès et audit", link: "/fr/guide/admin-access" },
