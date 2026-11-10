@@ -27,16 +27,18 @@ import { initAuth, useAuth } from "@/composables/useAuth";
 // so the singleton's initial identity fetch actually runs against the mocks above.
 initAuth();
 
-const ANON: MeResponse = { role: "anonymous", groups: [], has_registry_access: true };
-const ANON_NO_ACCESS: MeResponse = { role: "anonymous", groups: [], has_registry_access: false };
-const USER: MeResponse = { role: "user", groups: [], has_registry_access: true };
+const ANON: MeResponse = { role: "anonymous", groups: [], has_registry_access: true, verbs: [], registries: {} };
+const ANON_NO_ACCESS: MeResponse = { role: "anonymous", groups: [], has_registry_access: false, verbs: [], registries: {} };
+const USER: MeResponse = { role: "user", groups: [], has_registry_access: true, verbs: [], registries: {} };
 const USER_OIDC: MeResponse = {
   role: "user",
   groups: [],
   has_registry_access: true,
   auth_provider: "keycloak",
+  verbs: [],
+  registries: {},
 };
-const ADMIN: MeResponse = { role: "admin", groups: ["admins"], has_registry_access: true };
+const ADMIN: MeResponse = { role: "admin", groups: ["admins"], has_registry_access: true, verbs: [], registries: {} };
 
 /**
  * Drive the singleton `useAuth` state to a deterministic identity. Setting the

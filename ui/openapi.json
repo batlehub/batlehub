@@ -25700,7 +25700,9 @@
         "required": [
           "role",
           "has_registry_access",
-          "groups"
+          "groups",
+          "verbs",
+          "registries"
         ],
         "properties": {
           "auth_provider": {
@@ -25720,6 +25722,19 @@
             "type": "boolean",
             "description": "Whether the current user has access to at least one configured registry."
           },
+          "registries": {
+            "type": "object",
+            "description": "Per registry with a grant hierarchy, the verbs held there (instance\nand registry tiers). A registry absent here is \"not shown to hold\nanything\", never \"holds everything\". Package- and version-tier grants\nare not reflected: the server still decides per package.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "role": {
             "$ref": "#/components/schemas/Role"
           },
@@ -25728,6 +25743,13 @@
               "string",
               "null"
             ]
+          },
+          "verbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The verbs this caller holds at the instance tier — what a control\nendpoint naming no registry checks (RFC 0042 §4.3). Spelled as in\n`[grants]`."
           }
         }
       },

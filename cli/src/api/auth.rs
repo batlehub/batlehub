@@ -13,6 +13,11 @@ pub struct MeResponse {
     pub role: String,
     pub auth_provider: Option<String>,
     pub groups: Vec<String>,
+    /// Instance-tier verbs (RFC 0042); absent on an older server.
+    #[serde(default)]
+    pub verbs: Vec<String>,
+    #[serde(default)]
+    pub registries: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
