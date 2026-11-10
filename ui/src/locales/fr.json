@@ -902,6 +902,7 @@
     "admin": "Administration",
     "aria": "Principale",
     "packages": "Paquets",
+    "security": "Sécurité",
     "setup": "Configuration"
   },
   "packageBetaChannel": {
@@ -1272,5 +1273,23 @@
   "displaySettings": {
     "theme": "Thème",
     "title": "Affichage"
+  },
+  "securityDashboard": {
+    "title": "Sécurité",
+    "description": "Ce que la couche de chaîne d'approvisionnement retient, ce que les sources de signalements ont dit, et qui a tiré une version signalée — chaque section n'apparaît qu'à qui détient sa permission."
+  },
+  "holdsPanel": {
+    "title": "Versions retenues",
+    "intro": "Le nombre de verdicts par registre doté d'un profil de sécurité, puis les dernières versions refusées ou en quarantaine. Les constats restent sur la page du paquet.",
+    "empty": "Aucun registre n'a de profil de sécurité.",
+    "loadFailed": "Impossible de charger la synthèse des verdicts.",
+    "denied": "Refusées",
+    "quarantined": "En quarantaine",
+    "warned": "Averties",
+    "allowed": "Autorisées",
+    "recent": "Retenues récemment",
+    "state": "État",
+    "reasons": "Motifs",
+    "evaluated": "Évaluée"
   }
 }

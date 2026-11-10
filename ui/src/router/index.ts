@@ -6,7 +6,12 @@ import {
   type RouteLocationRaw,
 } from "vue-router";
 import { useAuth, storeTokens } from "@/composables/useAuth";
-import { LEGACY_REDIRECTS, packagePath, SECTION_INDEXES } from "@/config/navigation";
+import {
+  LEGACY_REDIRECTS,
+  packagePath,
+  SECTION_INDEXES,
+  SECURITY_VERBS,
+} from "@/config/navigation";
 import { ADMIN_PAGE_VERBS, firstAdminPage } from "@/config/adminSections";
 
 const OIDC_STATE_KEY = "oidc_state";
@@ -136,8 +141,9 @@ function checkMetaGuards(
   {
     isAuthenticated,
     can,
+    canAny,
     isOidcSession,
-  }: Pick<AuthState, "isAuthenticated" | "can" | "isOidcSession">,
+  }: Pick<AuthState, "isAuthenticated" | "can" | "canAny" | "isOidcSession">,
 ): RouteLocationRaw | undefined {
   if (to.meta.requiresAuth && !isAuthenticated.value) {
     return { path: "/login", query: { redirect: to.fullPath } };
@@ -152,6 +158,11 @@ function checkMetaGuards(
   // on the role. A page missing from the table is refused (fail closed). A
   // signed-in caller is not sent to sign in again: they land on the first page
   // of the same section they may open, else of any section, else home.
+  if (to.meta.securityArea && !canAny(SECURITY_VERBS)) {
+    return isAuthenticated.value
+      ? { path: "/" }
+      : { path: "/login", query: { redirect: to.fullPath } };
+  }
   if (to.meta.adminArea) {
     const verb = ADMIN_PAGE_VERBS[to.path];
     if (!verb || !can(verb)) {
@@ -278,6 +289,11 @@ export const router = createRouter({
       ],
     },
 
+    {
+      path: "/security",
+      component: () => import("@/pages/SecurityDashboard.vue"),
+      meta: { securityArea: true },
+    },
     {
       path: "/admin",
       component: () => import("@/layouts/AdminLayout.vue"),

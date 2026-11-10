@@ -185,6 +185,14 @@ describe("router navigation guards (integration)", () => {
     expect(await go("/admin/observability/health")).toBe("/login");
   });
 
+  it("opens the security console to a security verb, and to nobody else", async () => {
+    await setAuth(AUDITOR, "tok");
+    expect(await go("/security")).toBe("/security");
+    await go("/setup"); // leave it first: a push to the current route is not a navigation
+    await setAuth(USER, "tok");
+    expect(await go("/security")).toBe("/");
+  });
+
   it("lets a delegate reach the page of their verb, and only that page", async () => {
     await setAuth(AUDITOR, "tok");
     expect(await go("/admin/observability/audit-log")).toBe("/admin/observability/audit-log");

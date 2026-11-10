@@ -284,6 +284,31 @@ Four things are worth knowing before you write one:
   granted, and nothing else. If every version is filtered out, the document is
   `404` rather than an empty index — hidden means absent.
 
+### Delegating the security console {#security-console}
+
+A security team does not need to be administrators. Grant its group the
+security verbs at the **instance** tier, and the console shows it a *Security*
+entry, beside *Admin* rather than inside it:
+
+```toml
+[grants]
+"group:oidc1:secops" = ["quarantine:read", "findings:read", "flags:read",
+                        "audit:read", "scans:run"]
+```
+
+Each section of `/security` is drawn only when its verb is held: held versions
+(`quarantine:read`), pushed flags (`flags:read`), exposure (`audit:read`).
+`findings:read` adds the findings to the verdict listing, and `scans:run`
+allows a bulk rescan or a backfill. Nothing else opens: the configuration and
+health still answer `403` to the group.
+
+It has to be the instance tier. Every user holds `quarantine:read` on each
+registry by default, which shows them why *a* version is held; the console
+lists every held version of a registry, private packages included, so it asks
+for the grant one tier up ([RFC 0042](/rfc/0042-security-console-by-verb)).
+The `/api/v1/admin/…` prefix of these endpoints names the back office, not the
+role: a non-administrator granted the verb reaches them.
+
 ### The other policies {#policies}
 
 Grants are one of six things a tier carries. The rest:
