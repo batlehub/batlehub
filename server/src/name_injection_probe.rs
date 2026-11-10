@@ -165,10 +165,15 @@ async fn probe() -> Vec<(String, String)> {
             }
         };
         for whole in PROBES[0].1 {
-            // SDKMAN's names carry the one query its handler composes from
-            // validated values (`reject_url_delimiters`), so a `?` there is
-            // the protocol; the handler refuses one in a candidate.
-            if *kind == RegistryKind::Sdkman && whole.contains('?') {
+            // SDKMAN, devfile and the JetBrains Marketplace name a document
+            // with the query their handler composes or relays
+            // (`reject_url_delimiters`), so a `?` in their names is the
+            // protocol, not an injection.
+            if matches!(
+                kind,
+                RegistryKind::Sdkman | RegistryKind::Devfile | RegistryKind::JetbrainsMarketplace
+            ) && whole.contains('?')
+            {
                 continue;
             }
             for name in shapes(whole) {

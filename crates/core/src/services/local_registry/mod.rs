@@ -310,9 +310,11 @@ pub fn validate_package_name(name: &str) -> Result<(), CoreError> {
 ///
 /// - a forge's version or file name is a git ref, which may hold `#` (never
 ///   `?`); the forge clients encode every segment (PR #304);
-/// - SDKMAN's rendered `versions/list` document is named with the query this
-///   proxy rebuilt from validated values; its handler refuses `?` and `#` in a
-///   candidate and a version;
+/// - SDKMAN's rendered `versions/list`, devfile's filtered index
+///   (`v2index?arch=…`) and the JetBrains Marketplace's relayed API calls are
+///   documents named with the query the handler composed or relays — the
+///   query is part of what is cached and judged, and of what is asked;
+///   SDKMAN's handler refuses `?` and `#` in a candidate and a version;
 /// - Galaxy names a role by its numeric id as `role#<id>` (`role_alias`), the
 ///   id validated alphanumeric.
 pub fn reject_url_delimiters(
@@ -323,7 +325,7 @@ pub fn reject_url_delimiters(
 ) -> Result<(), CoreError> {
     let (in_name, in_version): (&[char], &[char]) = match registry_type {
         "github" | "forgejo" | "gitlab" => (&[], &['#']),
-        "sdkman" => (&['?'], &[]),
+        "sdkman" | "devfile" | "jetbrains-marketplace" => (&['?'], &[]),
         "galaxy" => (&['#'], &[]),
         _ => (&[], &[]),
     };

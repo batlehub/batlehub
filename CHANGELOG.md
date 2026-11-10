@@ -20,8 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   block on a version was bypassed by appending `%3F` to it**. A `400` now
   refuses both in a coordinate bound for an upstream, except where a kind
   puts one there itself: a forge's tag may hold `#` (the GitHub, Forgejo and
-  GitLab clients encode it, so such a release is still served), SDKMAN names
-  its rendered `versions/list` with the query this proxy rebuilt, and Galaxy
+  GitLab clients encode it, so such a release is still served), SDKMAN,
+  devfile and the JetBrains Marketplace name a document with the query their
+  handler composes or relays, and Galaxy
   addresses a role as `role#<id>`. Every upstream client sits behind a guard
   that applies the same rule for the paths that skip the service's edge
   (warming, the scan worker, the upstream audit), and a test aims each kind's
