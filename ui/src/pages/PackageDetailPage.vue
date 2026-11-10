@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref, computed, onBeforeUnmount, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { Check, Copy, FileJson, FileCode, Download } from "@lucide/vue";
 import { listRegistries, packageDetail } from "@/client/sdk.gen";
 import type { FirewallDto, PackageDetailResponse, RegistryInfo } from "@/client/types.gen";
-import { installCommandFor } from "@/config/registryTypes";
 import { useAuth } from "@/composables/useAuth";
 import PackageVersionsTable from "@/components/admin/PackageVersionsTable.vue";
 import PackageBetaChannel from "@/components/admin/PackageBetaChannel.vue";
@@ -18,18 +16,24 @@ import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
 import PackageBreadcrumb from "@/components/package/PackageBreadcrumb.vue";
 import PackageMasthead from "@/components/package/PackageMasthead.vue";
+import VersionSubject, {
+  type UpstreamPackageStatus,
+} from "@/components/package/VersionSubject.vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
-import { rowState, STATE_LABEL_KEYS, usePackageVersions } from "@/composables/usePackageVersions";
+import {
+  isUpstreamOnly,
+  rowState,
+  STATE_LABEL_KEYS,
+  usePackageVersions,
+} from "@/composables/usePackageVersions";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import { formatCount, formatDay } from "@/lib/format";
-import { severityVariant } from "@/lib/badge-variants";
 import { Badge } from "@/components/ui/badge";
 import { Resolution } from "@/components/ui/resolution";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
-import { RuleNote } from "@/components/ui/rule-note";
 import { Pagination } from "@/components/ui/pagination";
 import {
   Table,
@@ -42,7 +46,7 @@ import {
 
 const { t } = useI18n();
 
-const { token, can, isAuthenticated } = useAuth();
+const { token, can } = useAuth();
 // RFC 0042 §4.3: each surface on the verb its endpoint asks for, not the role.
 const canAdminister = computed(() => can("packages:read"));
 const canReadUpstream = computed(() => can("system:read", registry.value));
@@ -87,17 +91,6 @@ const {
   onFetchVersion,
   fetchDetail,
 } = usePackageVersions(registry, name);
-
-/**
- * Whether a row describes a version this instance holds no bytes for.
- *
- * Every cell that would be a fact about what we hold reads *unknown* on such a
- * row rather than `0` or `—`: nobody has downloaded it *through here*, which is
- * not the same as nobody having downloaded it (RFC 0007 §4.2).
- */
-function isUpstreamOnly(source: string) {
-  return source === "upstream";
-}
 
 // ── Per-artifact SBOM download ─────────────────────────────────────────────
 
@@ -166,26 +159,8 @@ async function downloadSbom(version: string, fmt: "spdx" | "cyclonedx") {
   }
 }
 
-onBeforeUnmount(() => {
-  if (copyTimer) clearTimeout(copyTimer);
-});
-
 const stateLabel = (row: { state?: string; firewall: FirewallDto }) =>
   t(STATE_LABEL_KEYS[rowState(row)]);
-
-/**
- * The blocked variant of a firewall status, or `null`.
- *
- * In the script rather than in the template because this is where TypeScript can
- * narrow the union: `FirewallDto` is a discriminated union that *does* declare
- * `reason`, `blocked_by` and `blocked_at`, and the template read them through
- * three `as any` casts because a `v-if` on one element does not narrow a type
- * for a sibling. The casts meant the one part of this page that renders a
- * policy decision was the one part unchecked against the OpenAPI contract.
- */
-function blockedInfo(fw: FirewallDto) {
-  return fw.status === "blocked" ? fw : null;
-}
 
 /**
  * The SBOM formats the selected version can actually be downloaded in.
@@ -225,79 +200,6 @@ const sbomState = computed<"available" | "none" | "unknown">(() => {
   return row.sbom?.state === "none" ? "none" : "unknown";
 });
 
-/** The one line that installs the selected version, when its type has an honest one. */
-const installLine = computed(() =>
-  selectedVersion.value
-    ? installCommandFor(registryType.value, name.value, selectedVersion.value)
-    : null,
-);
-
-/**
- * Copy confirmed in place, and reset.
- *
- * A copy that says nothing leaves the reader wondering whether it took; a copy
- * that says so forever stops being feedback. Two seconds, and no motion — the
- * system animates exactly one thing and this is not it.
- */
-const copied = ref(false);
-let copyTimer: ReturnType<typeof setTimeout> | null = null;
-
-async function copyInstall() {
-  if (!installLine.value) return;
-  try {
-    await navigator.clipboard.writeText(installLine.value.command);
-    copied.value = true;
-    if (copyTimer) clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => {
-      copied.value = false;
-      copyTimer = null;
-    }, 2000);
-  } catch {
-    // A clipboard the browser refuses (no permission, no secure context) is not
-    // an error worth a banner: the command is on screen and selectable, which is
-    // the fallback every terminal user already uses.
-  }
-}
-
-// ── Download URL construction ──────────────────────────────────────────────────
-
-/**
- * Build the proxy download URL for a given version based on the registry type.
- * Returns null for registries whose URL can't be derived purely from name/version
- * (Maven, PyPI simple page, etc.).
- */
-function downloadUrl(version: string): string | null {
-  const n = name.value;
-  const r = registry.value;
-  const base = `${API_BASE_URL}/proxy/${encodeURIComponent(r)}`;
-  switch (registryType.value) {
-    case "cargo":
-      return `${base}/${encodeURIComponent(n)}/${encodeURIComponent(version)}/download`;
-    case "npm":
-      // encodeURIComponent handles scoped packages: @scope/pkg → %40scope%2Fpkg (one path segment)
-      return `${base}/${encodeURIComponent(n)}/${encodeURIComponent(version)}/tarball`;
-    case "nuget":
-      return `${base}/nuget/v3/flat/${encodeURIComponent(n.toLowerCase())}/${encodeURIComponent(version.toLowerCase())}/${encodeURIComponent(n.toLowerCase())}.${encodeURIComponent(version.toLowerCase())}.nupkg`;
-    case "rubygems":
-      return `${base}/gems/${encodeURIComponent(n)}-${encodeURIComponent(version)}.gem`;
-    case "pypi":
-      // PyPI has hashed filenames — link to the simple page instead
-      return `${base}/simple/${encodeURIComponent(n)}/`;
-    case "conda":
-      return `${base}/noarch/${encodeURIComponent(n)}-${encodeURIComponent(version)}-py_0.conda`;
-    case "vsix":
-    case "openvsx": {
-      const parts = n.split(".");
-      if (parts.length === 2) {
-        return `${base}/${encodeURIComponent(parts[0])}.${encodeURIComponent(parts[1])}/${encodeURIComponent(version)}/vsix`;
-      }
-      return null;
-    }
-    default:
-      return null;
-  }
-}
-
 /**
  * Administration is a *section of this page* now, not a parallel page at another
  * URL with its own layout and its own back button. One package, one address
@@ -307,21 +209,6 @@ function downloadUrl(version: string): string | null {
  * server-side, so firing it for everyone would mean a 403 on every package view.
  * Hiding the section is a rendering decision — the server still refuses.
  */
-/**
- * RFC 0014 §4.6: what the upstream audit knows about this package, for the
- * badge on the selected version. Admin-only and best-effort — a `503` is
- * "the audit does not run in this process", a `404` "not an audited
- * registry", and both mean no badge, not an error.
- */
-interface UpstreamRow {
-  version?: string | null;
-  state: "missing" | "disappeared";
-  consecutive_misses: number;
-}
-interface UpstreamPackageStatus {
-  policy: "audit" | "block";
-  rows: UpstreamRow[];
-}
 const upstreamStatus = ref<UpstreamPackageStatus | null>(null);
 async function loadUpstreamStatus() {
   upstreamStatus.value = null;
@@ -365,23 +252,6 @@ async function loadRefShas() {
 watch([registry, name, registryType], loadRefShas, { immediate: true });
 /** git's own abbreviation. */
 const shortSha = (version: string) => refShas.value[version]?.slice(0, 7) ?? null;
-
-/** The audit's row for `version`: its own, or the whole package's. */
-function upstreamRowFor(version: string): UpstreamRow | null {
-  const rows = upstreamStatus.value?.rows ?? [];
-  return rows.find((r) => r.version === version) ?? rows.find((r) => !r.version) ?? null;
-}
-const UPSTREAM_BADGE_KEYS: Record<string, string> = {
-  missing: "packageDetailPage.upstreamMissing",
-  disappeared: "packageDetailPage.upstreamDisappeared",
-  blocked: "packageDetailPage.upstreamBlocked",
-};
-function upstreamBadgeKey(row: UpstreamRow): string {
-  if (row.state === "disappeared" && upstreamStatus.value?.policy === "block") {
-    return UPSTREAM_BADGE_KEYS.blocked;
-  }
-  return UPSTREAM_BADGE_KEYS[row.state];
-}
 
 const {
   data: adminData,
@@ -461,295 +331,24 @@ const {
     <template v-else-if="data">
       <PackageMasthead :data="data" :unfiltered-total="unfilteredTotal" @refresh="fetchDetail()" />
 
-      <!-- ── The subject: one version ──────────────────────────────────────
-           The page's centre of gravity, and the reason it is not a table with a
-           README under it any more. Every question PRODUCT names — *why was this
-           blocked*, *what do I paste* — is answered by exactly one version, and
-           the page used to answer "here are twenty-five, click one to change a
-           README". So the selected version is drawn as the subject: its state at
-           full resolution, its rule in its own words, its vulnerabilities as
-           text, and the one line that installs it.
-
-           A region separated by a full-width hairline, not a card. The world has
-           no card, and three of them stacked here were the page's largest
-           disagreement with its own design system. -->
-      <section
+      <VersionSubject
         v-if="selectedRow"
-        class="border-t border-rule-soft pt-6"
-        aria-labelledby="subject-heading"
-      >
-        <div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-          <div class="min-w-0">
-            <!-- The version, in the reading face, at the section step. No label
-                 above it: the package name is the h1 immediately above, so
-                 "react / 18.3.1" reads as a coordinate without a word spent
-                 announcing that a version is a version. -->
-            <h2
-              id="subject-heading"
-              class="font-mono text-xl text-foreground [overflow-wrap:anywhere]"
-            >
-              {{ selectedRow.version }}
-            </h2>
-            <p
-              class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground"
-            >
-              <span>
-                {{
-                  selectedRow.source === "local"
-                    ? t("packageDetailPage.local")
-                    : isUpstreamOnly(selectedRow.source)
-                      ? t("packageDetailPage.notHeldHere")
-                      : t("common.proxied")
-                }}
-              </span>
-              <span v-if="selectedRow.published_at">
-                {{ t("common.published") }}
-                <span class="text-foreground tabular-nums">{{
-                  formatDay(selectedRow.published_at)
-                }}</span>
-              </span>
-              <span>
-                {{ t("common.downloads") }}
-                <span class="text-foreground tabular-nums">{{
-                  selectedRow.download_count === null || selectedRow.download_count === undefined
-                    ? t("common.unknown")
-                    : formatCount(selectedRow.download_count)
-                }}</span>
-              </span>
-              <span>{{ selectedRow.license ?? t("packageDetailPage.licenseUnknown") }}</span>
-            </p>
-            <!-- Why it is unknown, as a sentence rather than as a `title=`.
-                 "no manifest parser for this registry type" and "declares no
-                 licence" are different facts and the page must not render them
-                 identically; the explanation was written for exactly that and
-                 was reachable only by holding a mouse still over a `<span>`. -->
-            <p v-if="!selectedRow.license" class="mt-2 max-w-[64ch] text-xs text-muted-foreground">
-              {{ t("packageDetailPage.licenseUnknownHelp") }}
-            </p>
-          </div>
-
-          <!-- The supply-chain badge, which is a picture *about this version*
-               and was drawn once per row — twenty-five requests to a third-party
-               host on one page view, at 71×16px each. -->
-          <a
-            v-if="selectedRow.socket_badge_url"
-            :href="selectedRow.socket_badge_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="order-last shrink-0 py-1"
-            :title="t('packageDetailPage.supplyChainReportOn')"
-          >
-            <img :src="selectedRow.socket_badge_url" alt="socket.dev" class="h-5" />
-          </a>
-
-          <!-- RFC 0014: the upstream audit's word on this version, for an
-               admin — *missing* is a miss not yet believed, *disappeared* a
-               confirmed one, and under "block" the block it wrote. -->
-          <Badge
-            v-if="upstreamRowFor(selectedRow.version)"
-            :variant="
-              upstreamRowFor(selectedRow.version)!.state === 'disappeared'
-                ? 'destructive'
-                : 'copper'
-            "
-            class="shrink-0"
-            :title="t('packageDetailPage.upstreamBadgeHelp')"
-            data-testid="upstream-badge"
-          >
-            {{ t(upstreamBadgeKey(upstreamRowFor(selectedRow.version)!)) }}
-          </Badge>
-
-          <!-- The signature device, on the row it was written for.
-               `blocked` used to be the one state of six that never reached it:
-               the table's `v-else` handed that row a crimson chip instead, so
-               the world's organising idea was switched off on precisely the row
-               a reader opens the page for. -->
-          <Resolution
-            :state="rowState(selectedRow)"
-            :label="stateLabel(selectedRow)"
-            class="shrink-0"
-          />
-        </div>
-
-        <!-- The rule, beside the thing it refused, in text.
-             It was a `hidden group-hover:block` span: no focus trigger, no
-             `aria-describedby`, no dismiss — WCAG 2.2 1.4.13 failed on all three
-             counts, unreadable to a screen reader and unreachable on a phone.
-             It is the answer the page exists to give, so it is simply on the
-             page. The tie bar is the denial note's own, ported from the catalog
-             rather than invented here. -->
-        <RuleNote v-if="blockedInfo(selectedRow.firewall)" class="mt-4">
-          <span class="text-primary">{{ t("common.reasonLabel") }}</span>
-          {{ blockedInfo(selectedRow.firewall)!.reason }}
-          <span class="px-2" aria-hidden="true">·</span>
-          {{
-            t("packageDetailPage.blockedByOn", {
-              who: blockedInfo(selectedRow.firewall)!.blocked_by,
-              when: formatDay(blockedInfo(selectedRow.firewall)!.blocked_at),
-            })
-          }}
-          <RouterLink
-            class="text-primary underline underline-offset-[3px]"
-            :to="{
-              path: '/tools/access-check',
-              query: { registry, name, version: selectedRow.version },
-            }"
-            >{{ t("packageDetailPage.why") }}</RouterLink
-          >
-        </RuleNote>
-
-        <!-- The deprecation message, which was a `title=` on a chip in the
-             table — the upstream's own sentence about why not to use this
-             version, available only to a mouse held still. -->
-        <RuleNote v-if="selectedRow.deprecated" class="mt-4">
-          <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
-          {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
-        </RuleNote>
-
-        <!-- Vulnerabilities as text, for the same reason. A severity chip whose
-             identifier and summary appear only under a stationary mouse is a
-             supply-chain fact this page is not really reporting. -->
-        <ul v-if="selectedRow.vulnerabilities.length" class="mt-4 space-y-2">
-          <RuleNote v-for="vuln in selectedRow.vulnerabilities" :key="vuln.osv_id" as="li">
-            <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
-              vuln.severity
-            }}</Badge>
-            <span class="font-mono text-foreground">{{ vuln.osv_id }}</span>
-            <span class="px-2" aria-hidden="true">·</span>
-            {{ vuln.summary }}
-            <template v-if="vuln.fixed_version">
-              <span class="px-2" aria-hidden="true">·</span>
-              {{ t("packageDetailPage.fixedIn") }}
-              <span class="font-mono text-foreground">{{ vuln.fixed_version }}</span>
-            </template>
-          </RuleNote>
-        </ul>
-        <p
-          v-else-if="!selectedRow.vulnerabilities_scanned"
-          class="mt-4 text-sm text-muted-foreground"
-        >
-          {{ t("packageDetailPage.notScannedHelp") }}
-        </p>
-
-        <!-- The end of the journey, which the page did not have: a reader who
-             found their version had nowhere to go and the page stopped on an em
-             dash. The command is data (`installCommandFor`), not a switch in
-             this component, and a type with no honest one-liner says so rather
-             than printing a plausible wrong one. -->
-        <div v-if="installLine" class="mt-6">
-          <div class="flex items-stretch border border-border">
-            <pre
-              class="min-w-0 flex-1 overflow-x-auto bg-ground-sunk px-3 py-3 font-mono text-sm text-foreground"
-            ><code>{{ installLine.command }}</code></pre>
-            <button
-              type="button"
-              class="flex shrink-0 items-center gap-2 border-l border-border px-3 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground"
-              @click="copyInstall"
-            >
-              <component :is="copied ? Check : Copy" class="h-4 w-4" aria-hidden="true" />
-              {{ copied ? t("common.copied") : t("common.copy") }}
-            </button>
-          </div>
-          <p class="mt-2 text-xs text-muted-foreground">
-            {{ t("packageDetailPage.installAssumesSetup") }}
-            <RouterLink class="text-primary underline underline-offset-[3px]" to="/setup">{{
-              t("packageDetailPage.setupGuide")
-            }}</RouterLink>
-          </p>
-        </div>
-
-        <!-- The artifact itself and its bill of materials, for the version in
-             hand. These were three chips repeated on every row of a nine-column
-             table — where the Download one rendered a bare em dash for thirteen
-             of the twenty-one registry types, under a column headed "Download",
-             stating nothing about why. Here they are absent when there is
-             nothing to offer, which is the same answer without the furniture. -->
-        <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-          <a
-            v-if="downloadUrl(selectedRow.version)"
-            :href="downloadUrl(selectedRow.version)!"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px]"
-          >
-            <Download class="h-4 w-4" aria-hidden="true" />
-            {{ t("packageDetailPage.downloadViaProxy", { version: selectedRow.version }) }}
-          </a>
-          <template v-if="token && sbomState === 'available'">
-            <button
-              v-if="sbomFormats.includes('spdx')"
-              type="button"
-              class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
-              :disabled="sbomLoading === `${registry}/${name}/${selectedRow.version}:spdx`"
-              @click="downloadSbom(selectedRow!.version, 'spdx')"
-            >
-              <FileJson class="h-4 w-4" aria-hidden="true" />
-              {{ t("packageDetailPage.downloadSpdx23") }}
-            </button>
-            <button
-              v-if="sbomFormats.includes('cyclonedx')"
-              type="button"
-              class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
-              :disabled="sbomLoading === `${registry}/${name}/${selectedRow.version}:cyclonedx`"
-              @click="downloadSbom(selectedRow!.version, 'cyclonedx')"
-            >
-              <FileCode class="h-4 w-4" aria-hidden="true" />
-              {{ t("packageDetailPage.downloadCyclonedx14") }}
-            </button>
-          </template>
-          <span v-else-if="token && sbomState === 'none'" class="text-muted-foreground">{{
-            t("packageDetailPage.noSbom")
-          }}</span>
-          <span v-else-if="token" class="text-muted-foreground">{{
-            t("packageDetailPage.sbomPending")
-          }}</span>
-        </div>
-        <output
-          v-if="sbomError[artifactKey(selectedRow.version)]"
-          class="mt-2 block text-sm text-destructive"
-        >
-          {{
-            t("packageDetailPage.sbomFailed", {
-              reason: sbomError[artifactKey(selectedRow.version)],
-            })
-          }}
-        </output>
-
-        <!-- The one filled action on the reader's half of the page, and the only
-             act here that spends this instance's bandwidth and writes an audit
-             row. It was a 24px outline chip in the second column of a table. -->
-        <div v-if="isUpstreamOnly(selectedRow.source)" class="mt-6">
-          <p class="mb-3 max-w-[64ch] text-sm text-muted-foreground">
-            {{ t("packageDetailPage.notHeldHereHelp") }}
-          </p>
-          <Button
-            v-if="data.fetch.offered"
-            :disabled="fetching !== null"
-            @click="onFetchVersion(selectedRow!.version)"
-          >
-            {{
-              fetching === selectedRow.version
-                ? t("packageDetailPage.fetching")
-                : t("packageDetailPage.fetchVersion")
-            }}
-          </Button>
-          <p v-else-if="data.fetch.reason" class="text-sm text-muted-foreground">
-            {{ t("packageDetailPage.fetchUnavailable", { reason: data.fetch.reason }) }}
-          </p>
-          <RouterLink
-            v-else-if="!isAuthenticated"
-            :to="{ path: '/login', query: { redirect: route.fullPath } }"
-            class="text-sm text-primary underline underline-offset-[3px]"
-            >{{ t("packageDetailPage.fetchNeedsSession") }}</RouterLink
-          >
-          <p v-if="fetchResult[selectedRow.version]" class="mt-2 text-sm text-muted-foreground">
-            {{ fetchResult[selectedRow.version] }}
-          </p>
-          <p class="mt-2 max-w-[64ch] text-xs text-muted-foreground">
-            {{ t("packageDetailPage.fetchWhatItDoes") }}
-          </p>
-        </div>
-      </section>
+        :registry="registry"
+        :name="name"
+        :registry-type="registryType"
+        :selected-version="selectedVersion"
+        :selected-row="selectedRow"
+        :fetch-offer="data.fetch"
+        :upstream-status="upstreamStatus"
+        :sbom-formats="sbomFormats"
+        :sbom-state="sbomState"
+        :sbom-loading="sbomLoading"
+        :sbom-error="sbomError[artifactKey(selectedRow.version)]"
+        :fetching="fetching"
+        :fetch-result="fetchResult"
+        @download-sbom="downloadSbom"
+        @fetch-version="onFetchVersion"
+      />
 
       <!-- README, below the subject and above the index, bound to the selected
            version. Fetched separately from the detail response so the catalogue

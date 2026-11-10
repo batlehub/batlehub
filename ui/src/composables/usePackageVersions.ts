@@ -614,3 +614,14 @@ export const STATE_LABEL_KEYS: Record<ResolutionState, string> = {
   yanked: "resolution.yanked",
   blocked: "resolution.blocked",
 };
+
+/**
+ * Whether a row describes a version this instance holds no bytes for.
+ *
+ * Every cell that would be a fact about what we hold reads *unknown* on such a
+ * row rather than `0` or `—`: nobody has downloaded it *through here*, which is
+ * not the same as nobody having downloaded it (RFC 0007 §4.2).
+ */
+export function isUpstreamOnly(source: string) {
+  return source === "upstream";
+}
