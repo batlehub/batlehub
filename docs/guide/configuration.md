@@ -2359,7 +2359,10 @@ lifecycle's changes from anyone else's. Pair sealing with `[logging] format =
 is what detects a truncated tail ([SIEM integration](../operations/siem.md)).
 
 **The manual purge** (`DELETE /api/v1/admin/audit-log`) deletes access-class
-rows only; a purge record outlives every later purge. Rows already
+rows only; a purge record outlives every later purge. Without sealing it is
+one `DELETE`; with sealing it runs in batches of 5 000 so each sealed window it
+touches gets its `expire` record, and on a large table it can take longer than
+a client or ingress timeout — rerun it to finish. Rows already
 pseudonymised or deleted cannot be recovered — which is the point of the
 setting.
 

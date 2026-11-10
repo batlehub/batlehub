@@ -428,3 +428,38 @@ async fn without_sealing_the_lifecycle_still_runs_and_writes_no_record() {
         Err(CoreError::NotSupported(_))
     ));
 }
+
+/// TD-0002 §1: an unsealed trail purges with one `purge_events_before`, not
+/// through the batched rewrite. The rewrite reads candidates from `store`, so
+/// an empty store here would leave every row in `events` behind.
+#[tokio::test]
+async fn an_unsealed_purge_is_one_delete_not_a_rewrite() {
+    let events = InMemoryPackageRepository::new();
+    for r in [
+        download("alice", 10),
+        sign_in("alice", 20),
+        download("bob", 3 * STEP),
+    ] {
+        events.record_access(r).await.unwrap();
+    }
+    let svc = AuditTrailService::new(
+        InMemoryPackageRepository::new(),
+        events.clone(),
+        Arc::new(AlwaysLeader),
+        AuditPolicy::default(),
+    );
+    let deleted = svc
+        .purge_access_before(at(STEP), &admin(), CallerNet::unknown())
+        .await
+        .unwrap();
+    assert_eq!(deleted, 1);
+    let left = events.events.read().await.clone();
+    assert!(left.iter().any(|e| e.action == AccessAction::SignIn));
+    assert_eq!(
+        left.iter()
+            .filter(|e| e.action == AccessAction::Download)
+            .count(),
+        1,
+        "the newer download stays"
+    );
+}
