@@ -1093,3 +1093,33 @@ async fn a_rejected_credential_is_one_throttled_row_per_source() {
         1
     );
 }
+
+/// pip and mise (reading `~/.netrc` for a forge) send HTTP Basic only, the
+/// token in the password. A PAT carried that way used to resolve to
+/// anonymous, while a static token in the same place worked: reported on a
+/// GitHub and a PyPI registry, 1.10.0, by the one user with a PAT.
+#[actix_web::test]
+async fn a_pat_sent_as_a_basic_password_is_its_owner() {
+    use base64::Engine as _;
+    let app = make_app_with_tokens(InMemoryRepo::new(), InMemoryTokenRepository::new()).await;
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/tokens")
+        .insert_header(("Authorization", bearer(OIDC_USER_TOKEN)))
+        .set_json(serde_json::json!({"name": "pip", "expires_in_days": 30, "role": "user"}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201);
+    let body: Value = read_body_json(resp).await;
+    let raw = body["token"].as_str().expect("raw token").to_owned();
+
+    for user in ["oidc-user", "__token__", "anything"] {
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{raw}"));
+        let req = TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header(("Authorization", format!("Basic {basic}")))
+            .to_request();
+        let me: Value = read_body_json(call_service(&app, req).await).await;
+        assert_eq!(me["user_id"], "oidc-user", "Basic user name {user:?}");
+        assert_eq!(me["auth_provider"], "user-token");
+    }
+}

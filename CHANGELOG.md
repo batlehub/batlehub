@@ -23,6 +23,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `name%401.2.3`, which GitHub answers on the API, the archive and the raw
   host alike.
 
+### Fixed
+
+- **A personal access token sent over HTTP Basic resolved to anonymous.**
+  pip, and mise reading `~/.netrc` for a GitHub/Forgejo/GitLab registry, send
+  only `Authorization: Basic`, with the token as the password. The static
+  token provider has always read that; the PAT provider read `Bearer` only, so
+  a PAT configured exactly where a static token works was silently dropped and
+  the request went on as anonymous. The PAT provider now reads the Basic
+  password too, whatever the user name.
+
 ## [1.10.0] - 2026-11-09
 
 ### Upgrade checklist (RFC 0041 — read before upgrading from 1.9.x)

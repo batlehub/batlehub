@@ -33,6 +33,28 @@ impl RawAuthRequest {
             .strip_prefix("Bearer ")
             .or_else(|| value.strip_prefix("bearer "))
     }
+
+    /// The password of a `Basic` `Authorization` header — where pip, mise's
+    /// netrc, Go, rustup, apt and dnf put a token (they speak HTTP Basic only,
+    /// the user name is whatever the operator typed). Split at the first `:`,
+    /// so a token holding one survives. `None` for any other scheme, or a
+    /// header that does not decode.
+    pub fn basic_password(&self) -> Option<String> {
+        use base64::Engine as _;
+        let value = self
+            .headers
+            .get("authorization")
+            .or_else(|| self.headers.get("Authorization"))?;
+        let encoded = value
+            .strip_prefix("Basic ")
+            .or_else(|| value.strip_prefix("basic "))?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded.trim())
+            .ok()?;
+        let decoded = String::from_utf8(decoded).ok()?;
+        let (_, password) = decoded.split_once(':')?;
+        (!password.is_empty()).then(|| password.to_owned())
+    }
 }
 
 /// Authenticates an HTTP request and returns the caller's identity.
