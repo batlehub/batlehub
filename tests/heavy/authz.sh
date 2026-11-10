@@ -135,6 +135,7 @@ GH_R="authz-github-$HEAVY_RUN"
 FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
 NODEDIST_R="authz-nodedist-$HEAVY_RUN"
+MV_R="authz-mise-versions-$HEAVY_RUN"
 DEVFILE_R="authz-devfile-$HEAVY_RUN"
 NIX_R="authz-nix-$HEAVY_RUN"
 SDKMAN_R="authz-sdkman-$HEAVY_RUN"
@@ -3249,7 +3250,8 @@ some other reason, which is exactly what the warmed repository exists to prevent
 # the part worth reading — three of these four mechanisms are not what this
 # project's setup snippets said they were before the phases were written.
 
-AUTHZ_LIVE_KINDS=(goproxy nodedist sdkman github forgejo gitlab generic deb rpm pacman rustup)
+AUTHZ_LIVE_KINDS=(goproxy nodedist sdkman github forgejo gitlab generic deb rpm pacman rustup
+                  mise-versions)
 
 LIVE_GO="live-go-$HEAVY_RUN"
 LIVE_NODEDIST="live-nodedist-$HEAVY_RUN"
@@ -3262,6 +3264,7 @@ LIVE_DEB="live-deb-$HEAVY_RUN"
 LIVE_RPM="live-rpm-$HEAVY_RUN"
 LIVE_PACMAN="live-pacman-$HEAVY_RUN"
 LIVE_RUSTUP="live-rustup-$HEAVY_RUN"
+LIVE_MV="live-mise-versions-$HEAVY_RUN"
 
 # Pins, one per client the live targets resolve for themselves.
 LIVE_GO_MODULE="${HEAVY_AUTHZ_GO_MODULE:-rsc.io/quote}"
@@ -3514,6 +3517,33 @@ live_run_gitlab() {
   return $?
 }
 
+# ── mise-versions — mise, and `~/.netrc` ────────────────────────────────────
+#
+# The forges' mechanism, one host over: mise sends a netrc stanza on any URL a
+# rule rewrote (RFC 0043 §4.1). `jq` is a registry tool, so mise lists it
+# through the versions host first. A refused list is not the end for mise — it
+# falls back to the backend's own listing on GitHub — so the fallback's egress
+# is closed here, or the denied arm would succeed by going around the instance.
+# `grep` makes "exited 0 and listed nothing" a failure as well.
+live_run_mise_versions() {
+  local suffix="$1" login="$2" token="$3"
+  local root="$HEAVY_WORK/live-mise-versions-$suffix"
+  mkdir -p "$root"/{data,cache,config,state,home}
+  authz_live_netrc "$root/home" "$login" "$token"
+  cat >"$root/config/config.toml" <<EOF
+[settings.url_replacements]
+"regex:^https://mise-versions\\\\.jdx\\\\.dev/(.+)" = "$HEAVY_TAP_BASE/proxy/$LIVE_MV/mise-versions/\$1"
+EOF
+  HOME="$root/home" \
+  MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
+  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
+  HTTPS_PROXY="http://127.0.0.1:1" HTTP_PROXY="http://127.0.0.1:1" \
+  https_proxy="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
+    bash -c 'set -o pipefail; mise ls-remote jq | tee /dev/stderr | grep -qE "^1[.][0-9]"'
+  return $?
+}
+
 # ── generic — curl, which is this kind's whole client ───────────────────────
 #
 # A path proxy has no protocol for a package manager to speak, so the client is
@@ -3708,6 +3738,10 @@ phase_live() {
       "${CW_ENGINE[@]}" pull "$LIVE_PACMAN_IMAGE" >/dev/null 2>&1 \
         || heavy_fail "pacman: could not pull $LIVE_PACMAN_IMAGE"
       authz_live_pair pacman "pacman -Sy, credential in XferCommand" live_run_pacman ;;
+    mise-versions)
+      heavy_runner_for mise "mise@latest"
+      authz_live_pair mise-versions "mise ls-remote of a registry tool, credential in ~/.netrc" \
+        live_run_mise_versions ;;
     rustup)
       heavy_need rustup "the Rust toolchain installer"
       authz_live_pair rustup "rustup toolchain install, credential in RUSTUP_DIST_SERVER" \
@@ -3851,6 +3885,7 @@ github|releases:read|GET|/proxy/$GH_R/probe-owner/probe-repo/releases/download/v
 forgejo|releases:read|GET|/proxy/$FJ_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
 gitlab|releases:read|GET|/proxy/$GL_R/probe-group/probe-project/-/releases/v1.0.0/downloads/probe.bin|a release download link
 nodedist|releases:read|GET|/proxy/$NODEDIST_R/nodedist/v1.0.0/node-v1.0.0-linux-x64.tar.gz|a Node tarball
+mise-versions|releases:list|GET|/proxy/$MV_R/mise-versions/t?tool=probe|the install beacon. This kind has no artifact (RFC 0043), and the beacon is the one route that answers without an upstream: 204 for the reader, a refusal for the rest
 nix|releases:read|GET|/proxy/$NIX_R/nix/nar/0001npbf2n4z3pjy6vm2mw8ywkqixxs6/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst|a NAR under its coordinate. Two gates, not one: the store hash is resolved to a package through its narinfo (releases:list) before the bytes are read (releases:read), so a caller holding neither is refused at the first
 sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linuxx64|a candidate through the broker
 rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-x86_64-unknown-linux-gnu.tar.gz|a dated dist component

@@ -236,6 +236,10 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // The tree nvm itself defaults to; io.js takes a second registry
         // pointed at `https://iojs.org/dist` (RFC 0010 §4.1).
         RegistryKind::Nodedist => resolve_urls(&reg.upstreams, "https://nodejs.org/dist"),
+        RegistryKind::MiseVersions => resolve_urls(
+            &reg.upstreams,
+            batlehub_adapters::registry::mise_versions::DEFAULT_BASE,
+        ),
         // The candidates API `sdkman-init.sh` defaults to; the broker is
         // `broker_url`, resolved below (RFC 0010 §4.1).
         RegistryKind::Sdkman => resolve_urls(
@@ -357,6 +361,9 @@ fn make_one(
         RegistryKind::Jetbrains => path_proxy("jetbrains")?,
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
+        RegistryKind::MiseVersions => {
+            Arc::new(batlehub_adapters::registry::MiseVersionsRegistryClient::new(url, opts)?)
+        }
         RegistryKind::Sdkman => Arc::new(SdkmanRegistryClient::new(url, broker_url, opts)?),
         RegistryKind::Rustup => Arc::new(RustupRegistryClient::new(url, opts)?),
         RegistryKind::Galaxy => Arc::new(

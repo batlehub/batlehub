@@ -742,6 +742,22 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# mise-versions (RFC 0043): a version list with no artifact. Pointed at a host
+# that does not exist; the row reads the beacon, which never asks it.
+[[registries]]
+type = "mise-versions"
+name = "authz-mise-versions-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/mise-versions"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list"]
+
 # devfile (RFC 0035): proxy-only, pointed at a host that does not exist — the
 # boundary is crossed at the index listing, before anything is dialled.
 [[registries]]

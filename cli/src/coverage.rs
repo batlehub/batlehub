@@ -72,6 +72,7 @@ fn configure(kind: RegistryKind) -> Cell {
         K::Nix => Done("user `nix.conf`"),
         K::Github | K::Forgejo | K::Gitlab | K::Generic => Done("mise"),
         K::Nodedist => Done("env + mise"),
+        K::MiseVersions => Done("mise"),
         K::Rustup | K::Sdkman => Done("env"),
         K::Openvsx | K::VscodeMarketplace | K::JetbrainsMarketplace => Done("`setup ide`"),
         K::Helm => Print("`helm repo add`: helm rewrites its own repository file"),
@@ -109,6 +110,7 @@ fn publish(kind: RegistryKind) -> Cell {
             NotApplicable("proxy only")
         }
         K::Nodedist | K::Sdkman | K::Rustup => NotApplicable("a vendor's releases, mirrored"),
+        K::MiseVersions => NotApplicable("a version list, mirrored"),
     }
 }
 
@@ -142,7 +144,8 @@ fn consult(kind: RegistryKind) -> Cell {
         | K::Generic
         | K::Nodedist
         | K::Sdkman
-        | K::Rustup => Done("`package versions`, `package readme`"),
+        | K::Rustup
+        | K::MiseVersions => Done("`package versions`, `package readme`"),
     }
 }
 
@@ -175,6 +178,7 @@ fn lifecycle(kind: RegistryKind) -> Cell {
         K::Nodedist | K::Sdkman | K::Rustup => {
             NotApplicable("a vendor's releases: nothing published here to yank")
         }
+        K::MiseVersions => NotApplicable("a version list: nothing published here to yank"),
     }
 }
 
@@ -200,6 +204,7 @@ fn check(kind: RegistryKind) -> Cell {
         K::Galaxy => NotApplicable("`requirements.yml` pins no exact version"),
         K::Nix => NotApplicable("`flake.lock` pins sources; the cache serves store paths by hash"),
         K::Generic => NotApplicable("a mirrored file has no version to ask about"),
+        K::MiseVersions => NotApplicable("`mise.lock` names assets, never this listing"),
         K::Devfile | K::Openvsx | K::VscodeMarketplace | K::JetbrainsMarketplace | K::Jetbrains => {
             NotApplicable("editors keep no lockfile")
         }

@@ -156,6 +156,8 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         // rustup prints the status and its reason phrase; text is what a
         // person sees when they curl the same URL.
         | RegistryKind::Rustup
+        // mise logs the status of a failed version list and falls back.
+        | RegistryKind::MiseVersions
         // Nix never reads the body of a failed substituter request:
         // `HttpBinaryCacheStore::getFile` maps 404/410 to
         // `FileTransfer::NotFound` and 403 to `Forbidden` from the *status*,

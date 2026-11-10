@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 338b901cf47d2ace
+sourceHash: c8d94da7a0a70e3c
 ---
 
 # batlehub-cli
@@ -250,6 +250,7 @@ en anglais : ce sont celles que la CLI imprime.
 | nix | yes — user `nix.conf` | print — `nix copy --to` signs and uploads the closure | n.a. — a version is one or more store paths, each a separate build with its own 32-character hash, and the hash is not derivable from the version | yes — `package versions`, `package readme` | yes — the generic lifecycle endpoint | n.a. — `flake.lock` pins sources; the cache serves store paths by hash |
 | devfile | print — Che's `CheCluster` is cluster configuration | yes — `devfile.yaml` or its directory | yes — by coordinate, checksum verified | yes — `package versions`, `package readme` | yes — the generic lifecycle endpoint | n.a. — editors keep no lockfile |
 | helm | print — `helm repo add`: helm rewrites its own repository file | yes — chart `.tgz` | yes — by coordinate, checksum verified | yes — `package versions`, `package readme` | yes — the generic lifecycle endpoint | yes — `Chart.lock` |
+| mise-versions | yes — mise | n.a. — a version list, mirrored | n.a. — this kind lists versions; the bytes come from the backend's own registry | yes — `package versions`, `package readme` | n.a. — a version list: nothing published here to yank | n.a. — `mise.lock` names assets, never this listing |
 <!-- cli-matrix:end -->
 
 ---

@@ -271,6 +271,13 @@ GET /proxy/{registry}/nix/realisations/{id}.doi	skip: no arm yet
 GET /proxy/{registry}/nix/{hash}.ls	skip: no arm yet
 GET /proxy/{registry}/nix/{hash}.narinfo	profiled
 PUT /proxy/{registry}/nix/{hash}.narinfo	skip: no arm yet
+GET /proxy/{registry}/mise-versions/api/github/{tail}	skip: always 503, nothing to measure
+GET /proxy/{registry}/mise-versions/data/github/{tail}	skip: always 503, nothing to measure
+GET /proxy/{registry}/mise-versions/data/{file}	profiled
+GET /proxy/{registry}/mise-versions/t	profiled
+GET /proxy/{registry}/mise-versions/tools/{file}	skip: the same handler as data/{file}, which is profiled
+POST /proxy/{registry}/mise-versions/api/tools/{tool}	skip: the same 204 as the GET beacon, which is profiled
+POST /proxy/{registry}/mise-versions/api/track	skip: the same 204 as the GET beacon, which is profiled
 GET /proxy/{registry}/nodedist/index.json	profiled
 GET /proxy/{registry}/nodedist/index.tab	skip: no arm yet
 GET /proxy/{registry}/nodedist/{version}/{file}	profiled

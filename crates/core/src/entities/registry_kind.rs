@@ -262,6 +262,12 @@ pub enum RegistryKind {
     /// the served index is rewritten to this instance, which also puts the chart
     /// on the host `helm` sends the repository's credentials to.
     Helm,
+    /// mise's versions host (`mise-versions.jdx.dev`) — the version lists mise
+    /// asks for before any backend's own. A listing-only kind: the package is a
+    /// mise tool name (`jq`), the version mise's own spelling (`1.8.2`), and
+    /// there is no artifact — the bytes come from the backend's registry. The
+    /// install beacon is answered on site and never forwarded (RFC 0043).
+    MiseVersions,
 }
 
 impl RegistryKind {
@@ -297,6 +303,7 @@ impl RegistryKind {
         Self::Nix,
         Self::Devfile,
         Self::Helm,
+        Self::MiseVersions,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -331,6 +338,7 @@ impl RegistryKind {
             Self::Nix => "nix",
             Self::Devfile => "devfile",
             Self::Helm => "helm",
+            Self::MiseVersions => "mise-versions",
         }
     }
 
@@ -382,6 +390,7 @@ impl RegistryKind {
                 | Self::Nodedist
                 | Self::Sdkman
                 | Self::Rustup
+                | Self::MiseVersions
         )
     }
 
@@ -566,6 +575,20 @@ impl RegistryKind {
         // dispatch does not carry. Both are decided at the handler, which is
         // also where `.sha256` is computed from the rendered body and where
         // `channel-rust-stable-date.txt` is read off it (RFC 0024 §6.2, §6.5).
+        // The tool's version list, filtered by the block list and — the one
+        // listing in the tree that does this — by the registry's own
+        // `release_age_gate`, since this kind has no artifact for the gate to
+        // fire on. The python-build-standalone index is relayed byte-exact
+        // until its format is read (RFC 0043 §4.3, decision 3).
+        const MISE_VERSIONS: &[ListingDocument] = &[
+            ListingDocument::filtered("`data/<tool>.toml`", &["versions"]),
+            ListingDocument::unsupported(
+                "`data/python-precompiled-<triple>.gz`",
+                "relayed byte-exact until its format is read from mise's python plugin \
+                 (RFC 0043 decision 3); a blocked Python version is refused at its asset",
+            ),
+        ];
+
         const RUSTUP: &[ListingDocument] = &[
             ListingDocument::filtered("`manifests.txt`", &["versions"]),
             ListingDocument::filtered(
@@ -657,6 +680,7 @@ impl RegistryKind {
             Self::Nix => NIX,
             Self::Devfile => DEVFILE,
             Self::Helm => HELM,
+            Self::MiseVersions => MISE_VERSIONS,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -741,6 +765,10 @@ impl RegistryKind {
             Self::Sdkman => ReadmeSupport::None(
                 "SDKMAN describes a distribution, not a package: no document in the protocol \
                  carries prose about a candidate",
+            ),
+            Self::MiseVersions => ReadmeSupport::None(
+                "a version list carries no prose about a tool, and the tool's own documents are \
+                 served by the registry that serves its bytes",
             ),
             Self::Rustup => ReadmeSupport::None(
                 "a toolchain release is a manifest and a set of tarballs; the dist tree carries \
@@ -843,6 +871,9 @@ impl RegistryKind {
             // The chart's entries of `index.yaml`, each with `created`,
             // `appVersion`, `description` and `deprecated` (RFC 0029 §6.1).
             Self::Helm => UpstreamDetailSupport::Document("versions"),
+            // `data/<tool>.toml`: every version with its `created_at`
+            // (RFC 0043 §6.1).
+            Self::MiseVersions => UpstreamDetailSupport::Document("versions"),
             Self::Nix => UpstreamDetailSupport::None(
                 "a binary cache has no index: it answers one store path at a time, and the path \
                  is computed by the client rather than listed by the cache",
@@ -887,7 +918,8 @@ impl RegistryKind {
             | Self::Galaxy
             | Self::Nix
             | Self::Devfile
-            | Self::Helm => &[],
+            | Self::Helm
+            | Self::MiseVersions => &[],
         }
     }
 
@@ -984,6 +1016,9 @@ impl RegistryKind {
             ),
             // Maven's reasoning, one tree over: the file name is not a
             // constant, so warming cannot name it either (RFC 0010 §6.1).
+            Self::MiseVersions => FetchSupport::None(
+                "this kind lists versions; the bytes come from the backend's own registry",
+            ),
             Self::Nodedist => FetchSupport::None(
                 "a Node release is a set of files — one per platform, plus headers, source and \
                  checksums — so \"fetch this version\" has no single meaning",
@@ -1070,6 +1105,9 @@ impl RegistryKind {
         match self {
             Self::Npm | Self::Cargo | Self::Goproxy => &[ReleasesList, ReleasesRead, SourceRead],
             Self::Openvsx | Self::VscodeMarketplace => &[ReleasesList, SourceRead],
+            // The listing, and `python-precompiled`'s index read as bytes
+            // (RFC 0043 §6.1).
+            Self::MiseVersions => &[ReleasesList, ReleasesRead],
             Self::Github
             | Self::Forgejo
             | Self::Gitlab
@@ -1498,12 +1536,17 @@ mod tests {
             [
                 // Marshal indexes only; the JSON APIs are filtered.
                 "rubygems", // Signed repository indexes.
-                "deb", "rpm", "pacman",
+                "deb",
+                "rpm",
+                "pacman",
                 // `apk`'s index is signed over its own bytes too, and every
                 // shipping apk verifies it before reading one — so the block
                 // is enforced at the `.apk`, whose file name carries a real
                 // coordinate (RFC 0026 §4.4).
                 "apk",
+                // The python-build-standalone index, until its format is read
+                // (RFC 0043 decision 3); the version list itself is filtered.
+                "mise-versions",
             ]
         );
     }
@@ -1565,6 +1608,9 @@ mod tests {
                 // A devfile is YAML a workspace runs, not prose; the stack's
                 // description is one index field (RFC 0035 §6.1).
                 "devfile",
+                // A version list; the tool's documents are served by the
+                // registry that serves its bytes (RFC 0043 §6.1).
+                "mise-versions",
             ]
         );
     }

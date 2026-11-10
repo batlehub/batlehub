@@ -125,9 +125,28 @@ pub async fn cached_forward(
     cache_key: &str,
     out: Outbound,
 ) -> Result<HttpResponse, AppError> {
+    cached_forward_with(svc, http, registry, cache_key, out, false).await
+}
+
+/// [`cached_forward`], and with `offline` the upstream is never dialled: a
+/// cached answer is served, anything else is the outage rung — for an
+/// air-gapped instance, whose upstream must not be asked at all.
+pub async fn cached_forward_with(
+    svc: &Arc<ProxyService>,
+    http: &reqwest::Client,
+    registry: &str,
+    cache_key: &str,
+    out: Outbound,
+    offline: bool,
+) -> Result<HttpResponse, AppError> {
     let ttl = passthrough_ttl(svc, registry).await;
     let result = svc
         .cached_passthrough(registry, cache_key, Some(ttl), || async {
+            if offline {
+                return Err(CoreError::Registry(
+                    "air gap: this instance does not dial out".to_owned(),
+                ));
+            }
             let mut rb = http.request(out.method, &out.url);
             if let Some(body) = &out.json_body {
                 rb = rb.json(body);

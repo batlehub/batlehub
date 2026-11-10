@@ -158,6 +158,10 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // blocking both ways, `.prov` verification, the redirect followed
     // server-side and the ChartMuseum publish (RFC 0029 §6.10).
     ("helm", Live::ClosedWorld("helm"), AirGap::Case),
+    // mise's versions host (RFC 0043): its own closed-world phase drives a real
+    // `mise ls-remote`/`mise install` of a registry tool, which is the only kind
+    // of tool mise lists through this host; the air-gap case asserts the `404`.
+    ("mise-versions", Live::ClosedWorld("mise-versions"), AirGap::Case),
 ];
 
 fn repo_root() -> PathBuf {

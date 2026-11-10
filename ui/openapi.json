@@ -13501,6 +13501,323 @@
         ]
       }
     },
+    "/proxy/{registry}/mise-versions/api/github/{tail}": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The GitHub mirror's API family — refused with the `503` that makes mise ask\napi.github.com instead (RFC 0043 §11, decision 5).",
+        "operationId": "mise_versions_github_api",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "path",
+            "description": "Anything under `api/github/`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          },
+          "503": {
+            "description": "Not mirrored here: mise falls back to api.github.com"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/api/tools/{tool}": {
+      "post": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The install beacon of mise 2026.5–2026.10 — answered here, sent nowhere.",
+        "operationId": "mise_versions_beacon_tools",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tool",
+            "in": "path",
+            "description": "Tool name, as mise sends it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Absorbed: nothing stored, nothing forwarded"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/api/track": {
+      "post": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The install beacon of mise 2026.1–2026.4 — answered here, sent nowhere.",
+        "operationId": "mise_versions_beacon_track",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Absorbed: nothing stored, nothing forwarded"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/data/github/{tail}": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The GitHub mirror's whole-list family — refused like the API family.",
+        "operationId": "mise_versions_github_data",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "path",
+            "description": "Anything under `data/github/`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          },
+          "503": {
+            "description": "Not mirrored here: mise falls back to api.github.com"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/data/{file}": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "A tool's version list, blocked and too-young versions removed — or a file\nof the python-build-standalone index, byte-exact.",
+        "operationId": "mise_versions_data",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "`{tool}.toml`, or `python-precompiled-{triple}.gz`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version list as TOML, filtered; or the gzipped python index, byte-exact",
+            "content": {
+              "application/toml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe tool name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown tool or file, unknown registry, or an air-gapped listing"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/t": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The install beacon of mise 2026.11 and later — answered here, sent nowhere.",
+        "operationId": "mise_versions_beacon",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Absorbed: nothing stored, nothing forwarded"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/tools/{file}": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The same version list under the path mise 2026.1.0–2026.6.5 asks for\n(RFC 0043 §11, decision 4).",
+        "operationId": "mise_versions_tools",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "`{tool}.toml`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version list as TOML, filtered",
+            "content": {
+              "application/toml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe tool name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown tool, unknown registry, or an air-gapped listing"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/names": {
       "get": {
         "tags": [
@@ -30037,6 +30354,10 @@
     {
       "name": "proxy/generic",
       "description": "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"
+    },
+    {
+      "name": "proxy/mise-versions",
+      "description": "mise's versions host (mise-versions.jdx.dev) — tool version lists filtered by the block list and the age gate, the install beacon absorbed on site, the GitHub mirror refused so mise asks the rerouted GitHub API (RFC 0043)"
     },
     {
       "name": "proxy/nodedist",

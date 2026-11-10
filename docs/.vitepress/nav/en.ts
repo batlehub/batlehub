@@ -134,6 +134,7 @@ export const sidebar = {
       text: "Toolchains",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
+        { text: "mise versions host", link: "/registries/mise-versions" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
         { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
         { text: "SDKMAN", link: "/registries/sdkman" },
@@ -385,6 +386,15 @@ export const sidebar = {
         {
           text: "0041 — Test depth and gate scale",
           link: "/rfc/0041-test-depth-and-security-gate-scale",
+        },
+      ],
+    },
+    {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0043 — mise versions host",
+          link: "/rfc/0043-mise-versions-host",
         },
       ],
     },

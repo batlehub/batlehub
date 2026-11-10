@@ -300,6 +300,16 @@ user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
 [[registries]]
+type = "mise-versions"
+name = "perf-mise-versions"
+upstreams = ["${SOAK_UPSTREAM_URL}/mise-versions"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
 type = "nix"
 name = "perf-nix"
 upstreams = ["${SOAK_UPSTREAM_URL}/nix"]

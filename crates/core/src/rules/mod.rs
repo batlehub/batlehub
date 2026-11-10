@@ -95,6 +95,17 @@ pub trait Rule: Send + Sync {
     /// Evaluate the rule against `ctx`. Rules are called in order; the first
     /// `Deny` short-circuits the chain.
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision;
+
+    /// The minimum age this rule would hide from a *listing* for `identity`, or
+    /// `None`. Only `release_age_gate` answers, and only the `mise-versions`
+    /// kind asks: it has no artifact for the gate to fire on (RFC 0043 §11,
+    /// decision 2).
+    fn listing_min_age(
+        &self,
+        _identity: &crate::entities::Identity,
+    ) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 /// Evaluate a list of rules in order. Returns the first `Deny`, or `Allow`.

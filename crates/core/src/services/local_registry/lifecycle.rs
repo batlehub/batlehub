@@ -862,6 +862,8 @@ pub fn stores_files_under_version(kind: RegistryKind) -> bool {
         | RegistryKind::Galaxy
         | RegistryKind::Devfile
         // One archive at the version key; a `.prov` rides the row's signature.
-        | RegistryKind::Helm => false,
+        | RegistryKind::Helm
+        // No local mode, nothing stored (RFC 0043).
+        | RegistryKind::MiseVersions => false,
     }
 }

@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 043c8a07050946ce
+sourceHash: 26c0af30016ff22d
 ---
 
 # Faire pointer mise vers BatleHub
@@ -41,6 +41,21 @@ pour l'hôte du proxy plutôt que d'embarquer un token dans l'URL. mise la lit, 
 le token reste hors de l'historique du shell, des logs de CI et de la sortie de
 `mise doctor`.
 :::
+
+### 1.1 L'hôte de versions
+
+Pour un outil dont le backend est celui du registre par défaut — `jq`, `node`,
+`terraform` — mise demande la liste des versions à `mise-versions.jdx.dev`
+avant de la demander au backend, et après chaque installation il y signale
+l'outil, la version, l'OS et l'architecture. Un registre
+[`mise-versions`](/fr/registries/mise-versions) fait passer les deux par cette
+instance : la liste est filtrée par la liste de blocage (et par un garde-fou
+d'âge, si le registre en a un), donc `latest` ne tombe jamais sur une version
+que l'instance refuserait, et le signalement est répondu ici et envoyé nulle
+part. Le générateur écrit sa règle en premier quand l'instance a un tel
+registre. Coupée du réseau, la liste répond `404` aussitôt, et mise se replie
+sur la liste du backend — celle que le §2 compose à partir de ce que le bundle
+détenait.
 
 ## 2. Ce qu'exige une coupure réseau
 
@@ -242,5 +257,6 @@ reviendrait à défaire le blocage par accident.
 ## Voir aussi
 
 - [Vue d'ensemble des registres](/fr/registries/) · [Configuration](/fr/guide/configuration#air-gap)
+- [Hôte de versions de mise](/fr/registries/mise-versions) — les listes de versions que mise lit en premier
 - [La procédure de coupure réseau](/fr/operations/air-gap) — construire, transporter, importer, réconcilier
 - [RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate) — pourquoi c'est fait ainsi
