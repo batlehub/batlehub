@@ -272,8 +272,13 @@ async fn nodedist_file_traversal_returns_400() {
 #[actix_web::test]
 async fn the_routes_refuse_a_registry_of_another_kind() {
     let app = proxy_registry_app("npm-reg", "npm").await;
+    // Since TD-0004 §1 a request is routed on its own registry kind's routes
+    // only: the other kind's handler is never reached, whatever answers.
     let resp = call_service(&app, admin_get("/proxy/npm-reg/nodedist/index.tab")).await;
-    assert_eq!(resp.status(), 404);
+    assert_ne!(
+        resp.request().match_pattern().as_deref(),
+        Some("/proxy/{registry}/nodedist/index.tab")
+    );
 }
 
 // ── the age gate, against the real client ────────────────────────────────────

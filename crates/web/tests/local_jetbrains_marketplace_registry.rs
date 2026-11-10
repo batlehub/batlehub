@@ -238,8 +238,13 @@ async fn jbm_routes_on_wrong_registry_type_return_404() {
         .uri("/proxy/local-cargo/updatePlugins.xml")
         .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
+    // Since TD-0004 §1 a request is routed on its own registry kind's routes
+    // only: the other kind's handler is never reached, whatever answers.
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 404);
+    assert_ne!(
+        resp.request().match_pattern().as_deref(),
+        Some("/proxy/{registry}/updatePlugins.xml")
+    );
 }
 
 // ── updatePlugins.xml / plugins/list ─────────────────────────────────────────

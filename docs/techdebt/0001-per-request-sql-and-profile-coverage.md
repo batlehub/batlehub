@@ -189,6 +189,11 @@ move:
 
 **Paid when** the router's share of CPU on `composer_root` is under 10 %.
 
+**Fixed, not yet re-profiled** (2026-11-10): the scoped router of
+[TD-0004 §1](/techdebt/0004-request-routing-and-db-writes) took a composer
+request from 54.6 to 11.9 µs in process. This section is Paid once a
+`profile` run shows the router under 10 % on `composer_root`.
+
 ## 4. 321 of 372 API operations have no profile arm
 
 ### What was measured
