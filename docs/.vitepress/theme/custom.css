@@ -215,35 +215,19 @@
   font-size: var(--t-meta);
 }
 
-/* The default theme reveals the social links at 1280px, a width computed for
-   its own sentence-case navbar. Ours is Meta: uppercase and tracked 0.1em, which
-   is wider for the same words — at 1280 the icons landed 77px past the edge and
-   the appearance toggle was clipped. Measured, at 1440 / 1280 / 1100.
-
-   Raised rather than retracked: the tracking is the Tracking Ladder's step for
-   inline chrome, and a nav item is inline chrome whatever the viewport is.
-
-   Both thresholds were first measured on the home page. A page with a sidebar
-   gives its navbar less room — the title block takes the sidebar's width — and
-   there the toggle ran past the edge at 1280-1339 and the social icons at
-   1380-1439, in English as well as in French. Measured on /guide/caching. */
-@media (min-width: 1280px) and (max-width: 1439px) {
-  :root .VPNavBarSocialLinks {
-    display: none;
-  }
-}
-
-/* The same arithmetic, one step down. The default theme lays the navbar out
-   flat from 768px up; with Meta labels this world's navbar needs 1280, and
-   below that it was clipping — at 1000px "Operations", "Project" and the
-   appearance toggle were simply off the right edge, unreachable rather than
-   merely tight. That predates the Config Generator entry (the nav is 65
-   characters now against 67 before), which is why it is fixed here rather than
-   worked around by shortening another label.
+/* When the navbar collapses. The default theme lays it out flat from 768px up,
+   a width computed for its own sentence-case labels; ours are Meta, uppercase
+   and tracked 0.1em, and wider for the same words. Seven flat entries needed
+   1340px on a page with a sidebar (whose title block takes the sidebar's
+   width), plus a rule hiding the social icons up to 1439. Five entries — two
+   of them dropdowns — need 1200 with the icons in, in both locales: measured
+   on /, /fr/, /guide/caching and /fr/guide/caching, where the bar's right edge
+   is 1174 at 1200 and 1103 at 1100.
 
    Collapsing to the hamburger is the default theme's own answer to a navbar
-   that does not fit; this only tells it when. */
-@media (min-width: 768px) and (max-width: 1339px) {
+   that does not fit; this only tells it when. Retracking instead was ruled
+   out: a nav item is inline chrome, and the Tracking Ladder sets that step. */
+@media (min-width: 768px) and (max-width: 1199px) {
   /* `:root`-prefixed for the reason every override in this file is: the default
      theme's rules are single-file-component styles and carry a `[data-v-…]` on
      top of their class, so a bare `.VPNavBarMenu` loses silently. */
