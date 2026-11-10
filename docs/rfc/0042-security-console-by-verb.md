@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted                                                      |
+| Status      | Implemented                                                   |
 | Short       | Security console by verb                                      |
 | Settles     | How a delegated security group reaches a security dashboard without being admin: verbs in /me, narrowed endpoint verbs, one aggregate read |
 | Author      | Sn0walice <snow.alice@pm.me>                                  |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-10                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core` (authz, verdict port), `crates/adapters` (verdict counts), `crates/web` (`/me`, `security.rs`, `sbom.rs`), `ui` (auth, router, nav, a new page), docs |
+| Touches     | `crates/core` (authz, verdict port), `crates/adapters` (verdict counts), `crates/web` (`/me`, `security.rs`, `sbom.rs`), `cli` (`whoami`), `ui` (auth, router, nav, a new page), `tests/heavy` (`authz.sh`, `console_fetch.sh`), `perf/profile_routes.txt`, docs |
 
 ---
 
@@ -566,3 +566,92 @@ vue-tsc and oxlint pass after each one.
 | 5 | **`/security` page.** `SecurityDashboard.vue`, nav entry, i18n keys, the heavy cases of §6.6. |
 
 Phases 1 and 2 are independent. Phase 4 needs 1, and phase 5 needs 3 and 4.
+
+---
+
+## 13. Revision against the tree (2026-11-10)
+
+All five phases landed on 2026-11-10, one commit each, on a branch cut from
+`alice-fix` after TD-0001/TD-0004 merged. Every point where the built thing
+differs from the text above is listed here. The text above is left as it was
+accepted, except for decision 8, which was written into it before phase 2.
+
+**Decision 8, found before phase 2 was written.** §4.2 had the verdict listing
+and the summary checking `quarantine:read` at the registry tier. `translate.rs`
+grants that verb to `role:user` on every registry, so any developer could have
+listed every held coordinate of a registry, private packages included. Both
+reads now check the instance tier, and `role:admin`'s instance floor gained
+`quarantine:read` and `findings:read` (and `scans:run`). The cost is that a
+per-registry delegate cannot list verdicts. An instance grant covers the case
+this RFC exists for.
+
+**`count_by_registry_and_state` has a default after all.** §6.1 said no
+default, so that a backend that never counted could not answer "0 held". The
+default that shipped returns `CoreError::NotSupported`, which keeps that
+property without touching the four test doubles that implement the port.
+
+**One table for the admin pages' verbs, not `meta.verb`.** §6.5 put each
+admin route's verb in its `meta`. The verbs live in `ADMIN_PAGE_VERBS`
+(`ui/src/config/adminSections.ts`), which the router guard, the sidebar and
+`SectionTabs` all read, so a link and the guard behind it cannot disagree. A
+page missing from the table is refused. A signed-in caller who lacks a page's
+verb lands on the first page of the same section they may open, then of any
+section, then `/`, never on `/login`.
+
+**What `/security` does not have yet.**
+
+- The *Findings* section of §6.5. There is no console page listing one
+  registry's verdicts to link it to. `findings:read` is honoured by the API
+  (the listing empties findings without it), but the console has no surface
+  for it.
+- The package page's admin section is gated on `packages:read` as a whole.
+  The actions inside it (yank, delete, grants, visibility) keep their own
+  server-side verbs, but the console does not yet hide each one by verb, so a
+  `packages:read`-only delegate sees buttons that answer `403`.
+- The `whoami` and `incident-response` doc pointers of §6.7 were not written.
+  `docs/guide/access-control.md` § *Delegating the security console* carries
+  the instruction.
+
+**What the heavy suites observed** (§6.6).
+
+- `tests/heavy/authz.sh matrix`, against a real server and Postgres: 109
+  assertions, and the vocabulary check passes with `scans:run` in it. That
+  check would have failed on phase 2 alone, because the verb was new and
+  nothing on the wire exercised it. The tap's transcript for the new section:
+  secops `GET /api/v1/admin/verdicts?registry=…` gets `404` past the gate (no
+  `[security]` profile in that config), and the denied `role:user` gets `403`.
+  `GET …/verdicts/summary` gives `200` and `403` for the same pair. A bulk
+  rescan by secops gets `404` past the gate, and the SRE holding `system:read`
+  gets `403`, with a body naming `scans:run`. `config/warnings` and `health`
+  give `403` to secops, and `flags` gives `200`.
+- `quarantine:read` and `findings:read` are no longer exceptions in the
+  vocabulary check. They are exercised as control gates now.
+- Cases 1 to 5 of §6.6 ran on the wire, with one change in case 2: the
+  findings half (emptied without `findings:read`) is asserted in-process, in
+  `security_registry.rs`, which has a verdict to empty. Case 6 (summary counts
+  after a real hold) is in-process for the same reason: the matrix config
+  deliberately has no security profile. The Postgres `GROUP BY` is asserted in
+  `crates/adapters/tests/pg_verdicts.rs` against a real database.
+- `tests/heavy/console_fetch.sh`, case 7, in a real Chrome against the built
+  console: secops's nav is `/packages`, `/setup`, `/security`, `/admin`;
+  `/security` draws `holds-panel`, `flags-panel` and `exposure-panel`; and
+  `/admin/operations/config-reload` lands on `/admin/observability/audit-log`.
+  A plain user's nav is `/packages`, `/setup`, and both `/security` and the
+  admin page land on `/`. **Case 7 as written was wrong.** It said secops sees
+  *Security* and not *Admin*, but §4.3 shows `/admin` to anyone holding one
+  admin page's verb, and `audit:read` is the audit log's. The browser
+  followed §4.3, the suite's first run failed on the case, and the case now
+  asserts §4.3: *Admin* appears, holding the audit log alone.
+- **`/me` is 20 KB for the administrator** on `config.authz.toml`'s 35
+  registries, against 4 KB for secops. That is decision 6's full sets, as
+  predicted, and the number to watch if an estate has hundreds of registries.
+
+**A pre-existing failure the console run met.** `console_fetch.sh`'s own
+`user-view` step fails before case 7 is reached: the catalogue's *Fetch*
+button is clicked and no `POST …/fetch` crosses the tap. It fails identically
+on `alice-fix` at `988ea75`, without this RFC's commits, so it is not this
+change. Case 7 was run on its own to get past it.
+
+**Follow-up, not this RFC:** the console's *Fetch* failure above, and
+`back_office/tombstones.rs`'s compact endpoint, which asks for
+`tombstones:read` on a write.
