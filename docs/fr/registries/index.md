@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 020cde666e8b713d
+sourceHash: f78229f481aeff5d
 ---
 
 # Registres
@@ -10,7 +10,7 @@ registres** — des gestionnaires de paquets par langage aux dépôts de paquets
 système, en passant par les places de marché d'extensions d'éditeur et les
 miroirs de fichiers génériques.
 
-<RegistryGrid />
+<SectionGrid section="registries" />
 
 Chaque type de registre tourne dans l'un de trois **modes**, réglé registre par
 registre dans la configuration :

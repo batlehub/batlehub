@@ -337,6 +337,13 @@
   font-size: var(--t-row);
 }
 
+/* A first cell that is only a link is a label ("Docker / Compose"); wrapped it
+   breaks mid-name and reads as two entries. Tables scroll in their own box, so
+   keeping it on one line costs nothing. */
+.vp-doc td:first-child:has(> a:only-child) {
+  white-space: nowrap;
+}
+
 .vp-doc th,
 .vp-doc td {
   font-size: var(--t-row);
@@ -616,6 +623,10 @@
   line-height: 1.7;
   border-left: 2px solid var(--rule-strong);
   color: var(--ink-dim);
+  /* The theme centres the quote; against a left rule that leaves the rule
+     floating beside a centred paragraph, so the text sits flush to it. */
+  text-align: left;
+  padding-left: var(--s4);
 }
 
 :root .NotFound .action .link {
@@ -788,6 +799,9 @@
 .mermaid .cluster :is(rect, polygon) {
   fill: var(--ground-sunk) !important;
   stroke: var(--rule-strong) !important;
+  /* Mermaid's dark theme drops a blurred shadow under every node; nothing in
+     this world casts a shadow at rest. */
+  filter: none !important;
 }
 
 .mermaid :is(.nodeLabel, .cluster-label, .cluster-label span, .label foreignObject div) {

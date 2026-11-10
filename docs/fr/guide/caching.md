@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: 9341303af495517b
+sourceHash: f201e0c9d9526121
 ---
 
 # Mise en cache
@@ -18,35 +18,27 @@ comment régler chaque étape de ce trajet.
 
 Toute requête vers `/proxy/{registry}/...` traverse ce pipeline :
 
+```mermaid
+flowchart TD
+  C[Client] --> A[AuthMiddleware]
+  A --> R[RateLimitMiddleware]
+  R -->|seau épuisé| E429[429]
+  R --> B[Contrôle RBAC]
+  B -->|refusé| E403a[403]
+  B --> U[Contrôle des règles]
+  U -->|une règle se déclenche| E403b[403]
+  U --> M{Cache de métadonnées}
+  M -->|HIT| S{Stockage de l'artefact}
+  M -->|MISS| S
+  S -->|HIT ou MISS| D[Diffusion au client]
 ```
-Client
-  │
-  ▼
-AuthMiddleware          ← valide le token bearer / OIDC / compte de service Kubernetes
-  │  pose l'Identity (user_id, role, groups)
-  ▼
-RateLimitMiddleware     ← contrôle et incrémente les compteurs dans le backend de cache
-  │  429 si un seau est épuisé (mode block)
-  ▼
-Contrôle RBAC           ← valide les permissions de registre pour le rôle de l'appelant
-  │  403 si la permission est refusée
-  ▼
-Contrôle des règles     ← garde-fou d'âge, deny_latest, require_signed_release
-  │  403 si une règle se déclenche
-  ▼
-Cache de métadonnées    ← consulté dans le backend de cache (memory / postgres / redis)
-  │
-  ├─ HIT :  on continue avec les métadonnées en cache
-  │
-  └─ MISS : récupération en amont, stockage dans le backend avec un TTL
-              │
-              ▼
-          Stockage de l'artefact   ← consulté dans le stockage de blobs (fichiers / S3)
-            │
-            ├─ HIT :  l'artefact est diffusé du stockage vers le client
-            │
-            └─ MISS : récupération en amont, stockage du blob, diffusion vers le client
-```
+
+- **AuthMiddleware** valide le token bearer / OIDC / compte de service Kubernetes et pose l'Identity (`user_id`, rôle, groupes).
+- **RateLimitMiddleware** contrôle et incrémente ses compteurs dans le backend de cache ; un seau épuisé répond `429` en mode block.
+- **Contrôle RBAC** : valide les permissions de registre pour le rôle de l'appelant.
+- **Contrôle des règles** : garde-fou d'âge, `deny_latest` et `require_signed_release`.
+- **Cache de métadonnées** : dans le backend de cache (memory / postgres / redis). Un HIT continue avec les métadonnées en cache ; un MISS les récupère en amont et les stocke avec un TTL.
+- **Stockage de l'artefact** : dans le stockage de blobs (fichiers / S3). Un HIT diffuse depuis le stockage ; un MISS récupère en amont, stocke le blob et le diffuse au client.
 
 ### Deux couches d'état
 

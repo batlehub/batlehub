@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/index.md
-sourceHash: c9f30a203e5250b1
+sourceHash: 8702f8ce071197d8
 ---
 
 # Exploitation
@@ -10,6 +10,8 @@ Pour la personne d'astreinte, et pour l'auditeur.
 Tout ce qui suit suppose que BatleHub tourne déjà. Si vous en êtes encore à la
 mise en place, commencez par [Installation](/fr/guide/installation) et
 [Configuration](/fr/guide/configuration).
+
+<SectionGrid section="operations" />
 
 ::: warning Des repères, pas un engagement
 BatleHub est un logiciel auto-hébergé sous licence Apache 2.0, et **c'est vous

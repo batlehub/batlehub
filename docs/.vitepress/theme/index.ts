@@ -9,7 +9,7 @@ import './tokens.css'
 import './vp-bridge.css'
 import './custom.css'
 import ConfigGenerator from '../components/ConfigGenerator.vue'
-import RegistryGrid from '../components/RegistryGrid.vue'
+import SectionGrid from '../components/SectionGrid.vue'
 import Layout from './Layout.vue'
 import type { Theme } from 'vitepress'
 
@@ -50,7 +50,7 @@ export default {
   Layout,
   enhanceApp({ app, router }) {
     app.component('ConfigGenerator', ConfigGenerator)
-    app.component('RegistryGrid', RegistryGrid)
+    app.component('SectionGrid', SectionGrid)
     if (typeof window !== 'undefined') {
       // Once for the server-rendered page, then after every client navigation.
       // `requestAnimationFrame` waits for the new page's DOM rather than the

@@ -2,7 +2,7 @@
 
 BatleHub proxies, caches, and privately hosts **29 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
 
-<RegistryGrid />
+<SectionGrid section="registries" />
 
 Every registry type can run in one of three **modes**, set per registry in the config:
 

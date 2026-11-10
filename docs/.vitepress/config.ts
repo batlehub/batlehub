@@ -348,7 +348,13 @@ const config = withMermaid(defineConfig({
         // The 404 link's accessible name has to contain its visible text
         // (WCAG 2.5.3). The theme's defaults are "go to home" on a link that
         // reads "Take me home", which axe reports as label-content-name-mismatch.
-        notFound: { linkLabel: "Take me home", linkText: "Take me home" },
+        notFound: {
+          title: "PAGE NOT FOUND",
+          quote:
+            "This page may have moved when the docs were reorganised. Press Ctrl K to search, or start from the registries index.",
+          linkLabel: "Take me home",
+          linkText: "Take me home",
+        },
         footer: {
           message:
             "Released under the Apache 2.0 License. Made with care and too much coffee.",
