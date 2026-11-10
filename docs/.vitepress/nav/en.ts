@@ -322,6 +322,10 @@ export const sidebar = {
           text: "TD-0004 — Routing, the audit write, the pool",
           link: "/techdebt/0004-request-routing-and-db-writes",
         },
+        {
+          text: "TD-0005 — Upstream URL segment encoding",
+          link: "/techdebt/0005-upstream-url-segment-encoding",
+        },
       ],
     },
   ],
