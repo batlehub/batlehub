@@ -619,7 +619,7 @@ pub async fn installable_registries(
 /// Whether `identity` holds each of `actions` over each coordinate's
 /// **config** tiers (instance, registry, matching namespaces), resolved
 /// without a shadow — what a list page decides a scan status's tier from
-/// (RFC 0042 §4.2).
+/// (RFC 0044 §4.2).
 ///
 /// Three choices, each the fail-closed one:
 ///

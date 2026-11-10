@@ -1,4 +1,4 @@
-//! One registry's configuration and health, on one page (RFC 0042 §5.3).
+//! One registry's configuration and health, on one page (RFC 0044 §5.3).
 //!
 //! The configuration half is **projected**, field by field, from
 //! `RegistryConfig` when a config is loaded or a reload is staged: a field added
@@ -257,7 +257,7 @@ pub struct RegistryView {
     pub config: Option<RegistryConfigView>,
 }
 
-/// One registry's configuration and health (RFC 0042 §4.4). `system:read`
+/// One registry's configuration and health (RFC 0044 §4.4). `system:read`
 /// first, so an unknown name never answers an unauthorised caller; then each
 /// block behind its own verb.
 #[utoipa::path(

@@ -1,4 +1,4 @@
-//! RFC 0042 phase 1 — `scan_status` on the explore list, the explore detail
+//! RFC 0044 phase 1 — `scan_status` on the explore list, the explore detail
 //! and the admin package list: who sees it, what it costs, and what it never
 //! does (§4.2, §7.1 T1/T2/T5/T8b/T15).
 
@@ -255,7 +255,7 @@ struct Opts {
 }
 
 /// The config half of the registry pages: `SEC` with a credential and a
-/// tokenised upstream, both monitoring links (RFC 0042 phase 5).
+/// tokenised upstream, both monitoring links (RFC 0044 phase 5).
 const VIEWS_TOML: &str = r#"
 [database]
 type = "postgresql"
@@ -895,7 +895,7 @@ async fn bulk_rescan_without_system_write_is_403() {
     assert_eq!(call_service(&app, req).await.status(), 403);
 }
 
-// ── /admin/findings (RFC 0042 phase 3) ───────────────────────────────────────
+// ── /admin/findings (RFC 0044 phase 3) ───────────────────────────────────────
 
 const FINDINGS: &str = "/api/v1/admin/findings";
 
@@ -1180,7 +1180,7 @@ async fn findings_reference_filter_escapes_like_metacharacters() {
     }
 }
 
-// ── next_rescan on the verdict GET (RFC 0042 phase 4) ────────────────────────
+// ── next_rescan on the verdict GET (RFC 0044 phase 4) ────────────────────────
 
 /// §6.P observation 7, in process: `verdict_at` is the last scan plus the
 /// interval, the verdict GET now carries `scan_status`, and without an
@@ -1249,7 +1249,7 @@ async fn verdict_get_omits_next_rescan_without_system_read() {
     assert!(body["scan_status"].get("detail").is_none());
 }
 
-// ── /admin/registries/{name} and the monitoring links (RFC 0042 phase 5) ─────
+// ── /admin/registries/{name} and the monitoring links (RFC 0044 phase 5) ─────
 
 const VIEW: &str = "/api/v1/admin/registries";
 

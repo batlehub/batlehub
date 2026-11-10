@@ -36,7 +36,7 @@ pub struct ExposureConfig {
     /// Registries with `[registries.sbom]`.
     pub sbom_registries: u64,
     /// `[vulnerability_scan] interval_secs` when the re-check is enabled —
-    /// the verdict GET's `next_rescan.sbom_at` (RFC 0042 phase 4).
+    /// the verdict GET's `next_rescan.sbom_at` (RFC 0044 phase 4).
     pub sbom_recheck_interval: Option<std::time::Duration>,
 }
 

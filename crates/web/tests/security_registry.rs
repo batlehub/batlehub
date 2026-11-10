@@ -1776,7 +1776,7 @@ async fn an_exhausted_rescan_leaves_the_verdict_alone() {
     exhaust(&lab).await;
     assert_eq!(lab.worker.run_once().await.unwrap().exhausted, 1);
     assert!(lab.queue.open_jobs().await.is_empty(), "the row closed");
-    // RFC 0042 decision 34: the closed row says it was exhausted, which is
+    // RFC 0044 decision 34: the closed row says it was exhausted, which is
     // the only trace an exhausted rescan leaves.
     let (open, closed) = lab
         .queue

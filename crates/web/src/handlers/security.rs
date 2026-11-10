@@ -289,16 +289,16 @@ pub async fn hold_http_response(
     hold_response(kind, verdict, visibility, chrono::Utc::now())
 }
 
-// ── scan status (RFC 0042) ───────────────────────────────────────────────────
+// ── scan status (RFC 0044) ───────────────────────────────────────────────────
 
 /// How long a list waits for its status batch before it is served without
-/// one (RFC 0042 §6.3).
+/// one (RFC 0044 §6.3).
 const SCAN_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The longest `last_error` a status carries, after redaction.
 const LAST_ERROR_MAX_CHARS: usize = 200;
 
-/// Where a version stands in scanning, as one caller may see it (RFC 0042
+/// Where a version stands in scanning, as one caller may see it (RFC 0044
 /// §4.2): `state` and `verdict` with `quarantine:read`, `detail` with
 /// `findings:read` too, nothing at all without.
 ///
@@ -349,7 +349,7 @@ fn redact_error(e: &str) -> String {
 }
 
 /// The scan status of each of `coords` for `identity`, and whether the batch
-/// failed (RFC 0042 §5.1). The one way a status reaches a response.
+/// failed (RFC 0044 §5.1). The one way a status reaches a response.
 ///
 /// - The tier is decided per registry from the config tiers, without a
 ///   shadow ([`batlehub_core::services::authz::config_tier_holds`]), so a
@@ -457,12 +457,12 @@ pub struct VerdictResponse {
     pub ref_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_commit: Option<String>,
-    /// Where the version stands in scanning, at the caller's tier (RFC 0042
+    /// Where the version stands in scanning, at the caller's tier (RFC 0044
     /// §4.2). The same field the lists carry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_status: Option<ScanStatusDto>,
     /// When the version is looked at again; only with `system:read` at the
-    /// instance tier (RFC 0042 §7.2).
+    /// instance tier (RFC 0044 §7.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_rescan: Option<batlehub_core::services::scan_status::NextRescan>,
 }
@@ -946,7 +946,7 @@ pub async fn list_verdicts(
     }))
 }
 
-// ── the Scans page (RFC 0042 phase 2) ────────────────────────────────────────
+// ── the Scans page (RFC 0044 phase 2) ────────────────────────────────────────
 
 /// The most rows one `/admin/scans` page carries (§4.3).
 const SCANS_MAX_PER_PAGE: u64 = 200;
@@ -1003,7 +1003,7 @@ pub struct ScanQueuePage {
     pub per_page: u64,
 }
 
-/// The scan queue and its failures (RFC 0042 §4.4). `system:read` at the
+/// The scan queue and its failures (RFC 0044 §4.4). `system:read` at the
 /// instance tier; then rows only from registries where the caller holds
 /// `quarantine:read`, and `last_error` only with `findings:read` there, so
 /// `system:read` alone names no held version (T16).
@@ -1133,7 +1133,7 @@ pub async fn list_scans(
     }))
 }
 
-// ── the Findings page (RFC 0042 phase 3) ─────────────────────────────────────
+// ── the Findings page (RFC 0044 phase 3) ─────────────────────────────────────
 
 /// The longest `reference` prefix `/admin/findings` takes (§4.3).
 const REFERENCE_MAX_CHARS: usize = 128;
@@ -1194,7 +1194,7 @@ pub struct FindingsPage {
     pub per_page: u64,
 }
 
-/// Findings across registries (RFC 0042 §5.2). `findings:read` per
+/// Findings across registries (RFC 0044 §5.2). `findings:read` per
 /// configured registry through `authorize_control`, never `authorize_grants`
 /// (which answers `Ok` under a shadow and for a registry with no hierarchy):
 /// the registries it opens are bound into the query, and each row is then

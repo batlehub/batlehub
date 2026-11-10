@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/table";
 
 /**
- * The scan queue, its failures and the verdicts by state (RFC 0042 §4.5,
+ * The scan queue, its failures and the verdicts by state (RFC 0044 §4.5,
  * phase 2). Rows come filtered by the server: a registry where the caller
  * lacks `quarantine:read` contributes none, and `last_error` needs
  * `findings:read` (T16).

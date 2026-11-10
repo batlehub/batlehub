@@ -243,7 +243,7 @@ new_consumer() {  # dir
 EOF
 }
 
-# ── RFC 0042 §6.P: the console's scan status, as the API serves it ──────────
+# ── RFC 0044 §6.P: the console's scan status, as the API serves it ──────────
 
 USER_TOKEN="heavy-user-token"
 
@@ -292,7 +292,7 @@ grep -q "batlehub-cli why $REG/" "$HEAVY_WORK/install-1.err" \
 TARBALL_REQUESTS="$(heavy_wire_count_after first-contact "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 403")"
 heavy_log "HOLD-OK (npm exit $RC, $TARBALL_REQUESTS request(s) for the held tarball, SCAN_PENDING printed)"
 
-# RFC 0042 §6.P observation 1, first half: the version npm was just refused is
+# RFC 0044 §6.P observation 1, first half: the version npm was just refused is
 # in the catalogue with a transient status, and the `user` tier carries no
 # detail. The embedded worker may already have finished, so `scanned` is
 # accepted here; the second half, after `wait`, is exact.
@@ -349,7 +349,7 @@ heavy_wire_re_after "recover" "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 200" \
   "the tarball was not served through the proxy after the verdict cleared"
 heavy_log "RECOVER-OK ($PKG@$CLEAN installed, verdict allowed)"
 
-# RFC 0042 §6.P observation 1, second half: the same call now reads the
+# RFC 0044 §6.P observation 1, second half: the same call now reads the
 # verdict `wait` saw, and the admin tier carries the detail.
 python3 - "$(scan_row "$USER_TOKEN" "$REG" "$PKG")" "$(scan_row "$ADMIN_TOKEN" "$REG" "$PKG")" <<'PY' \
   || heavy_fail "the explore list does not read scanned/allowed for $PKG@$CLEAN after wait"
@@ -439,7 +439,7 @@ grep -q "denied" "$HEAVY_WORK/why.out" \
   || { cat "$HEAVY_WORK/why.out" >&2; heavy_fail "batlehub why does not say the verdict is denied"; }
 heavy_log "FINDING-OK ($ADVISORY on the wire, printed by npm, and in 'why')"
 
-# RFC 0042 §6.P observation 4 (phase 3): the Findings page is
+# RFC 0044 §6.P observation 4 (phase 3): the Findings page is
 # `findings:read`'s, which the user role holds nowhere — `403` — and the
 # admin finds the advisory, by reference, on the version it denied.
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/findings")"
@@ -455,7 +455,7 @@ assert "raw" not in rows[0], rows[0]
 PY
 heavy_log "FINDINGS-PAGE-OK (user 403; admin sees $ADVISORY on $PKG@$VULN, denied)"
 
-# RFC 0042 §6.P observations 4 and 8 (phase 5): the registry page is
+# RFC 0044 §6.P observations 4 and 8 (phase 5): the registry page is
 # `system:read`'s, and its monitoring link is the configured template with
 # this registry's name in it, built by the server. The upstream credential
 # never appears, only that one is or is not configured.
@@ -732,7 +732,7 @@ set -e
 heavy_wire_re_after "flip-first-contact" "GET /proxy/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION/tarball -> 200" \
   "the tarball was not served after the clean scan"
 
-# RFC 0042 §6.P observation 7 (phase 4): `next_rescan` is the last scan plus
+# RFC 0044 §6.P observation 7 (phase 4): `next_rescan` is the last scan plus
 # `rescan.interval_secs` (1 s here), only for `system:read`; the first
 # registry sets no interval, so its clock is absent rather than invented.
 NEXT="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION")" \

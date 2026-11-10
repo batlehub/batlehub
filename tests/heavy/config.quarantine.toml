@@ -28,14 +28,14 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
-# RFC 0042 §6.P: the `user` role holds quarantine:read and not findings:read,
+# RFC 0044 §6.P: the `user` role holds quarantine:read and not findings:read,
 # the tier between anonymous and admin that the console's badge is drawn for.
 [[auth.tokens]]
 value = "heavy-user-token"
 role = "user"
 user_id = "ci-user"
 
-# RFC 0042 §6.P observation 8: the registry page's monitoring link, built by
+# RFC 0044 §6.P observation 8: the registry page's monitoring link, built by
 # the server from this template.
 [stats]
 registry_dashboard_url = "https://grafana.test/d/x?var-registry={registry}"

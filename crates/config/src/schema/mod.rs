@@ -302,7 +302,7 @@ pub struct StatsConfig {
     #[serde(default = "default_true")]
     pub metrics_enabled: bool,
 
-    /// The global monitoring link, shown on Admin → Dashboard (RFC 0042
+    /// The global monitoring link, shown on Admin → Dashboard (RFC 0044
     /// §4.1). No placeholder. Absent: no button.
     #[serde(default)]
     pub dashboard_url: Option<String>,
@@ -327,7 +327,7 @@ impl Default for StatsConfig {
 }
 
 /// `template` with `{registry}` replaced by `registry`, percent-encoded as a
-/// query value, so `/`, space, `&`, `#` and `"` cannot leave it (RFC 0042
+/// query value, so `/`, space, `&`, `#` and `"` cannot leave it (RFC 0044
 /// §6.6). `validate()` has already refused a template this would break.
 pub fn monitoring_url_for(template: &str, registry: &str) -> String {
     let encoded: String = form_urlencoded::byte_serialize(registry.as_bytes()).collect();
@@ -767,7 +767,7 @@ impl AppConfig {
         out
     }
 
-    /// RFC 0042 §4.3: an `http` monitoring link is accepted, and said.
+    /// RFC 0044 §4.3: an `http` monitoring link is accepted, and said.
     fn stats_url_warnings(&self, out: &mut Vec<ConfigWarning>) {
         for (field, url) in [
             ("dashboard_url", &self.stats.dashboard_url),
@@ -2435,7 +2435,7 @@ impl AppConfig {
         Ok(())
     }
 
-    /// RFC 0042 §4.3: a `[stats]` link is rendered as an `href`, so a
+    /// RFC 0044 §4.3: a `[stats]` link is rendered as an `href`, so a
     /// `javascript:` value would run in the console's origin.
     fn validate_stats_urls(&self) -> Result<()> {
         if let Some(url) = &self.stats.dashboard_url {

@@ -250,7 +250,7 @@ pub struct ExplorePackageDetailResponse {
     /// `true` when the upstream database was unreachable and this package has no cached data.
     pub upstream_unavailable: bool,
     /// The scan-status batch failed or timed out, so no version carries
-    /// `scan_status` (RFC 0042 §10.2).
+    /// `scan_status` (RFC 0044 §10.2).
     pub scan_status_unavailable: bool,
     /// What the discovery read did (RFC 0007 §4.2).
     pub upstream: UpstreamReadDto,
@@ -375,7 +375,7 @@ pub struct ExploreVersionDto {
     /// this endpoint holds, and inventing either would be the same class of
     /// claim this field exists to stop.
     pub state: String,
-    /// This version's scan status, as last recorded (RFC 0042 §4.2). Absent on
+    /// This version's scan status, as last recorded (RFC 0044 §4.2). Absent on
     /// a registry without `[security]` and for a caller without
     /// `quarantine:read` alike.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -659,7 +659,7 @@ pub async fn explore_package_detail(
         None => None,
     };
 
-    // RFC 0042: one batch for the page and the subject, wherever it is.
+    // RFC 0044: one batch for the page and the subject, wherever it is.
     let coords: Vec<batlehub_core::entities::PackageId> = versions
         .iter()
         .chain(selected.as_ref())

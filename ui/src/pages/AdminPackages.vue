@@ -59,7 +59,7 @@ interface AdminPackageSummary {
   last_accessed: string | null;
   last_accessed_by: string | null;
   access_count: number;
-  /** RFC 0042: absent without `[security]` or without quarantine:read. */
+  /** RFC 0044: absent without `[security]` or without quarantine:read. */
   scan_status?: ScanStatusDto | null;
 }
 

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import type { BadgeVariant } from "@/lib/badge-variants";
 
 /**
- * Where one version stands in scanning (RFC 0042 §4.5): one component for the
+ * Where one version stands in scanning (RFC 0044 §4.5): one component for the
  * header, the catalog, the admin list and the Versions tab.
  *
  * The text carries the state, never the colour alone. No `status` and no

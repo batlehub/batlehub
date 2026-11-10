@@ -207,7 +207,7 @@ def scenarios(run):
         ("local-publish", publish, 200),
         ("local-packument", lambda: ("GET", f"/proxy/{local}/pkg-{run}", None, None), 200),
         ("local-tarball", lambda: ("GET", f"/proxy/{local}/pkg-{run}/1.0.1/tarball", None, None), 200),
-        # RFC 0042: a first download on the [security] registry, served past
+        # RFC 0044: a first download on the [security] registry, served past
         # maturity, leaves an open job and a catalogue row for the lists below.
         ("proxy-tarball-sec", lambda: ("GET", f"/proxy/{sec}/left-pad/1.0.0/tarball", ADMIN, None), 200),
         ("api-explore-list", lambda: ("GET", "/api/v1/explore/packages", ADMIN, None), 200),
@@ -339,7 +339,7 @@ def run(base, log, budget_path, update):
         statements.update((q["sql"], q["raw"]) for r in rows for q in r["queries"])
         if bad:
             failures.append(f"{name}: answered {bad}, expected {expect} — the count measured an error path")
-        # RFC 0042 T8b: anonymous holds no quarantine:read anywhere here, so
+        # RFC 0044 T8b: anonymous holds no quarantine:read anywhere here, so
         # the scan-status batch is skipped, not merely cheap.
         if name == "api-explore-list-anon":
             status_reads = [q["sql"] for r in rows for q in r["queries"]

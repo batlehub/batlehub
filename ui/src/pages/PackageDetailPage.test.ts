@@ -1623,10 +1623,10 @@ describe("PackageDetailPage SBOM downloads", () => {
 });
 
 /**
- * RFC 0042 §4.2: four tabs, linkable with `?tab=`; the scan status in the
+ * RFC 0044 §4.2: four tabs, linkable with `?tab=`; the scan status in the
  * sticky header; the Security tab's bounded poll of the explore detail.
  */
-describe("tabs and scan status (RFC 0042)", () => {
+describe("tabs and scan status (RFC 0044)", () => {
   beforeEach(() => {
     explorePackageDetailMock.mockReset().mockImplementation(serve());
     listRegistriesMock.mockReset().mockResolvedValue({ data: [] });

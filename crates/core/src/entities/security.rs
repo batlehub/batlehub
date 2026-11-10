@@ -736,7 +736,7 @@ pub struct ScanJob {
     pub deferred_since: Option<DateTime<Utc>>,
     /// The worker holding the lease. `None` on a job never leased, released
     /// by a failure, or deferred — which is how a deferral is told from a
-    /// running scan whose `leased_until` is also in the future (RFC 0042 §4.2
+    /// running scan whose `leased_until` is also in the future (RFC 0044 §4.2
     /// rule 2).
     #[serde(default)]
     pub leased_by: Option<String>,
@@ -749,7 +749,7 @@ pub struct ScanJob {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Which rows the Scans page lists (RFC 0042 §4.4 `/admin/scans?state`).
+/// Which rows the Scans page lists (RFC 0044 §4.4 `/admin/scans?state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanJobFilter {
     /// Every open job: queued and scanning.
@@ -761,7 +761,7 @@ pub enum ScanJobFilter {
     Failed,
 }
 
-/// What `/admin/findings` reads (RFC 0042 §6.1). `registries` is a ceiling
+/// What `/admin/findings` reads (RFC 0044 §6.1). `registries` is a ceiling
 /// the caller's grants computed: the store never reads outside it, and an
 /// empty one lists nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -788,12 +788,12 @@ pub struct FindingRow {
 }
 
 /// What `close_exhausted` writes before the last error of a job whose
-/// attempts ran out (RFC 0042 decision 34). The web process reads it to tell a
+/// attempts ran out (RFC 0044 decision 34). The web process reads it to tell a
 /// failed scan from a finished one: an exhausted `rescan` writes no
 /// `SCANNER_ERROR`, and `max_attempts` is a worker setting it may not share.
 pub const EXHAUSTED_PREFIX: &str = "exhausted: ";
 
-/// Where one version stands in scanning (RFC 0042 §4.2), derived by
+/// Where one version stands in scanning (RFC 0044 §4.2), derived by
 /// `services::scan_status::derive` and nowhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

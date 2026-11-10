@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Every registry, one line each, leading to its page (RFC 0042 §6.4). Read
+ * Every registry, one line each, leading to its page (RFC 0044 §6.4). Read
  * from `/admin/stats`, which already filters per registry by `stats:read`.
  */
 import { useI18n } from "vue-i18n";

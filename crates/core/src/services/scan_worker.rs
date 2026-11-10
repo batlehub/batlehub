@@ -896,7 +896,7 @@ impl ScanWorker {
                 tracing::warn!(package = %job.package, error = %e, "security worker: could not record SCANNER_ERROR");
             }
         }
-        // The prefix is what tells a reader this row failed (RFC 0042
+        // The prefix is what tells a reader this row failed (RFC 0044
         // decision 34): a `Rescan` or `Backfill` closing here writes no
         // `SCANNER_ERROR`, and would otherwise read as a finished scan.
         let last_error = format!(

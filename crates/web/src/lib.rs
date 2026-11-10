@@ -1283,7 +1283,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // More specific first: `/stats/history` before `/stats`.
     cfg.service(admin_stats_history);
     cfg.service(admin_stats);
-    cfg.service(get_registry_view); // GET  /api/v1/admin/registries/{name} (RFC 0042 §5.3)
+    cfg.service(get_registry_view); // GET  /api/v1/admin/registries/{name} (RFC 0044 §5.3)
     cfg.service(admin_access_check);
     cfg.service(admin_authz_explain);
     cfg.service(authz_shadow);

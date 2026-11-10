@@ -273,7 +273,7 @@ pub struct PendingReload {
     /// Warnings the candidate config produces, promoted to the live
     /// [`ConfigWarnings`] store when this pending reload is applied.
     pub warnings: Vec<ConfigWarning>,
-    /// The candidate's registry views (RFC 0042 §5.3), swapped in by `apply`.
+    /// The candidate's registry views (RFC 0044 §5.3), swapped in by `apply`.
     pub new_registry_views: crate::handlers::back_office::registries::RegistryViewsSnapshot,
 }
 
@@ -391,7 +391,7 @@ pub struct ConfigReloadService {
     /// [`ConfigReloadService::set_warnings`] and refreshed by `apply`.
     pub(super) config_warnings: ConfigWarnings,
     /// The registry pages' projected config; seeded at startup, replaced by
-    /// `apply` (RFC 0042 decision 32).
+    /// `apply` (RFC 0044 decision 32).
     pub(super) registry_views: crate::RegistryViews,
     /// Raw content of the last config load attempt (file-watcher or editor), whether
     /// or not it ended up applied. Lets `load_pending`/`load_pending_from_content`

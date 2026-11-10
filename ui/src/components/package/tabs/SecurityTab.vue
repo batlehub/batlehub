@@ -10,7 +10,7 @@ import ScanBadge from "@/components/package/ScanBadge.vue";
 import VerdictPanel from "@/components/package/VerdictPanel.vue";
 
 /**
- * The package page's Security tab (RFC 0042 §4.5): the selected version's
+ * The package page's Security tab (RFC 0044 §4.5): the selected version's
  * scan status, its verdict and findings, then the page's vulnerability and
  * SBOM blocks through the default slot.
  *

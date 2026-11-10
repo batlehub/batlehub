@@ -396,8 +396,8 @@ export const sidebar = {
       text: "Ready to build",
       items: [
         {
-          text: "0042 — Scan visibility and admin views",
-          link: "/rfc/0042-scan-visibility-and-admin-views",
+          text: "0044 — Scan visibility and admin views",
+          link: "/rfc/0044-scan-visibility-and-admin-views",
         },
       ],
     },

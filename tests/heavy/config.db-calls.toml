@@ -26,7 +26,7 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
-# RFC 0042: the `user` role holds `quarantine:read`, so a list it reads runs
+# RFC 0044: the `user` role holds `quarantine:read`, so a list it reads runs
 # the scan-status batch; anonymous does not, and must not.
 [[auth.tokens]]
 value = "heavy-user-token"
@@ -58,7 +58,7 @@ anonymous = ["releases:read", "source:read"]
 user = ["releases:read", "source:read"]
 admin = ["*"]
 
-# RFC 0042 §10.3: a registry behind [security], so the list routes carry a
+# RFC 0044 §10.3: a registry behind [security], so the list routes carry a
 # scan status and their budget measures its batch. Without a worker the job
 # the first download queues stays open — a status to read — and the mock's
 # 2024 publish date is past `mature_age_secs`, so the download is served as

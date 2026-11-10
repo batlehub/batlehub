@@ -8,7 +8,7 @@ function badge(props: { status?: ScanStatusDto | null; unavailable?: boolean; in
   return mount(ScanBadge, { props });
 }
 
-describe("ScanBadge (RFC 0042 §4.5)", () => {
+describe("ScanBadge (RFC 0044 §4.5)", () => {
   it("draws nothing without a status: no [security], or no quarantine:read", () => {
     expect(badge({}).find('[data-testid="scan-badge"]').exists()).toBe(false);
     expect(badge({ status: null }).html()).not.toContain("scan-badge");

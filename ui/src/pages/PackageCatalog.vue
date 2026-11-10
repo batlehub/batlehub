@@ -65,7 +65,7 @@ type SearchScope = "name" | "readme" | "both";
 const searchIn = ref<SearchScope>("name");
 /** `[search] readmes` on this instance, as the last response reported it. */
 const readmeSearchEnabled = ref(false);
-/** RFC 0042: the page's scan-status batch failed; rows draw "—". */
+/** RFC 0044: the page's scan-status batch failed; rows draw "—". */
 const scanUnavailable = ref(false);
 /** The prose search hit its cap; there may be more than is shown. */
 const searchTruncated = ref(false);
@@ -365,7 +365,7 @@ interface PageResult {
       a truncated prose search followed by a cached name search left the
       "showing the first N matches" note under a list it was not about. */
   truncated: boolean;
-  /** RFC 0042 §10.2: the status batch failed for this answer. */
+  /** RFC 0044 §10.2: the status batch failed for this answer. */
   scanUnavailable: boolean;
 }
 const exploreCache = useExploreCache<PageResult>();
@@ -1116,7 +1116,7 @@ onMounted(() => {
               >
                 <TableCell class="pl-0 pr-3 py-3 align-baseline">
                   <Resolution :state="rowState(row)" :label="t(STATE_LABEL_KEYS[rowState(row)])" />
-                  <!-- RFC 0042: under the State badge, in the same cell, so the
+                  <!-- RFC 0044: under the State badge, in the same cell, so the
                        390px layout keeps its columns. -->
                   <div v-if="row.kind === 'cached'" class="mt-1">
                     <ScanBadge

@@ -2,7 +2,7 @@
 reference: true
 ---
 
-# RFC 0042 — Scan visibility and admin views
+# RFC 0044 — Scan visibility and admin views
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |

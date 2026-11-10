@@ -1395,7 +1395,7 @@ pub fn rbac_policy_deny_anonymous(
     (policy, rbac_policy_deny_anonymous_perms())
 }
 pub struct ConfigureAppDefaults {
-    /// The registry pages' projected config (RFC 0042 §5.3). Empty by default,
+    /// The registry pages' projected config (RFC 0044 §5.3). Empty by default,
     /// so `/admin/registries/{name}` answers `404`; a test seeds it with
     /// `RegistryViews::from_config`.
     pub registry_views: batlehub_web::RegistryViews,

@@ -989,7 +989,7 @@ function upstreamBadgeKey(row: UpstreamRow): string {
   return UPSTREAM_BADGE_KEYS[row.state];
 }
 
-// ── Tabs (RFC 0042 §4.2) ─────────────────────────────────────────────────────
+// ── Tabs (RFC 0044 §4.2) ─────────────────────────────────────────────────────
 
 const TABS = ["overview", "versions", "security", "admin"] as const;
 type Tab = (typeof TABS)[number];
@@ -1023,7 +1023,7 @@ const activeTab = computed<Tab>({
   },
 });
 
-// ── The bounded poll (RFC 0042 §4.2) ─────────────────────────────────────────
+// ── The bounded poll (RFC 0044 §4.2) ─────────────────────────────────────────
 
 /**
  * One silent re-read of the explore detail, which always answers — never the
@@ -1301,7 +1301,7 @@ const { stopped: pollStopped, restart: restartPoll } = usePoll(
         </Button>
       </div>
 
-      <!-- RFC 0042: four tabs, linkable with `?tab=`. Every panel stays
+      <!-- RFC 0044: four tabs, linkable with `?tab=`. Every panel stays
            mounted (`force-mount`), so the README, SBOM and vulnerability
            blocks still load on mount and a tab switch costs no request. -->
       <Tabs v-model="activeTab">

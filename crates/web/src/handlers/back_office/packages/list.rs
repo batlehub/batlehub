@@ -31,11 +31,11 @@ pub struct AdminPackageListResponse {
     pub page: u64,
     pub per_page: u64,
     /// The scan-status batch failed or timed out, so no row carries
-    /// `scan_status` (RFC 0042 §10.2).
+    /// `scan_status` (RFC 0044 §10.2).
     pub scan_status_unavailable: bool,
 }
 
-/// One version, and where it stands in scanning (RFC 0042 §4.2).
+/// One version, and where it stands in scanning (RFC 0044 §4.2).
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct AdminPackageRow {
     #[serde(flatten)]

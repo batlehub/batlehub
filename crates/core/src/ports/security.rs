@@ -18,7 +18,7 @@ pub trait VerdictRepository: Send + Sync {
     async fn get(&self, package: &PackageId) -> Result<Option<Verdict>, CoreError>;
 
     /// The verdicts of `coords`, across registries, findings **not** loaded
-    /// — the batch a list page reads its scan statuses from (RFC 0042 §5.1).
+    /// — the batch a list page reads its scan statuses from (RFC 0044 §5.1).
     /// One entry per coordinate, in order. The default asks one at a time;
     /// the stores override it with one statement.
     async fn get_many(&self, coords: &[PackageId]) -> Result<Vec<Option<Verdict>>, CoreError> {
@@ -56,7 +56,7 @@ pub trait VerdictRepository: Send + Sync {
         limit: u64,
     ) -> Result<Vec<PackageId>, CoreError>;
 
-    /// The findings list (RFC 0042 §6.2): one page of findings inside
+    /// The findings list (RFC 0044 §6.2): one page of findings inside
     /// `filter.registries`, most severe first, with the total before paging.
     /// `raw` is not loaded. The default refuses, as `list_jobs` does.
     async fn list_findings(
@@ -133,7 +133,7 @@ pub trait ScanQueue: Send + Sync {
     /// Close a job whose attempts ran out, nobody holding it, recording
     /// `last_error` — [`crate::entities::EXHAUSTED_PREFIX`] and the last
     /// error, which is how a reader tells a failed scan from a finished one
-    /// (RFC 0042 decision 34). The default closes without the record.
+    /// (RFC 0044 decision 34). The default closes without the record.
     async fn complete_exhausted(
         &self,
         job_id: uuid::Uuid,
@@ -143,7 +143,7 @@ pub trait ScanQueue: Send + Sync {
     }
 
     /// For each of `coords`, in order: its open job and its most recently
-    /// closed one, across registries, in one read (RFC 0042 §5.1). The
+    /// closed one, across registries, in one read (RFC 0044 §5.1). The
     /// default refuses, so a queue that cannot answer makes the status
     /// unavailable rather than wrong.
     async fn jobs_for(
@@ -155,7 +155,7 @@ pub trait ScanQueue: Send + Sync {
         )))
     }
 
-    /// The Scans page (RFC 0042 §6.1): the jobs of `registries` matching
+    /// The Scans page (RFC 0044 §6.1): the jobs of `registries` matching
     /// `filter`, with the total before paging. Open rows: scanning first,
     /// then oldest first. Failed: most recently closed first. An empty
     /// `registries` lists nothing. The default refuses, as `jobs_for` does.

@@ -150,7 +150,7 @@ async fn an_expired_lease_returns_to_the_queue_and_spent_attempts_are_reported()
         .all(|j| j.package != p));
 }
 
-/// RFC 0042 §5.1: the batch reads behind a list page's scan statuses, and
+/// RFC 0044 §5.1: the batch reads behind a list page's scan statuses, and
 /// decision 34's marker on an exhausted row.
 #[tokio::test]
 async fn jobs_for_and_get_many_answer_per_coordinate_in_order() {
@@ -220,7 +220,7 @@ async fn jobs_for_and_get_many_answer_per_coordinate_in_order() {
     assert_eq!(many[1].as_ref().unwrap().state, VerdictState::Allowed);
 }
 
-/// RFC 0042 phase 2: the Scans page reads open jobs scanning first, and as
+/// RFC 0044 phase 2: the Scans page reads open jobs scanning first, and as
 /// failed only a coordinate whose **latest** closed job is exhausted and that
 /// has no open job.
 #[tokio::test]
@@ -627,7 +627,7 @@ async fn leadership_is_one_process_at_a_time_and_released_on_drop() {
     panic!("the lock was not released after the holder was dropped");
 }
 
-/// RFC 0042 phase 3: `list_findings` ranks severity (not alphabetically),
+/// RFC 0044 phase 3: `list_findings` ranks severity (not alphabetically),
 /// stays inside `registries`, and matches `reference` literally (T10).
 #[tokio::test]
 async fn list_findings_ranks_filters_and_escapes_the_prefix() {

@@ -50,10 +50,10 @@ export const SECURITY_TABS = [
   // both answer "why was this refused?", and an operator arriving with that
   // question should not have to know which of two mechanisms produced it.
   { to: "/admin/security/authorization", label: "adminNav.authorization" },
-  // RFC 0042 phase 2: where scans are followed — the queue, the failures and
+  // RFC 0044 phase 2: where scans are followed — the queue, the failures and
   // the verdicts by state.
   { to: "/admin/security/scans", label: "adminNav.scans" },
-  // RFC 0042 phase 3: findings across registries, by finding or by reference.
+  // RFC 0044 phase 3: findings across registries, by finding or by reference.
   { to: "/admin/security/findings", label: "adminNav.findings" },
 ];
 
@@ -102,7 +102,7 @@ export const NOTIFICATIONS_TABS = [
 
 export const OBSERVABILITY_TABS = [
   { to: "/admin/observability/health", label: "adminNav.health" },
-  // RFC 0042 phase 5: one registry's configuration and health, from its list.
+  // RFC 0044 phase 5: one registry's configuration and health, from its list.
   { to: "/admin/observability/registries", label: "adminNav.registries" },
   { to: "/admin/observability/audit-log", label: "adminNav.auditLog" },
 ];

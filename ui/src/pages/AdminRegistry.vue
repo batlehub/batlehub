@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * One registry's configuration and health (RFC 0042 §4.5, phase 5).
+ * One registry's configuration and health (RFC 0044 §4.5, phase 5).
  *
  * The server decides what each caller sees: `config` is absent without
  * `config:read`, the upstream URLs without `upstreams:read`, the queue counts

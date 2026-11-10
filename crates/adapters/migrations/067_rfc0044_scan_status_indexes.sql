@@ -1,4 +1,4 @@
--- RFC 0042 decision 33 — the two reads the scan status and the findings list
+-- RFC 0044 decision 33 — the two reads the scan status and the findings list
 -- add, each on an index rather than a walk of a table that only grows.
 --
 -- `scan_jobs` keeps every closed row. A list page reads the latest closed job

@@ -15,7 +15,7 @@ function poll(fn: () => Promise<void>, on = true) {
   return { ...api, active, scope };
 }
 
-describe("usePoll (RFC 0042 §4.2)", () => {
+describe("usePoll (RFC 0044 §4.2)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setVisibility("visible");

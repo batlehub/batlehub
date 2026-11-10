@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, watch, type Ref } from "vue";
 
-/** RFC 0042 §4.2's bounds. */
+/** RFC 0044 §4.2's bounds. */
 export const POLL_INTERVAL_MS = 5_000;
 export const POLL_MAX_MS = 10 * 60_000;
 export const POLL_MAX_BACKOFF_MS = 60_000;
@@ -17,7 +17,7 @@ function retryAfterMs(e: unknown): number {
 }
 
 /**
- * The bounded poll of RFC 0042 §4.2: `fn` every 5 s while `active` is true.
+ * The bounded poll of RFC 0044 §4.2: `fn` every 5 s while `active` is true.
  *
  * - paused while the document is hidden, resumed when it is shown again;
  * - stopped after 10 minutes (`stopped = "timeout"`), so a stuck job cannot

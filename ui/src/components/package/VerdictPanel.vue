@@ -134,7 +134,7 @@ function every(secs: number): string {
 }
 
 /**
- * The two "Next rescan" lines (RFC 0042 §4.2). `next_rescan` is present only
+ * The two "Next rescan" lines (RFC 0044 §4.2). `next_rescan` is present only
  * for a `system:read` holder — the server decides, the panel only draws.
  */
 const nextRescan = computed<string[] | null>(() => {

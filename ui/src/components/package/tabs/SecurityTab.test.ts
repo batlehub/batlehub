@@ -30,7 +30,7 @@ function tab(
   });
 }
 
-describe("SecurityTab (RFC 0042 §4.5)", () => {
+describe("SecurityTab (RFC 0044 §4.5)", () => {
   it("tells an admin the registry scans nothing when no status came back", () => {
     expect(tab({ isAdmin: true }).find('[data-testid="no-scanning"]').exists()).toBe(true);
     // A reader without the verb cannot tell that from being withheld: nothing.

@@ -47,7 +47,7 @@ in review, seven are drafts and one is superseded.
 
 | RFC | Status | What it settles |
 | --- | --- | --- |
-| [0042 — Scan visibility and admin views](/rfc/0042-scan-visibility-and-admin-views) | Accepted | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
+| [0044 — Scan visibility and admin views](/rfc/0044-scan-visibility-and-admin-views) | Accepted | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 
 **Settled** — thirty-seven implemented, rejected or superseded: history rather than proposals.
 

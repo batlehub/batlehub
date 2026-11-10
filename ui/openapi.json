@@ -1509,7 +1509,7 @@
         "tags": [
           "security"
         ],
-        "summary": "Findings across registries (RFC 0042 §5.2). `findings:read` per\nconfigured registry through `authorize_control`, never `authorize_grants`\n(which answers `Ok` under a shadow and for a registry with no hierarchy):\nthe registries it opens are bound into the query, and each row is then\nre-checked at its namespace, so a seal cuts the list as it cuts the\nper-version GET (T3, T3b, T3c).",
+        "summary": "Findings across registries (RFC 0044 §5.2). `findings:read` per\nconfigured registry through `authorize_control`, never `authorize_grants`\n(which answers `Ok` under a shadow and for a registry with no hierarchy):\nthe registries it opens are bound into the query, and each row is then\nre-checked at its namespace, so a seal cuts the list as it cuts the\nper-version GET (T3, T3b, T3c).",
         "operationId": "list_findings",
         "parameters": [
           {
@@ -2878,7 +2878,7 @@
         "tags": [
           "back-office"
         ],
-        "summary": "One registry's configuration and health (RFC 0042 §4.4). `system:read`\nfirst, so an unknown name never answers an unauthorised caller; then each\nblock behind its own verb.",
+        "summary": "One registry's configuration and health (RFC 0044 §4.4). `system:read`\nfirst, so an unknown name never answers an unauthorised caller; then each\nblock behind its own verb.",
         "operationId": "get_registry_view",
         "parameters": [
           {
@@ -5308,7 +5308,7 @@
         "tags": [
           "security"
         ],
-        "summary": "The scan queue and its failures (RFC 0042 §4.4). `system:read` at the\ninstance tier; then rows only from registries where the caller holds\n`quarantine:read`, and `last_error` only with `findings:read` there, so\n`system:read` alone names no held version (T16).",
+        "summary": "The scan queue and its failures (RFC 0044 §4.4). `system:read` at the\ninstance tier; then rows only from registries where the caller holds\n`quarantine:read`, and `last_error` only with `findings:read` there, so\n`system:read` alone names no held version (T16).",
         "operationId": "list_scans",
         "parameters": [
           {
@@ -22558,7 +22558,7 @@
           },
           "scan_status_unavailable": {
             "type": "boolean",
-            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status` (RFC 0042 §10.2)."
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status` (RFC 0044 §10.2)."
           },
           "total": {
             "type": "integer",
@@ -22589,7 +22589,7 @@
             }
           }
         ],
-        "description": "One version, and where it stands in scanning (RFC 0042 §4.2)."
+        "description": "One version, and where it stands in scanning (RFC 0044 §4.2)."
       },
       "AdvisoryRelation": {
         "type": "string",
@@ -24449,7 +24449,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ScanStatusDto",
-                "description": "The scan status of `newest_version`, as last recorded (RFC 0042 §4.2).\nAbsent on a registry without `[security]` and for a caller without\n`quarantine:read` alike, so the two cannot be told apart."
+                "description": "The scan status of `newest_version`, as last recorded (RFC 0044 §4.2).\nAbsent on a registry without `[security]` and for a caller without\n`quarantine:read` alike, so the two cannot be told apart."
               },
               {
                 "type": "null"
@@ -24542,7 +24542,7 @@
           },
           "scan_status_unavailable": {
             "type": "boolean",
-            "description": "The scan-status batch failed or timed out, so no version carries\n`scan_status` (RFC 0042 §10.2)."
+            "description": "The scan-status batch failed or timed out, so no version carries\n`scan_status` (RFC 0044 §10.2)."
           },
           "selected": {
             "oneOf": [
@@ -24618,7 +24618,7 @@
           },
           "scan_status_unavailable": {
             "type": "boolean",
-            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status`; the list is otherwise current (RFC 0042 §10.2)."
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status`; the list is otherwise current (RFC 0044 §10.2)."
           },
           "searched_in": {
             "type": "string",
@@ -24730,7 +24730,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ScanStatusDto",
-                "description": "This version's scan status, as last recorded (RFC 0042 §4.2). Absent on\na registry without `[security]` and for a caller without\n`quarantine:read` alike."
+                "description": "This version's scan status, as last recorded (RFC 0044 §4.2). Absent on\na registry without `[security]` and for a caller without\n`quarantine:read` alike."
               },
               {
                 "type": "null"
@@ -26567,7 +26567,7 @@
       },
       "NextRescan": {
         "type": "object",
-        "description": "When a version is next looked at again (RFC 0042 §4.2 *Next rescan*).",
+        "description": "When a version is next looked at again (RFC 0044 §4.2 *Next rescan*).",
         "properties": {
           "sbom_at": {
             "type": [
@@ -29100,7 +29100,7 @@
       },
       "ScanState": {
         "type": "string",
-        "description": "Where one version stands in scanning (RFC 0042 §4.2), derived by\n`services::scan_status::derive` and nowhere else.",
+        "description": "Where one version stands in scanning (RFC 0044 §4.2), derived by\n`services::scan_status::derive` and nowhere else.",
         "enum": [
           "not_scanned",
           "queued",
@@ -29111,7 +29111,7 @@
       },
       "ScanStatusDto": {
         "type": "object",
-        "description": "Where a version stands in scanning, as one caller may see it (RFC 0042\n§4.2): `state` and `verdict` with `quarantine:read`, `detail` with\n`findings:read` too, nothing at all without.\n\nThe fields are private and the only constructor is private to this module,\nso a status reaches a response through [`scan_status_for`] or not at all.\nThere is no `Deserialize`: it cannot arrive from outside either.",
+        "description": "Where a version stands in scanning, as one caller may see it (RFC 0044\n§4.2): `state` and `verdict` with `quarantine:read`, `detail` with\n`findings:read` too, nothing at all without.\n\nThe fields are private and the only constructor is private to this module,\nso a status reaches a response through [`scan_status_for`] or not at all.\nThere is no `Deserialize`: it cannot arrive from outside either.",
         "required": [
           "state"
         ],
@@ -29580,7 +29580,7 @@
               "string",
               "null"
             ],
-            "description": "`[stats] dashboard_url`; only with `system:read` (RFC 0042 §4.2)."
+            "description": "`[stats] dashboard_url`; only with `system:read` (RFC 0044 §4.2)."
           },
           "per_registry": {
             "type": "array",
@@ -29700,7 +29700,7 @@
       },
       "SuggestionCode": {
         "type": "string",
-        "description": "One piece of advice on the registry page (RFC 0042 §4.2), a closed list.",
+        "description": "One piece of advice on the registry page (RFC 0044 §4.2), a closed list.",
         "enum": [
           "degraded_without_stale",
           "security_without_rescan",
@@ -30378,7 +30378,7 @@
                 "oneOf": [
                   {
                     "$ref": "#/components/schemas/NextRescan",
-                    "description": "When the version is looked at again; only with `system:read` at the\ninstance tier (RFC 0042 §7.2)."
+                    "description": "When the version is looked at again; only with `system:read` at the\ninstance tier (RFC 0044 §7.2)."
                   },
                   {
                     "type": "null"
@@ -30408,7 +30408,7 @@
                 "oneOf": [
                   {
                     "$ref": "#/components/schemas/ScanStatusDto",
-                    "description": "Where the version stands in scanning, at the caller's tier (RFC 0042\n§4.2). The same field the lists carry."
+                    "description": "Where the version stands in scanning, at the caller's tier (RFC 0044\n§4.2). The same field the lists carry."
                   },
                   {
                     "type": "null"

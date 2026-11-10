@@ -16,7 +16,7 @@ serde.workspace = true
 toml.workspace = true
 utoipa.workspace = true
 anyhow.workspace = true
-# RFC 0042 §6.6: the `[stats]` monitoring links are parsed and substituted.
+# RFC 0044 §6.6: the `[stats]` monitoring links are parsed and substituted.
 form_urlencoded.workspace = true
 url.workspace = true
 

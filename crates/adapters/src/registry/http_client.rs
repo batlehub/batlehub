@@ -243,7 +243,7 @@ pub fn redacted(url: &reqwest::Url) -> reqwest::Url {
 
 /// Every `http(s)://` URL in free text through [`redacted`]: a worker's
 /// `last_error` can quote the URL it failed on, token and all, and reaches an
-/// administrator's page (RFC 0042 §7.3, T5). A URL that does not parse is
+/// administrator's page (RFC 0044 §7.3, T5). A URL that does not parse is
 /// replaced whole — it cannot be told safe. Call it **before** truncating, or
 /// a cut mid-URL leaves a remainder that no longer parses as one.
 pub fn redact_text_urls(text: &str) -> String {
@@ -801,7 +801,7 @@ pub fn percent_encode(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// RFC 0042 T5: credentials in a quoted URL never survive, and the text
+    /// RFC 0044 T5: credentials in a quoted URL never survive, and the text
     /// around it does.
     #[test]
     fn redact_text_urls_strips_userinfo_and_query_from_every_url() {

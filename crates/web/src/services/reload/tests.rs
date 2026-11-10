@@ -218,7 +218,7 @@ fn expire_stale_clears_expired_pending() {
 
 // ── Apply / reload tests ──────────────────────────────────────────────────────
 
-/// RFC 0042 decision 32: the `[stats]` links are hot. `build_pending` projects
+/// RFC 0044 decision 32: the `[stats]` links are hot. `build_pending` projects
 /// them and `apply` swaps them into the handle the registry pages hold.
 #[actix_web::test]
 async fn apply_swaps_the_registry_views() {

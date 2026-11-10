@@ -104,7 +104,7 @@ pub struct ExplorePackageListResponse {
     /// The result set will be empty; the UI should surface a warning to the user.
     pub upstream_unavailable: bool,
     /// The scan-status batch failed or timed out, so no row carries
-    /// `scan_status`; the list is otherwise current (RFC 0042 §10.2).
+    /// `scan_status`; the list is otherwise current (RFC 0044 §10.2).
     pub scan_status_unavailable: bool,
     /// Whether `[search] readmes` is on for this instance.
     ///
@@ -174,7 +174,7 @@ pub struct ExploreEntryDto {
     /// package-authored content reached by a much cheaper path — no navigation,
     /// just a query (RFC 0007-bis §7.4).
     pub snippet: Option<String>,
-    /// The scan status of `newest_version`, as last recorded (RFC 0042 §4.2).
+    /// The scan status of `newest_version`, as last recorded (RFC 0044 §4.2).
     /// Absent on a registry without `[security]` and for a caller without
     /// `quarantine:read` alike, so the two cannot be told apart.
     #[serde(skip_serializing_if = "Option::is_none")]

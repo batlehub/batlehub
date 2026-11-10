@@ -182,7 +182,7 @@ describe("AdminDashboard trend", () => {
   });
 });
 
-/** RFC 0042 phase 5: the global monitoring link, and registry names that lead somewhere. */
+/** RFC 0044 phase 5: the global monitoring link, and registry names that lead somewhere. */
 describe("AdminDashboard — monitoring link", () => {
   beforeEach(() => {
     adminStatsHistoryMock.mockReset().mockResolvedValue({ data: trend() });

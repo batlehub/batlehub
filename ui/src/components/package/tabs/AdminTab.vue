@@ -13,7 +13,7 @@ import PackageGrants from "@/components/admin/PackageGrants.vue";
 import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 
 /**
- * The package page's Administration tab (RFC 0042 §6.4): everything
+ * The package page's Administration tab (RFC 0044 §6.4): everything
  * AdminPackageDetail used to be, moved unchanged. The page renders it only for
  * an administrator, so it loads only for one.
  */

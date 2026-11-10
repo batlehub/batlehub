@@ -43,7 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Scan visibility and admin views (RFC 0042).** Lists and the package page
+- **Scan visibility and admin views (RFC 0044).** Lists and the package page
   show where each version stands in scanning (`scan_status`: queued, scanning,
   failed, scanned · verdict), at the caller's tier; the package page has
   Overview, Versions, Security and Administration tabs. New admin pages:

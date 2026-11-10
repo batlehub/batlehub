@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/table";
 
 /**
- * Findings across the registries the caller reads them on (RFC 0042 §4.5,
+ * Findings across the registries the caller reads them on (RFC 0044 §4.5,
  * phase 3). The server scopes the rows: `findings:read` per registry, then a
  * namespace re-check per row, so a page can hold fewer than `per_page` rows.
  */

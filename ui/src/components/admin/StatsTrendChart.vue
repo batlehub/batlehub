@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * One series as a row of bars, oldest first (RFC 0042 §4.5, Activity tab).
+ * One series as a row of bars, oldest first (RFC 0044 §4.5, Activity tab).
  *
  * `null` is a gap — an hour with no traffic is not an hour at zero, so it is
  * drawn as nothing rather than as a flat bar. The numbers are in the

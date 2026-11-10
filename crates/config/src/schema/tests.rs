@@ -5106,7 +5106,7 @@ fn rule_settings_a_security_registry_ignores_warn() {
     }
 }
 
-// ── RFC 0042 §4.3: the `[stats]` monitoring links ───────────────────────────
+// ── RFC 0044 §4.3: the `[stats]` monitoring links ───────────────────────────
 
 fn with_stats(lines: &str) -> AppConfig {
     let raw = format!(

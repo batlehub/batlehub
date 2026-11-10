@@ -121,7 +121,7 @@ pub struct StatsResponse {
     pub since_startup: DateTime<Utc>,
     pub aggregate: AggregateStats,
     pub per_registry: Vec<RegistryStatsDto>,
-    /// `[stats] dashboard_url`; only with `system:read` (RFC 0042 §4.2).
+    /// `[stats] dashboard_url`; only with `system:read` (RFC 0044 §4.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring_url: Option<String>,
 }

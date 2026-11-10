@@ -156,7 +156,7 @@ describe("VerdictPanel", () => {
     expect(w.find('[data-testid="verdict-rescan"]').exists()).toBe(false);
   });
 
-  describe("next rescan (RFC 0042 phase 4)", () => {
+  describe("next rescan (RFC 0044 phase 4)", () => {
     async function nextRescan(next: Record<string, unknown> | undefined) {
       getVerdict.mockResolvedValue({
         data: verdict(next === undefined ? {} : { next_rescan: next }),

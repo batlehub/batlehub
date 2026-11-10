@@ -1,4 +1,4 @@
-//! Where one version stands in scanning (RFC 0042 §4.2), from rows already
+//! Where one version stands in scanning (RFC 0044 §4.2), from rows already
 //! read. Pure: the reads and the visibility tier are the web layer's.
 
 use chrono::{DateTime, Utc};
@@ -95,7 +95,7 @@ fn non_empty(s: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// When a version is next looked at again (RFC 0042 §4.2 *Next rescan*).
+/// When a version is next looked at again (RFC 0044 §4.2 *Next rescan*).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct NextRescan {
     /// `last_scanned_at + rescan.interval_secs`; a version never scanned is
@@ -140,7 +140,7 @@ pub fn next_rescan(
     }
 }
 
-/// One piece of advice on the registry page (RFC 0042 §4.2), a closed list.
+/// One piece of advice on the registry page (RFC 0044 §4.2), a closed list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionCode {
