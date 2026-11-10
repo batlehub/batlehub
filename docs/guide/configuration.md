@@ -2341,7 +2341,8 @@ pseudonymised, nothing is sealed, and the server warns once
 (`audit.no-retention`). The values above are the documented example, not a
 default. The load refuses a seal interval without a key, a key that is not a
 seed, pseudonymisation set past the access retention, and a security retention
-shorter than the access one.
+shorter than the access one — where `0` keeps forever, so a security retention
+with `access_retention_days = 0` is refused too.
 
 **Classes.** `download` and `view_metadata` are the access class; every other
 action — admin actions, sign-ins, token events, purges — is the security
@@ -2359,7 +2360,10 @@ lifecycle's changes from anyone else's. Pair sealing with `[logging] format =
 is what detects a truncated tail ([SIEM integration](../operations/siem.md)).
 
 **The manual purge** (`DELETE /api/v1/admin/audit-log`) deletes access-class
-rows only; a purge record outlives every later purge. Rows already
+rows only; a purge record outlives every later purge. Without sealing it is
+one `DELETE`; with sealing it runs in batches of 5 000 so each sealed window it
+touches gets its `expire` record, and on a large table it can take longer than
+a client or ingress timeout — rerun it to finish. Rows already
 pseudonymised or deleted cannot be recovered — which is the point of the
 setting.
 

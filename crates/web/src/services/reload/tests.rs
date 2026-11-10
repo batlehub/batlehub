@@ -406,7 +406,7 @@ async fn config_content_returns_error_for_missing_file() {
 async fn load_pending_from_content_returns_error_when_disabled() {
     let svc = make_svc(false);
     let err = svc
-        .load_pending_from_content("[servers]\n", ReloadSource::AdminRequest)
+        .load_pending_from_content("[servers]\n", "admin")
         .await
         .unwrap_err();
     assert!(err.to_string().contains("disabled"));
@@ -416,7 +416,7 @@ async fn load_pending_from_content_returns_error_when_disabled() {
 async fn load_pending_from_content_returns_error_for_invalid_toml() {
     let svc = make_svc(true);
     let err = svc
-        .load_pending_from_content("not valid toml ::::", ReloadSource::AdminRequest)
+        .load_pending_from_content("not valid toml ::::", "admin")
         .await
         .unwrap_err();
     // The error comes from TOML parsing — just verify it propagates.
@@ -495,7 +495,7 @@ async fn resubmitting_identical_content_reports_that_nothing_was_staged() {
     let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
 
     let first = svc
-        .load_pending_from_content(MINIMAL_CONFIG, ReloadSource::AdminRequest)
+        .load_pending_from_content(MINIMAL_CONFIG, "admin")
         .await
         .expect("first submission");
     assert!(first.pending_created, "the first submission stages");
@@ -506,7 +506,7 @@ async fn resubmitting_identical_content_reports_that_nothing_was_staged() {
     // content, so the dedup fires even though nothing is staged any more.
     assert!(svc.discard_pending());
     let second = svc
-        .load_pending_from_content(MINIMAL_CONFIG, ReloadSource::AdminRequest)
+        .load_pending_from_content(MINIMAL_CONFIG, "admin")
         .await
         .expect("re-submission still succeeds");
 
@@ -875,7 +875,7 @@ async fn applying_editor_content_leaves_the_overlay_untouched() {
         make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
 
     let edited = format!("{MINIMAL_CONFIG}\n# edited by the console\n");
-    svc.load_pending_from_content(&edited, ReloadSource::AdminRequest)
+    svc.load_pending_from_content(&edited, "admin")
         .await
         .expect("editor load failed");
     svc.apply("test-user").await.expect("apply failed");
@@ -980,7 +980,7 @@ const NPM: &str =
     "\n[[registries]]\ntype = \"npm\"\nname = \"npm\"\nupstreams = [\"https://one.example\"]\n";
 
 async fn stage(svc: &ConfigReloadService, content: &str) -> ReloadDiff {
-    svc.load_pending_from_content(content, ReloadSource::AdminRequest)
+    svc.load_pending_from_content(content, "admin")
         .await
         .expect("candidate accepted")
         .diff
@@ -1034,7 +1034,7 @@ async fn a_restart_owed_survives_the_next_reload() {
 async fn a_rejected_or_pending_candidate_leaves_the_layers_in_force() {
     let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
     assert!(svc
-        .load_pending_from_content("not toml [", ReloadSource::AdminRequest)
+        .load_pending_from_content("not toml [", "admin")
         .await
         .is_err());
     stage(&svc, &minimal_with("elsewhere/db", "")).await;
@@ -1077,7 +1077,7 @@ async fn a_config_merge_layers_refuses_reloads_and_reports_a_star() {
         "\n[search]\ntext_config = \"\"\"x${PATH}\"\"\"\n",
     );
     let outcome = svc
-        .load_pending_from_content(&candidate, ReloadSource::AdminRequest)
+        .load_pending_from_content(&candidate, "admin")
         .await
         .expect("the server still accepts it");
     assert!(outcome.pending_created);
@@ -1252,4 +1252,55 @@ async fn a_single_server_has_no_replicas_to_disagree_with() {
     let (svc, _f) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
     assert!(svc.heartbeat("explore:").await.unwrap().is_empty());
     assert!(svc.replica_drift().await.is_none());
+}
+
+/// A `config_changes` table in a `Vec`.
+#[derive(Default)]
+struct RecordingChanges(std::sync::Mutex<Vec<(String, String)>>);
+
+#[async_trait::async_trait]
+impl ConfigChangeRepository for RecordingChanges {
+    async fn insert(
+        &self,
+        r: batlehub_core::ports::ConfigChangeRecord,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.0.lock().unwrap().push((r.triggered_by, r.status));
+        Ok(())
+    }
+    async fn list(
+        &self,
+        _: u64,
+        _: u64,
+    ) -> Result<Vec<batlehub_core::ports::ConfigChangeRecord>, batlehub_core::error::CoreError>
+    {
+        Ok(Vec::new())
+    }
+    async fn count(&self) -> Result<u64, batlehub_core::error::CoreError> {
+        Ok(0)
+    }
+}
+
+/// TD-0002 §4: a candidate rejected from the editor, or by an immediate
+/// reload, names the admin who sent it, as an applied one does — not
+/// `config-editor`, which `config_rejected.yml` cannot tell anyone by.
+#[tokio::test]
+async fn a_rejected_candidate_names_the_admin_who_sent_it() {
+    use std::io::Write as _;
+    let changes = Arc::new(RecordingChanges::default());
+    let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+    tmp.write_all(b"not toml [").expect("write");
+    let builder: HotConfigBuilder = Arc::new(|_| anyhow::bail!("builder not used"));
+    let svc = ConfigReloadService::new(ConfigReloadParams {
+        startup_layers: vec![MINIMAL_CONFIG.to_owned()],
+        config_change_repo: Some(changes.clone()),
+        ..reload_params(tmp.path().to_str().unwrap().to_owned(), true, builder)
+    });
+    assert!(svc
+        .load_pending_from_content("still not toml [", "alice")
+        .await
+        .is_err());
+    assert!(svc.reload_immediate("bob").await.is_err());
+    let rows = changes.0.lock().unwrap().clone();
+    let rejected = |who: &str| (who.to_owned(), "rejected".to_owned());
+    assert_eq!(rows, [rejected("alice"), rejected("bob")]);
 }

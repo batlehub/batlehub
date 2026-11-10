@@ -3475,6 +3475,28 @@ fn a_devfile_registry_without_a_host_or_anonymous_reads_is_warned() {
     );
 }
 
+/// TD-0002 §3: `releases:*` grants the read through `expand_pattern`, as
+/// authz reads it, so it must not be told every pull will be refused.
+#[test]
+fn a_pattern_granting_anonymous_reads_is_not_warned_on_a_devfile_registry() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+
+        [registries.rbac]
+        anonymous = ["releases:*"]
+        "#,
+    );
+    cfg.validate().expect("served");
+    let codes: Vec<String> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        !codes.iter().any(|c| c == warnings::DEVFILE_NOT_ANONYMOUS),
+        "{codes:?}"
+    );
+}
+
 // ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
 
 #[test]

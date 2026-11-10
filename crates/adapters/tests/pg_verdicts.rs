@@ -483,6 +483,13 @@ async fn leadership_is_one_process_at_a_time_and_released_on_drop() {
     assert!(first.try_lead(key).await.unwrap());
     assert!(first.try_lead(key).await.unwrap(), "kept, not re-taken");
     assert!(!second.try_lead(key).await.unwrap(), "held elsewhere");
+    // TD-0002 §6: one lock per key. Holding `key` is not leading `other`.
+    let other = key + 0x1_0000;
+    assert!(second.try_lead(other).await.unwrap());
+    assert!(
+        !first.try_lead(other).await.unwrap(),
+        "two leaders for one key"
+    );
     drop(first);
     // The lock goes with the connection, which the pool closes on drop.
     for _ in 0..20 {

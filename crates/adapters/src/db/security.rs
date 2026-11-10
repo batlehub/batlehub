@@ -1,6 +1,9 @@
 //! PostgreSQL stores for RFC 0018: verdicts with their findings, the leased
 //! scan queue, and worker heartbeats.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -11,7 +14,7 @@ use batlehub_core::entities::{
     VerdictState,
 };
 use batlehub_core::error::CoreError;
-use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
+use batlehub_core::ports::{LeaderLock, QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 
 use super::DbResultExt;
 
@@ -314,11 +317,10 @@ impl VerdictRepository for PgVerdictRepository {
 /// `scan_jobs` (migration 051), leased with `FOR UPDATE SKIP LOCKED`.
 pub struct PgScanQueue {
     pool: PgPool,
-    /// The connection holding the advisory lock while this process leads
-    /// (RFC 0018 §6.3). A session lock lives as long as its connection, so
-    /// the connection is kept out of the pool for as long as the lock is
-    /// wanted, and giving it back is how leadership is released.
-    leader: tokio::sync::Mutex<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>>,
+    /// One advisory-lock leader per key asked for (RFC 0018 §6.3), the same
+    /// election the audit trail runs (TD-0002 §6): holding one key is not
+    /// leading another.
+    leaders: std::sync::Mutex<HashMap<i64, Arc<super::PgAdvisoryLeader>>>,
     /// Signalled by [`ScanQueue::enqueue`] when it creates a row, so this
     /// process's own worker wakes without polling. `notify_one` keeps a permit
     /// when nobody is waiting, so a job enqueued mid-pass is not missed.
@@ -329,7 +331,7 @@ impl PgScanQueue {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
-            leader: tokio::sync::Mutex::new(None),
+            leaders: Default::default(),
             work: tokio::sync::Notify::new(),
         }
     }
@@ -508,28 +510,14 @@ impl ScanQueue for PgScanQueue {
     }
 
     async fn try_lead(&self, key: i64) -> Result<bool, CoreError> {
-        let mut guard = self.leader.lock().await;
-        if let Some(conn) = guard.as_mut() {
-            // Still ours while the connection answers; a dropped connection
-            // dropped the lock with it, and the next call competes again.
-            match sqlx::query("SELECT 1").execute(&mut **conn).await {
-                Ok(_) => return Ok(true),
-                Err(e) => {
-                    tracing::warn!(error = %e, "scan queue: leader connection lost; re-electing");
-                    *guard = None;
-                }
-            }
-        }
-        let mut conn = self.pool.acquire().await.db_err()?;
-        let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-            .bind(key)
-            .fetch_one(&mut *conn)
-            .await
-            .db_err()?;
-        if held {
-            *guard = Some(conn);
-        }
-        Ok(held)
+        let leader = Arc::clone(
+            self.leaders
+                .lock()
+                .expect("scan queue leaders lock poisoned")
+                .entry(key)
+                .or_insert_with(|| Arc::new(super::PgAdvisoryLeader::new(self.pool.clone(), key))),
+        );
+        leader.try_lead().await
     }
 
     async fn heartbeat(&self, job_id: Uuid, lease_secs: u64) -> Result<(), CoreError> {

@@ -523,3 +523,67 @@ async fn the_routes_leave_another_kinds_paths_alone() {
         );
     }
 }
+
+/// TD-0002 §2: a pull asks for a manifest by digest and then each layer by
+/// digest. Finding which version names a digest walks the versions, but the
+/// metadata cache answers every walk after the first, so the upstream sees
+/// one manifest GET per version for the lookups of a whole pull — not one per
+/// version per object. Were each lookup to refetch, both counts below would
+/// be 4.
+#[actix_web::test]
+async fn a_pull_by_digest_fetches_each_upstream_manifest_at_most_once_per_object() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut s = mockito::Server::new_async().await;
+    s.mock("GET", "/v2index")
+        .with_body(v2index().to_string())
+        .create_async()
+        .await;
+    let gets: Arc<[AtomicUsize; 2]> = Arc::new(Default::default());
+    for (i, (version, devfile)) in [("2.2.1", DEVFILE_221), ("2.2.0", DEVFILE_220)]
+        .into_iter()
+        .enumerate()
+    {
+        let m = manifest(devfile);
+        let gets = Arc::clone(&gets);
+        s.mock(
+            "GET",
+            format!("/v2/devfile-catalog/nodejs/manifests/{version}").as_str(),
+        )
+        .with_header("docker-content-digest", &sha(m.as_bytes()))
+        .with_body_from_request(move |_| {
+            gets[i].fetch_add(1, Ordering::SeqCst);
+            m.clone().into_bytes()
+        })
+        .create_async()
+        .await;
+    }
+    for blob in [DEVFILE_220, ARCHIVE] {
+        s.mock(
+            "GET",
+            format!("/v2/devfile-catalog/nodejs/blobs/{}", sha(blob)).as_str(),
+        )
+        .with_body(blob)
+        .create_async()
+        .await;
+    }
+    let app = app_against(s.url(), false).await;
+
+    // 2.2.0 is the stack's last version: every lookup walks past 2.2.1 first.
+    let m = manifest(DEVFILE_220);
+    let base = format!("/proxy/{REG}/v2/devfile-catalog/nodejs");
+    let (status, _) =
+        status_and_body(&app, &format!("{base}/manifests/{}", sha(m.as_bytes()))).await;
+    assert_eq!(status, 200);
+    for layer in [DEVFILE_220, ARCHIVE] {
+        let (status, body) = status_and_body(&app, &format!("{base}/blobs/{}", sha(layer))).await;
+        assert_eq!(status, 200);
+        assert_eq!(body, layer);
+    }
+    let [newer, older] = [0, 1].map(|i| gets[i].load(Ordering::SeqCst));
+    // 2.2.1: the first walk, then `archive.tar` (both versions name it, so
+    // it is served as 2.2.1's layer, whose metadata is its own cache entry).
+    assert_eq!(newer, 2, "2.2.1's manifest GETs");
+    // 2.2.0: the first walk, the manifest bytes, and its devfile layer's
+    // metadata.
+    assert_eq!(older, 3, "2.2.0's manifest GETs");
+}
