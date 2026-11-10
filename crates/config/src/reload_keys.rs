@@ -39,6 +39,8 @@ pub const RELOAD_KEYS: &[(&str, Tier, &str)] = &[
     ("limits.packages_per_page", Tier::Hot, "listing pagination"),
     ("subdomain_routing", Tier::Hot, "the host → registry routing table"),
     ("search.readmes", Tier::Hot, "the prose-search switch"),
+    ("stats.dashboard_url", Tier::Hot, "the Dashboard's monitoring link"),
+    ("stats.registry_dashboard_url", Tier::Hot, "the registry views' monitoring links"),
     ("scanners.*.escalation", Tier::Hot, "each registry's security policy"),
     ("registries[*]", Tier::Partial, "the registry clients, policies and maps; warming and release imports keep the startup client"),
     ("registries[*].rbac", Tier::Hot, "the registry's grant hierarchy"),

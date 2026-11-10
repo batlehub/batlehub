@@ -586,6 +586,14 @@ When the status could not be read within 500 ms, the list is served without it
 and carries `scan_status_unavailable: true`; the console then draws "—" in
 place of each badge.
 
+**The verdict endpoint carries the same status**, as `scan_status`, and for a
+holder of `system:read` a `next_rescan` block: when the verdict is rescanned
+(`last_scanned_at` plus `[registries.security.rescan] interval_secs`; absent
+without an interval, and in the past means due) and when the registry-wide SBOM
+re-check runs next (its last run plus `[vulnerability_scan] interval_secs`;
+absent when the re-check is off or has never covered the registry). The
+package page's Security tab shows both as *Next rescan*.
+
 ### The Scans page {#scans-page}
 
 *Admin → Security & Access → Scans* follows the scan queue

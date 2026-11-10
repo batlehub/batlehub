@@ -1716,7 +1716,14 @@ scanners = ["osv"]
         ];
         // Read by `build_pending`, not the builder, and observed swapped by
         // `apply_success_swaps_hot_config` in `batlehub-web`.
-        let elsewhere = ["server.trusted_proxies", "ip_blocking.trusted_proxies"];
+        // The `[stats]` links likewise: `build_pending` projects them and
+        // `apply_swaps_the_registry_views` observes the swap.
+        let elsewhere = [
+            "server.trusted_proxies",
+            "ip_blocking.trusted_proxies",
+            "stats.dashboard_url",
+            "stats.registry_dashboard_url",
+        ];
         // ponytail: read by the builder into opaque values — the clients'
         // proxy settings and the internal scanners — so no field shows them;
         // the heavy suite (RFC 0037 §6.6) is their observation.

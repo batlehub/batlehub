@@ -181,3 +181,59 @@ describe("AdminDashboard trend", () => {
     expect(wrapper.text()).toContain("90.0%");
   });
 });
+
+/** RFC 0042 phase 5: the global monitoring link, and registry names that lead somewhere. */
+describe("AdminDashboard — monitoring link", () => {
+  beforeEach(() => {
+    adminStatsHistoryMock.mockReset().mockResolvedValue({ data: trend() });
+    registryHealthMock.mockReset().mockResolvedValue({ data: [] });
+  });
+
+  async function mountWithLinks() {
+    const wrapper = mount(AdminDashboard, {
+      global: {
+        stubs: { RouterLink: { props: ["to"], template: '<a :data-to="to"><slot /></a>' } },
+      },
+    });
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("opens the configured dashboard in a new tab, without a referrer", async () => {
+    adminStatsMock.mockReset().mockResolvedValue({
+      data: {
+        ...stats,
+        monitoring_url: "https://grafana.test/d/all",
+        per_registry: [
+          {
+            registry: "npm-q",
+            artifact_hits: 1,
+            artifact_misses: 0,
+            hit_rate: 1,
+            upstream_degraded: false,
+            upstream_error_rate: 0,
+            upstream_latency_ms: 0,
+          },
+        ],
+      },
+    });
+    registryHealthMock.mockResolvedValue({
+      data: [{ registry: "npm-q", recent_errors: [] }],
+    });
+    const w = await mountWithLinks();
+    const a = w.get('[data-testid="monitoring"]');
+    expect(a.attributes("href")).toBe("https://grafana.test/d/all");
+    expect(a.attributes("target")).toBe("_blank");
+    expect(a.attributes("rel")).toBe("noopener noreferrer");
+    expect(w.find('a[data-to="/admin/observability/registries/npm-q"]').exists()).toBe(true);
+  });
+
+  it("binds no link that is not http(s)", async () => {
+    adminStatsMock
+      .mockReset()
+      .mockResolvedValue({ data: { ...stats, monitoring_url: "javascript:alert(1)" } });
+    const w = await mountWithLinks();
+    expect(w.find('[data-testid="monitoring"]').exists()).toBe(false);
+    expect(w.html()).not.toContain("javascript:");
+  });
+});

@@ -72,6 +72,33 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 Returns per-registry status (upstream reachability, cache hit rate) and overall server status.
 
+### The registry page {#registry-page}
+
+*Admin → Observability → Registries* lists every registry; each name opens its
+page (`GET /api/v1/admin/registries/{name}`). A strip at the top carries the
+five signals someone opens it for — upstream, cache, scan, queue and advice —
+and four tabs (`?tab=overview|activity|scan|config`) hold the detail:
+
+- **Overview**: the suggestions, a closed list computed by the server — an
+  upstream degraded while stale metadata is not served, security on with no
+  rescan interval, versions whose scan ran out of attempts.
+- **Activity**: upstream error rate and latency **for this replica since it
+  started** (each replica counts its own), and the hourly history of
+  `[stats]` (hits, misses, listing reads). Error and latency history are not
+  kept by BatleHub: that is what the monitoring link is for.
+- **Scan**: whether the registry scans, its rescan interval, the last and next
+  SBOM re-check, the queue counts, and a link to the Scans page filtered on it.
+- **Configuration**: the effective settings, **built from an allow-list**: a
+  credential shows as `configured (bearer)`, never as a value, and upstream URLs
+  are shown with their credentials and query removed.
+
+The page needs `system:read`. The Configuration tab also needs `config:read`,
+the upstream URLs `upstreams:read`, and the queue counts `quarantine:read` on
+the registry. With `[stats] registry_dashboard_url` set
+([configuration](/guide/configuration)), a [Monitoring ↗] button opens your
+dashboard filtered on the registry, in a new tab that receives no referrer;
+`[stats] dashboard_url` puts the same button on the Dashboard.
+
 ### Clear registry cache
 
 Forces the next request for any package in the registry to re-fetch from upstream:

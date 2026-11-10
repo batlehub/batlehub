@@ -273,6 +273,8 @@ pub struct PendingReload {
     /// Warnings the candidate config produces, promoted to the live
     /// [`ConfigWarnings`] store when this pending reload is applied.
     pub warnings: Vec<ConfigWarning>,
+    /// The candidate's registry views (RFC 0042 §5.3), swapped in by `apply`.
+    pub new_registry_views: crate::handlers::back_office::registries::RegistryViewsSnapshot,
 }
 
 /// Snapshot of a pending reload returned to the GET /pending endpoint.
@@ -388,6 +390,9 @@ pub struct ConfigReloadService {
     /// Warnings for the config currently in force. Populated at startup via
     /// [`ConfigReloadService::set_warnings`] and refreshed by `apply`.
     pub(super) config_warnings: ConfigWarnings,
+    /// The registry pages' projected config; seeded at startup, replaced by
+    /// `apply` (RFC 0042 decision 32).
+    pub(super) registry_views: crate::RegistryViews,
     /// Raw content of the last config load attempt (file-watcher or editor), whether
     /// or not it ended up applied. Lets `load_pending`/`load_pending_from_content`
     /// suppress redundant rebuilds triggered by byte-identical rewrites (touch,
@@ -526,6 +531,7 @@ impl ConfigReloadService {
             builder,
             banner,
             config_warnings: ConfigWarnings::default(),
+            registry_views: crate::RegistryViews::default(),
             last_content: Mutex::new(None),
             applied_layers: Mutex::new(startup_layers.clone()),
             startup_document: batlehub_config::merge_layers(&startup_layers)
@@ -543,6 +549,11 @@ impl ConfigReloadService {
     /// it themselves, so this is only needed once.
     pub fn set_warnings(&self, warnings: Vec<ConfigWarning>) {
         self.config_warnings.replace(warnings);
+    }
+
+    /// The handle the registry pages read; register it as app data.
+    pub fn registry_views(&self) -> crate::RegistryViews {
+        self.registry_views.clone()
     }
 
     /// Discards the pending reload without applying. Returns `true` if one existed.

@@ -316,6 +316,15 @@ export const router = createRouter({
         { path: "operations/warming", component: () => import("@/pages/AdminWarming.vue") },
         { path: "operations/imports", component: () => import("@/pages/AdminImports.vue") },
         { path: "observability/health", component: () => import("@/pages/AdminHealth.vue") },
+        // RFC 0042 phase 5: every registry, and one registry's config and health.
+        {
+          path: "observability/registries",
+          component: () => import("@/pages/AdminRegistries.vue"),
+        },
+        {
+          path: "observability/registries/:name",
+          component: () => import("@/pages/AdminRegistry.vue"),
+        },
         { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
         { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },
         { path: "operations/upstream", component: () => import("@/pages/AdminUpstream.vue") },

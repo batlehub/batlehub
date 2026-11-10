@@ -248,13 +248,59 @@ struct Opts {
     /// registry node, and `SEC` seals the namespace `@sealed` — the T3/T3c
     /// registry-scoped findings reader.
     sec_findings_reader: bool,
+    /// `SEC` sets `[registries.security.rescan] interval_secs = 3600`.
+    hourly_rescan: bool,
+    /// The registry pages see `VIEWS_TOML`'s projection.
+    views: bool,
 }
+
+/// The config half of the registry pages: `SEC` with a credential and a
+/// tokenised upstream, both monitoring links (RFC 0042 phase 5).
+const VIEWS_TOML: &str = r#"
+[database]
+type = "postgresql"
+url = "postgresql://localhost/test"
+
+[storage]
+type = "filesystem"
+path = "/tmp/batlehub-test"
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[stats]
+dashboard_url = "https://grafana.test/d/all"
+registry_dashboard_url = "https://grafana.test/d/x?var-registry={registry}"
+
+[[registries]]
+type = "npm"
+name = "npm-sec"
+mode = "proxy"
+upstreams = ["https://u:SENTINEL-0042@up.test/?token=SENTINEL-0042"]
+
+[registries.upstream_auth]
+type = "bearer"
+token = "SENTINEL-0042"
+
+[registries.security]
+mode = "block"
+scanners = ["osv"]
+
+[[registries]]
+type = "npm"
+name = "npm"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+"#;
 
 async fn app_opts(
     Opts {
         shadow,
         delegate,
         sec_findings_reader,
+        hourly_rescan,
+        views,
     }: Opts,
 ) -> (
     impl actix_web::dev::Service<
@@ -346,7 +392,13 @@ async fn app_opts(
         policies,
         security: [SEC, SEC2]
             .iter()
-            .map(|n| (n.to_string(), SecurityPolicy::defaults_for(n)))
+            .map(|n| {
+                let mut p = SecurityPolicy::defaults_for(n);
+                if hourly_rescan && *n == SEC {
+                    p.rescan_interval = Some(std::time::Duration::from_secs(3600));
+                }
+                (n.to_string(), p)
+            })
             .collect(),
         verdicts: Some(Arc::new(Verdicts(verdicts.clone(), counts.clone()))),
         scan_queue: Some(Arc::new(Queue(queue.clone(), counts.clone()))),
@@ -389,7 +441,17 @@ async fn app_opts(
         local_svc,
         RegistryModeMap::default(),
         batlehub_web::CargoIndexMap::default(),
-        ConfigureAppDefaults::default(),
+        ConfigureAppDefaults {
+            registry_views: if views {
+                let config: batlehub_config::AppConfig =
+                    toml::from_str(VIEWS_TOML).expect("the views config parses");
+                config.validate().expect("the views config validates");
+                batlehub_web::RegistryViews::from_config(&config)
+            } else {
+                batlehub_web::RegistryViews::default()
+            },
+            ..ConfigureAppDefaults::default()
+        },
         test_auth_providers(),
     )
     .await;
@@ -1115,5 +1177,189 @@ async fn findings_reference_filter_escapes_like_metacharacters() {
         )
         .await;
         assert_eq!(page["total"], 0, "{q}");
+    }
+}
+
+// ── next_rescan on the verdict GET (RFC 0042 phase 4) ────────────────────────
+
+/// §6.P observation 7, in process: `verdict_at` is the last scan plus the
+/// interval, the verdict GET now carries `scan_status`, and without an
+/// interval the clock is absent rather than invented.
+#[actix_web::test]
+async fn verdict_get_carries_next_rescan_and_scan_status_for_system_read() {
+    let (app, lab) = app_opts(Opts {
+        hourly_rescan: true,
+        ..Opts::default()
+    })
+    .await;
+    for r in [SEC, SEC2] {
+        lab.seed(r, "a", "1.0.0").await;
+        lab.verdict(r, "a", "1.0.0", VerdictState::Allowed).await;
+    }
+    let body = get(
+        &app,
+        &format!("/api/v1/verdicts/{SEC}/a/1.0.0"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    let scanned: DateTime<Utc> = serde_json::from_value(body["last_scanned_at"].clone()).unwrap();
+    let at: DateTime<Utc> =
+        serde_json::from_value(body["next_rescan"]["verdict_at"].clone()).unwrap();
+    assert_eq!(at, scanned + chrono::Duration::seconds(3600));
+    assert_eq!(body["next_rescan"]["verdict_interval_secs"], 3600);
+    assert!(
+        body["next_rescan"].get("sbom_at").is_none(),
+        "no SBOM re-check configured"
+    );
+    assert_eq!(body["scan_status"]["state"], "scanned");
+    assert_eq!(body["scan_status"]["verdict"], "allowed");
+
+    let none = get(
+        &app,
+        &format!("/api/v1/verdicts/{SEC2}/a/1.0.0"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(
+        none["next_rescan"],
+        serde_json::json!({}),
+        "no interval: no date"
+    );
+}
+
+/// §7.2: the clocks are `system:read`'s; a `quarantine:read` holder reads
+/// the verdict and its status, not when it is looked at again.
+#[actix_web::test]
+async fn verdict_get_omits_next_rescan_without_system_read() {
+    let (app, lab) = app_opts(Opts {
+        hourly_rescan: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.seed(SEC, "a", "1.0.0").await;
+    lab.verdict(SEC, "a", "1.0.0", VerdictState::Allowed).await;
+    let body = get(
+        &app,
+        &format!("/api/v1/verdicts/{SEC}/a/1.0.0"),
+        Some(USER_TOKEN),
+    )
+    .await;
+    assert!(body.get("next_rescan").is_none(), "{body}");
+    assert_eq!(body["scan_status"]["state"], "scanned");
+    assert!(body["scan_status"].get("detail").is_none());
+}
+
+// ── /admin/registries/{name} and the monitoring links (RFC 0042 phase 5) ─────
+
+const VIEW: &str = "/api/v1/admin/registries";
+
+/// The view, its blocks and the link, for an administrator; no secret.
+#[actix_web::test]
+async fn registry_view_shows_config_health_and_the_monitoring_link() {
+    let (app, lab) = app_opts(Opts {
+        views: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.queue_three(SEC, "e").await;
+    let body = get(&app, &format!("{VIEW}/{SEC}"), Some(ADMIN_TOKEN)).await;
+    let text = body.to_string();
+    assert!(!text.contains("SENTINEL-0042"), "{text}");
+    assert_eq!(body["registry_type"], "npm");
+    assert_eq!(body["mode"], "proxy");
+    assert_eq!(
+        body["monitoring_url"],
+        "https://grafana.test/d/x?var-registry=npm-sec"
+    );
+    assert_eq!(body["config"]["upstream_auth"]["state"], "configured");
+    assert_eq!(body["config"]["upstream_auth"]["kind"], "bearer");
+    assert_eq!(body["config"]["upstream_count"], 1);
+    assert!(body["config"]["upstreams"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("https://up.test/"));
+    assert_eq!(body["scan"]["enabled"], true);
+    assert_eq!(body["scan"]["queued"], 1);
+    assert_eq!(body["scan"]["scanning"], 1);
+    assert_eq!(body["scan"]["failed"], 1);
+    let codes: Vec<&str> = body["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["security_without_rescan", "scan_failures"]);
+    assert_eq!(body["suggestions"][1]["count"], 1);
+
+    let plain = get(&app, &format!("{VIEW}/{PLAIN}"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(plain["scan"]["enabled"], false);
+    assert_eq!(plain["config"]["upstream_auth"]["state"], "none");
+    assert_eq!(plain["suggestions"], serde_json::json!([]));
+
+    let stats = get(&app, "/api/v1/admin/stats", Some(ADMIN_TOKEN)).await;
+    assert_eq!(stats["monitoring_url"], "https://grafana.test/d/all");
+}
+
+/// T6: `system:read` is checked before the lookup, so an unknown name and a
+/// known one are the same `403` to a caller without it.
+#[actix_web::test]
+async fn registry_view_without_system_read_is_403_before_lookup() {
+    let (app, _lab) = app_opts(Opts {
+        views: true,
+        ..Opts::default()
+    })
+    .await;
+    for name in [SEC, "nope"] {
+        assert_eq!(
+            status_of(&app, &format!("{VIEW}/{name}"), Some(USER_TOKEN)).await,
+            403,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        status_of(&app, &format!("{VIEW}/nope"), Some(ADMIN_TOKEN)).await,
+        404
+    );
+}
+
+/// T4b and §7.2: `system:read` alone opens the page, not the configuration,
+/// the URLs, or the queue counts of a registry whose holds it may not read.
+#[actix_web::test]
+async fn registry_view_hides_blocks_without_their_verbs() {
+    let (app, lab) = app_opts(Opts {
+        views: true,
+        delegate: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.queue_three(SEC, "e").await;
+    let body = get(&app, &format!("{VIEW}/{SEC}"), Some(USER_TOKEN)).await;
+    assert!(body.get("config").is_none(), "no config:read: {body}");
+    assert!(!body.to_string().contains("up.test"), "{body}");
+    assert_eq!(
+        body["scan"]["queued"], 1,
+        "the user holds quarantine:read on SEC"
+    );
+}
+
+/// T13: the Dashboard's link is `system:read`'s; a `stats:read`-only caller
+/// does not learn the monitoring host.
+#[actix_web::test]
+async fn monitoring_url_absent_without_system_read() {
+    let (app, _lab) = app_opts(Opts {
+        views: true,
+        ..Opts::default()
+    })
+    .await;
+    let req = TestRequest::get()
+        .uri("/api/v1/admin/stats")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    if resp.status() == 200 {
+        let body: Value = read_body_json(resp).await;
+        assert!(body.get("monitoring_url").is_none(), "{body}");
+    } else {
+        assert_eq!(resp.status(), 403);
     }
 }

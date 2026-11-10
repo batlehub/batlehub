@@ -457,6 +457,14 @@ pub struct VerdictResponse {
     pub ref_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_commit: Option<String>,
+    /// Where the version stands in scanning, at the caller's tier (RFC 0042
+    /// §4.2). The same field the lists carry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_status: Option<ScanStatusDto>,
+    /// When the version is looked at again; only with `system:read` at the
+    /// instance tier (RFC 0042 §7.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_rescan: Option<batlehub_core::services::scan_status::NextRescan>,
 }
 
 /// The current verdict for one version (RFC 0018 §4.2 *Verdict endpoint*).
@@ -486,6 +494,8 @@ pub async fn get_verdict(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    exposure: Option<web::Data<crate::handlers::back_office::exposure::ExposureConfig>>,
+    advisories: Option<web::Data<Arc<dyn batlehub_core::ports::AdvisoryRepository>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
     let requested = PackageId::new(&registry, &name, &version);
@@ -557,9 +567,37 @@ pub async fn get_verdict(
     if findings_withheld {
         verdict.findings.clear();
     }
+    let (statuses, _) = scan_status_for(&svc.hot, &identity.0, std::slice::from_ref(&pkg)).await;
+    let next_rescan = if authz::authorize_control(&svc.hot, None, &identity.0, Action::SystemRead)
+        .await
+        .is_ok()
+    {
+        let interval = exposure.as_ref().and_then(|e| e.sbom_recheck_interval);
+        // A failed read drops the SBOM clock, not the answer.
+        let sbom_last_run = match (&advisories, interval) {
+            (Some(repo), Some(_)) => repo
+                .list_scan_state()
+                .await
+                .inspect_err(|e| tracing::warn!(error = %e, "next_rescan: scan state unreadable"))
+                .ok()
+                .and_then(|rows| rows.into_iter().find(|r| r.registry == registry))
+                .map(|r| r.last_scan_at),
+            _ => None,
+        };
+        Some(batlehub_core::services::scan_status::next_rescan(
+            &verdict,
+            policy.rescan_interval,
+            sbom_last_run,
+            interval,
+        ))
+    } else {
+        None
+    };
     Ok(web::Json(VerdictResponse {
         verdict,
         findings_withheld,
+        scan_status: statuses.into_iter().next().flatten(),
+        next_rescan,
         requested_ref: resolution.as_ref().map(|r| r.requested.clone()),
         ref_kind: resolution.as_ref().map(|r| r.kind.as_str().to_owned()),
         resolved_commit: resolution.as_ref().map(|r| r.sha.clone()),

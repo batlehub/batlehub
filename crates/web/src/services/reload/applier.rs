@@ -262,6 +262,7 @@ impl ConfigReloadService {
                 new_config.effective_trusted_proxies(),
             ),
             warnings,
+            new_registry_views: crate::handlers::back_office::registries::project(&new_config),
         };
         *self.pending.lock().expect("pending reload lock poisoned") = Some(pending);
         Ok(diff)
@@ -368,6 +369,8 @@ impl ConfigReloadService {
         // Refresh (and re-log) the config warnings so the admin endpoint describes
         // the config that is now in force, not the one it replaced.
         self.config_warnings.replace(pending.warnings.clone());
+        self.registry_views
+            .replace(pending.new_registry_views.clone());
         // Upstream absences were observed under the old upstreams and credentials.
         self.discovery.clear_absent();
 

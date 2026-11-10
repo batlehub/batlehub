@@ -155,4 +155,58 @@ describe("VerdictPanel", () => {
     await flushPromises();
     expect(w.find('[data-testid="verdict-rescan"]').exists()).toBe(false);
   });
+
+  describe("next rescan (RFC 0042 phase 4)", () => {
+    async function nextRescan(next: Record<string, unknown> | undefined) {
+      getVerdict.mockResolvedValue({
+        data: verdict(next === undefined ? {} : { next_rescan: next }),
+        error: undefined,
+      });
+      const w = panel();
+      await flushPromises();
+      return w.find('[data-testid="verdict-next-rescan"]');
+    }
+
+    it("draws no row when the server sent none (no system:read)", async () => {
+      expect((await nextRescan(undefined)).exists()).toBe(false);
+    });
+
+    it("says never without an interval, and disabled without an SBOM re-check", async () => {
+      const row = await nextRescan({});
+      expect(row.text()).toContain("never (no interval configured)");
+      expect(row.text()).toContain("SBOM re-check disabled");
+    });
+
+    it("says due for a past date, and not yet run for an SBOM pass that never ran", async () => {
+      const row = await nextRescan({
+        verdict_at: "2000-01-01T00:00:00Z",
+        verdict_interval_secs: 3600,
+        sbom_interval_secs: 86_400,
+      });
+      expect(row.text()).toContain("verdict: due (every 1 h)");
+      expect(row.text()).toContain("not yet run (registry-wide, every 1 d)");
+    });
+
+    it("gives both dates with their intervals", async () => {
+      const row = await nextRescan({
+        verdict_at: "2999-11-17T14:02:00Z",
+        verdict_interval_secs: 604_800,
+        sbom_at: "2999-11-11T03:00:00Z",
+        sbom_interval_secs: 86_400,
+      });
+      expect(row.text()).toMatch(/verdict: .*2999.* \(every 7 d\)/);
+      expect(row.text()).toMatch(/SBOM re-check: .*2999.* \(registry-wide, every 1 d\)/);
+    });
+
+    it("writes odd intervals in minutes or seconds", async () => {
+      const row = await nextRescan({
+        verdict_at: "2999-01-01T00:00:00Z",
+        verdict_interval_secs: 90,
+        sbom_at: "2999-01-01T00:00:00Z",
+        sbom_interval_secs: 120,
+      });
+      expect(row.text()).toContain("every 90 s");
+      expect(row.text()).toContain("every 2 min");
+    });
+  });
 });

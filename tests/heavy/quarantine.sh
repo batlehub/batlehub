@@ -455,6 +455,23 @@ assert "raw" not in rows[0], rows[0]
 PY
 heavy_log "FINDINGS-PAGE-OK (user 403; admin sees $ADVISORY on $PKG@$VULN, denied)"
 
+# RFC 0042 §6.P observations 4 and 8 (phase 5): the registry page is
+# `system:read`'s, and its monitoring link is the configured template with
+# this registry's name in it, built by the server. The upstream credential
+# never appears, only that one is or is not configured.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/registries/$REG")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/registries/$REG, not 403"
+VIEW="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/registries/$REG")" \
+  || heavy_fail "/api/v1/admin/registries/$REG failed for the admin"
+python3 - "$VIEW" "$REG" <<'PY' || heavy_fail "the registry view of $REG is wrong: $VIEW"
+import json, sys
+view, reg = json.loads(sys.argv[1]), sys.argv[2]
+assert view["monitoring_url"] == f"https://grafana.test/d/x?var-registry={reg}", view
+assert view["scan"]["enabled"] is True, view
+assert view["config"]["upstream_auth"]["state"] in ("none", "configured"), view
+PY
+heavy_log "REGISTRY-VIEW-OK (user 403; admin sees the monitoring link for $REG)"
+
 # ── 3b. `download` explains a refusal (RFC 0040 heavy case 10) ───────────────
 #
 # Through the tap, so the CLI's own request is on the wire.
@@ -714,6 +731,31 @@ set -e
   || { cat "$HEAVY_WORK/install-9.err" >&2; heavy_fail "npm install through $RESCAN_REG failed after the clean scan"; }
 heavy_wire_re_after "flip-first-contact" "GET /proxy/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION/tarball -> 200" \
   "the tarball was not served after the clean scan"
+
+# RFC 0042 §6.P observation 7 (phase 4): `next_rescan` is the last scan plus
+# `rescan.interval_secs` (1 s here), only for `system:read`; the first
+# registry sets no interval, so its clock is absent rather than invented.
+NEXT="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION")" \
+  || heavy_fail "the admin could not read the verdict of $FLIP_PKG@$FLIP_VERSION"
+NONE="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$REG/$PKG/$CLEAN")" \
+  || heavy_fail "the admin could not read the verdict of $PKG@$CLEAN"
+USERS="$(curl -fsS -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION")" \
+  || heavy_fail "the user could not read the verdict of $FLIP_PKG@$FLIP_VERSION"
+python3 - "$NEXT" "$NONE" "$USERS" <<'PY' || heavy_fail "next_rescan is wrong: $NEXT / $NONE / $USERS"
+import json, sys
+from datetime import datetime, timedelta
+nxt, none, user = (json.loads(a) for a in sys.argv[1:])
+import re
+# chrono writes up to 9 fractional digits; fromisoformat takes 6.
+at = lambda s: datetime.fromisoformat(re.sub(r"(\.\d{6})\d*", r"\1", s).replace("Z", "+00:00"))
+n = nxt["next_rescan"]
+assert n["verdict_interval_secs"] == 1, n
+assert at(n["verdict_at"]) == at(nxt["last_scanned_at"]) + timedelta(seconds=1), nxt
+assert "verdict_at" not in none.get("next_rescan", {}), none
+assert "next_rescan" not in user, user
+assert nxt["scan_status"]["state"] in ("scanned", "queued", "scanning"), nxt
+PY
+heavy_log "NEXT-RESCAN-OK (last scan + 1 s on $RESCAN_REG; none on $REG; absent for the user)"
 # The hold's release reached the receiver: the identity refused on first
 # contact is the one named.
 RELEASED="$(sink_wait artifact_released 1)"

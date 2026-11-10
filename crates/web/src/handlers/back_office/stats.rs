@@ -121,6 +121,9 @@ pub struct StatsResponse {
     pub since_startup: DateTime<Utc>,
     pub aggregate: AggregateStats,
     pub per_registry: Vec<RegistryStatsDto>,
+    /// `[stats] dashboard_url`; only with `system:read` (RFC 0042 §4.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitoring_url: Option<String>,
 }
 
 /// Aggregate cache hit/miss statistics since last restart (admin).
@@ -140,6 +143,7 @@ pub async fn admin_stats(
     registry_map: web::Data<RegistryMap>,
     proxy_svc: web::Data<Arc<ProxyService>>,
     proxy_metrics: web::Data<Arc<ProxyMetrics>>,
+    views: Option<web::Data<super::registries::RegistryViews>>,
 ) -> Result<impl Responder, AppError> {
     let mut per_registry: Vec<RegistryStatsDto> = Vec::new();
     let mut total_hits: u64 = 0;
@@ -201,5 +205,20 @@ pub async fn admin_stats(
             cached_bytes: total_cached_bytes,
         },
         per_registry,
+        monitoring_url: match views {
+            Some(v)
+                if batlehub_core::services::authz::authorize_control(
+                    &proxy_svc.hot,
+                    None,
+                    &identity.0,
+                    batlehub_core::entities::Action::SystemRead,
+                )
+                .await
+                .is_ok() =>
+            {
+                v.dashboard_url()
+            }
+            _ => None,
+        },
     }))
 }

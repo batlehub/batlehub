@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 1–3 built 2026-11-10 (§17.1–§17.3); phases 4–5 to come |
+| Status      | Accepted — phases 1–5 built 2026-11-10 (§17.1–§17.5); the real-client proof of §6.P not yet run |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1794,8 +1794,8 @@ None.
 | 1 ✅ (§17.1) | `scan_status` (core `derive`, ports' `jobs_for`/`get_many`, `scan_status_for` with per-registry visibility, the skip, the timeout and `scan_status_unavailable`, the field on the list, detail and admin-list responses) + `ScanBadge` in the catalog's State cell, `AdminPackages` and the header; package page tabs; `usePoll` with its backoff; the worker's `exhausted:` marker (decision 34) and the index migration (decision 33); `config.db-calls.toml` gains a security registry and the budgets are re-measured; the explore-list soak arm; T1/T2/T5/T8/T8b/T15 | yes: motivations 1 and 2 |
 | 2 ✅ (§17.2) | `GET /admin/scans` with its per-registry row filter, `AdminScans.vue` (queue, failures, verdicts by state), [Rescan] wired to existing endpoints; the route in `authz_matrix.rs` and `profile_routes.txt`; T7 for `/admin/scans`, T9, T16 | yes: motivation 4 |
 | 3 ✅ (§17.3) | `GET /admin/findings` built on `authorize_control` with the per-row seal check, `AdminFindings.vue`, [Exempt…] reusing the exemption dialog; the route in `authz_matrix.rs` and `profile_routes.txt`; T3/T3b/T3c/T7 for `/admin/findings`/T10 | yes: motivation 3 |
-| 4 | `next_rescan` on the verdict GET and in the Security tab | yes: motivation 5 |
-| 5 | `GET /admin/registries/{name}`, `registries::project` allow-list and `AuthPresence`, suggestions, `AdminRegistry.vue` (strip + tabs) + `AdminRegistries.vue`, the extracted `StatsTrendChart`, the Activity tab on `/admin/stats/history`, links from Dashboard/Health; `[stats] dashboard_url`/`registry_dashboard_url` with their validation, `monitoring_url` on both responses, the Grafana `registry` variable; URL fields through `redacted()` behind `upstreams:read`; `RegistryViews` via `PendingReload.new_registry_views`; the two `RELOAD_KEYS` rows and `hot-reload.md` regenerated (decision 32); T4/T4b/T6/T11/T12/T13/T14 in the same PR as the endpoint | yes: motivations 6 and 7 |
+| 4 ✅ (§17.4) | `next_rescan` on the verdict GET and in the Security tab | yes: motivation 5 |
+| 5 ✅ (§17.5) | `GET /admin/registries/{name}`, `registries::project` allow-list and `AuthPresence`, suggestions, `AdminRegistry.vue` (strip + tabs) + `AdminRegistries.vue`, the extracted `StatsTrendChart`, the Activity tab on `/admin/stats/history`, links from Dashboard/Health; `[stats] dashboard_url`/`registry_dashboard_url` with their validation, `monitoring_url` on both responses, the Grafana `registry` variable; URL fields through `redacted()` behind `upstreams:read`; `RegistryViews` via `PendingReload.new_registry_views`; the two `RELOAD_KEYS` rows and `hot-reload.md` regenerated (decision 32); T4/T4b/T6/T11/T12/T13/T14 in the same PR as the endpoint | yes: motivations 6 and 7 |
 
 Every phase regenerates `ui/openapi.json` and `ui/src/client/`, and adds its
 docs and both locales. The allow-list and its sentinel test (T4) land in the
@@ -2024,4 +2024,109 @@ absent in this workspace; CI runs it) and the rendered design gate
 7. **§6.P observation 3 is not automated.** It needs a second token holding
    `findings:read` on one registry only; T3 covers the rule in-process, and
    the heavy suite covers the `403` and the admin read.
+
+### 17.4 Phase 4 — built 2026-11-10
+
+**Landed as designed:**
+
+- `services/scan_status.rs` `next_rescan(verdict, rescan_interval,
+  sbom_last_run, sbom_interval) -> NextRescan`, unit-tested on an absent
+  interval, a never-scanned version (due from `evaluated_at`) and a disabled
+  SBOM re-check.
+- The verdict GET carries `scan_status` (through `scan_status_for`, phase 1's
+  deviation 4 closed) and, with `system:read` at the instance tier,
+  `next_rescan`. The SBOM clock reads `registry_scan_state` through the
+  `AdvisoryRepository` and `[vulnerability_scan] interval_secs` through
+  `ExposureConfig.sbom_recheck_interval`; a failed read drops that clock, not
+  the answer. The `404` with no verdict row is unchanged.
+- `scan_visibility.rs`: `verdict_get_carries_next_rescan_and_scan_status_for_system_read`
+  (observation 7 in process: `verdict_at == last_scanned_at + 3600 s`, absent
+  without an interval) and `verdict_get_omits_next_rescan_without_system_read`.
+- `quarantine.sh` observation 7 (`NEXT-RESCAN-OK`): on the rescan registry
+  (`interval_secs = 1`), the admin reads `last_scanned_at + 1 s`; the first
+  registry has no interval and no date; the user reads no `next_rescan`.
+- `VerdictPanel.vue`: *Next rescan*, only when the field is present — "never
+  (no interval configured)", "due", "SBOM re-check disabled", "not yet run" —
+  with both locales and tests.
+- `docs/guide/security-gates.md` and its twin say what the endpoint carries.
+
+**Where the build differs from the text:**
+
+1. **`next_rescan` takes the verdict, not a scan state**, and has no
+   `scan_state` argument: a version being scanned has the same next date, and
+   the badge already says it is being scanned.
+2. **The response carries both intervals** (`verdict_interval_secs`,
+   `sbom_interval_secs`), so the panel can print "(every 7 d)" as the mock
+   does.
+3. **The SBOM interval travels on `ExposureConfig`.** `[vulnerability_scan]`
+   is not hot, and that struct is already the app data that carries SBOM
+   coverage to the web process.
+
+### 17.5 Phase 5 — built 2026-11-10
+
+**Landed as designed:**
+
+- `[stats] dashboard_url` and `registry_dashboard_url`, with
+  `validate_stats_urls()` (§4.3: parse, `http`/`https`, no userinfo, not
+  empty, no `{` in the global link, `{registry}` required, alone and outside
+  the host) and the `stats.monitoring-url-http` warning;
+  `monitoring_url_for` substitutes with `form_urlencoded`. `url` becomes a
+  direct dependency of `batlehub-config` (already 2.5.8 in the tree). Tests:
+  T11 `monitoring_url_rejects_non_http_schemes`, T12
+  `monitoring_url_encodes_query_metacharacters`, T14
+  `stats_url_with_userinfo_is_rejected`, each §4.3 rejection, the `http`
+  warning.
+- Both keys are Hot in `RELOAD_KEYS`; `hot-reload.md` regenerated (and its
+  twin by hand). `build_pending` projects them into
+  `PendingReload.new_registry_views`, `apply` swaps them into the
+  `RegistryViews` handle, observed by `apply_swaps_the_registry_views`; the
+  server gate lists them as read outside the builder.
+- `back_office/registries.rs`: `project()` copies `RegistryConfig` field by
+  field into `RegistryConfigView` (upstream count and redacted URLs, rule
+  kinds, cache keys, security keys, grant and namespace counts), credentials
+  as `AuthPresence`; `GET /api/v1/admin/registries/{name}` joins the live half
+  per request (this replica's upstream health since start, the queue counts
+  through `list_jobs`, the SBOM pass) and the closed list of suggestions
+  (`services/scan_status.rs` `suggestions`). `system:read` before the lookup
+  (T6); `config` with `config:read`; URLs with `upstreams:read`. T4
+  `registry_view_never_contains_sentinel` sets every `UpstreamAuthConfig`
+  variant and a tokenised upstream and index URL to a sentinel.
+- `/admin/stats` carries `monitoring_url` with `system:read` (T13).
+- `deploy/grafana/batlehub-production.json`: a `registry` variable (multi,
+  `All` = `.*`), every `by (registry)` panel filtered on it, `version` 2.
+- `quarantine.sh` (`REGISTRY-VIEW-OK`): the user gets `403`; the admin's view
+  of the quarantined registry carries the encoded monitoring link from the
+  heavy config's new `[stats]` block.
+- UI: `AdminRegistries.vue` (a tab of *Observability*) and
+  `AdminRegistry.vue` (strip, four tabs on `?tab=`, the 404 and 403 states,
+  [Monitoring ↗] bound only for `http(s)` with `rel="noopener noreferrer"`),
+  `StatsTrendChart.vue`, [Monitoring ↗] on the Dashboard, registry names
+  linked from the Dashboard and Health tables, and `AdminScans` reading
+  `?registry=` so the Scan tab's link filters. Both locales.
+- Docs: *The registry page* in `admin-storage-health.md`, the two keys in
+  `configuration.md`, the warning code in `hot-reload.md`, with twins;
+  `config.example.toml` shows both keys commented.
+
+**Where the build differs from the text:**
+
+1. **Queue counts need `quarantine:read` on the registry**, not only
+   `system:read`: a count of held versions is the disclosure T16 closed on
+   the Scans page.
+2. **`project()` runs on the whole `AppConfig`**, and `RegistryViews` holds
+   the `[stats]` global link too, so `/admin/stats` reads it from the same
+   snapshot.
+3. **There was no trend chart to extract.** `AdminDashboard.vue` states its
+   trend as a sentence; `StatsTrendChart.vue` is new and used by the registry
+   page only.
+4. **[Edit configuration] is always drawn**, and the config page does not yet
+   place the caret on the registry's block: the console has no `config:write`
+   signal to decide on, and the caret is a change to `AdminConfigReload.vue`
+   this phase did not make.
+5. **The Registries list has no type column**: `/admin/stats` `per_registry`
+   does not carry the kind.
+6. **No `authz_matrix.rs` entry**, for §17.2 deviation 1's reason.
+7. **§6.P observations 8 (in a browser over CDP) and 9 (a reload refused
+   over the API) are not automated.** Observation 9's rule is
+   `monitoring_url_rejects_non_http_schemes`, run through the same
+   `validate()` a reload calls.
 

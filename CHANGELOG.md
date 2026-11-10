@@ -41,6 +41,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `name%401.2.3`, which GitHub answers on the API, the archive and the raw
   host alike.
 
+### Added
+
+- **Scan visibility and admin views (RFC 0042).** Lists and the package page
+  show where each version stands in scanning (`scan_status`: queued, scanning,
+  failed, scanned · verdict), at the caller's tier; the package page has
+  Overview, Versions, Security and Administration tabs. New admin pages:
+  **Scans** (`GET /api/v1/admin/scans`: the queue, failures, verdicts by
+  state), **Findings** (`GET /api/v1/admin/findings`: findings across the
+  registries where you hold `findings:read`, by finding or by advisory, with
+  [Exempt…]) and one page per **registry** (`GET /api/v1/admin/registries/{name}`:
+  health, scanning, suggestions and an allow-listed view of its
+  configuration). The verdict endpoint carries `scan_status` and, for
+  `system:read`, `next_rescan`.
+- **`[stats] dashboard_url` and `registry_dashboard_url`**: [Monitoring ↗]
+  links on the Dashboard and on each registry page, validated at load and
+  reloaded without a restart. **An older release refuses a config that sets
+  either key**: remove them before rolling back. The shipped Grafana dashboard
+  gains a `registry` variable; re-importing it overwrites local edits.
+
 ### Fixed
 
 - **A personal access token sent over HTTP Basic resolved to anonymous.**

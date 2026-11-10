@@ -67,6 +67,7 @@ GET /api/v1/admin/quota	skip: no arm yet
 GET /api/v1/admin/quota/{registry}	skip: no arm yet
 DELETE /api/v1/admin/quota/{registry}/{user_id}	skip: no arm yet
 GET /api/v1/admin/quota/{registry}/{user_id}	skip: no arm yet
+GET /api/v1/admin/registries/{name}	skip: no arm yet
 GET /api/v1/admin/registries/{registry}/beta-channel	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/beta-channel	skip: no arm yet
 DELETE /api/v1/admin/registries/{registry}/beta-channel/{principal_type}/{principal_id}	skip: no arm yet

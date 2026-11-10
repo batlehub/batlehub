@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: 0e15f14cef0693eb
+sourceHash: 48b8bab8fc5b1f47
 ---
 
 # Stockage et santé
@@ -90,6 +90,36 @@ curl -X POST \
   -H "Authorization: Bearer <admin-token>" \
   http://localhost:8080/api/v1/admin/registries/npm/clear-cache
 ```
+
+### La page d'un registre {#registry-page}
+
+*Admin → Observabilité → Registres* liste chaque registre ; chaque nom ouvre sa
+page (`GET /api/v1/admin/registries/{name}`). Un bandeau en haut porte les cinq
+signaux pour lesquels on l'ouvre — amont, cache, analyse, file et conseils — et
+quatre onglets (`?tab=overview|activity|scan|config`) portent le détail :
+
+- **Vue d'ensemble** : les suggestions, une liste fermée calculée par le serveur
+  — un amont dégradé alors que les métadonnées périmées ne sont pas servies, une
+  sécurité active sans intervalle de réanalyse, des versions dont l'analyse a
+  épuisé ses tentatives.
+- **Activité** : le taux d'erreur et la latence de l'amont **pour ce réplica
+  depuis son démarrage** (chaque réplica compte les siens), et l'historique
+  horaire de `[stats]` (hits, misses, lectures de listing). BatleHub ne garde
+  pas l'historique des erreurs et de la latence : c'est le rôle du lien de
+  monitoring.
+- **Analyse** : si le registre analyse, son intervalle de réanalyse, la
+  dernière et la prochaine revérification SBOM, les compteurs de la file, et un
+  lien vers la page Scans filtrée sur lui.
+- **Configuration** : les réglages effectifs, **construits depuis une liste
+  blanche** : un identifiant apparaît comme `configured (bearer)`, jamais comme
+  une valeur, et les URL amont sont affichées sans identifiants ni requête.
+
+La page demande `system:read`. L'onglet Configuration demande aussi
+`config:read`, les URL amont `upstreams:read`, et les compteurs de la file
+`quarantine:read` sur le registre. Avec `[stats] registry_dashboard_url`
+([configuration](/fr/guide/configuration)), un bouton [Monitoring ↗] ouvre votre
+tableau de bord filtré sur le registre, dans un nouvel onglet qui ne reçoit pas
+de référent ; `[stats] dashboard_url` met le même bouton sur le Tableau de bord.
 
 ### OpenTelemetry (Jaeger, Tempo)
 

@@ -57,7 +57,8 @@ const activeTab = computed<Tab>({
 });
 
 const registries = ref<string[]>([]);
-const registry = ref("");
+// `?registry=` preselects the filter: the registry page links here filtered.
+const registry = ref(typeof route.query.registry === "string" ? route.query.registry : "");
 const queueState = ref("");
 const queuePage = ref(0);
 const failPage = ref(0);

@@ -5105,3 +5105,125 @@ fn rule_settings_a_security_registry_ignores_warn() {
         );
     }
 }
+
+// ── RFC 0042 §4.3: the `[stats]` monitoring links ───────────────────────────
+
+fn with_stats(lines: &str) -> AppConfig {
+    let raw = format!(
+        r#"
+        [database]
+        type = "postgresql"
+        url = "postgresql://localhost/test"
+
+        [storage]
+        type = "filesystem"
+        path = "/tmp/batlehub-test"
+
+        [server]
+        host = "127.0.0.1"
+        port = 8080
+
+        [stats]
+        {lines}
+        "#
+    );
+    toml::from_str::<AppConfig>(&raw).expect("parses")
+}
+
+fn stats_error(lines: &str) -> String {
+    with_stats(lines).validate().expect_err(lines).to_string()
+}
+
+/// T11: a link rendered as an `href` cannot be a script.
+#[test]
+fn monitoring_url_rejects_non_http_schemes() {
+    let err = stats_error(r#"registry_dashboard_url = "javascript:alert(1)//{registry}""#);
+    assert!(
+        err.contains("`stats.registry_dashboard_url`: scheme `javascript` is not allowed"),
+        "{err}"
+    );
+    let err = stats_error(r#"dashboard_url = "data:text/html,<script>alert(1)</script>""#);
+    assert!(err.contains("scheme `data` is not allowed"), "{err}");
+}
+
+#[test]
+fn monitoring_url_templates_are_checked_at_load() {
+    for (lines, want) in [
+        (r#"dashboard_url = """#, "must not be empty"),
+        (
+            r#"dashboard_url = "https://g.test/d/x?var-registry={registry}""#,
+            "no placeholder",
+        ),
+        (
+            r#"registry_dashboard_url = "https://g.test/d/x""#,
+            "must contain `{registry}`",
+        ),
+        (
+            r#"registry_dashboard_url = """#,
+            "must contain `{registry}`",
+        ),
+        (
+            r#"registry_dashboard_url = "https://g.test/d/x?r={registry}&t={team}""#,
+            "only placeholder",
+        ),
+        (
+            r#"registry_dashboard_url = "https://{registry}.g.test/d/x""#,
+            "registry_dashboard_url",
+        ),
+        (r#"dashboard_url = "not a url""#, "stats.dashboard_url"),
+    ] {
+        let err = stats_error(lines);
+        assert!(err.contains(want), "{lines}: {err}");
+    }
+    let ok = with_stats(
+        r#"dashboard_url = "https://g.test/d/x"
+        registry_dashboard_url = "https://g.test/d/x?var-registry={registry}&from=now-24h""#,
+    );
+    ok.validate().expect("both links are legal");
+    assert!(ok
+        .warnings()
+        .iter()
+        .all(|w| w.code != "stats.monitoring-url-http"));
+}
+
+/// T14: a credential in a link shown to every `system:read` holder.
+#[test]
+fn stats_url_with_userinfo_is_rejected() {
+    let err = stats_error(r#"dashboard_url = "https://u:p@g.test/d/x""#);
+    assert!(err.contains("must not carry a user or password"), "{err}");
+    let err = stats_error(r#"registry_dashboard_url = "https://u@g.test/d/x?r={registry}""#);
+    assert!(err.contains("must not carry a user or password"), "{err}");
+}
+
+#[test]
+fn an_http_monitoring_url_loads_with_a_warning() {
+    let cfg = with_stats(r#"registry_dashboard_url = "http://g.test/d/x?r={registry}""#);
+    cfg.validate().expect("http is accepted");
+    let w = cfg.warnings();
+    assert!(
+        w.iter()
+            .any(|w| w.code == "stats.monitoring-url-http"
+                && w.path == "stats.registry_dashboard_url"),
+        "{w:?}"
+    );
+}
+
+/// T12: the registry name cannot leave its query value.
+#[test]
+fn monitoring_url_encodes_query_metacharacters() {
+    let name = r#"a/b c&d#e"f"#;
+    let url = monitoring_url_for(
+        "https://g.test/d/x?var-registry={registry}&from=now-24h",
+        name,
+    );
+    let parsed = url::Url::parse(&url).expect("parses");
+    let pairs: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+    assert_eq!(
+        pairs,
+        [
+            ("var-registry".to_owned(), name.to_owned()),
+            ("from".to_owned(), "now-24h".to_owned())
+        ]
+    );
+    assert!(parsed.fragment().is_none(), "{url}");
+}

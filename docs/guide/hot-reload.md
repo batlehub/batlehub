@@ -34,6 +34,8 @@ incident. The most specific row wins, so
 | `search.readmes` | hot | the prose-search switch |
 | `server.signed_urls` | hot | the download URL signer |
 | `server.trusted_proxies` | hot | the proxy-trust policy, swapped together with the host routing table |
+| `stats.dashboard_url` | hot | the Dashboard's monitoring link |
+| `stats.registry_dashboard_url` | hot | the registry views' monitoring links |
 | `subdomain_routing` | hot | the host → registry routing table |
 | `air_gap` | partial | the registry clients' air-gap wrapper; warming and release imports keep the startup clients |
 | `limits.max_artifact_size_bytes` | partial | the request path; the scan worker keeps the startup limit |
@@ -166,6 +168,7 @@ Config Reload admin page renders both.
 | `proxy-trust.deprecated-key-only` | Proxy trust comes from the deprecated `[ip_blocking].trusted_proxies` |
 | `proxy-trust.invalid-deprecated-entry` | An entry of the deprecated `[ip_blocking].trusted_proxies` is not an IP or CIDR range and was dropped |
 | `proxy-trust.shadowed-deprecated-key` | Both keys are set; `[server]` wins and the deprecated list is ignored entirely |
+| `stats.monitoring-url-http` | A `[stats]` monitoring link uses `http`; the browser follows it in clear text |
 | `subdomain.invalid-dns-label` | `[subdomain_routing]` is on but a registry name cannot be a DNS label, so no wildcard host is derived for it |
 | `vsx-signing.proxy-mode` | `[registries.vsx_signing]` on a registry in `proxy` mode: nothing is published there, so the key signs nothing; the upstream's signature is relayed regardless |
 

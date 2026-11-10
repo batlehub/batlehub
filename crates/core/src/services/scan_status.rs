@@ -95,6 +95,93 @@ fn non_empty(s: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// When a version is next looked at again (RFC 0042 §4.2 *Next rescan*).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct NextRescan {
+    /// `last_scanned_at + rescan.interval_secs`; a version never scanned is
+    /// due from its verdict's `evaluated_at`. Absent without an interval. In
+    /// the past means due: the scheduler ticks every minute.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict_interval_secs: Option<u64>,
+    /// The registry-wide SBOM re-check: its last run plus
+    /// `[vulnerability_scan] interval_secs`. Absent when the re-check is off
+    /// or has never covered this registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sbom_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sbom_interval_secs: Option<u64>,
+}
+
+/// Both clocks of [`NextRescan`], from plain values: core cannot read the
+/// `[vulnerability_scan]` config, so its interval arrives as a `Duration`.
+pub fn next_rescan(
+    verdict: &Verdict,
+    rescan_interval: Option<std::time::Duration>,
+    sbom_last_run: Option<DateTime<Utc>>,
+    sbom_interval: Option<std::time::Duration>,
+) -> NextRescan {
+    let after = |at: DateTime<Utc>, d: std::time::Duration| {
+        chrono::Duration::from_std(d)
+            .ok()
+            .and_then(|d| at.checked_add_signed(d))
+    };
+    let verdict_at = rescan_interval
+        .and_then(|i| after(verdict.last_scanned_at.unwrap_or(verdict.evaluated_at), i));
+    let sbom_interval = sbom_interval.filter(|_| sbom_last_run.is_some());
+    NextRescan {
+        verdict_at,
+        verdict_interval_secs: rescan_interval.map(|d| d.as_secs()),
+        sbom_at: sbom_last_run
+            .zip(sbom_interval)
+            .and_then(|(at, i)| after(at, i)),
+        sbom_interval_secs: sbom_interval.map(|d| d.as_secs()),
+    }
+}
+
+/// One piece of advice on the registry page (RFC 0042 §4.2), a closed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestionCode {
+    /// The upstream is degraded and stale metadata is not served.
+    DegradedWithoutStale,
+    /// Security is on and nothing rescans a version on a clock.
+    SecurityWithoutRescan,
+    /// Versions whose last scan job ran out of attempts.
+    ScanFailures,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct Suggestion {
+    pub code: SuggestionCode,
+    /// How many versions, for `scan_failures`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+}
+
+/// §4.2's suggestions, from plain values. Text and a link; never a write.
+pub fn suggestions(
+    degraded: bool,
+    serve_stale: bool,
+    security_on: bool,
+    rescan_interval: Option<std::time::Duration>,
+    failed: u64,
+) -> Vec<Suggestion> {
+    let mut out = Vec::new();
+    let mut push = |code, count| out.push(Suggestion { code, count });
+    if degraded && !serve_stale {
+        push(SuggestionCode::DegradedWithoutStale, None);
+    }
+    if security_on && rescan_interval.is_none() {
+        push(SuggestionCode::SecurityWithoutRescan, None);
+    }
+    if failed > 0 {
+        push(SuggestionCode::ScanFailures, Some(failed));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +377,86 @@ mod tests {
             assert_eq!((s.state, s.verdict), (ScanState::Scanned, Some(st)));
             assert_eq!(s.detail.last_scanned_at, v.last_scanned_at);
         }
+    }
+
+    fn scanned(at: Option<DateTime<Utc>>) -> Verdict {
+        Verdict {
+            package: PackageId::new("r", "p", "1.0.0"),
+            state: VerdictState::Allowed,
+            reason_codes: vec![],
+            findings: vec![],
+            policy_ref: "r/default".into(),
+            available_at: None,
+            evaluated_at: now() - Duration::days(30),
+            last_scanned_at: at,
+            scanners_done: vec![],
+        }
+    }
+
+    #[test]
+    fn next_rescan_adds_each_interval_to_its_own_clock() {
+        let hour = std::time::Duration::from_secs(3600);
+        let day = std::time::Duration::from_secs(86_400);
+        let n = next_rescan(&scanned(Some(now())), Some(hour), Some(now()), Some(day));
+        assert_eq!(n.verdict_at, Some(now() + Duration::hours(1)));
+        assert_eq!(n.verdict_interval_secs, Some(3600));
+        assert_eq!(n.sbom_at, Some(now() + Duration::days(1)));
+        assert_eq!(n.sbom_interval_secs, Some(86_400));
+    }
+
+    #[test]
+    fn next_rescan_is_absent_without_an_interval_or_an_sbom_run() {
+        let n = next_rescan(
+            &scanned(Some(now())),
+            None,
+            None,
+            Some(std::time::Duration::from_secs(60)),
+        );
+        assert_eq!(
+            n,
+            NextRescan {
+                verdict_at: None,
+                verdict_interval_secs: None,
+                sbom_at: None,
+                sbom_interval_secs: None
+            }
+        );
+        let n = next_rescan(&scanned(Some(now())), None, Some(now()), None);
+        assert_eq!(n.sbom_at, None, "SBOM re-check disabled");
+    }
+
+    #[test]
+    fn a_never_scanned_version_is_due_from_its_evaluation() {
+        let hour = std::time::Duration::from_secs(3600);
+        let n = next_rescan(&scanned(None), Some(hour), None, None);
+        let at = n.verdict_at.unwrap();
+        assert_eq!(at, now() - Duration::days(30) + Duration::hours(1));
+        assert!(at < now(), "in the past: due");
+    }
+
+    #[test]
+    fn each_suggestion_fires_at_its_boundary_and_not_before() {
+        let hour = Some(std::time::Duration::from_secs(3600));
+        assert!(suggestions(false, false, false, None, 0).is_empty());
+        assert!(
+            suggestions(true, true, true, hour, 0).is_empty(),
+            "stale served: no advice"
+        );
+        let codes = |v: Vec<Suggestion>| v.into_iter().map(|s| s.code).collect::<Vec<_>>();
+        assert_eq!(
+            codes(suggestions(true, false, false, None, 0)),
+            [SuggestionCode::DegradedWithoutStale]
+        );
+        assert_eq!(
+            codes(suggestions(false, false, true, None, 0)),
+            [SuggestionCode::SecurityWithoutRescan]
+        );
+        assert_eq!(
+            suggestions(false, false, true, hour, 1),
+            [Suggestion {
+                code: SuggestionCode::ScanFailures,
+                count: Some(1)
+            }]
+        );
     }
 }

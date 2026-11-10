@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: c6b29ac867ec1f4b
+sourceHash: 7659821444aed832
 ---
 
 # Référence de configuration
@@ -3144,6 +3144,9 @@ une seule question d'opérateur — même si les deux moitiés diffèrent :
 history_enabled        = true   # défaut
 history_retention_days = 30     # défaut ; 0 désactive l'élagage, pas l'historique
 metrics_enabled        = true   # défaut : le comportement d'avant la RFC 0004
+# Liens de monitoring (absents par défaut : pas de bouton)
+dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
+registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batlehub?var-registry={registry}&from=now-24h&to=now"
 ```
 
 | Champ | Type | Défaut | Notes |
@@ -3151,6 +3154,8 @@ metrics_enabled        = true   # défaut : le comportement d'avant la RFC 0004
 | `history_enabled` | booléen | `true` | Enregistrer le cumul horaire du cache derrière la tendance du tableau de bord. `false` rétablit le tableau de bord d'avant la RFC 0004, qui n'affiche que les compteurs depuis le démarrage du processus courant |
 | `history_retention_days` | u32 | `30` | Supprimer les lignes de cumul plus anciennes. `0` garde toutes les lignes — cela désactive l'*élagage*, pas l'historique |
 | `metrics_enabled` | booléen | `true` | Installer le collecteur Prometheus et servir `/metrics`. `false` fait répondre `503 metrics not configured` à `/metrics` |
+| `dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de *Admin → Tableau de bord*. Aucun paramètre |
+| `registry_dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de chaque page de registre. `{registry}` est son seul paramètre, et il est obligatoire ; il est remplacé encodé en pourcentage, le modèle doit donc le placer dans la requête |
 
 **`metrics_enabled` est un contrôle de sécurité, pas une préférence.**
 `/metrics` n'est pas authentifié et, avant l'existence de ce bloc, était
@@ -3177,6 +3182,20 @@ registre et par heure fait moins de 9 000 lignes par an.
 
 La table ne contient ni principal ni coordonnée — registre, fenêtre, compteurs —
 sa rétention est donc un choix opérationnel plutôt qu'un choix de confidentialité.
+
+**Les liens de monitoring.** Le serveur construit les deux URL et ne les sert
+qu'aux détenteurs de `system:read`, car un lien peut nommer un hôte de
+monitoring interne. Chacun est vérifié au chargement : il doit être analysable,
+utiliser `http` ou `https` (un lien `javascript:` rendu en `href` s'exécuterait
+dans la console), ne porter aucun `user:password` et ne pas être vide ;
+`dashboard_url` n'accepte pas de `{`, et `{registry}` ne doit pas se trouver
+dans l'hôte. Un chargement ou un rechargement qui enfreint l'une de ces règles
+est refusé, avec le champ et la règle ; un lien `http` est chargé avec un
+avertissement. Les deux clés se rechargent sans redémarrage. Le tableau de bord
+livré `deploy/grafana/batlehub-production.json` a une variable `registry`, si
+bien que `?var-registry={registry}` le filtre. Une version plus ancienne refuse
+une configuration qui définit l'une de ces clés (`[stats]` rejette les clés
+inconnues) : retirez-les avant un retour arrière.
 
 ---
 

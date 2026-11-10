@@ -301,6 +301,17 @@ pub struct StatsConfig {
     /// breaks on upgrade.
     #[serde(default = "default_true")]
     pub metrics_enabled: bool,
+
+    /// The global monitoring link, shown on Admin → Dashboard (RFC 0042
+    /// §4.1). No placeholder. Absent: no button.
+    #[serde(default)]
+    pub dashboard_url: Option<String>,
+
+    /// The per-registry monitoring link, shown on each registry page.
+    /// `{registry}` is its only placeholder, replaced percent-encoded by
+    /// [`monitoring_url_for`].
+    #[serde(default)]
+    pub registry_dashboard_url: Option<String>,
 }
 
 impl Default for StatsConfig {
@@ -309,8 +320,34 @@ impl Default for StatsConfig {
             history_enabled: true,
             history_retention_days: default_history_retention_days(),
             metrics_enabled: true,
+            dashboard_url: None,
+            registry_dashboard_url: None,
         }
     }
+}
+
+/// `template` with `{registry}` replaced by `registry`, percent-encoded as a
+/// query value, so `/`, space, `&`, `#` and `"` cannot leave it (RFC 0042
+/// §6.6). `validate()` has already refused a template this would break.
+pub fn monitoring_url_for(template: &str, registry: &str) -> String {
+    let encoded: String = form_urlencoded::byte_serialize(registry.as_bytes()).collect();
+    template.replace("{registry}", &encoded)
+}
+
+/// One `[stats]` link against §4.3: parseable, `http`/`https`, no userinfo.
+fn check_monitoring_url(field: &str, url: &str) -> Result<()> {
+    if url.is_empty() {
+        anyhow::bail!("`stats.{field}`: must not be empty (remove the key to hide the button)");
+    }
+    let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("`stats.{field}`: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "https" && scheme != "http" {
+        anyhow::bail!("`stats.{field}`: scheme `{scheme}` is not allowed (http or https only)");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        anyhow::bail!("`stats.{field}`: must not carry a user or password; it is shown to every system:read holder");
+    }
+    Ok(())
 }
 
 // ── Vulnerability scan ──────────────────────────────────────────────────────────
@@ -726,7 +763,24 @@ impl AppConfig {
         self.flag_source_warnings(&mut out);
         self.air_gap_warnings(&mut out);
         self.audit_warnings(&mut out);
+        self.stats_url_warnings(&mut out);
         out
+    }
+
+    /// RFC 0042 §4.3: an `http` monitoring link is accepted, and said.
+    fn stats_url_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (field, url) in [
+            ("dashboard_url", &self.stats.dashboard_url),
+            ("registry_dashboard_url", &self.stats.registry_dashboard_url),
+        ] {
+            if url.as_deref().is_some_and(|u| u.starts_with("http:")) {
+                out.push(ConfigWarning::new(
+                    "stats.monitoring-url-http",
+                    format!("stats.{field}"),
+                    "the monitoring link uses http; the browser follows it in clear text",
+                ));
+            }
+        }
     }
 
     /// RFC 0036 §4.3's warnings: the trail's lifecycle as configured, stated.
@@ -2374,8 +2428,48 @@ impl AppConfig {
         self.validate_security_globals(env)?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
+        self.validate_stats_urls()?;
         if let Some(audit) = &self.audit {
             audit.validate()?;
+        }
+        Ok(())
+    }
+
+    /// RFC 0042 §4.3: a `[stats]` link is rendered as an `href`, so a
+    /// `javascript:` value would run in the console's origin.
+    fn validate_stats_urls(&self) -> Result<()> {
+        if let Some(url) = &self.stats.dashboard_url {
+            if url.contains('{') {
+                anyhow::bail!(
+                    "`stats.dashboard_url`: has no placeholder; `{{` looks like a copy of registry_dashboard_url"
+                );
+            }
+            check_monitoring_url("dashboard_url", url)?;
+        }
+        if let Some(t) = &self.stats.registry_dashboard_url {
+            let rest = t.replace("{registry}", "");
+            if rest.len() == t.len() {
+                anyhow::bail!(
+                    "`stats.registry_dashboard_url`: the template must contain `{{registry}}`"
+                );
+            }
+            if rest.contains('{') || rest.contains('}') {
+                anyhow::bail!(
+                    "`stats.registry_dashboard_url`: `{{registry}}` is the only placeholder"
+                );
+            }
+            // A test name with a space and a slash: a placeholder in the host
+            // would not parse once substituted.
+            let url = monitoring_url_for(t, "a/b c");
+            check_monitoring_url("registry_dashboard_url", &url)?;
+            let host = url::Url::parse(&monitoring_url_for(t, "probe"))
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned));
+            if host.is_some_and(|h| h.contains("probe")) {
+                anyhow::bail!(
+                    "`stats.registry_dashboard_url`: `{{registry}}` must not be in the host"
+                );
+            }
         }
         Ok(())
     }

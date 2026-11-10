@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: f5eb7c27f7d7bccd
+sourceHash: cff271fe09b853d8
 ---
 
 # Contrôles de sécurité
@@ -617,6 +617,15 @@ fenêtre d'âge ou un changement de politique.
 Quand le statut n'a pas pu être lu en 500 ms, la liste est servie sans lui et
 porte `scan_status_unavailable: true` ; la console affiche alors « — » à la
 place de chaque badge.
+
+**L'endpoint de verdict porte le même état**, dans `scan_status`, et pour un
+détenteur de `system:read` un bloc `next_rescan` : quand le verdict sera
+réanalysé (`last_scanned_at` plus `[registries.security.rescan]
+interval_secs` ; absent sans intervalle, et une date passée signifie « dû ») et
+quand la revérification SBOM du registre aura lieu (sa dernière exécution plus
+`[vulnerability_scan] interval_secs` ; absente quand la revérification est
+désactivée ou n'a jamais couvert le registre). L'onglet Sécurité de la page du
+paquet affiche les deux sous *Prochaine réanalyse*.
 
 ### La page Scans {#scans-page}
 

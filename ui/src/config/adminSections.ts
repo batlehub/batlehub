@@ -102,5 +102,7 @@ export const NOTIFICATIONS_TABS = [
 
 export const OBSERVABILITY_TABS = [
   { to: "/admin/observability/health", label: "adminNav.health" },
+  // RFC 0042 phase 5: one registry's configuration and health, from its list.
+  { to: "/admin/observability/registries", label: "adminNav.registries" },
   { to: "/admin/observability/audit-log", label: "adminNav.auditLog" },
 ];
