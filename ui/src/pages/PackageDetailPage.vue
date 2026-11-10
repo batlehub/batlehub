@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { ref, computed, onBeforeUnmount, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Check, Copy, FileJson, FileCode, Download, RefreshCw } from "@lucide/vue";
+import { RouterLink, useRoute } from "vue-router";
+import { Check, Copy, FileJson, FileCode, Download, RefreshCw } from "@lucide/vue";
 import { listRegistries, packageDetail } from "@/client/sdk.gen";
 import type { FirewallDto, PackageDetailResponse, RegistryInfo } from "@/client/types.gen";
 import { installCommandFor } from "@/config/registryTypes";
@@ -16,14 +16,15 @@ import ReadmePanel from "@/components/package/ReadmePanel.vue";
 import VerdictPanel from "@/components/package/VerdictPanel.vue";
 import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
+import PackageBreadcrumb from "@/components/package/PackageBreadcrumb.vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
-import { usePackageVersions } from "@/composables/usePackageVersions";
+import { rowState, STATE_LABEL_KEYS, usePackageVersions } from "@/composables/usePackageVersions";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import { formatCount, formatDay } from "@/lib/format";
 import { severityVariant } from "@/lib/badge-variants";
 import { Badge } from "@/components/ui/badge";
-import { Resolution, type ResolutionState } from "@/components/ui/resolution";
+import { Resolution } from "@/components/ui/resolution";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
@@ -47,7 +48,6 @@ const canReadUpstream = computed(() => can("system:read", registry.value));
 const canRescan = computed(() => can("gates:exempt", registry.value));
 const { authFetch } = useAuthFetch();
 const route = useRoute();
-const router = useRouter();
 
 const registry = computed(() => String(route.params.registry ?? ""));
 const name = computed(() => String(route.params.name ?? ""));
@@ -189,103 +189,6 @@ async function downloadSbom(version: string, fmt: "spdx" | "cyclonedx") {
 onBeforeUnmount(() => {
   if (copyTimer) clearTimeout(copyTimer);
 });
-
-/**
- * Back to the catalog **as the reader left it**, not to a fresh one.
- *
- * This pushed `/packages?registry=…`, which looked like it preserved something
- * and did not: the catalog never read `route.query`, so the registry was dropped
- * on arrival along with the search, the scope, the sort and the page. Opening a
- * package from the fifth page of a search and pressing Back gave an empty search
- * box and page one.
- *
- * `router.back()` when the previous entry is the catalog, because that restores
- * the URL *and* the scroll offset (`scrollBehavior` in `router/index.ts` returns
- * the saved position on a pop) — and the catalog now carries its whole state in
- * the query, so the URL is the search. Rebuilding a location by hand would
- * reconstruct the query and still lose the offset.
- *
- * The fallback is for arriving without that history: a pasted link, a refresh, a
- * new tab. `history.state.back` is Vue Router's own record of the previous
- * entry, so this asks the question directly rather than guessing from
- * `document.referrer`. A detail page also starts with `/packages`, hence the
- * exact-path test — going "back" from one package to another would be a
- * surprise, not a return.
- */
-function isCatalogEntry(entry: unknown): boolean {
-  if (typeof entry !== "string") return false;
-  return entry.split("?")[0].split("#")[0] === "/packages";
-}
-
-function goBack() {
-  if (isCatalogEntry(window.history.state?.back)) {
-    router.back();
-    return;
-  }
-  router.push({ path: "/packages", query: { registry: registry.value } });
-}
-
-/**
- * The first crumb is a link that also knows how to *return*.
- *
- * A plain click runs `goBack()` — which pops the history entry when the catalog
- * is the one behind us, and that is what restores its search, scope, sort, page
- * *and* scroll offset. A modified click (new tab, new window, download) is left
- * to the browser, and so is the href, which is why this is an `<a>` and not the
- * `<button>` it used to be: a control that navigates and cannot be middle-clicked
- * is a link wearing the wrong element.
- */
-/** The href the first crumb carries, so it is a real link before it is a handler. */
-const catalogHref = computed(() => router.resolve({ path: "/packages" }).href);
-
-function onCrumbToCatalog(event: MouseEvent) {
-  if (event.defaultPrevented) return;
-  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0)
-    return;
-  event.preventDefault();
-  goBack();
-}
-
-/**
- * The row's state, as the server graded it, in the vocabulary the catalogue's
- * rows already use.
- *
- * This used to be derived here from `firewall` alone, over three values, and it
- * was wrong in the one place it mattered: an upstream-only candidate carries
- * `Clear` — the firewall has nothing to refuse about a version nobody can
- * download from here yet — so a version this instance holds **no bytes of**
- * rendered as a full 3×3 matrix in ink, DESIGN.md's *held and verified*, right
- * beside a badge reading "not held here". The signature device of the whole
- * system was lying on precisely the rows the fetch button exists for.
- *
- * `ExploreVersionDto.state` is now graded on the side that knows what is held,
- * exactly as `ExploreEntry::state` already is for the catalogue. The fallback is
- * defensive only, for a response predating the field.
- */
-function rowState(row: { state?: string; firewall: FirewallDto }): ResolutionState {
-  const graded = row.state as ResolutionState | undefined;
-  if (graded && graded in STATE_LABEL_KEYS) return graded;
-  if (row.firewall.status === "blocked") return "blocked";
-  if (row.firewall.status === "yanked") return "yanked";
-  return "cached";
-}
-
-/**
- * One vocabulary, shared with the catalogue.
- *
- * The two pages described the same versions in two languages — `Cached / Stale /
- * Held / Pending / Yanked / Blocked` on the index that points here, and
- * `Clear / (yanked) / Blocked` on the destination. A reader who followed a link
- * had to translate.
- */
-const STATE_LABEL_KEYS: Record<ResolutionState, string> = {
-  cached: "resolution.cached",
-  stale: "resolution.stale",
-  held: "resolution.held",
-  pending: "resolution.pending",
-  yanked: "resolution.yanked",
-  blocked: "resolution.blocked",
-};
 
 const stateLabel = (row: { state?: string; firewall: FirewallDto }) =>
   t(STATE_LABEL_KEYS[rowState(row)]);
@@ -538,76 +441,7 @@ const {
        paragraph do not want the same width, which is exactly what one cap on
        the page was giving them. -->
   <div class="space-y-6">
-    <!-- ── The trail ────────────────────────────────────────────────────────
-         A back button became a breadcrumb, and the breadcrumb is sticky.
-
-         It answers three separate complaints with one element. (1) It is real
-         navigation: `Packages` was a `<button>` calling `goBack()`, so it had no
-         href, could not be middle-clicked and told a reader nothing about where
-         they were. (2) It carries **the selected version and its state**, and
-         that is the point of the stickiness: the index sits below a README of
-         arbitrary length, so clicking a version used to change a region the
-         reader could no longer see — now the change is always on screen, in the
-         one strip that never scrolls away. (3) It restores the location channel
-         the console had nowhere else on this route.
-
-         Sticky with a hairline and the page's own ground — no shadow, because
-         nothing in this world casts one at rest, and a strip that needed a
-         shadow to separate itself would be a strip that is not a rule.
-
-         The first crumb is a plain `<a>` with a resolved href and its own click
-         handler, deliberately not a `RouterLink`: a fallthrough `@click` on one
-         is merged *after* the component's own `navigate`, so it would push
-         before this handler could decline — the href is what makes it a link
-         (middle-click, copy, focus), and `goBack()` is what restores the
-         catalog's search, scope, sort, page and scroll offset when the reader
-         came from there. A modified click stays the browser's.
-
-         `top-[var(--masthead-h)] z-30` (set by `AppHeader`) is the offset the console's other two sticky bars already
-         use (`AdminPackages.vue`, `PackageVersionsTable.vue`). `top-0 z-10`
-         pinned this at viewport y=0 — the same line `AppHeader`'s `sticky top-0
-         z-40` opaque bar occupies — so the crumb, the version and the Resolution
-         chip vanished under the masthead the moment the page scrolled, which is
-         the opposite of what the note above claims for it. -->
-    <nav
-      :aria-label="t('packageDetailPage.breadcrumb')"
-      class="sticky top-[var(--masthead-h,4rem)] z-30 -mx-4 border-b border-rule-soft bg-background px-4 py-3 md:-mx-6 md:px-6"
-    >
-      <ol class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-        <li>
-          <a
-            :href="catalogHref"
-            class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px]"
-            @click="onCrumbToCatalog"
-          >
-            <ArrowLeft class="h-4 w-4" aria-hidden="true" />
-            {{ t("packageDetailPage.backToCatalog") }}
-          </a>
-        </li>
-        <li aria-hidden="true" class="text-muted-foreground">/</li>
-        <li>
-          <RouterLink
-            :to="{ path: '/packages', query: { registry } }"
-            class="inline-block py-1 text-primary underline underline-offset-[3px]"
-            >{{ registry }}</RouterLink
-          >
-        </li>
-        <li aria-hidden="true" class="text-muted-foreground">/</li>
-        <li class="min-w-0 [overflow-wrap:anywhere] font-mono text-foreground" aria-current="page">
-          {{ name }}
-        </li>
-        <!-- The version, and its state, pinned to the top of the viewport. This
-             is the selection feedback; without it a click twelve rows down the
-             index changes only what is off screen above. -->
-        <template v-if="selectedRow">
-          <li aria-hidden="true" class="text-muted-foreground">/</li>
-          <li class="font-mono text-foreground">{{ selectedRow.version }}</li>
-          <li>
-            <Resolution :state="rowState(selectedRow)" :label="stateLabel(selectedRow)" />
-          </li>
-        </template>
-      </ol>
-    </nav>
+    <PackageBreadcrumb :registry="registry" :name="name" :selected-row="selectedRow" />
 
     <!-- Loading and error are *panels*, which is the only bounded box this
          system has besides the settings popover — 1px rule, 40/24 padding, a

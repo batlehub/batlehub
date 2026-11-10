@@ -2,7 +2,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { explorePackageDetail, exploreFetchVersion } from "@/client/sdk.gen";
-import type { ExplorePackageDetailResponse, ExploreVersionDto } from "@/client/types.gen";
+import type {
+  ExplorePackageDetailResponse,
+  ExploreVersionDto,
+  FirewallDto,
+} from "@/client/types.gen";
+import type { ResolutionState } from "@/components/ui/resolution";
 import { extractMessage } from "@/composables/useApi";
 import { formatBytes } from "@/lib/format";
 
@@ -568,3 +573,44 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
     fetchDetail,
   };
 }
+
+/**
+ * The row's state, as the server graded it, in the vocabulary the catalogue's
+ * rows already use.
+ *
+ * This used to be derived here from `firewall` alone, over three values, and it
+ * was wrong in the one place it mattered: an upstream-only candidate carries
+ * `Clear` — the firewall has nothing to refuse about a version nobody can
+ * download from here yet — so a version this instance holds **no bytes of**
+ * rendered as a full 3×3 matrix in ink, DESIGN.md's *held and verified*, right
+ * beside a badge reading "not held here". The signature device of the whole
+ * system was lying on precisely the rows the fetch button exists for.
+ *
+ * `ExploreVersionDto.state` is now graded on the side that knows what is held,
+ * exactly as `ExploreEntry::state` already is for the catalogue. The fallback is
+ * defensive only, for a response predating the field.
+ */
+export function rowState(row: { state?: string; firewall: FirewallDto }): ResolutionState {
+  const graded = row.state as ResolutionState | undefined;
+  if (graded && graded in STATE_LABEL_KEYS) return graded;
+  if (row.firewall.status === "blocked") return "blocked";
+  if (row.firewall.status === "yanked") return "yanked";
+  return "cached";
+}
+
+/**
+ * One vocabulary, shared with the catalogue.
+ *
+ * The two pages described the same versions in two languages — `Cached / Stale /
+ * Held / Pending / Yanked / Blocked` on the index that points here, and
+ * `Clear / (yanked) / Blocked` on the destination. A reader who followed a link
+ * had to translate.
+ */
+export const STATE_LABEL_KEYS: Record<ResolutionState, string> = {
+  cached: "resolution.cached",
+  stale: "resolution.stale",
+  held: "resolution.held",
+  pending: "resolution.pending",
+  yanked: "resolution.yanked",
+  blocked: "resolution.blocked",
+};
