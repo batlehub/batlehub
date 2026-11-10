@@ -4,13 +4,13 @@ Proxy and cache the JetBrains plugin ecosystem ([plugins.jetbrains.com](https://
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `jetbrains-marketplace` |
 | **Default upstream** | `plugins.jetbrains.com` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ marketplace-compatible upload |
+| **Private publish** | yes — marketplace-compatible upload |
 | **Air gap** | no composed listing offline: a gallery answers by query |
 
 ## Proxy setup

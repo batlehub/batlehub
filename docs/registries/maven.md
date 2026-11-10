@@ -4,13 +4,13 @@ Proxy a Maven Central-compatible repository — POMs, JARs, source/Javadoc JARs,
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `maven` |
 | **Default upstream** | `repo1.maven.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `mvn deploy` |
+| **Private publish** | yes — `mvn deploy` |
 | **Air gap** | offline,`maven-metadata.xml` is composed from the held files; Maven still asks for `.sha1`/`.md5` beside every file, which the bundle can carry for real files |
 
 ## Proxy setup

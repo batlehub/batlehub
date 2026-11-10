@@ -6,13 +6,13 @@ Roles — the older v1 API — are served read-only, and how much of that surfac
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `galaxy` |
 | **Default upstream** | `https://galaxy.ansible.com/api/` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | `{namespace}.{name}` — the spelling `requirements.yml` uses — with one tarball per version |
-| **Private publish** | ✅ `ansible-galaxy collection publish` |
+| **Private publish** | yes — `ansible-galaxy collection publish` |
 | **Client switch** | `server_list` in `ansible.cfg` |
 
 ## Proxy setup

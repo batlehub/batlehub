@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/cargo.md
-sourceHash: ed751e26fd208c43
+sourceHash: 1f4db53b601d63a3
 ---
 
 # Cargo
@@ -13,13 +13,13 @@ en cache : la vérification continue donc de fonctionner.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `cargo` |
 | **Amont par défaut** | `crates.io` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `cargo publish` |
+| **Publication privée** | oui — `cargo publish` |
 | **Coupure réseau** | hors ligne, l'index sparse est composé à partir des crates détenues, leurs dépendances étant lues dans le manifeste de chaque crate à l'import ; une crate importée sans son manifeste n'est pas listée |
 
 ## Mise en place du proxy

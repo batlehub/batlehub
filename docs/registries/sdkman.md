@@ -4,13 +4,13 @@ Proxy and cache SDKMAN — the JDK, Gradle, Maven, Kotlin and every other candid
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `sdkman` |
 | **Default upstream** | `api.sdkman.io/2` (candidates API) · `broker.sdkman.io` (`broker_url`) |
 | **Modes** | proxy-only |
 | **Addressing** | `{candidate}/{version}/{platform}` — one archive per platform |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | offline, `versions/all` and `candidates/default` are composed from the held candidate archives for the platform |
 
 ## Proxy setup

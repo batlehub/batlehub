@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: 27cb1ec777095167
+sourceHash: 22f54024a2a0e09b
 ---
 
 # Cache binaire Nix
@@ -11,13 +11,13 @@ Le protocole *substituter* de Nix est relayé et mis en cache comme un registre 
 
 ## En bref
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nix` |
 | **Amont par défaut** | `cache.nixos.org` |
 | **Modes** | proxy · local · hybride |
 | **Adressage** | le nom du store est la coordonnée — `hello-1.0.0.2-doc` donne `hello` en `1.0.0.2-doc` — et le hash de 32 caractères est l'artefact |
-| **Publication privée** | ✅ `nix copy --to` |
+| **Publication privée** | oui — `nix copy --to` |
 | **Réglage client** | `substituters` dans `nix.conf` |
 
 ## Configuration du proxy
@@ -167,7 +167,7 @@ Le téléversement qui arrive en premier ne nomme aucun paquet : il ne peut donc
 pas être autorisé par rapport à celui-ci. Trois limites s'y appliquent à la
 place :
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Qui** | Un appelant qui détient `releases:publish` sur le registre ou sur l'un de ses espaces de noms. Une autorisation limitée à un *seul paquet* ne couvre pas cette requête — aucun paquet n'est encore nommé — et le `403` le dit. |
 | **Combien de temps** | Un NAR non réclamé est balayé **une heure** après son arrivée — `pending_nar_ttl_secs`. Une publication réclame ses octets quelques secondes plus tard : la limite vise les téléversements abandonnés, pas les lents. |

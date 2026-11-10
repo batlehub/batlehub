@@ -23,6 +23,12 @@
 // La barre de navigation liste les points d'entrée de chaque espace, en clair.
 // Le détail vit dans la barre latérale, de sorte que les deux ne répètent pas la
 // même liste. Pas d'entrée « Accueil » : le logo à gauche y mène déjà.
+//
+// Les libellés restent plus courts que ceux de la nav anglaise (65 caractères) :
+// les seuils de `custom.css` (menu replié sous 1340 px, icônes masquées de 1280
+// à 1439) ont été mesurés sur elle. À 87 caractères (« Générateur de config »,
+// « Guide utilisateur », « Administration »), la nav débordait de l'écran entre
+// 1280 et 1650 px et emportait le bouton d'apparence avec elle.
 export const nav = [
   {
     text: "Installer",
@@ -34,12 +40,12 @@ export const nav = [
   // `config.toml` juste après, et que le générer vaut mieux que lire une
   // référence de 12 000 mots pour l'écrire à la main.
   {
-    text: "Générateur de config",
+    text: "Générateur",
     link: "/fr/guide/config-generator",
     activeMatch: "/fr/guide/config-generator",
   },
   {
-    text: "Guide utilisateur",
+    text: "Utiliser",
     link: "/fr/use/",
     activeMatch: "/fr/use/",
   },
@@ -49,7 +55,7 @@ export const nav = [
     activeMatch: "/fr/registries/",
   },
   {
-    text: "Administration",
+    text: "Admin",
     link: "/fr/guide/administration",
     activeMatch: "/fr/guide/admin",
   },
@@ -177,7 +183,7 @@ export const sidebar = {
       items: [
         { text: "Ce que fait BatleHub", link: "/fr/guide/features" },
         { text: "Installation", link: "/fr/guide/installation" },
-        { text: "Configuration", link: "/fr/guide/configuration" },
+        { text: "Référence de configuration", link: "/fr/guide/configuration" },
         {
           text: "Exemples commentés",
           link: "/fr/guide/configuration-examples",
@@ -189,7 +195,7 @@ export const sidebar = {
       text: "Administration",
       items: [
         { text: "Vue d'ensemble", link: "/fr/guide/administration" },
-        { text: "Configuration", link: "/fr/guide/admin-config" },
+        { text: "Configuration du serveur", link: "/fr/guide/admin-config" },
         { text: "Stockage et santé", link: "/fr/guide/admin-storage-health" },
         { text: "Politiques et paquets", link: "/fr/guide/admin-policies" },
         { text: "Accès et audit", link: "/fr/guide/admin-access" },

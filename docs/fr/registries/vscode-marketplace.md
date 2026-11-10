@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/vscode-marketplace.md
-sourceHash: 44ab88c2014f12c2
+sourceHash: 227d465ae5351104
 ---
 
 # Place de marché VS Code
@@ -13,13 +13,13 @@ aussi héberger des extensions privées.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `vscode-marketplace` |
 | **Amont par défaut** | `marketplace.visualstudio.com` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi de VSIX (`PUT …/vsix`) |
+| **Publication privée** | oui — envoi de VSIX (`PUT …/vsix`) |
 | **Coupure réseau** | pas de listing composé hors ligne : une galerie répond à des requêtes |
 | **Signatures** | le registre signe ce qu'il héberge (`[registries.vsx_signing]`), relaie celle de l'amont pour ce dont il fait proxy, et conserve celle attachée à une version republiée |
 

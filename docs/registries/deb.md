@@ -4,13 +4,13 @@ Proxy a Debian/Ubuntu APT repository and, in `local`/`hybrid` mode, host your ow
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `deb` |
 | **Default upstream** | none — set `upstreams` explicitly for proxy/hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | path-addressed |
-| **Private publish** | ✅ `curl -X PUT … /deb/pool/{suite}/{component}/upload` |
+| **Private publish** | yes — `curl -X PUT … /deb/pool/{suite}/{component}/upload` |
 | **Air gap** | no composed index offline: a signed `Packages` file cannot be re-signed here; a held file is served by path |
 
 ## Proxy setup

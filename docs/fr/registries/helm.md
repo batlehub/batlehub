@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: f33b54e665249cfe
+sourceHash: e67c7564142cc7b4
 ---
 
 # Helm
@@ -17,13 +17,13 @@ Les registres de charts OCI (`helm pull oci://…`) ne sont pas un dépôt de ch
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `helm` |
 | **Amont par défaut** | aucun — un registre est un dépôt de charts, et c'est vous qui le nommez |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | un paquet par chart, une version par entrée d'index, le `.tgz` et son `.prov` comme fichiers de cette version |
-| **Publication privée** | ✅ `POST api/charts` de ChartMuseum (`curl`, `helm cm-push`) |
+| **Publication privée** | oui — `POST api/charts` de ChartMuseum (`curl`, `helm cm-push`) |
 | **Bascule côté client** | `helm repo add` |
 
 ## Configuration du proxy

@@ -4,13 +4,13 @@ Proxy and cache the `nodejs.org/dist` tree as a *typed* registry, so a Node rele
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `nodedist` |
 | **Default upstream** | `nodejs.org/dist` (io.js takes a second registry pointed at `iojs.org/dist`) |
 | **Modes** | proxy-only |
 | **Addressing** | one package (`node`), one version per release, one file per platform |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | offline, `index.tab` and `index.json` are composed from the held dist files, dated by receipt and with `lts` unknown |
 
 ## Proxy setup

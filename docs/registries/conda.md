@@ -4,13 +4,13 @@ Proxy and cache a conda channel, or host private conda packages. BatleHub serves
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `conda` |
 | **Default upstream** | `conda.anaconda.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `curl -X POST …/{platform}/` |
+| **Private publish** | yes — `curl -X POST …/{platform}/` |
 | **Air gap** | offline, each subdir's `repodata.json` is composed from the held packages, each entry its own `info/index.json` read at import; a subdir with nothing held answers empty, and `micromamba` resolves against it |
 
 ## Proxy setup

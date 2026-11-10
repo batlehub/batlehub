@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/galaxy.md
-sourceHash: b75d9cc1b7d45c52
+sourceHash: fc07acce61c5560d
 ---
 
 # Ansible Galaxy
@@ -11,13 +11,13 @@ Les rôles — l'ancienne API v1 — sont servis en lecture seule, et l'étendue
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de config** | `galaxy` |
 | **Amont par défaut** | `https://galaxy.ansible.com/api/` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | `{namespace}.{name}` — l'orthographe qu'utilise `requirements.yml` — avec un tarball par version |
-| **Publication privée** | ✅ `ansible-galaxy collection publish` |
+| **Publication privée** | oui — `ansible-galaxy collection publish` |
 | **Bascule client** | `server_list` dans `ansible.cfg` |
 
 ## Configuration du proxy

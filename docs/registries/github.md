@@ -4,13 +4,13 @@ Proxy and cache the GitHub REST API — release listings and metadata, release a
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `github` |
 | **Default upstream** | `api.github.com` |
 | **Modes** | proxy-only |
 | **Addressing** | per-package |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | offline, the release listing and the release by tag are composed from the held assets; a pinned `mise install` works without a lock |
 
 ## Proxy setup

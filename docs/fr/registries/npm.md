@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/npm.md
-sourceHash: d410201111a4c812
+sourceHash: 878ece5526bca16c
 ---
 
 # npm
@@ -12,13 +12,13 @@ travers le proxy.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `npm` |
 | **Amont par défaut** | `registry.npmjs.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `npm publish` |
+| **Publication privée** | oui — `npm publish` |
 | **Coupure réseau** | hors ligne, le packument est composé à partir des versions détenues ([RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap)) ; un `npm install` neuf s'y résout |
 
 ## Mise en place du proxy

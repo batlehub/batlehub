@@ -6,13 +6,13 @@ This is the one member of the OS family whose artifacts carry a **coordinate**. 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `apk` |
 | **Default upstream** | none — set `upstreams` explicitly for proxy/hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | path-addressed, with a coordinate on every `.apk` |
-| **Private publish** | ✅ `curl -X PUT … /apk/upload` |
+| **Private publish** | yes — `curl -X PUT … /apk/upload` |
 | **Air gap** | planned: the composed index is this instance's own document, so unlike the other OS kinds it *can* be re-signed offline |
 
 ## The index is relayed byte-exact, and why

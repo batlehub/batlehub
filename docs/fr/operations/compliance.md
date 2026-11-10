@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance.md
-sourceHash: 13462c027147b498
+sourceHash: 11db6eae8bf75627
 ---
 
 # Conformité
@@ -58,7 +58,7 @@ TIC au sens de DORA.
 | [Intégration SIEM](./siem.md) | il vous faut le flux d'audit et ses règles de détection |
 
 Chaque page emploie les mêmes statuts que la checklist SOC 2 :
-**✅ Implémenté** signifie que le contrôle existe dans le code, à l'endroit
+**Implémenté** signifie que le contrôle existe dans le code, à l'endroit
 nommé dans la colonne Preuve ; **Documenté** signifie qu'une procédure écrite
 existe ; **Processus manuel** désigne un processus que *vous* exécutez, et que
 BatleHub ne peut pas exécuter à votre place. La page NIS2 et DORA ajoute

@@ -6,13 +6,13 @@ Proxy and cache a Nix *binary cache* — the substituter protocol — as a typed
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `nix` |
 | **Default upstream** | `cache.nixos.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | the store name is the coordinate — `hello-1.0.0.2-doc` is `hello` at `1.0.0.2-doc` — and the 32-character store hash is the artifact |
-| **Private publish** | ✅ `nix copy --to` |
+| **Private publish** | yes — `nix copy --to` |
 | **Client switch** | `substituters` in `nix.conf` |
 
 ## Proxy setup
@@ -157,7 +157,7 @@ uploaded it.
 The upload that arrives first names no package, so it cannot be authorized
 against one. Three limits apply to it instead:
 
-| | |
+| Property | Value |
 |---|---|
 | **Who** | A caller who holds `releases:publish` on the registry or on one of its namespaces. A grant scoped to a *single package* does not reach this request — no package is named yet — and the `403` says so. |
 | **How long** | An unclaimed NAR is swept **an hour** after it arrives — `pending_nar_ttl_secs`. A publish claims its bytes seconds later, so this is a limit on abandoned uploads, not on slow ones. |

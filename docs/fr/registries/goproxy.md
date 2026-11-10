@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/goproxy.md
-sourceHash: 7021356d815f56fe
+sourceHash: b6c02602393d59d0
 ---
 
 # Modules Go
@@ -13,13 +13,13 @@ sorte que `govulncheck` fonctionne sans accès direct à Internet.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `goproxy` |
 | **Amont par défaut** | `proxy.golang.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ (envoi d'un zip de module) |
+| **Publication privée** | oui — (envoi d'un zip de module) |
 | **Coupure réseau** | hors ligne, `@v/list`, `@latest` et `.info` sont composés à partir des zips détenus ; le `.mod` doit être dans le lot à côté du zip, et c'est au client de désactiver `GOSUMDB` |
 
 ## Mise en place du proxy

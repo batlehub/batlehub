@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: c6b29ac867ec1f4b
+sourceHash: e6af85dd640c7b0c
 ---
 
 # Référence de configuration
@@ -3056,7 +3056,9 @@ pseudonymisée, rien n'est scellé, et le serveur l'indique une fois
 (`audit.no-retention`). Les valeurs ci-dessus sont l'exemple documenté, pas un
 défaut. Le chargement refuse un intervalle de scellement sans clé, une clé qui
 n'est pas une graine, une pseudonymisation postérieure à la rétention des
-accès, et une rétention de sécurité plus courte que celle des accès.
+accès, et une rétention de sécurité plus courte que celle des accès — où `0`
+conserve pour toujours, si bien qu'une rétention de sécurité avec
+`access_retention_days = 0` est refusée elle aussi.
 
 **Les classes.** `download` et `view_metadata` forment la classe d'accès ;
 toutes les autres actions — actions d'administration, connexions, événements
@@ -3078,7 +3080,11 @@ tronquée ([Intégration SIEM](../operations/siem.md)).
 
 **La purge manuelle** (`DELETE /api/v1/admin/audit-log`) ne supprime que les
 lignes de la classe d'accès ; l'enregistrement d'une purge survit à toutes les
-purges suivantes. Les lignes déjà pseudonymisées ou supprimées ne se récupèrent
+purges suivantes. Sans scellement, c'est un seul `DELETE` ; avec scellement,
+elle procède par lots de 5 000 pour que chaque fenêtre scellée qu'elle touche
+reçoive son enregistrement `expire`, et sur une grande table elle peut dépasser
+le délai d'un client ou d'un ingress — relancez-la pour la terminer. Les lignes
+déjà pseudonymisées ou supprimées ne se récupèrent
 pas — c'est l'objet du réglage.
 
 Les deux tâches tournent sur le rôle `worker`, un processus à la fois. La

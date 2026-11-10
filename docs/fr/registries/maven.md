@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/maven.md
-sourceHash: c89e1694124d77fe
+sourceHash: cbdc5d915876af08
 ---
 
 # Maven
@@ -12,13 +12,13 @@ protocole de dépôt Maven.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `maven` |
 | **Amont par défaut** | `repo1.maven.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `mvn deploy` |
+| **Publication privée** | oui — `mvn deploy` |
 | **Coupure réseau** | hors ligne, `maven-metadata.xml` est composé à partir des fichiers détenus ; Maven demande toujours un `.sha1` et un `.md5` à côté de chaque fichier, que le lot peut porter pour les fichiers réels |
 
 ## Mise en place du proxy

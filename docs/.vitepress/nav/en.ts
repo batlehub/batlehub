@@ -175,7 +175,7 @@ export const sidebar = {
       items: [
         { text: "What it does", link: "/guide/features" },
         { text: "Installation", link: "/guide/installation" },
-        { text: "Configuration", link: "/guide/configuration" },
+        { text: "Configuration reference", link: "/guide/configuration" },
         { text: "Worked examples", link: "/guide/configuration-examples" },
         { text: "Config Generator", link: "/guide/config-generator" },
       ],
@@ -184,7 +184,7 @@ export const sidebar = {
       text: "Administration",
       items: [
         { text: "Overview", link: "/guide/administration" },
-        { text: "Configuration", link: "/guide/admin-config" },
+        { text: "Server configuration", link: "/guide/admin-config" },
         { text: "Storage & health", link: "/guide/admin-storage-health" },
         { text: "Policies & packages", link: "/guide/admin-policies" },
         { text: "Access & audit", link: "/guide/admin-access" },

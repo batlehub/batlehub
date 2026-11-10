@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nuget.md
-sourceHash: 42383ab70e0689df
+sourceHash: 1039960e74635d16
 ---
 
 # NuGet (.NET)
@@ -12,13 +12,13 @@ garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nuget` |
 | **Amont par défaut** | `api.nuget.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `dotnet nuget push` |
+| **Publication privée** | oui — `dotnet nuget push` |
 | **Coupure réseau** | hors ligne, l'index plat est composé à partir des paquets détenus et la page d'enregistrement depuis le `.nuspec` de chaque paquet lu à l'import ; `dotnet restore` lit l'index plat |
 
 ## Mise en place du proxy

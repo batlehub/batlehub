@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/terraform.md
-sourceHash: fb34f620b39a8858
+sourceHash: e863945a6d5e6ade
 ---
 
 # Terraform
@@ -13,13 +13,13 @@ modules, sous contrôle du RBAC et du garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `terraform` |
 | **Amont par défaut** | `registry.terraform.io` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ modules · ⚠️ envoi de providers, que `terraform init` ne sait pas encore installer ([ci-dessous](#publishing-providers)) |
+| **Publication privée** | oui — modules · partiel — envoi de providers, que `terraform init` ne sait pas encore installer ([ci-dessous](#publishing-providers)) |
 | **Coupure réseau** | hors ligne, les `versions` de providers et de modules sont composées à partir de l'ensemble détenu, ainsi que le document `download` d'un provider pour une plateforme dont l'archive, les `shasums` et la `shasums.sig` sont toutes détenues — le plan doit nommer les trois chemins — les clés de signature du publieur étant portées par le manifeste du lot que produit `mise export` ; `terraform init` vérifie la signature du publieur comme il le ferait connecté, et cette instance ne signe rien. Une plateforme à laquelle il manque l'un des trois donne un `503` |
 
 ## Mise en place du proxy

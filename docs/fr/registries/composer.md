@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/composer.md
-sourceHash: 31011f6dae4929be
+sourceHash: 2a604b1cc8dcb95c
 ---
 
 # Composer (PHP)
@@ -12,13 +12,13 @@ natif — sous contrôle du RBAC et du garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `composer` |
 | **Amont par défaut** | `repo.packagist.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `curl -X POST …/api/upload` |
+| **Publication privée** | oui — `curl -X POST …/api/upload` |
 | **Coupure réseau** | hors ligne, `p2` est composé à partir des dists détenues, chaque entrée depuis son `composer.json` lu à l'import ; la variante `~dev` répond vide |
 
 ## Mise en place du proxy

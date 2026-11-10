@@ -4,13 +4,13 @@ Proxy and cache release assets, source archives, and raw files from a [Forgejo](
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `forgejo` |
 | **Default upstream** | `codeberg.org` |
 | **Modes** | proxy-only |
 | **Addressing** | per-package |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Air gap** | offline, the release listing and the release by tag are composed from the held assets |
 
 ## Proxy setup

@@ -1,6 +1,6 @@
 # Registries
 
-BatleHub proxies, caches, and privately hosts **23 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
+BatleHub proxies, caches, and privately hosts **29 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
 
 Every registry type can run in one of three **modes**, set per registry in the config:
 
@@ -16,55 +16,55 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [GitHub](./github) | `github` | Releases, assets, tarballs, raw files | proxy-only | ❌ | `api.github.com` |
-| [Forgejo / Gitea](./forgejo) | `forgejo` | Releases, assets, archives, raw (`/api/v1`) | proxy-only | ❌ | `codeberg.org` |
-| [GitLab](./gitlab) | `gitlab` | Releases, link assets, archives (`/api/v4`) | proxy-only | ❌ | `gitlab.com` |
+| [GitHub](./github) | `github` | Releases, assets, tarballs, raw files | proxy-only | no | `api.github.com` |
+| [Forgejo / Gitea](./forgejo) | `forgejo` | Releases, assets, archives, raw (`/api/v1`) | proxy-only | no | `codeberg.org` |
+| [GitLab](./gitlab) | `gitlab` | Releases, link assets, archives (`/api/v4`) | proxy-only | no | `gitlab.com` |
 
 ### Language package managers
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [npm](./npm) | `npm` | Packument + tarballs | proxy · local · hybrid | ✅ | `registry.npmjs.org` |
-| [Cargo](./cargo) | `cargo` | Sparse index + `.crate` | proxy · local · hybrid | ✅ | `crates.io` |
-| [Go Modules](./goproxy) | `goproxy` | GOPROXY (`.info`/`.mod`/`.zip`) | proxy · local · hybrid | ✅ | `proxy.golang.org` |
-| [Maven](./maven) | `maven` | Metadata XML + JAR/POM | proxy · local · hybrid | ✅ | `repo1.maven.org` |
-| [PyPI](./pypi) | `pypi` | Simple API (PEP 503/691) + wheels | proxy · local · hybrid | ✅ | `pypi.org` |
-| [Conda](./conda) | `conda` | `repodata.json` + `.conda`/`.tar.bz2` | proxy · local · hybrid | ✅ | `conda.anaconda.org` |
-| [Composer (PHP)](./composer) | `composer` | Packagist v2 (p2 metadata + dist) | proxy · local · hybrid | ✅ | `repo.packagist.org` |
-| [RubyGems](./rubygems) | `rubygems` | Gems + versions + info API | proxy · local · hybrid | ✅ | `rubygems.org` |
-| [NuGet (.NET)](./nuget) | `nuget` | v3 index + flat + `.nupkg` | proxy · local · hybrid | ✅ | `api.nuget.org` |
-| [Terraform](./terraform) | `terraform` | Providers + modules (v1 API) | proxy · local · hybrid | ✅ | `registry.terraform.io` |
-| [Ansible Galaxy](./galaxy) | `galaxy` | Collections API v3 (versions list, version document, tarball) + the v1 role reads | proxy · local · hybrid | ✅ | `galaxy.ansible.com/api/` |
+| [npm](./npm) | `npm` | Packument + tarballs | proxy · local · hybrid | yes | `registry.npmjs.org` |
+| [Cargo](./cargo) | `cargo` | Sparse index + `.crate` | proxy · local · hybrid | yes | `crates.io` |
+| [Go Modules](./goproxy) | `goproxy` | GOPROXY (`.info`/`.mod`/`.zip`) | proxy · local · hybrid | yes | `proxy.golang.org` |
+| [Maven](./maven) | `maven` | Metadata XML + JAR/POM | proxy · local · hybrid | yes | `repo1.maven.org` |
+| [PyPI](./pypi) | `pypi` | Simple API (PEP 503/691) + wheels | proxy · local · hybrid | yes | `pypi.org` |
+| [Conda](./conda) | `conda` | `repodata.json` + `.conda`/`.tar.bz2` | proxy · local · hybrid | yes | `conda.anaconda.org` |
+| [Composer (PHP)](./composer) | `composer` | Packagist v2 (p2 metadata + dist) | proxy · local · hybrid | yes | `repo.packagist.org` |
+| [RubyGems](./rubygems) | `rubygems` | Gems + versions + info API | proxy · local · hybrid | yes | `rubygems.org` |
+| [NuGet (.NET)](./nuget) | `nuget` | v3 index + flat + `.nupkg` | proxy · local · hybrid | yes | `api.nuget.org` |
+| [Terraform](./terraform) | `terraform` | Providers + modules (v1 API) | proxy · local · hybrid | yes | `registry.terraform.io` |
+| [Ansible Galaxy](./galaxy) | `galaxy` | Collections API v3 (versions list, version document, tarball) + the v1 role reads | proxy · local · hybrid | yes | `galaxy.ansible.com/api/` |
 
 ### Editor extensions
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [OpenVSX](./openvsx) | `openvsx` | Extension VSIX | proxy · local · hybrid | ✅ | `open-vsx.org` |
-| [VS Code Marketplace](./vscode-marketplace) | `vscode-marketplace` | Extension VSIX (MS Gallery) | proxy · local · hybrid | ✅ | `marketplace.visualstudio.com` |
-| [JetBrains Marketplace](./jetbrains-marketplace) | `jetbrains-marketplace` | Plugin API + downloads | proxy · local · hybrid | ✅ | `plugins.jetbrains.com` |
+| [OpenVSX](./openvsx) | `openvsx` | Extension VSIX | proxy · local · hybrid | yes | `open-vsx.org` |
+| [VS Code Marketplace](./vscode-marketplace) | `vscode-marketplace` | Extension VSIX (MS Gallery) | proxy · local · hybrid | yes | `marketplace.visualstudio.com` |
+| [JetBrains Marketplace](./jetbrains-marketplace) | `jetbrains-marketplace` | Plugin API + downloads | proxy · local · hybrid | yes | `plugins.jetbrains.com` |
 
 ### OS / system packages <Badge type="tip" text="path-addressed" />
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [Debian / APT](./deb) | `deb` | `Packages`/`Release` + `.deb` | proxy · local · hybrid | ✅ | none — set `upstreams` |
-| [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` + `.rpm` | proxy · local · hybrid | ✅ | none — set `upstreams` |
-| [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` + `.pkg.tar.zst` | proxy · local · hybrid | ✅ | none — set `upstreams` |
-| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` + `.apk` | proxy · local · hybrid | ✅ | none — set `upstreams` |
+| [Debian / APT](./deb) | `deb` | `Packages`/`Release` + `.deb` | proxy · local · hybrid | yes | none — set `upstreams` |
+| [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` + `.rpm` | proxy · local · hybrid | yes | none — set `upstreams` |
+| [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` + `.pkg.tar.zst` | proxy · local · hybrid | yes | none — set `upstreams` |
+| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` + `.apk` | proxy · local · hybrid | yes | none — set `upstreams` |
 
 ### Binaries & mirrors <Badge type="tip" text="path-addressed" />
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [JetBrains IDEs](./jetbrains) | `jetbrains` | IDE installer archives | proxy-only | ❌ | `download.jetbrains.com` |
-| [Generic mirror](./generic) | `generic` | Any HTTP file tree | proxy-only | ❌ | none — set `upstreams` + `path_allow` |
+| [JetBrains IDEs](./jetbrains) | `jetbrains` | IDE installer archives | proxy-only | no | `download.jetbrains.com` |
+| [Generic mirror](./generic) | `generic` | Any HTTP file tree | proxy-only | no | none — set `upstreams` + `path_allow` |
 
 ### Build caches <Badge type="tip" text="RFC 0028" />
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [Nix binary cache](./nix) | `nix` | `nix-cache-info`, one `{hash}.narinfo` per store path (relayed with only `URL:` rewritten, so every `Sig:` still verifies) and the NARs | proxy · local · hybrid | ✅ | `cache.nixos.org` |
+| [Nix binary cache](./nix) | `nix` | `nix-cache-info`, one `{hash}.narinfo` per store path (relayed with only `URL:` rewritten, so every `Sig:` still verifies) and the NARs | proxy · local · hybrid | yes | `cache.nixos.org` |
 
 ### Toolchains <Badge type="tip" text="RFC 0010" />
 
@@ -72,20 +72,20 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | ❌ | `nodejs.org/dist` |
-| [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | ❌ | `api.sdkman.io/2` + `broker.sdkman.io` |
-| [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | ❌ | `static.rust-lang.org` |
+| [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | no | `nodejs.org/dist` |
+| [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | no | `api.sdkman.io/2` + `broker.sdkman.io` |
+| [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | no | `static.rust-lang.org` |
 
 ### Development environments <Badge type="tip" text="RFC 0035" />
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [Devfile registry](./devfile) | `devfile` | The stack indexes (filtered), each stack version's devfile, OCI manifest and layers (verified, byte-exact) and starter projects — for Eclipse Che and `registry-library`/`odo`; needs a host of its own | proxy-only | ❌ | `registry.devfile.io` |
+| [Devfile registry](./devfile) | `devfile` | The stack indexes (filtered), each stack version's devfile, OCI manifest and layers (verified, byte-exact) and starter projects — for Eclipse Che and `registry-library`/`odo`; needs a host of its own | proxy-only | no | `registry.devfile.io` |
 ### Kubernetes <Badge type="tip" text="RFC 0029" />
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
-| [Helm](./helm) | `helm` | A classic chart repository: `index.yaml` (filtered, every chart URL rewritten here) + `.tgz`/`.prov` (byte-exact) | proxy · local · hybrid | ✅ | none — one named repository per registry |
+| [Helm](./helm) | `helm` | A classic chart repository: `index.yaml` (filtered, every chart URL rewritten here) + `.tgz`/`.prov` (byte-exact) | proxy · local · hybrid | yes | none — one named repository per registry |
 
 ## Feature matrix
 

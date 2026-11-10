@@ -218,7 +218,9 @@ for (const file of all) {
 // that drops a card is a translation that makes a different argument.
 for (const home of ["index.md", join("fr", "index.md")]) {
   const src = readFileSync(join(DOCS, home), "utf8");
-  const cards = (src.match(/^ {2}- icon:/gm) ?? []).length;
+  // A card is a `features` item, whichever key it opens with (no icon since
+  // the emoji glyphs went).
+  const cards = (src.match(/^ {2}- (icon|title):/gm) ?? []).length;
   if (cards !== HOME_CARDS) {
     add("home page", `${home} — ${cards} feature cards, expected ${HOME_CARDS}`);
   }

@@ -221,8 +221,13 @@
    the appearance toggle was clipped. Measured, at 1440 / 1280 / 1100.
 
    Raised rather than retracked: the tracking is the Tracking Ladder's step for
-   inline chrome, and a nav item is inline chrome whatever the viewport is. */
-@media (min-width: 1280px) and (max-width: 1379px) {
+   inline chrome, and a nav item is inline chrome whatever the viewport is.
+
+   Both thresholds were first measured on the home page. A page with a sidebar
+   gives its navbar less room — the title block takes the sidebar's width — and
+   there the toggle ran past the edge at 1280-1339 and the social icons at
+   1380-1439, in English as well as in French. Measured on /guide/caching. */
+@media (min-width: 1280px) and (max-width: 1439px) {
   :root .VPNavBarSocialLinks {
     display: none;
   }
@@ -238,7 +243,7 @@
 
    Collapsing to the hamburger is the default theme's own answer to a navbar
    that does not fit; this only tells it when. */
-@media (min-width: 768px) and (max-width: 1279px) {
+@media (min-width: 768px) and (max-width: 1339px) {
   /* `:root`-prefixed for the reason every override in this file is: the default
      theme's rules are single-file-component styles and carry a `[data-v-…]` on
      top of their class, so a bare `.VPNavBarMenu` loses silently. */
@@ -353,6 +358,10 @@
   font-size: var(--t-row);
   font-variant-numeric: tabular-nums;
   border: 1px solid var(--rule-soft);
+  /* A row of facts reads top-down. Centred, a key sat at the bottom of a
+     15-line value cell — RFC 0015's `Status` row, and every key/value table
+     whose value wraps. */
+  vertical-align: top;
 }
 
 /* Column heads take the Tracking Ladder's 0.14em step. */
@@ -506,14 +515,6 @@
   border-color: var(--rule-strong);
 }
 
-:root .VPFeature .icon {
-  border: 1px solid var(--rule-soft);
-  background: var(--ground-raised);
-  /* The feature glyphs are emoji, so this is an icon size rather than a step in
-     the ramp; it takes the Head step so it is still a size the system names. */
-  font-size: var(--t-head);
-}
-
 .VPFeature .title {
   font-family: var(--face-display);
   font-weight: 700;
@@ -604,6 +605,18 @@
   font-size: var(--t-meta);
 }
 
+/* The default theme truncates each entry to one line with an ellipsis — sized
+   for a sans. In the mono face "12. Decisions and open questions" came out as
+   "12. Decisions and open q…"; wrapping costs a line, hiding costs the title. */
+:root .outline-link {
+  white-space: normal;
+  /* The theme's 32px line box would set a wrapped title's second line as far
+     from its first as the next entry is; 1.5 plus 6px each side keeps a
+     one-line entry at the same 32px and binds a wrapped one together. */
+  line-height: 1.5;
+  padding-block: 6px;
+}
+
 .VPDocOutlineItem.is-active a {
   color: var(--accent);
   font-weight: 600;
@@ -664,8 +677,9 @@
   border-radius: var(--radius);
 }
 
+/* Ink, not crimson: a scrollbar is none of the accent's four jobs. */
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--ink-dim);
 }
 
 /* ── Reduced motion ──────────────────────────────────────────────────────────
@@ -697,9 +711,13 @@
    16.64:1 light. `!important` is not decoration here — mermaid injects a
    <style> block inside each SVG, and these rules have to outrank it.
 
-   Only the edge labels are touched. Node fills and their text come from
-   mermaid's theme and passed the gate as they are; restyling them would be a
-   second palette to keep in agreement with the first. */
+   The nodes followed in a second pass. They had been left to mermaid's theme
+   on the grounds that restyling them would be a second palette — but mermaid's
+   theme *was* the second palette: cyan and magenta subgraphs on paper, neutral
+   grey boxes on near-black, neither of which this world contains. Repainting
+   them in tokens removes that palette rather than adding one: boxes are the
+   sunk ground under a strong rule, labels are ink, edges are dim ink, and the
+   whole diagram flips with the rendition because the tokens do. */
 .mermaid .edgeLabel,
 .mermaid .edgeLabel p,
 .mermaid .edgeLabel foreignObject div {
@@ -711,6 +729,55 @@
 .mermaid .labelBkg {
   background-color: var(--ground) !important;
   opacity: 1 !important;
+}
+
+/* A label is a <p> inside the SVG, so the Reading rule at the top of this file
+   reached it: 16px at line-height 1.7, after mermaid had sized the box for its
+   own 1.5. Two lines then needed 54px in a 48px box and the last one was cut.
+   A node label is data, not prose. */
+.vp-doc .mermaid :is(p, span, div) {
+  font-size: inherit;
+  line-height: 1.5;
+  max-width: none;
+}
+
+.mermaid .node :is(rect, polygon, circle, ellipse, path),
+.mermaid .cluster :is(rect, polygon) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid :is(.nodeLabel, .cluster-label, .cluster-label span, .label foreignObject div) {
+  color: var(--ink) !important;
+}
+
+.mermaid :is(.node, .cluster) text {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.flowchart-link, .messageLine0, .messageLine1, .relation) {
+  stroke: var(--ink-dim) !important;
+}
+
+/* Sequence diagrams (50 of the 148) draw with their own classes: lavender
+   actors and yellow notes by default. Same three tokens. */
+.mermaid :is(rect.actor, rect.note, polygon.labelBox, rect[class^="activation"]) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid :is(text.actor, text.actor tspan, .noteText, .messageText, .labelText, .loopText, .loopText tspan) {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.actor-line, line[class^="actor-line"], .loopLine) {
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid #arrowhead path,
+.mermaid :is(marker path, .arrowheadPath, .arrowMarkerPath) {
+  fill: var(--ink-dim) !important;
+  stroke: var(--ink-dim) !important;
 }
 
 /* A diagram is wider than a phone. Scroll it inside its own box rather than
