@@ -28,6 +28,7 @@ vi.mock("vue-router", () => ({
 }));
 
 import AdminAuthorization from "./AdminAuthorization.vue";
+import AuthzExemptionsPanel from "@/components/admin/authorization/AuthzExemptionsPanel.vue";
 
 const noShadow = {
   data: { by_node: [], recent: [], kept: 500, no_shadow_configured: true },
@@ -227,7 +228,9 @@ describe("the authorization page", () => {
     expect(panel).toContain("lodash");
     expect(panel).toContain("left-pad");
 
-    (w.vm as unknown as { selfApprovedOnly: boolean }).selfApprovedOnly = true;
+    (
+      w.findComponent(AuthzExemptionsPanel).vm as unknown as { selfApprovedOnly: boolean }
+    ).selfApprovedOnly = true;
     await flushPromises();
     panel = w.get('[data-testid="panel-exemptions"]').text();
     expect(panel).not.toContain("lodash");
