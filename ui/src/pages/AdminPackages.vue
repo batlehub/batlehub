@@ -495,14 +495,7 @@ async function runPending(): Promise<void> {
          person able to perform destructive actions. -->
     <Announcer :message="bulkResultMsg ?? ''" />
     <SectionTabs :tabs="PACKAGES_TABS" />
-    <PageHeader variant="display">
-      <template #title>
-        {{ t("adminNav.allPackages") }}
-        <span v-if="packages?.length" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ packages.length }})</span
-        >
-      </template>
-    </PageHeader>
+    <PageHeader variant="display" :title="t('adminNav.allPackages')" :count="packages?.length" />
     <!-- The form that used to sit here is `/admin/packages/bulk`, one tab
          away and better at the job. A link, not a second implementation. -->
     <p class="text-sm text-muted-foreground">

@@ -2,16 +2,7 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import {
-  ArrowLeft,
-  Check,
-  Copy,
-  FileJson,
-  FileCode,
-  Download,
-  RefreshCw,
-  Search,
-} from "@lucide/vue";
+import { ArrowLeft, Check, Copy, FileJson, FileCode, Download, RefreshCw } from "@lucide/vue";
 import {
   explorePackageDetail,
   exploreFetchVersion,
@@ -45,8 +36,8 @@ import { Badge } from "@/components/ui/badge";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
+import { SearchInput } from "@/components/ui/search-input";
 import { RuleNote } from "@/components/ui/rule-note";
-import { Input } from "@/components/ui/input";
 import { Pagination } from "@/components/ui/pagination";
 import {
   Table,
@@ -1627,16 +1618,12 @@ const {
                list is*, this one searches inside it, and putting them together
                would read as two halves of one filter. -->
           <div v-if="unfilteredTotal > 1" class="flex flex-wrap items-center gap-3">
-            <div class="relative min-w-48 flex-1">
-              <Search class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                class="pl-10"
-                :placeholder="t('packageDetailPage.filterVersions')"
-                :aria-label="t('packageDetailPage.filterVersions')"
-                :value="versionFilter"
-                @input="filterVersions(($event.target as HTMLInputElement).value)"
-              />
-            </div>
+            <SearchInput
+              :placeholder="t('packageDetailPage.filterVersions')"
+              :aria-label="t('packageDetailPage.filterVersions')"
+              :value="versionFilter"
+              @input="filterVersions(($event.target as HTMLInputElement).value)"
+            />
             <!-- The live region that answers "did my filter do anything".
                  It is not the only one on the page — `Pagination` and
                  `UpstreamNotice` are shared components and carry their own, and

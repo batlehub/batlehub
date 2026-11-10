@@ -11,7 +11,7 @@ import { Facet } from "@/components/ui/facet";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Pagination } from "@/components/ui/pagination";
-import { Search, RefreshCw } from "@lucide/vue";
+import { RefreshCw } from "@lucide/vue";
 import {
   listRegistries,
   exploreRegistryStats,
@@ -28,9 +28,9 @@ import type {
 } from "@/client/types.gen";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
+import { SearchInput } from "@/components/ui/search-input";
 import { RuleNote } from "@/components/ui/rule-note";
 import { Announcer } from "@/components/ui/announcer";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { AsyncState } from "@/components/ui/async-state";
@@ -938,16 +938,12 @@ onMounted(() => {
       <div class="min-w-0 space-y-4 py-6 md:pl-6">
         <!-- Search + sort bar -->
         <div class="flex gap-2 flex-wrap">
-          <div class="relative flex-1 min-w-48">
-            <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              class="pl-10"
-              :placeholder="t('packageCatalog.searchPackages')"
-              :aria-label="t('packageCatalog.searchPackages2')"
-              :value="search"
-              @input="onSearchInput(($event.target as HTMLInputElement).value)"
-            />
-          </div>
+          <SearchInput
+            :placeholder="t('packageCatalog.searchPackages')"
+            :aria-label="t('packageCatalog.searchPackages2')"
+            :value="search"
+            @input="onSearchInput(($event.target as HTMLInputElement).value)"
+          />
           <!-- Where the search looks. Beside the box it modifies rather than in
              a settings panel, because it changes what the *next keystroke*
              means. Hidden entirely when the instance searches names only: a

@@ -24,13 +24,20 @@ import { cn } from "@/lib/utils";
  * back down to `text-base` by hand: the size they all wanted is the default.
  */
 const props = withDefaults(
-  defineProps<{ class?: HTMLAttributes["class"]; as?: "h1" | "h2" | "h3" | "h4" }>(),
+  defineProps<{
+    class?: HTMLAttributes["class"];
+    as?: "h1" | "h2" | "h3" | "h4";
+    /** A count after the title, in parentheses; nothing when 0 or absent. */
+    count?: number;
+  }>(),
   { as: "h2" },
 );
 </script>
 
 <template>
   <component :is="as" :class="cn('font-mono text-base font-normal leading-snug', props.class)">
-    <slot />
+    <slot /><template v-if="count"
+      >{{ " " }}<span class="text-muted-foreground">({{ count }})</span></template
+    >
   </component>
 </template>

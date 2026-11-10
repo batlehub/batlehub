@@ -28,13 +28,13 @@ import { RouterLink, useRoute } from "vue-router";
 import { adminAuthzExplain, authzShadow, listExemptions, auditLog } from "@/client/sdk.gen";
 import type { ExplainResponse, ShadowResponse, ExemptionListEntry } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
+import CoordinateFields from "@/components/admin/CoordinateFields.vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { SECURITY_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Select } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
-import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/useSuggestions";
 import { Button } from "@/components/ui/button";
 import { Announcer } from "@/components/ui/announcer";
 import { Alert } from "@/components/ui/alert";
@@ -61,9 +61,6 @@ const subject = ref("role:user");
 const action = ref("releases:read");
 const packageName = ref("");
 const version = ref("");
-
-const packageSuggestions = usePackageNameSuggestions(packageName, registry);
-const versionSuggestions = useVersionSuggestions(registry, packageName);
 
 const explained = ref<ExplainResponse | null>(null);
 const explainError = ref<string | null>(null);
@@ -376,30 +373,12 @@ onMounted(async () => {
               placeholder="role:user"
             />
           </div>
-          <div class="space-y-1">
-            <label for="az-package" class="text-sm font-medium">{{
-              t("adminAccessCheck.packageName")
-            }}</label>
-            <Combobox
-              id="az-package"
-              v-model="packageName"
-              :options="packageSuggestions.options.value"
-              :loading="packageSuggestions.loading.value"
-              placeholder="lodash"
-            />
-          </div>
-          <div class="space-y-1">
-            <label for="az-version" class="text-sm font-medium">{{ t("common.version") }}</label>
-            <Combobox
-              id="az-version"
-              v-model="version"
-              :options="versionSuggestions.options.value"
-              :loading="versionSuggestions.loading.value"
-              :disabled="!versionSuggestions.ready()"
-              :disabled-reason="t('adminAccessCheck.versionNeedsPackage')"
-              placeholder="1.0.0"
-            />
-          </div>
+          <CoordinateFields
+            v-model:name="packageName"
+            v-model:version="version"
+            id-prefix="az"
+            :registry="registry"
+          />
         </div>
 
         <Button type="submit" :disabled="explaining || !registry">

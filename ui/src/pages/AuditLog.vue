@@ -289,16 +289,9 @@ async function purge() {
   <div class="space-y-6">
     <SectionTabs :tabs="OBSERVABILITY_TABS" />
     <Announcer :message="announcement" />
-    <PageHeader variant="display">
-      <template #title>
-        {{ t("adminNav.auditLog") }}
-        <!-- `total`, not the loaded page: the endpoint returns 100 rows by
+    <!-- `total`, not the loaded page: the endpoint returns 100 rows by
              default and the count must not silently mean "the first 100". -->
-        <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ total }})</span
-        >
-      </template>
-    </PageHeader>
+    <PageHeader variant="display" :title="t('adminNav.auditLog')" :count="total" />
     <Card>
       <CardHeader class="space-y-3 pb-3">
         <div class="flex flex-row items-center justify-end space-y-0">

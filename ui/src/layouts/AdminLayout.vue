@@ -5,6 +5,10 @@ import { RouterView, RouterLink, useRoute } from "vue-router";
 import { ChevronDown, ShieldCheck } from "@lucide/vue";
 import { ADMIN_PAGE_VERBS, ADMIN_SIDEBAR, firstAdminPage } from "@/config/adminSections";
 import { useAuth } from "@/composables/useAuth";
+import { createReusableTemplate } from "@vueuse/core";
+
+/* The section links, drawn once for the sidebar and the mobile menu. */
+const [DefineSectionLinks, SectionLinks] = createReusableTemplate();
 
 const { t } = useI18n();
 const route = useRoute();
@@ -36,6 +40,23 @@ watch(
 </script>
 
 <template>
+  <DefineSectionLinks>
+    <RouterLink
+      v-for="link in sidebar"
+      :key="link.to"
+      :to="link.to"
+      :aria-current="isActive(link.to) ? 'page' : undefined"
+      :class="[
+        'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
+        isActive(link.to)
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground',
+      ]"
+    >
+      <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
+      {{ t(link.label) }}
+    </RouterLink>
+  </DefineSectionLinks>
   <!--
     Column on mobile, row from `md` up.
 
@@ -64,21 +85,7 @@ watch(
         {{ t("common.admin") }}
       </div>
       <nav class="flex flex-col" :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })">
-        <RouterLink
-          v-for="link in sidebar"
-          :key="link.to"
-          :to="link.to"
-          :aria-current="isActive(link.to) ? 'page' : undefined"
-          :class="[
-            'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
-            isActive(link.to)
-              ? 'border-primary text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground',
-          ]"
-        >
-          <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
-          {{ t(link.label) }}
-        </RouterLink>
+        <SectionLinks />
       </nav>
     </aside>
 
@@ -116,21 +123,7 @@ watch(
         class="flex flex-col border border-t-0 border-border"
         :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })"
       >
-        <RouterLink
-          v-for="link in sidebar"
-          :key="link.to"
-          :to="link.to"
-          :aria-current="isActive(link.to) ? 'page' : undefined"
-          :class="[
-            'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
-            isActive(link.to)
-              ? 'border-primary text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground',
-          ]"
-        >
-          <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
-          {{ t(link.label) }}
-        </RouterLink>
+        <SectionLinks />
       </nav>
     </div>
 

@@ -5,6 +5,7 @@ import { useRoute, RouterLink } from "vue-router";
 import { adminAccessCheck } from "@/client/sdk.gen";
 import type { AccessSimulationResponse } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
+import CoordinateFields from "@/components/admin/CoordinateFields.vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { SECURITY_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
@@ -12,11 +13,7 @@ import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
-import {
-  usePackageNameSuggestions,
-  useSubjectSuggestions,
-  useVersionSuggestions,
-} from "@/composables/useSuggestions";
+import { useSubjectSuggestions } from "@/composables/useSuggestions";
 
 import { Button } from "@/components/ui/button";
 import { Announcer } from "@/components/ui/announcer";
@@ -42,8 +39,6 @@ const clientIp = ref("");
  * whole point is answering about a coordinate that may not be cached, so a
  * field that only took what it could offer would break it.
  */
-const packageSuggestions = usePackageNameSuggestions(packageName, registry);
-const versionSuggestions = useVersionSuggestions(registry, packageName);
 const subjectSuggestions = useSubjectSuggestions(userId);
 
 const result = ref<AccessSimulationResponse | null>(null);
@@ -178,32 +173,12 @@ async function simulate() {
             :placeholder="t('adminHealth.chooseRegistry')"
           />
         </div>
-        <div class="space-y-1">
-          <label for="aac-package" class="text-sm font-medium">{{
-            t("adminAccessCheck.packageName")
-          }}</label>
-          <Combobox
-            id="aac-package"
-            v-model="packageName"
-            :options="packageSuggestions.options.value"
-            :loading="packageSuggestions.loading.value"
-            placeholder="lodash"
-          />
-        </div>
-        <div class="space-y-1">
-          <label for="aac-version" class="text-sm font-medium">{{ t("common.version") }}</label>
-          <!-- Closed once its parents are answered, and disabled with a stated
-               reason until then rather than merely dark. -->
-          <Combobox
-            id="aac-version"
-            v-model="version"
-            :options="versionSuggestions.options.value"
-            :loading="versionSuggestions.loading.value"
-            :disabled="!versionSuggestions.ready()"
-            :disabled-reason="t('adminAccessCheck.versionNeedsPackage')"
-            placeholder="1.0.0"
-          />
-        </div>
+        <CoordinateFields
+          v-model:name="packageName"
+          v-model:version="version"
+          id-prefix="aac"
+          :registry="registry"
+        />
         <div class="space-y-1">
           <label for="aac-resource-type" class="text-sm font-medium">{{
             t("adminAccessCheck.resourceType")

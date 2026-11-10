@@ -106,12 +106,7 @@ onMounted(load);
 <template>
   <Card data-testid="flags-panel">
     <CardHeader>
-      <CardTitle>
-        {{ t("flagsPanel.title") }}
-        <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ total }})</span
-        >
-      </CardTitle>
+      <CardTitle :count="total">{{ t("flagsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
       <p class="text-sm text-muted-foreground">{{ t("flagsPanel.intro") }}</p>

@@ -57,4 +57,17 @@ describe("PageHeader", () => {
     expect(wrapper.find("h1").text()).toContain("Custom Title");
     expect(wrapper.find("h1 svg.icon").exists()).toBe(true);
   });
+
+  it("follows the title with its count, and shows none for zero", () => {
+    expect(
+      mount(PageHeader, { props: { title: "Audit", count: 42 } })
+        .find("h1")
+        .text(),
+    ).toBe("Audit(42)");
+    expect(
+      mount(PageHeader, { props: { title: "Audit", count: 0 } })
+        .find("h1")
+        .text(),
+    ).toBe("Audit");
+  });
 });
