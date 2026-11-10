@@ -389,6 +389,15 @@ export const sidebar = {
       ],
     },
     {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0042 — Security console by verb",
+          link: "/rfc/0042-security-console-by-verb",
+        },
+      ],
+    },
+    {
       text: "Settled",
       items: [
         {
