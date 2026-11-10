@@ -4589,3 +4589,53 @@ mod storage_key_collisions {
         }
     }
 }
+
+/// `?` and `#` reach a handler decoded from `%3F` / `%23` and pass
+/// `validate_path_safe`; bound for an upstream they are refused, except where
+/// a kind puts one there on purpose.
+#[test]
+fn url_delimiters_are_refused_except_where_a_kind_means_them() {
+    use crate::services::reject_url_delimiters as r;
+    for kind in ["npm", "pypi", "maven", "cargo", "generic"] {
+        for (name, version, artifact) in [
+            ("left-pad?x=1", "1.0.0", None),
+            ("left-pad#x", "1.0.0", None),
+            ("left-pad", "1.0.0?x", None),
+            ("left-pad", "1.0.0#x", None),
+            ("left-pad", "1.0.0", Some("a?b.tgz")),
+            ("left-pad", "1.0.0", Some("a#b.tgz")),
+        ] {
+            assert!(
+                matches!(
+                    r(kind, name, version, artifact),
+                    Err(CoreError::InvalidInput(_))
+                ),
+                "{kind} {name} {version} {artifact:?}"
+            );
+        }
+        r(
+            kind,
+            "@scope/left-pad",
+            "1.0.0+build.1",
+            Some("left-pad-1.0.0.tgz"),
+        )
+        .unwrap();
+    }
+    // A git tag may hold `#`, never `?`; a repository name holds neither.
+    for forge in ["github", "forgejo", "gitlab"] {
+        r(forge, "o/r", "release#2", Some("tarball/release#2")).unwrap();
+        assert!(r(forge, "o/r", "release?2", None).is_err());
+        assert!(r(forge, "o/r#x", "v1", None).is_err());
+    }
+    // What SDKMAN and Galaxy compose themselves.
+    r(
+        "sdkman",
+        "java/linuxx64?current=&installed=",
+        "versions-list",
+        None,
+    )
+    .unwrap();
+    assert!(r("sdkman", "java", "1.0#x", None).is_err());
+    r("galaxy", "role#10923", "latest", None).unwrap();
+    assert!(r("galaxy", "ns.coll?x", "1.0.0", None).is_err());
+}

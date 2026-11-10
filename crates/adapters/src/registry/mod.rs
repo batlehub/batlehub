@@ -1,3 +1,4 @@
+pub mod guard;
 pub mod http_client;
 pub mod offline;
 pub mod readme_image;

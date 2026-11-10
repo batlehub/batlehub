@@ -298,6 +298,56 @@ pub fn validate_package_name(name: &str) -> Result<(), CoreError> {
     validate_path_safe("package name", name)
 }
 
+/// `?` and `#` in a coordinate bound for `registry_type`'s upstream.
+///
+/// actix decodes `%3F` and `%23` in a path parameter, and `validate_path_safe`
+/// lets both through. Interpolated into an upstream URL, `?` starts a query and
+/// `#` a fragment the client never sends, so the upstream answered about
+/// another coordinate than the one the rules judged: a block on `pkg@1.0.0` did
+/// not stop `pkg@1.0.0%3F` (`server/src/name_injection_probe.rs` found it in 22
+/// of 29 kinds). No ecosystem's names, versions or file names hold either,
+/// except where a kind puts one there on purpose:
+///
+/// - a forge's version or file name is a git ref, which may hold `#` (never
+///   `?`); the forge clients encode every segment (PR #304);
+/// - SDKMAN's rendered `versions/list`, devfile's filtered index
+///   (`v2index?arch=…`) and the JetBrains Marketplace's relayed API calls are
+///   documents named with the query the handler composed or relays — the
+///   query is part of what is cached and judged, and of what is asked;
+///   SDKMAN's handler refuses `?` and `#` in a candidate and a version;
+/// - Galaxy names a role by its numeric id as `role#<id>` (`role_alias`), the
+///   id validated alphanumeric.
+pub fn reject_url_delimiters(
+    registry_type: &str,
+    name: &str,
+    version: &str,
+    artifact: Option<&str>,
+) -> Result<(), CoreError> {
+    let (in_name, in_version): (&[char], &[char]) = match registry_type {
+        "github" | "forgejo" | "gitlab" => (&[], &['#']),
+        "sdkman" | "devfile" | "jetbrains-marketplace" => (&['?'], &[]),
+        "galaxy" => (&['#'], &[]),
+        _ => (&[], &[]),
+    };
+    let parts = [
+        ("package name", Some(name), in_name),
+        ("version", Some(version), in_version),
+        ("artifact", artifact, in_version),
+    ];
+    for (part, value, allowed) in parts {
+        let Some(value) = value else { continue };
+        if let Some(c) = value
+            .chars()
+            .find(|c| matches!(c, '?' | '#') && !allowed.contains(c))
+        {
+            return Err(CoreError::InvalidInput(format!(
+                "{part} '{value}' must not contain '{c}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validate every user-controlled component of a package coordinate (`name`,
 /// `version`, and optional sub-`artifact`) before it is interpolated into a
 /// storage/cache key.

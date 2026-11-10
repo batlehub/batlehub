@@ -389,7 +389,11 @@ fn offline_if(
     registry: &str,
     client: anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>>,
 ) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
-    let client = client?;
+    // Every client, every kind: no caller coordinate holding `?` or `#`
+    // reaches an upstream URL (name_injection_probe.rs).
+    let client: Arc<dyn batlehub_core::ports::RegistryClient> = Arc::new(
+        batlehub_adapters::registry::guard::CoordinateGuard::new(client?),
+    );
     Ok(if air_gapped {
         Arc::new(batlehub_adapters::registry::offline::OfflineRegistryClient::new(client, registry))
     } else {
