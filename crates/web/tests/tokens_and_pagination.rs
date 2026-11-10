@@ -1099,7 +1099,7 @@ async fn a_rejected_credential_is_one_throttled_row_per_source() {
 /// anonymous, while a static token in the same place worked: reported on a
 /// GitHub and a PyPI registry, 1.10.0, by the one user with a PAT.
 #[actix_web::test]
-async fn a_pat_sent_as_a_basic_password_is_its_owner() {
+async fn a_pat_sent_in_a_basic_header_is_its_owner() {
     use base64::Engine as _;
     let app = make_app_with_tokens(InMemoryRepo::new(), InMemoryTokenRepository::new()).await;
     let req = TestRequest::post()

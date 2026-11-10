@@ -129,14 +129,14 @@ impl AuthProvider for UserTokenAuthProvider {
     }
 
     async fn authenticate(&self, req: &RawAuthRequest) -> Result<Option<Identity>, CoreError> {
-        // `Bearer`, or the password of `Basic`: pip, and mise reading a
+        // `Bearer`, or the token in a `Basic` header: pip, and mise reading a
         // `~/.netrc` for a forge, send nothing else, and a PAT they carried
         // used to arrive anonymous while a static token in the same place
         // worked (`token.rs` has always read both).
         let basic;
         let raw = match req.bearer_token() {
             Some(t) => t,
-            None => match req.basic_password() {
+            None => match req.basic_token() {
                 Some(p) => {
                     basic = p;
                     basic.as_str()
@@ -371,16 +371,16 @@ mod tests {
         }
     }
 
-    fn basic(user: &str, password: &str) -> RawAuthRequest {
+    fn basic(user: &str, token: &str) -> RawAuthRequest {
         use base64::Engine as _;
-        let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+        let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}"));
         req(&format!("Basic {enc}"))
     }
 
-    /// pip and mise's netrc send HTTP Basic only. The PAT is the password,
+    /// pip and mise's netrc send HTTP Basic only. The PAT is the secret half,
     /// the user name is anything; before this, the request went on anonymous.
     #[tokio::test]
-    async fn a_pat_in_a_basic_password_authenticates_whatever_the_user_name() {
+    async fn a_pat_in_a_basic_header_authenticates_whatever_the_user_name() {
         let (pat, _) = generate_token();
         let p = UserTokenAuthProvider::new(Arc::new(OneToken(pat.clone())));
         for user in ["carol", "__token__", "x", ""] {
@@ -391,7 +391,7 @@ mod tests {
                 "user name {user:?}"
             );
         }
-        // The same PAT as Bearer still works, and a wrong password is no one.
+        // The same PAT as Bearer still works, and another token is no one.
         let bearer = p
             .authenticate(&req(&format!("Bearer {pat}")))
             .await

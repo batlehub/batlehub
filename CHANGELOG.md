@@ -27,11 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **A personal access token sent over HTTP Basic resolved to anonymous.**
   pip, and mise reading `~/.netrc` for a GitHub/Forgejo/GitLab registry, send
-  only `Authorization: Basic`, with the token as the password. The static
+  only `Authorization: Basic`, with the token in its secret half. The static
   token provider has always read that; the PAT provider read `Bearer` only, so
   a PAT configured exactly where a static token works was silently dropped and
-  the request went on as anonymous. The PAT provider now reads the Basic
-  password too, whatever the user name.
+  the request went on as anonymous. The PAT provider now reads the token
+  from a Basic header too, whatever the user name.
 
 ## [1.10.0] - 2026-11-09
 
