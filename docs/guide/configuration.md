@@ -2341,7 +2341,8 @@ pseudonymised, nothing is sealed, and the server warns once
 (`audit.no-retention`). The values above are the documented example, not a
 default. The load refuses a seal interval without a key, a key that is not a
 seed, pseudonymisation set past the access retention, and a security retention
-shorter than the access one.
+shorter than the access one — where `0` keeps forever, so a security retention
+with `access_retention_days = 0` is refused too.
 
 **Classes.** `download` and `view_metadata` are the access class; every other
 action — admin actions, sign-ins, token events, purges — is the security
