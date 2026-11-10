@@ -17,7 +17,7 @@
   },
   "proxy-packument-pat": {
     "cold": 4,
-    "warm": 2
+    "warm": 1
   },
   "proxy-tarball-pat": {
     "cold": 1,

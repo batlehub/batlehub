@@ -125,25 +125,34 @@ impl UserTokenRepository for PgPackageRepository {
     /// Throttled in SQL as well as in the caller: `UserTokenAuthProvider` skips
     /// the call entirely for a minute after a hit, and this `WHERE` means two
     /// replicas that both decide to write still produce one update.
-    async fn touch_last_used(&self, id: Uuid, source_ip: Option<&str>) -> Result<(), CoreError> {
-        sqlx::query(
+    ///
+    /// One statement: `prev` and the `UPDATE` share a snapshot, so `prev` is
+    /// the row before the write even when the throttle makes it a no-op. The
+    /// cached row is left alone (TD-0001 §1): evicting it here cost the next
+    /// request a `find_by_hash`.
+    async fn touch_last_used(
+        &self,
+        id: Uuid,
+        source_ip: Option<&str>,
+    ) -> Result<Option<String>, CoreError> {
+        let row = sqlx::query(
             r#"
-            UPDATE user_tokens
-            SET last_used_at = NOW(), last_used_ip = COALESCE($2, last_used_ip)
-            WHERE id = $1
-              AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '1 minute')
+            WITH prev AS (SELECT last_used_ip FROM user_tokens WHERE id = $1),
+            touched AS (
+                UPDATE user_tokens
+                SET last_used_at = NOW(), last_used_ip = COALESCE($2, last_used_ip)
+                WHERE id = $1
+                  AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '1 minute')
+            )
+            SELECT last_used_ip FROM prev
             "#,
         )
         .bind(id)
         .bind(source_ip)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .db_err()?;
-        // The cached row's last_used_ip is what `token_new_source` compares.
-        crate::db::read_cache::CACHES
-            .tokens
-            .forget_where(|t| t.id == id);
-        Ok(())
+        Ok(row.and_then(|r| r.get("last_used_ip")))
     }
 
     async fn revoke(&self, id: Uuid, owner: &TokenOwner) -> Result<bool, CoreError> {

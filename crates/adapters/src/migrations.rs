@@ -272,6 +272,11 @@ pub fn embedded_migrator() -> Migrator {
             "read cache invalidation",
             "../migrations/066_read_cache_invalidation.sql"
         ),
+        mig!(
+            67,
+            "read cache tokens ignore last used ip",
+            "../migrations/067_read_cache_tokens_ignore_last_used_ip.sql"
+        ),
     ])
 }
 
