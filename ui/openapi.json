@@ -5150,6 +5150,80 @@
         ]
       }
     },
+    "/api/v1/admin/scans": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The scan queue and its failures (RFC 0042 §4.4). `system:read` at the\ninstance tier; then rows only from registries where the caller holds\n`quarantine:read`, and `last_error` only with `findings:read` there, so\n`system:read` alone names no held version (T16).",
+        "operationId": "list_scans",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Only this registry. A filter, not a scope: one the caller may not\nread answers an empty page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`queued`, `scanning` or `failed`; absent lists every open job.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based; default 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Default 50, at most 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of scan jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanQueuePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`, or `per_page` over 200"
+          },
+          "403": {
+            "description": "`system:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/stats": {
       "get": {
         "tags": [
@@ -28383,6 +28457,112 @@
             ],
             "format": "date-time",
             "description": "The open job's `created_at`."
+          }
+        }
+      },
+      "ScanJobRow": {
+        "type": "object",
+        "description": "One job on the Scans page.",
+        "required": [
+          "registry",
+          "name",
+          "version",
+          "state",
+          "trigger",
+          "attempts",
+          "since",
+          "error_withheld",
+          "can_rescan"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "can_rescan": {
+            "type": "boolean",
+            "description": "Whether the caller holds `gates:exempt` here at the config tiers, so\nthe page draws [Rescan]. Cosmetic: the rescan endpoint checks again."
+          },
+          "deferred_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error_withheld": {
+            "type": "boolean",
+            "description": "Whether `last_error` was withheld for lack of `findings:read`."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker's last error, redacted and cut to 200 characters; only\nwith `findings:read` on the registry."
+          },
+          "leased_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker holding the lease, while one does."
+          },
+          "name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "An open job's `created_at`; a failed one's `completed_at`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScanState",
+            "description": "`queued`, `scanning` or `failed`."
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ScanQueuePage": {
+        "type": "object",
+        "description": "A page of `/admin/scans`.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScanJobRow"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matching rows across every page.",
+            "minimum": 0
           }
         }
       },

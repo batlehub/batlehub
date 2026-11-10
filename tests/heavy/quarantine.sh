@@ -310,6 +310,22 @@ ROW="$(scan_row - "$REG" "$PKG")"
   || heavy_fail "an anonymous caller was told the scan status of $PKG: $ROW"
 heavy_log "SCAN-STATUS-TRANSIENT-OK (user: $(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["scan_status"]["state"])' "$(scan_row "$USER_TOKEN" "$REG" "$PKG")"); anonymous: no scan_status)"
 
+# Observation 4 (phase 2): the Scans page is `system:read`'s — the user gets
+# `403` — and the admin finds the refused version on the queue, unless the
+# embedded worker already closed it, in which case the list says scanned.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/scans")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/scans, not 403"
+SCANS="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/scans?registry=$REG")" \
+  || heavy_fail "/api/v1/admin/scans failed for the admin"
+python3 - "$SCANS" "$(scan_row "$ADMIN_TOKEN" "$REG" "$PKG")" "$PKG" "$CLEAN" <<'PY' \
+  || heavy_fail "the held version is neither on the Scans queue nor scanned: $SCANS"
+import json, sys
+page, row, name, version = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3], sys.argv[4]
+queued = [r for r in page["items"] if (r["name"], r["version"]) == (name, version)]
+assert queued and queued[0]["state"] in ("queued", "scanning") or row["scan_status"]["state"] == "scanned", (page, row)
+PY
+heavy_log "SCANS-PAGE-OK (user 403; admin sees $PKG@$CLEAN queued, scanning or already scanned)"
+
 # ── 2. The worker clears it ──────────────────────────────────────────────────
 
 heavy_log "batlehub wait $REG:$PKG@$CLEAN"

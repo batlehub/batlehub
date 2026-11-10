@@ -20,7 +20,8 @@ use batlehub_adapters::in_memory::{
     InMemoryVerdictRepository, NoopArtifactMetaRepository, NullUserTokenRepository,
 };
 use batlehub_core::entities::{
-    AccessEvent, PackageId, Role, ScanJob, ScanTrigger, SecurityPolicy, Verdict, VerdictState,
+    AccessEvent, Action, GrantMap, PackageId, Role, ScanJob, ScanTrigger, SecurityPolicy,
+    SubjectMatcher, Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{
@@ -103,6 +104,15 @@ impl ScanQueue for Queue {
             return Err(CoreError::Other(anyhow::anyhow!("database is down")));
         }
         self.0.jobs_for(coords).await
+    }
+    async fn list_jobs(
+        &self,
+        r: &[String],
+        f: batlehub_core::entities::ScanJobFilter,
+        l: u64,
+        o: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        self.0.list_jobs(r, f, l, o).await
     }
 }
 
@@ -197,6 +207,23 @@ async fn app(
     >,
     Lab,
 ) {
+    app_with(shadow, false).await
+}
+
+/// `delegate`: `role:user` also holds `system:read` at the instance tier,
+/// and `SEC2`'s node grants `quarantine:read` to administrators only — the
+/// T16 caller, who may open the Scans page but not see `SEC2`'s holds.
+async fn app_with(
+    shadow: bool,
+    delegate: bool,
+) -> (
+    impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+    Lab,
+) {
     let repo = InMemoryRepo::new();
     let repo_dyn: Arc<dyn PackageRepository> = repo.clone();
     let storage: Arc<dyn StorageBackend> = InMemoryStorageBackend::new();
@@ -230,6 +257,19 @@ async fn app(
                     until: Utc::now().date_naive() + chrono::Days::new(30),
                 });
             }
+            // `gates:exempt` goes to nobody by default (RFC 0015 §10): the
+            // admin holds it on `SEC` only, so [Rescan] has both sides.
+            if *n == SEC {
+                let node = g.registry.grants.take().unwrap_or_default();
+                g.registry.grants =
+                    Some(node.grant(SubjectMatcher::Role(Role::Admin), [Action::GatesExempt]));
+            }
+            if delegate && *n == SEC2 {
+                g.registry.grants = Some(GrantMap::new().grant(
+                    SubjectMatcher::Role(Role::Admin),
+                    [Action::QuarantineRead, Action::FindingsRead],
+                ));
+            }
             (n.to_string(), Arc::new(g))
         })
         .collect();
@@ -239,7 +279,14 @@ async fn app(
     let hot = new_hot_lock(HotConfig {
         grants,
         instance: Some(Arc::new(
-            batlehub_core::services::authz::translate::instance_node(None),
+            batlehub_core::services::authz::translate::instance_node(
+                delegate
+                    .then(|| {
+                        GrantMap::new()
+                            .grant(SubjectMatcher::Role(Role::User), [Action::SystemRead])
+                    })
+                    .as_ref(),
+            ),
         )),
         registries,
         policies,
@@ -540,4 +587,194 @@ async fn the_verdict_get_still_answers_404_with_no_verdict_row() {
         .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
+// ── the Scans page (phase 2) ─────────────────────────────────────────────────
+
+const SCANS: &str = "/api/v1/admin/scans";
+
+async fn status_of<S>(app: &S, uri: &str, token: Option<&str>) -> u16
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    let mut req = TestRequest::get().uri(uri);
+    if let Some(t) = token {
+        req = req.insert_header(("Authorization", bearer(t)));
+    }
+    call_service(app, req.to_request()).await.status().as_u16()
+}
+
+impl Lab {
+    /// `registry/failed@1` exhausted with `error`, `registry/running@1`
+    /// leased, `registry/waiting@1` queued.
+    async fn queue_three(&self, registry: &str, error: &str) {
+        let q = &self.queue;
+        let pkg = |n: &str| PackageId::new(registry, n, "1");
+        q.enqueue(&pkg("failed"), None, ScanTrigger::FirstSeen)
+            .await
+            .unwrap();
+        let job = q.lease("w-0", &[], 1, 60, 3).await.unwrap().remove(0);
+        q.complete_exhausted(job.id, &format!("{EXHAUSTED_PREFIX}{error}"))
+            .await
+            .unwrap();
+        q.enqueue(&pkg("running"), None, ScanTrigger::FirstSeen)
+            .await
+            .unwrap();
+        q.enqueue(&pkg("waiting"), None, ScanTrigger::Rescan)
+            .await
+            .unwrap();
+        q.lease("worker-2", &[], 1, 60, 3).await.unwrap();
+    }
+}
+
+fn names(page: &Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            format!(
+                "{}/{}",
+                r["registry"].as_str().unwrap(),
+                r["name"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[actix_web::test]
+async fn scans_list_shows_the_queue_scanning_first_and_the_failures() {
+    let (app, lab) = app(false).await;
+    lab.queue_three(SEC, "tar: unexpected EOF").await;
+
+    let open = get(&app, SCANS, Some(ADMIN_TOKEN)).await;
+    assert_eq!(
+        names(&open),
+        [format!("{SEC}/running"), format!("{SEC}/waiting")]
+    );
+    assert_eq!(open["total"], 2);
+    assert_eq!(open["items"][0]["state"], "scanning");
+    assert_eq!(open["items"][0]["leased_by"], "worker-2");
+    assert_eq!(open["items"][1]["state"], "queued");
+    assert!(open["items"][1].get("leased_by").is_none());
+
+    let queued = get(&app, &format!("{SCANS}?state=queued"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(names(&queued), [format!("{SEC}/waiting")]);
+
+    let failed = get(&app, &format!("{SCANS}?state=failed"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(names(&failed), [format!("{SEC}/failed")]);
+    let row = &failed["items"][0];
+    assert_eq!(row["state"], "failed");
+    assert_eq!(row["last_error"], "tar: unexpected EOF", "prefix stripped");
+    assert_eq!(row["attempts"], 1);
+    assert_eq!(row["can_rescan"], true);
+
+    // A rescan of the failed version takes it off Failures and onto the queue.
+    lab.queue
+        .enqueue(
+            &PackageId::new(SEC, "failed", "1"),
+            None,
+            ScanTrigger::Rescan,
+        )
+        .await
+        .unwrap();
+    let failed = get(&app, &format!("{SCANS}?state=failed"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(failed["total"], 0);
+    let open = get(&app, SCANS, Some(ADMIN_TOKEN)).await;
+    assert_eq!(open["total"], 3);
+}
+
+#[actix_web::test]
+async fn scans_list_pages_and_filters_by_registry() {
+    let (app, lab) = app(false).await;
+    lab.queue_three(SEC, "e").await;
+    lab.queue_three(SEC2, "e").await;
+    let one = get(&app, &format!("{SCANS}?registry={SEC2}"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(
+        names(&one),
+        [format!("{SEC2}/running"), format!("{SEC2}/waiting")]
+    );
+    assert_eq!(
+        one["items"][0]["can_rescan"], false,
+        "no gates:exempt on SEC2"
+    );
+    let p2 = get(
+        &app,
+        &format!("{SCANS}?per_page=3&page=2"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(p2["total"], 4);
+    assert_eq!(p2["items"].as_array().unwrap().len(), 1);
+    let unknown = get(&app, &format!("{SCANS}?registry=nope"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(unknown["total"], 0);
+}
+
+/// T7, and a typo is a `400`, not an empty page.
+#[actix_web::test]
+async fn admin_lists_reject_per_page_over_200() {
+    let (app, _lab) = app(false).await;
+    for q in ["per_page=201", "per_page=0", "state=scaning"] {
+        assert_eq!(
+            status_of(&app, &format!("{SCANS}?{q}"), Some(ADMIN_TOKEN)).await,
+            400,
+            "{q}"
+        );
+    }
+    assert_eq!(
+        status_of(&app, &format!("{SCANS}?per_page=200"), Some(ADMIN_TOKEN)).await,
+        200
+    );
+}
+
+#[actix_web::test]
+async fn scans_list_needs_system_read() {
+    let (app, _lab) = app(false).await;
+    assert_eq!(status_of(&app, SCANS, Some(USER_TOKEN)).await, 403);
+    assert_eq!(status_of(&app, SCANS, None).await, 403);
+}
+
+/// T16: `system:read` opens the page, not every registry's holds, and not
+/// the worker's error text without `findings:read`.
+#[actix_web::test]
+async fn scans_list_omits_registry_without_quarantine_read() {
+    let (app, lab) = app_with(false, true).await;
+    lab.queue_three(SEC, "SECRET-ERROR").await;
+    lab.queue_three(SEC2, "SECRET-ERROR").await;
+
+    let open = get(&app, SCANS, Some(USER_TOKEN)).await;
+    assert_eq!(
+        names(&open),
+        [format!("{SEC}/running"), format!("{SEC}/waiting")]
+    );
+    let only = get(&app, &format!("{SCANS}?registry={SEC2}"), Some(USER_TOKEN)).await;
+    assert_eq!(
+        only["total"], 0,
+        "an explicit registry is a filter, not a way in"
+    );
+
+    let failed = get(&app, &format!("{SCANS}?state=failed"), Some(USER_TOKEN)).await;
+    assert_eq!(names(&failed), [format!("{SEC}/failed")]);
+    let row = &failed["items"][0];
+    assert!(row.get("last_error").is_none(), "{row}");
+    assert_eq!(row["error_withheld"], true);
+    assert_eq!(row["can_rescan"], false);
+    assert!(!failed.to_string().contains("SECRET-ERROR"));
+}
+
+/// T9: the bulk rescan the Scans page links to refuses without
+/// `system:write`; the UI hiding the button is cosmetic.
+#[actix_web::test]
+async fn bulk_rescan_without_system_write_is_403() {
+    let (app, _lab) = app_with(false, true).await;
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/verdicts/rescan")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({ "registry": SEC }))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 403);
 }

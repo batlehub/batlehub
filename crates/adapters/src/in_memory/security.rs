@@ -9,7 +9,9 @@ use chrono::{DateTime, Duration, Utc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use batlehub_core::entities::{PackageId, ScanJob, ScanTrigger, Verdict, VerdictState};
+use batlehub_core::entities::{
+    PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict, VerdictState, EXHAUSTED_PREFIX,
+};
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 
@@ -224,6 +226,7 @@ impl ScanQueue for InMemoryScanQueue {
                 deferred_since: None,
                 leased_by: None,
                 last_error: None,
+                completed_at: None,
             },
             completed: false,
         });
@@ -288,6 +291,7 @@ impl ScanQueue for InMemoryScanQueue {
         }) {
             r.completed = true;
             r.job.leased_until = None;
+            r.job.completed_at = Some(Utc::now());
         }
         Ok(())
     }
@@ -297,6 +301,7 @@ impl ScanQueue for InMemoryScanQueue {
         if let Some(r) = rows.iter_mut().find(|r| r.job.id == job_id && !r.completed) {
             r.completed = true;
             r.job.leased_until = None;
+            r.job.completed_at = Some(Utc::now());
             r.job.last_error = Some(last_error.to_owned());
         }
         Ok(())
@@ -322,6 +327,64 @@ impl ScanQueue for InMemoryScanQueue {
                 (open.map(|r| r.job.clone()), closed.map(|r| r.job.clone()))
             })
             .collect())
+    }
+
+    async fn list_jobs(
+        &self,
+        registries: &[String],
+        filter: ScanJobFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        let now = Utc::now();
+        let rows = self.rows.read().await;
+        let scanning =
+            |j: &ScanJob| j.leased_by.is_some() && j.leased_until.is_some_and(|u| u > now);
+        let mut hits: Vec<&ScanJob> = match filter {
+            ScanJobFilter::Failed => {
+                // The latest closed row per coordinate, rows being in creation
+                // order; a coordinate with an open job is not failed.
+                let mut latest: Vec<&ScanJob> = Vec::new();
+                for r in rows.iter().filter(|r| r.completed) {
+                    latest.retain(|j| j.package != r.job.package);
+                    latest.push(&r.job);
+                }
+                latest.retain(|j| {
+                    j.last_error
+                        .as_deref()
+                        .is_some_and(|e| e.starts_with(EXHAUSTED_PREFIX))
+                        && !rows
+                            .iter()
+                            .any(|o| !o.completed && o.job.package == j.package)
+                });
+                latest.sort_by_key(|j| std::cmp::Reverse(j.completed_at));
+                latest
+            }
+            _ => {
+                let mut open: Vec<&ScanJob> = rows
+                    .iter()
+                    .filter(|r| !r.completed)
+                    .map(|r| &r.job)
+                    .filter(|j| match filter {
+                        ScanJobFilter::Queued => !scanning(j),
+                        ScanJobFilter::Scanning => scanning(j),
+                        _ => true,
+                    })
+                    .collect();
+                open.sort_by_key(|j| (!scanning(j), j.created_at));
+                open
+            }
+        };
+        hits.retain(|j| registries.contains(&j.package.registry));
+        let total = hits.len() as u64;
+        Ok((
+            hits.into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .cloned()
+                .collect(),
+            total,
+        ))
     }
 
     async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {

@@ -220,6 +220,69 @@ async fn jobs_for_and_get_many_answer_per_coordinate_in_order() {
     assert_eq!(many[1].as_ref().unwrap().state, VerdictState::Allowed);
 }
 
+/// RFC 0042 phase 2: the Scans page reads open jobs scanning first, and as
+/// failed only a coordinate whose **latest** closed job is exhausted and that
+/// has no open job.
+#[tokio::test]
+async fn list_jobs_reads_the_queue_and_rule_5_failures() {
+    use batlehub_core::entities::ScanJobFilter;
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    let regs = std::slice::from_ref(&reg);
+    let pkg = |n: &str| PackageId::new(&reg, n, "1");
+    let close = |n: &'static str, err: Option<&'static str>| {
+        let q = &q;
+        let p = pkg(n);
+        async move {
+            q.enqueue(&p, None, ScanTrigger::FirstSeen).await.unwrap();
+            let j = q.lease("w", regs, 1, 60, 3).await.unwrap().remove(0);
+            match err {
+                Some(e) => q.complete_exhausted(j.id, e).await.unwrap(),
+                None => q.complete(j.id, Some("w")).await.unwrap(),
+            }
+        }
+    };
+    close("failed", Some("exhausted: tar: unexpected EOF")).await;
+    // Failed, then succeeded: not failed.
+    close("recovered", Some("exhausted: boom")).await;
+    close("recovered", None).await;
+    // Failed, then rescanning: on the queue, not under Failures.
+    close("retrying", Some("exhausted: boom")).await;
+    q.enqueue(&pkg("retrying"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    q.enqueue(&pkg("running"), None, ScanTrigger::FirstSeen)
+        .await
+        .unwrap();
+    q.lease("w-2", regs, 1, 60, 3).await.unwrap();
+
+    let (failed, total) = q
+        .list_jobs(regs, ScanJobFilter::Failed, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(failed[0].package, pkg("failed"));
+    assert!(failed[0].completed_at.is_some());
+
+    let (open, total) = q.list_jobs(regs, ScanJobFilter::Open, 50, 0).await.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(open[0].package, pkg("running"), "scanning first");
+    assert_eq!(open[1].package, pkg("retrying"));
+    let (queued, _) = q
+        .list_jobs(regs, ScanJobFilter::Queued, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(queued.len(), 1);
+    let (page2, total) = q.list_jobs(regs, ScanJobFilter::Open, 1, 1).await.unwrap();
+    assert_eq!((page2.len(), total), (1, 2));
+    let (none, _) = q.list_jobs(&[], ScanJobFilter::Open, 50, 0).await.unwrap();
+    assert!(none.is_empty());
+}
+
 #[tokio::test]
 async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
     let Some(url) = db_url() else {

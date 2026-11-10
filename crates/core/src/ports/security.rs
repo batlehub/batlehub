@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::entities::{PackageId, ScanJob, ScanTrigger, Verdict, VerdictState};
+use crate::entities::{PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict, VerdictState};
 use crate::error::CoreError;
 
 /// `artifact_verdicts` and `artifact_findings`.
@@ -135,6 +135,22 @@ pub trait ScanQueue: Send + Sync {
     ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
         Err(CoreError::Other(anyhow::anyhow!(
             "this scan queue cannot list jobs per coordinate"
+        )))
+    }
+
+    /// The Scans page (RFC 0042 §6.1): the jobs of `registries` matching
+    /// `filter`, with the total before paging. Open rows: scanning first,
+    /// then oldest first. Failed: most recently closed first. An empty
+    /// `registries` lists nothing. The default refuses, as `jobs_for` does.
+    async fn list_jobs(
+        &self,
+        _registries: &[String],
+        _filter: ScanJobFilter,
+        _limit: u64,
+        _offset: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        Err(CoreError::Other(anyhow::anyhow!(
+            "this scan queue cannot list jobs"
         )))
     }
 

@@ -50,6 +50,9 @@ export const SECURITY_TABS = [
   // both answer "why was this refused?", and an operator arriving with that
   // question should not have to know which of two mechanisms produced it.
   { to: "/admin/security/authorization", label: "adminNav.authorization" },
+  // RFC 0042 phase 2: where scans are followed — the queue, the failures and
+  // the verdicts by state.
+  { to: "/admin/security/scans", label: "adminNav.scans" },
 ];
 
 export const NAMESPACES_TABS = [

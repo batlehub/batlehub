@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: e0b05929df327c6b
+sourceHash: ceaad7723cecb8c6
 ---
 
 # Contrôles de sécurité
@@ -617,6 +617,33 @@ fenêtre d'âge ou un changement de politique.
 Quand le statut n'a pas pu être lu en 500 ms, la liste est servie sans lui et
 porte `scan_status_unavailable: true` ; la console affiche alors « — » à la
 place de chaque badge.
+
+### La page Scans {#scans-page}
+
+*Admin → Sécurité et accès → Scans* suit la file d'analyse
+(`GET /api/v1/admin/scans`) :
+
+- **File d'attente** : chaque tâche ouverte, celles qu'un worker tient en
+  premier, avec le déclencheur, l'heure de mise en file, le worker et les
+  tentatives. Une tâche différée indique quand son report a commencé.
+- **Échecs** : chaque version dont la dernière tâche d'analyse a épuisé ses
+  tentatives et qui n'a aucune tâche ouverte, avec la dernière erreur du
+  worker. [Relancer l'analyse] crée une nouvelle tâche
+  (`POST /api/v1/verdicts/…/rescan`) et la ligne passe dans la file.
+- **Verdicts par état** : les verdicts d'un registre, depuis
+  `GET /api/v1/admin/verdicts`.
+
+Ouvrir la page demande `system:read`. Les lignes ne viennent ensuite que des
+registres où vous détenez aussi `quarantine:read`, et la dernière erreur
+seulement là où vous détenez `findings:read` : `system:read` seul ne nomme
+aucune version retenue. [Relancer l'analyse] apparaît là où les droits
+configurés vous donnent `gates:exempt` sur le registre — personne ne le détient
+par défaut — et l'endpoint de relance le vérifie à nouveau. `per_page` vaut au
+plus 200.
+
+Une tâche close avant cette version ne porte pas de marqueur d'échec : un échec
+antérieur à la mise à jour n'apparaît donc pas sous Échecs ; son verdict
+affiche toujours `SCANNER_ERROR` dans *Verdicts par état*.
 
 ---
 

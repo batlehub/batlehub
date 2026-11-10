@@ -744,6 +744,21 @@ pub struct ScanJob {
     /// or, on a closed row, [`EXHAUSTED_PREFIX`] and the last error.
     #[serde(default)]
     pub last_error: Option<String>,
+    /// When the row was closed; `None` while it is open.
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Which rows the Scans page lists (RFC 0042 §4.4 `/admin/scans?state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanJobFilter {
+    /// Every open job: queued and scanning.
+    Open,
+    Queued,
+    Scanning,
+    /// A coordinate whose latest closed job ran out of attempts
+    /// ([`EXHAUSTED_PREFIX`]) and that has no open job (§4.2 rule 5).
+    Failed,
 }
 
 /// What `close_exhausted` writes before the last error of a job whose

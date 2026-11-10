@@ -292,6 +292,8 @@ export const router = createRouter({
         { path: "packages/all", component: () => import("@/pages/AdminPackages.vue") },
         { path: "packages/bulk", component: () => import("@/pages/AdminBulk.vue") },
         { path: "security/blocks", component: () => import("@/pages/AdminBlocks.vue") },
+        // RFC 0042 phase 2: the scan queue and its failures.
+        { path: "security/scans", component: () => import("@/pages/AdminScans.vue") },
         { path: "security/access-check", component: () => import("@/pages/AdminAccessCheck.vue") },
         {
           path: "security/authorization",

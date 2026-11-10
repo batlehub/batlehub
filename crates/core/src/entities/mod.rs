@@ -81,9 +81,9 @@ pub use release_import::ImportRun;
 pub use sbom::{ArtifactSbom, SbomFormat, SbomSource};
 pub use security::{
     coordinate_purl, reason_code_docs_url, worse_state, Escalation, Finding, FindingKind,
-    InstallHookMode, ReasonCode, ScanDetail, ScanJob, ScanState, ScanStatus, ScanTrigger,
-    ScannerErrorMode, SecurityMode, SecurityPolicy, Verdict, VerdictState, BLOCK_LIST_SCANNER,
-    EXHAUSTED_PREFIX,
+    InstallHookMode, ReasonCode, ScanDetail, ScanJob, ScanJobFilter, ScanState, ScanStatus,
+    ScanTrigger, ScannerErrorMode, SecurityMode, SecurityPolicy, Verdict, VerdictState,
+    BLOCK_LIST_SCANNER, EXHAUSTED_PREFIX,
 };
 pub use signing_key::SigningKey;
 pub use subject::{Decision, Resource, Subject, Tier};

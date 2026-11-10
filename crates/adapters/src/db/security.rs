@@ -7,8 +7,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use batlehub_core::entities::{
-    Finding, FindingKind, PackageId, ReasonCode, ScanJob, ScanTrigger, Severity, Verdict,
-    VerdictState,
+    Finding, FindingKind, PackageId, ReasonCode, ScanJob, ScanJobFilter, ScanTrigger, Severity,
+    Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
@@ -412,6 +412,10 @@ impl PgScanQueue {
                 .and_then(|e| deferred_since(&e)),
             leased_by: r.try_get::<Option<String>, _>("leased_by").ok().flatten(),
             last_error: r.try_get::<Option<String>, _>("last_error").ok().flatten(),
+            completed_at: r
+                .try_get::<Option<DateTime<Utc>>, _>("completed_at")
+                .ok()
+                .flatten(),
         })
     }
 }
@@ -426,7 +430,7 @@ fn deferred_since(last_error: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
-const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, leased_by, created_at, last_error";
+const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, leased_by, created_at, last_error, completed_at";
 
 impl PgScanQueue {
     /// One lease pick: up to `n` open, unleased, unexhausted jobs in
@@ -680,6 +684,69 @@ impl ScanQueue for PgScanQueue {
             }
         }
         Ok(out)
+    }
+
+    /// Open rows on the open-job partial indexes; `failed` takes the latest
+    /// closed row per coordinate of `registries` (`DISTINCT ON`, on
+    /// `scan_jobs_closed_coordinate_idx`) and keeps the exhausted ones with no
+    /// open job. `COUNT(*) OVER ()` carries the total in the same statement.
+    async fn list_jobs(
+        &self,
+        registries: &[String],
+        filter: ScanJobFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        if registries.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let live = "(leased_by IS NOT NULL AND leased_until > NOW())";
+        let sql = match filter {
+            ScanJobFilter::Failed => format!(
+                "WITH last AS (
+                   SELECT DISTINCT ON (registry, package_name, version) {JOB_COLUMNS}
+                     FROM scan_jobs
+                    WHERE completed_at IS NOT NULL AND registry = ANY($1)
+                    ORDER BY registry, package_name, version, completed_at DESC)
+                 SELECT *, COUNT(*) OVER () AS total FROM last l
+                  WHERE left(l.last_error, length($4)) = $4
+                    AND NOT EXISTS (
+                      SELECT 1 FROM scan_jobs o
+                       WHERE o.completed_at IS NULL AND o.registry = l.registry
+                         AND o.package_name = l.package_name AND o.version = l.version)
+                  ORDER BY l.completed_at DESC, l.id
+                  LIMIT $2 OFFSET $3"
+            ),
+            open => {
+                let state = match open {
+                    ScanJobFilter::Queued => format!("AND NOT {live}"),
+                    ScanJobFilter::Scanning => format!("AND {live}"),
+                    _ => String::new(),
+                };
+                format!(
+                    "SELECT {JOB_COLUMNS}, COUNT(*) OVER () AS total FROM scan_jobs
+                      WHERE completed_at IS NULL AND registry = ANY($1)
+                        {state}
+                      ORDER BY {live} DESC, created_at, id
+                      LIMIT $2 OFFSET $3"
+                )
+            }
+        };
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(registries)
+            .bind(limit as i64)
+            .bind(offset as i64);
+        if filter == ScanJobFilter::Failed {
+            q = q.bind(EXHAUSTED_PREFIX);
+        }
+        let rows = q.fetch_all(&self.pool).await.db_err()?;
+        let total = rows.first().map_or(0, |r| r.get::<i64, _>("total") as u64);
+        Ok((
+            rows.iter()
+                .map(Self::row_to_job)
+                .collect::<Result<_, _>>()?,
+            total,
+        ))
     }
 
     async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {

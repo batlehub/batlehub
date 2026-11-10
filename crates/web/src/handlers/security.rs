@@ -327,13 +327,7 @@ impl ScanStatusDto {
             HoldVisibility::Reason => None,
             HoldVisibility::Findings => {
                 let mut d = status.detail;
-                // Redact first: a cut mid-URL would no longer parse as one.
-                d.last_error = d.last_error.map(|e| {
-                    batlehub_adapters::registry::http_client::redact_text_urls(&e)
-                        .chars()
-                        .take(LAST_ERROR_MAX_CHARS)
-                        .collect()
-                });
+                d.last_error = d.last_error.as_deref().map(redact_error);
                 Some(d)
             }
         };
@@ -343,6 +337,15 @@ impl ScanStatusDto {
             detail,
         })
     }
+}
+
+/// A worker's error as a reader may see it: URLs redacted **then** cut to
+/// 200 characters — a cut mid-URL would no longer parse as one (§6.3).
+fn redact_error(e: &str) -> String {
+    batlehub_adapters::registry::http_client::redact_text_urls(e)
+        .chars()
+        .take(LAST_ERROR_MAX_CHARS)
+        .collect()
 }
 
 /// The scan status of each of `coords` for `identity`, and whether the batch
@@ -902,6 +905,193 @@ pub async fn list_verdicts(
     Ok(HttpResponse::Ok().json(VerdictListResponse {
         registry: query.registry.clone(),
         items,
+    }))
+}
+
+// ── the Scans page (RFC 0042 phase 2) ────────────────────────────────────────
+
+/// The most rows one `/admin/scans` page carries (§4.3).
+const SCANS_MAX_PER_PAGE: u64 = 200;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ScanListQuery {
+    /// Only this registry. A filter, not a scope: one the caller may not
+    /// read answers an empty page.
+    pub registry: Option<String>,
+    /// `queued`, `scanning` or `failed`; absent lists every open job.
+    pub state: Option<String>,
+    /// 1-based; default 1.
+    pub page: Option<u64>,
+    /// Default 50, at most 200.
+    pub per_page: Option<u64>,
+}
+
+/// One job on the Scans page.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScanJobRow {
+    pub registry: String,
+    pub name: String,
+    pub version: String,
+    /// `queued`, `scanning` or `failed`.
+    pub state: batlehub_core::entities::ScanState,
+    pub trigger: String,
+    pub attempts: u32,
+    /// An open job's `created_at`; a failed one's `completed_at`.
+    pub since: chrono::DateTime<chrono::Utc>,
+    /// The worker holding the lease, while one does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leased_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// The worker's last error, redacted and cut to 200 characters; only
+    /// with `findings:read` on the registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Whether `last_error` was withheld for lack of `findings:read`.
+    pub error_withheld: bool,
+    /// Whether the caller holds `gates:exempt` here at the config tiers, so
+    /// the page draws [Rescan]. Cosmetic: the rescan endpoint checks again.
+    pub can_rescan: bool,
+}
+
+/// A page of `/admin/scans`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScanQueuePage {
+    pub items: Vec<ScanJobRow>,
+    /// Matching rows across every page.
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// The scan queue and its failures (RFC 0042 §4.4). `system:read` at the
+/// instance tier; then rows only from registries where the caller holds
+/// `quarantine:read`, and `last_error` only with `findings:read` there, so
+/// `system:read` alone names no held version (T16).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/scans",
+    tag = "security",
+    params(ScanListQuery),
+    responses(
+        (status = 200, description = "One page of scan jobs", body = ScanQueuePage),
+        (status = 400, description = "An unknown `state`, or `per_page` over 200"),
+        (status = 403, description = "`system:read` required"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/scans")]
+pub async fn list_scans(
+    query: web::Query<ScanListQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    use batlehub_core::entities::{ScanJobFilter, ScanState};
+    crate::handlers::back_office::require_verb(&identity, Action::SystemRead, None, &svc.hot)
+        .await?;
+    let filter = match query.state.as_deref().map(str::trim) {
+        None | Some("") => ScanJobFilter::Open,
+        Some("queued") => ScanJobFilter::Queued,
+        Some("scanning") => ScanJobFilter::Scanning,
+        Some("failed") => ScanJobFilter::Failed,
+        Some(s) => {
+            return Err(AppError::bad_request(format!(
+                "state '{s}' is not one of: queued, scanning, failed"
+            )))
+        }
+    };
+    let per_page = query.per_page.unwrap_or(50);
+    if per_page == 0 || per_page > SCANS_MAX_PER_PAGE {
+        return Err(AppError::bad_request(format!(
+            "per_page must be between 1 and {SCANS_MAX_PER_PAGE}"
+        )));
+    }
+    let page = query.page.unwrap_or(1).max(1);
+    let (mut registries, queue) = {
+        let hot = svc.hot.read().await;
+        let mut r: Vec<String> = hot.security.keys().cloned().collect();
+        r.sort();
+        (r, hot.scan_queue.clone())
+    };
+    if let Some(only) = &query.registry {
+        registries.retain(|r| r == only);
+    }
+    // The registry list is a ceiling bound into the query: a row the caller
+    // may not see is never read.
+    let mut readable = Vec::new();
+    let mut findings = std::collections::HashSet::new();
+    for r in registries {
+        let may = |a| authz::authorize_control(&svc.hot, Some(&r), &identity.0, a);
+        if may(Action::QuarantineRead).await.is_ok() {
+            if may(Action::FindingsRead).await.is_ok() {
+                findings.insert(r.clone());
+            }
+            readable.push(r);
+        }
+    }
+    let empty = || ScanQueuePage {
+        items: Vec::new(),
+        total: 0,
+        page,
+        per_page,
+    };
+    let Some(queue) = queue.filter(|_| !readable.is_empty()) else {
+        return Ok(HttpResponse::Ok().json(empty()));
+    };
+    let offset = (page - 1).saturating_mul(per_page);
+    let (jobs, total) = queue
+        .list_jobs(&readable, filter, per_page, offset)
+        .await
+        .map_err(AppError::from)?;
+    let coords: Vec<PackageId> = jobs.iter().map(|j| j.package.clone()).collect();
+    let rescan =
+        authz::config_tier_holds(&svc.hot, &identity.0, &coords, &[Action::GatesExempt]).await;
+    let now = chrono::Utc::now();
+    let items = jobs
+        .into_iter()
+        .zip(rescan)
+        .map(|(j, may_rescan)| {
+            let failed = j.completed_at.is_some();
+            let state = if failed {
+                ScanState::Failed
+            } else {
+                batlehub_core::services::scan_status::derive(true, Some(&j), None, None, now)
+                    .map_or(ScanState::Queued, |s| s.state)
+            };
+            let error = if failed {
+                j.last_error
+                    .as_deref()
+                    .and_then(|e| e.strip_prefix(batlehub_core::entities::EXHAUSTED_PREFIX))
+            } else if j.deferred_since.is_none() {
+                j.last_error.as_deref()
+            } else {
+                None
+            }
+            .map(str::trim)
+            .filter(|e| !e.is_empty());
+            let shown = findings.contains(&j.package.registry);
+            ScanJobRow {
+                state,
+                trigger: j.trigger.as_str().to_owned(),
+                attempts: j.attempts,
+                since: j.completed_at.unwrap_or(j.created_at),
+                leased_by: j.leased_by.filter(|_| state == ScanState::Scanning),
+                deferred_since: j.deferred_since,
+                last_error: error.filter(|_| shown).map(redact_error),
+                error_withheld: error.is_some() && !shown,
+                can_rescan: may_rescan.first().copied().unwrap_or(false),
+                registry: j.package.registry,
+                name: j.package.name,
+                version: j.package.version,
+            }
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(ScanQueuePage {
+        items,
+        total,
+        page,
+        per_page,
     }))
 }
 

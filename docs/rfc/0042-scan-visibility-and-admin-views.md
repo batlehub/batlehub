@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phase 1 built 2026-11-10 (§17.1); phases 2–5 to come |
+| Status      | Accepted — phases 1–2 built 2026-11-10 (§17.1, §17.2); phases 3–5 to come |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1792,7 +1792,7 @@ None.
 | Phase | Content | Useful alone |
 | --- | --- | --- |
 | 1 ✅ (§17.1) | `scan_status` (core `derive`, ports' `jobs_for`/`get_many`, `scan_status_for` with per-registry visibility, the skip, the timeout and `scan_status_unavailable`, the field on the list, detail and admin-list responses) + `ScanBadge` in the catalog's State cell, `AdminPackages` and the header; package page tabs; `usePoll` with its backoff; the worker's `exhausted:` marker (decision 34) and the index migration (decision 33); `config.db-calls.toml` gains a security registry and the budgets are re-measured; the explore-list soak arm; T1/T2/T5/T8/T8b/T15 | yes: motivations 1 and 2 |
-| 2 | `GET /admin/scans` with its per-registry row filter, `AdminScans.vue` (queue, failures, verdicts by state), [Rescan] wired to existing endpoints; the route in `authz_matrix.rs` and `profile_routes.txt`; T7 for `/admin/scans`, T9, T16 | yes: motivation 4 |
+| 2 ✅ (§17.2) | `GET /admin/scans` with its per-registry row filter, `AdminScans.vue` (queue, failures, verdicts by state), [Rescan] wired to existing endpoints; the route in `authz_matrix.rs` and `profile_routes.txt`; T7 for `/admin/scans`, T9, T16 | yes: motivation 4 |
 | 3 | `GET /admin/findings` built on `authorize_control` with the per-row seal check, `AdminFindings.vue`, [Exempt…] reusing the exemption dialog; the route in `authz_matrix.rs` and `profile_routes.txt`; T3/T3b/T3c/T7 for `/admin/findings`/T10 | yes: motivation 3 |
 | 4 | `next_rescan` on the verdict GET and in the Security tab | yes: motivation 5 |
 | 5 | `GET /admin/registries/{name}`, `registries::project` allow-list and `AuthPresence`, suggestions, `AdminRegistry.vue` (strip + tabs) + `AdminRegistries.vue`, the extracted `StatsTrendChart`, the Activity tab on `/admin/stats/history`, links from Dashboard/Health; `[stats] dashboard_url`/`registry_dashboard_url` with their validation, `monitoring_url` on both responses, the Grafana `registry` variable; URL fields through `redacted()` behind `upstreams:read`; `RegistryViews` via `PendingReload.new_registry_views`; the two `RELOAD_KEYS` rows and `hot-reload.md` regenerated (decision 32); T4/T4b/T6/T11/T12/T13/T14 in the same PR as the endpoint | yes: motivations 6 and 7 |
@@ -1893,3 +1893,67 @@ asserts that no statement touching `scan_jobs` or `artifact_verdicts` ran.
 **Not run here:** `quarantine.sh` end to end (it needs `bwrap` for step 9,
 absent in this workspace; CI runs it) and the rendered design gate
 (`task docs:design:rendered`, which needs the browser sidecar and a backend).
+
+### 17.2 Phase 2 — built 2026-11-10
+
+**Landed as designed:**
+
+- `ScanQueue::list_jobs(registries, filter, limit, offset)`, in Postgres and
+  in memory, returning the page and the total (`COUNT(*) OVER ()`, one
+  statement). `ScanJobFilter` is `Open` (the default: queued and scanning,
+  the ones a worker holds first), `Queued`, `Scanning` or `Failed`. `Failed` is
+  rule 5's job half: the latest closed job per coordinate (`DISTINCT ON`, on
+  decision 33's index) whose `last_error` carries `EXHAUSTED_PREFIX`, with no
+  open job. `ScanJob` gains `completed_at`, the failure's "since".
+- `GET /api/v1/admin/scans` (`handlers/security.rs` `list_scans`):
+  `system:read` at the instance tier, then the registry list built
+  **before** the query from the `[security]` registries where
+  `authorize_control` gives `quarantine:read`, bound into it as a ceiling;
+  `last_error` only where it also gives `findings:read`, redacted and cut to
+  200 characters with the prefix stripped (T16). `registry` is a filter: one
+  the caller may not read answers an empty page. `per_page` 0 or over 200,
+  and an unknown `state`, answer `400` (T7). Each row carries `can_rescan`.
+- `crates/web/tests/scan_visibility.rs`: the queue and failures, paging and
+  the registry filter, T7, `403` without `system:read`, T16, and T9's new
+  `bulk_rescan_without_system_write_is_403`; T9's existing rescan test runs
+  unchanged. `pg_verdicts.rs` covers `list_jobs` on Postgres, including a
+  failure followed by a success and a failure followed by a rescan.
+- `quarantine.sh` observation 4's phase-2 half: the `user` token gets `403`
+  on `/admin/scans`, and the admin finds the refused version on the queue (or
+  already scanned).
+- `ui/src/pages/AdminScans.vue` at `/admin/security/scans`, a tab of
+  *Security & Access*: Queue, Failures and Verdicts by state on `?tab=`, both
+  counts loaded on mount, `ScanBadge` per queue row, [Rescan] only with
+  `can_rescan` (a `202` reloads both lists), `usePoll` at 5 s while the queue
+  holds rows, the error with [Retry]; both locales. `AdminScans.test.ts`
+  covers each mock state.
+- `perf/profile_routes.txt`: `GET /api/v1/admin/scans`, `skip: no arm yet`.
+- `docs/guide/security-gates.md` § *The Scans page*, and its French twin.
+
+**Where the build differs from the text:**
+
+1. **No `authz_matrix.rs` entry.** Its two inventories hold `/proxy/…`
+   routes only (`the_route_inventory_matches_the_router` filters on the
+   prefix); no admin route is in them. The route's authorisation is tested in
+   `scan_visibility.rs` instead. Phases 3 and 5 meet the same fact.
+2. **[Rescan] is decided by the config tiers** (`config_tier_holds` with
+   `gates:exempt`, one call per page), as list visibility is in phase 1. A
+   package-tier grant therefore draws no button where the endpoint would
+   accept; it never draws one where the endpoint refuses. `gates:exempt` is
+   held by nobody by default (RFC 0015 §10), so on a default config nobody
+   sees the button until an operator grants it.
+3. **"Failed" on the page is the job half of rule 5 only.** A verdict with
+   `SCANNER_ERROR` and no exhausted job — every failure closed before
+   decision 34's marker existed — is not listed; *Verdicts by state* still
+   shows it. The doc says so.
+4. **Attempts read "1", not "1/3"**, for phase 1's deviation 2's reason.
+5. **The Scans page is a section of `security-gates.md`**, not its own guide
+   page: one screen did not justify a page, a sidebar entry and its audience
+   row. Phase 5 can gather Scans, Findings and Registry into one
+   administration page.
+6. **No `db_calls` row for `/admin/scans`.** It is an admin page read on
+   demand: one statement whatever the page size, and the grant resolution
+   reads no table.
+7. **The Registry filter lists every registry the caller can see**, not only
+   the `[security]` ones; picking one that does not scan shows an empty queue.
+

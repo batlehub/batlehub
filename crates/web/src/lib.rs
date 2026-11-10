@@ -1207,6 +1207,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::security::rescan_verdict); // POST /api/v1/verdicts/{registry}/{name}/{version}/rescan
     cfg.service(crate::handlers::security::list_pullers); // GET  /api/v1/verdicts/{registry}/{name}/{version}/pullers
     cfg.service(crate::handlers::security::list_verdicts); // GET  /api/v1/admin/verdicts
+    cfg.service(crate::handlers::security::list_scans); // GET  /api/v1/admin/scans
     cfg.service(crate::handlers::security::bulk_rescan); // POST /api/v1/admin/verdicts/rescan
     cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
     cfg.service(download_cli);

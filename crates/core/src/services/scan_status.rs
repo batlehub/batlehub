@@ -120,6 +120,7 @@ mod tests {
             deferred_since: None,
             leased_by: None,
             last_error: None,
+            completed_at: None,
         }
     }
 

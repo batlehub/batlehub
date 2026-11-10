@@ -111,6 +111,7 @@ POST /api/v1/admin/registries/{registry}/tombstones/compact	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/undeprecate	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/unlist	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/warm	skip: no arm yet
+GET /api/v1/admin/scans	skip: no arm yet
 GET /api/v1/admin/stats	skip: no arm yet
 GET /api/v1/admin/stats/history	skip: no arm yet
 GET /api/v1/admin/subjects	skip: no arm yet

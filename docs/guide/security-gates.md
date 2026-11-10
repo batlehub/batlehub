@@ -586,6 +586,31 @@ When the status could not be read within 500 ms, the list is served without it
 and carries `scan_status_unavailable: true`; the console then draws "—" in
 place of each badge.
 
+### The Scans page {#scans-page}
+
+*Admin → Security & Access → Scans* follows the scan queue
+(`GET /api/v1/admin/scans`):
+
+- **Queue**: every open job, the ones a worker holds first, with the trigger,
+  the time it was queued, the worker and the attempts. A deferred job shows
+  when its deferral began.
+- **Failures**: each version whose latest scan job ran out of attempts and that
+  has no job open, with the worker's last error. [Rescan] queues a new job
+  (`POST /api/v1/verdicts/…/rescan`) and the row moves to the queue.
+- **Verdicts by state**: the verdicts of one registry, from
+  `GET /api/v1/admin/verdicts`.
+
+Opening the page needs `system:read`. Rows then come only from the registries
+where you also hold `quarantine:read`, and the last error only where you hold
+`findings:read`, so `system:read` alone names no held version. [Rescan] appears
+where the configured grants give you `gates:exempt` on the registry — nobody
+holds it by default — and the rescan endpoint checks it again. `per_page` is at
+most 200.
+
+A job closed before this release carries no failure marker, so a failure older
+than the upgrade does not appear under Failures; its verdict still reads
+`SCANNER_ERROR` under *Verdicts by state*.
+
 ---
 
 ## Watching it {#observability}
