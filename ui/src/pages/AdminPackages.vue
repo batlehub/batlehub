@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
@@ -487,7 +488,7 @@ async function runPending(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <!-- An outcome announced, not only rendered (RFC 0004-bis §2.6). Every bulk
          result, block, warm and cache invalidation in this console reached
          sighted users only — on the surface whose audience includes the one
@@ -532,7 +533,7 @@ async function runPending(): Promise<void> {
          the button beside the one you meant. -->
     <div
       v-if="selected.size > 0"
-      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2.5"
+      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2"
     >
       <span class="text-sm font-medium">{{
         t("adminPackages.selectedCount", { count: selected.size }, selected.size)
@@ -702,7 +703,7 @@ async function runPending(): Promise<void> {
                   </RouterLink>
                   <span
                     v-if="pkg.package_id.artifact"
-                    class="ml-1.5 font-mono text-xs text-muted-foreground"
+                    class="ml-2 font-mono text-xs text-muted-foreground"
                     >{{ pkg.package_id.artifact }}</span
                   >
                 </TableCell>
@@ -723,14 +724,15 @@ async function runPending(): Promise<void> {
                   </RouterLink>
                 </TableCell>
                 <TableCell>
-                  <div class="space-y-0.5">
-                    <Badge :variant="pkg.status.status === 'blocked' ? 'destructive' : 'secondary'">
-                      {{
-                        pkg.status.status === "blocked"
-                          ? t("common.blocked")
-                          : t("packageVersionsTable.available")
-                      }}
-                    </Badge>
+                  <div class="space-y-1">
+                    <Resolution
+                      v-if="pkg.status.status === 'blocked'"
+                      state="blocked"
+                      :label="t('common.blocked')"
+                    />
+                    <Badge v-else variant="secondary">{{
+                      t("packageVersionsTable.available")
+                    }}</Badge>
                     <p v-if="pkg.status.status === 'blocked'" class="text-xs text-muted-foreground">
                       {{ pkg.status.reason }}
                     </p>
@@ -764,9 +766,8 @@ async function runPending(): Promise<void> {
                       {{ t("common.block") }}
                     </Button>
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
-                      class="text-destructive hover:text-destructive hover:bg-accent"
                       @click="pending = { kind: 'delete-one', pkg }"
                     >
                       {{ t("common.delete") }}

@@ -527,7 +527,7 @@ onUnmounted(() => {
               <div
                 v-for="w in pendingReload.warnings"
                 :key="`pending-${w.code}@${w.path}`"
-                class="border border-copper px-3 py-1.5 text-xs text-copper"
+                class="border border-copper px-3 py-2 text-xs text-copper"
               >
                 <code class="font-mono break-all">{{ w.path }}</code>
                 — {{ w.message }}
@@ -801,7 +801,7 @@ onUnmounted(() => {
                   <TableCell>
                     <button
                       type="button"
-                      class="inline-flex items-center gap-1.5 text-left hover:underline underline-offset-[3px]"
+                      class="inline-flex items-center gap-2 text-left hover:underline underline-offset-[3px]"
                       :aria-expanded="expandedRow === row.id"
                       :aria-controls="
                         expandedRow === row.id ? `config-change-${row.id}` : undefined
@@ -823,10 +823,16 @@ onUnmounted(() => {
                   </TableCell>
                   <TableCell>{{ row.triggered_by }}</TableCell>
                   <TableCell>
-                    <Badge
-                      :class="row.status === 'applied' ? 'text-foreground' : 'text-destructive'"
-                    >
-                      {{ row.status }}
+                    <!-- `applied` or `rejected` (reload/applier.rs); only a rejection
+                         is a refusal, so only it takes crimson. -->
+                    <Badge :variant="row.status === 'rejected' ? 'destructive' : 'known'">
+                      {{
+                        row.status === "applied"
+                          ? t("adminConfigReload.statusApplied")
+                          : row.status === "rejected"
+                            ? t("adminConfigReload.statusRejected")
+                            : row.status
+                      }}
                     </Badge>
                   </TableCell>
                   <TableCell>{{ row.summary }}</TableCell>

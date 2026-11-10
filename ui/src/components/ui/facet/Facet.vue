@@ -53,7 +53,7 @@ const formatCount = (count: number): string => new Intl.NumberFormat().format(co
  * notices until one of them stops looking selected.
  */
 const CELL =
-  "flex w-auto shrink-0 items-baseline gap-2 whitespace-nowrap border-b-2 px-3 py-1.5 text-left text-sm transition-colors md:w-full md:shrink md:whitespace-normal md:border-b-0 md:border-l";
+  "flex w-auto shrink-0 items-baseline gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-left text-sm transition-colors md:w-full md:shrink md:whitespace-normal md:border-b-0 md:border-l";
 
 function cellState(active: boolean): string {
   return active

@@ -152,7 +152,7 @@ onMounted(() => load());
       <p class="text-sm text-muted-foreground">{{ t("exposurePanel.intro") }}</p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="exposure-source">{{ t("exposurePanel.source") }}</Label>
           <Input
             id="exposure-source"
@@ -161,11 +161,11 @@ onMounted(() => load());
             @keyup.enter="load()"
           />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="exposure-effect">{{ t("exposurePanel.minEffect") }}</Label>
           <Select id="exposure-effect" v-model="minEffect" :options="effectOptions" />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="exposure-when">{{ t("exposurePanel.when") }}</Label>
           <Select id="exposure-when" v-model="when" :options="whenOptions" />
         </div>

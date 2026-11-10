@@ -98,7 +98,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     </PageHeader>
 
     <!-- Registry selector -->
-    <div class="space-y-1.5 max-w-xs">
+    <div class="space-y-2 max-w-xs">
       <Label for="team-ns-registry">{{ t("common.registry") }}</Label>
       <Select
         id="team-ns-registry"
@@ -112,7 +112,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     <Card>
       <CardHeader>
         <div class="flex items-center justify-between">
-          <CardTitle class="text-base">
+          <CardTitle>
             {{ t("adminTeamNamespaces.namespaceClaims") }}
             <span v-if="selectedRegistry" class="font-mono text-muted-foreground text-sm ml-1"
               >({{ selectedRegistry }})</span
@@ -214,7 +214,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     </template>
     <div class="space-y-4">
       <div class="space-y-3">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-prefix">
             {{ t("adminTeamNamespaces.prefix") }} <span class="text-destructive">*</span>
           </Label>
@@ -230,7 +230,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
             </i18n-t>
           </p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-group-id">
             {{ t("adminTeamNamespaces.groupId") }} <span class="text-destructive">*</span>
           </Label>
@@ -244,7 +244,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
             {{ t("adminTeamNamespaces.mustMatchTheGroup") }}
           </p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-claimed-by">{{ t("adminTeamNamespaces.claimedBy") }}</Label>
           <!-- A8: identities this instance has actually seen. Typing a subject
                it has not seen is still allowed — a namespace can be claimed for

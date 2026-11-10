@@ -102,7 +102,7 @@ const principalTypeOptions = computed(() => [
     </PageHeader>
 
     <!-- Registry selector -->
-    <div class="space-y-1.5 max-w-xs">
+    <div class="space-y-2 max-w-xs">
       <Label for="beta-registry">{{ t("common.registry") }}</Label>
       <Select
         id="beta-registry"
@@ -116,7 +116,7 @@ const principalTypeOptions = computed(() => [
     <Card>
       <CardHeader>
         <div class="flex items-center justify-between">
-          <CardTitle class="text-base">
+          <CardTitle>
             {{ t("common.members") }}
             <span v-if="selectedRegistry" class="font-mono text-muted-foreground text-sm ml-1"
               >({{ selectedRegistry }})</span
@@ -155,7 +155,7 @@ const principalTypeOptions = computed(() => [
               <TableRow v-for="m in members" :key="m.principal_type + ':' + m.principal_id">
                 <TableCell>
                   <Badge
-                    :variant="m.principal_type === 'user' ? 'default' : 'secondary'"
+                    :variant="m.principal_type === 'user' ? 'known' : 'secondary'"
                     class="text-xs capitalize"
                   >
                     {{ m.principal_type }}
@@ -202,7 +202,7 @@ const principalTypeOptions = computed(() => [
     </template>
     <div class="space-y-4">
       <div class="space-y-3">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="beta-principal-type">{{ t("common.type") }}</Label>
           <Select
             id="beta-principal-type"
@@ -210,7 +210,7 @@ const principalTypeOptions = computed(() => [
             :options="principalTypeOptions"
           />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="beta-principal-id"
             >{{ t("adminBetaChannel.principalId") }} <span class="text-destructive">*</span></Label
           >
@@ -221,7 +221,7 @@ const principalTypeOptions = computed(() => [
             class="font-mono"
           />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="beta-granted-by">{{ t("adminBetaChannel.grantedBy") }}</Label>
           <Combobox
             id="beta-granted-by"

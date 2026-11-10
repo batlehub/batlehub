@@ -197,7 +197,7 @@ async function copy(key: string, text: string) {
 </script>
 
 <template>
-  <div class="max-w-7xl space-y-8">
+  <div class="max-w-7xl space-y-6">
     <PageHeader
       :title="t('setupGuide.setupGuide')"
       :description="t('setupGuide.configureYourToolsToRoute')"
@@ -335,11 +335,7 @@ async function copy(key: string, text: string) {
                   />
                 </div>
               </div>
-              <Badge
-                v-if="def.fileHint"
-                variant="outline"
-                class="shrink-0 font-mono text-xs mt-0.5"
-              >
+              <Badge v-if="def.fileHint" variant="outline" class="shrink-0 font-mono text-xs mt-1">
                 {{ def.fileHint }}
               </Badge>
             </div>
@@ -348,7 +344,7 @@ async function copy(key: string, text: string) {
           <CardContent class="space-y-4">
             <template v-for="snippet in def.snippets" :key="snippet.key">
               <div v-if="!snippet.showWhen || snippet.showWhen(ctxFor(def))">
-                <p v-if="snippet.label" class="text-xs text-muted-foreground mb-1.5">
+                <p v-if="snippet.label" class="text-xs text-muted-foreground mb-2">
                   {{ snippet.label }}
                 </p>
                 <CodeBlock :code="snippet.template(ctxFor(def))" :lang="snippet.lang">
@@ -361,7 +357,7 @@ async function copy(key: string, text: string) {
                     {{ copied === snippet.key ? t("common.copied") : t("common.copy") }}
                   </Button>
                 </CodeBlock>
-                <p v-if="snippet.note" class="text-xs text-muted-foreground mt-1.5">
+                <p v-if="snippet.note" class="text-xs text-muted-foreground mt-2">
                   <RichText
                     :markup="
                       typeof snippet.note === 'function' ? snippet.note(ctxFor(def)) : snippet.note

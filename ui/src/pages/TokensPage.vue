@@ -223,7 +223,7 @@ const lifetimePresets = [7, 30, 90];
   <div class="space-y-6">
     <PageHeader variant="display" as="h2">
       <template #title>
-        <Key class="h-5 w-5 text-primary" />
+        <Key class="h-5 w-5 text-foreground" aria-hidden="true" />
         {{ t("tokensPage.personalApiTokens") }}
       </template>
       <template #description>{{ t("tokensPage.createLongLivedTokens") }}</template>
@@ -248,7 +248,7 @@ const lifetimePresets = [7, 30, 90];
           </code>
           <CopyButton :text="newToken" variant="outline" size="icon" class="shrink-0 h-8 w-8">
             <template #default="{ copied }">
-              <Check v-if="copied" class="h-3.5 w-3.5 text-primary" />
+              <Check v-if="copied" class="h-3.5 w-3.5 text-foreground" />
               <Copy v-else class="h-3.5 w-3.5" />
             </template>
           </CopyButton>
@@ -284,7 +284,7 @@ const lifetimePresets = [7, 30, 90];
     <!-- Token table -->
     <Card>
       <CardHeader class="pb-3">
-        <CardTitle class="text-base">{{ t("tokensPage.activeTokens") }}</CardTitle>
+        <CardTitle>{{ t("tokensPage.activeTokens") }}</CardTitle>
         <CardDescription>{{ t("tokensPage.tokensThatHaveNot") }}</CardDescription>
       </CardHeader>
       <CardContent>
@@ -311,7 +311,7 @@ const lifetimePresets = [7, 30, 90];
                   {{ tok.name }}
                 </TableCell>
                 <TableCell>
-                  <Badge :variant="tok.role === 'admin' ? 'default' : 'secondary'" class="text-xs">
+                  <Badge :variant="tok.role === 'admin' ? 'known' : 'secondary'" class="text-xs">
                     {{ roleLabel(t, tok.role) }}
                   </Badge>
                 </TableCell>
@@ -334,7 +334,7 @@ const lifetimePresets = [7, 30, 90];
                   <span
                     :class="
                       daysUntil(tok.expires_at) <= 7
-                        ? 'text-destructive font-medium'
+                        ? 'text-copper font-medium'
                         : 'text-muted-foreground'
                     "
                     class="text-sm flex items-center gap-1"
@@ -372,7 +372,7 @@ const lifetimePresets = [7, 30, 90];
       <template #title>{{ t("tokensPage.createApiToken") }}</template>
       <template #description>{{ t("tokensPage.chooseANameRole") }}</template>
       <div class="space-y-4">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="token-name">{{ t("common.name") }}</Label>
           <Input
             id="token-name"
@@ -382,7 +382,7 @@ const lifetimePresets = [7, 30, 90];
           />
         </div>
 
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="token-role">{{ t("common.role") }}</Label>
           <Select
             id="token-role"

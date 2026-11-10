@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-sm border px-2 py-0.5 text-xs font-mono font-semibold transition-colors",
+  "inline-flex items-center rounded-sm border px-2 py-1 text-xs font-mono font-semibold transition-colors",
   {
     variants: {
       // No alpha fill under the accent text. The `bg-…/10` utilities these drop

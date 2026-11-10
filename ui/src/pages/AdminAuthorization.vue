@@ -236,7 +236,7 @@ onMounted(async () => {
          First, and the only panel that can be *currently wrong*: a shadowed
          node serves what the model refuses. -->
     <section class="space-y-3" data-testid="panel-shadow">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.shadowTitle") }}
       </h2>
       <!-- "No shadow" and "a quiet shadow" share the empty panel and not its
@@ -281,7 +281,7 @@ onMounted(async () => {
     <!-- ── Exemptions ───────────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-exemptions">
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
           {{ t("adminAuthorization.exemptionsTitle") }}
         </h2>
         <div class="flex items-center gap-2">
@@ -335,7 +335,7 @@ onMounted(async () => {
 
     <!-- ── Explain ──────────────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-explain">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.explainTitle") }}
       </h2>
 
@@ -495,7 +495,7 @@ onMounted(async () => {
              this" and "nothing I looked at denies this". -->
         <details class="text-xs text-muted-foreground">
           <summary class="cursor-pointer">{{ t("adminAuthorization.notCovered") }}</summary>
-          <ul class="mt-1 list-disc pl-5">
+          <ul class="mt-1 list-disc pl-6">
             <li v-for="(layer, i) in explained.not_covered" :key="i">{{ layer }}</li>
           </ul>
         </details>
@@ -504,7 +504,7 @@ onMounted(async () => {
 
     <!-- ── Recent denials ───────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-denials">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.denialsTitle") }}
       </h2>
       <AsyncState
@@ -542,7 +542,7 @@ onMounted(async () => {
          page is that the destructive direction is not out of sight, which the
          pointer serves. -->
     <section class="space-y-2" data-testid="panel-retention">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.retentionTitle") }}
       </h2>
       <p class="text-sm text-muted-foreground">

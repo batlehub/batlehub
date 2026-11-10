@@ -18,6 +18,13 @@ import { cn } from "@/lib/utils";
  * and 7.24:1 in light with a 3.68:1/3.41:1 border. The unfilled ones take the
  * `opacity: .5` DESIGN.md gives the secondary control, per variant rather than
  * from one shared string that could not tell them apart.
+ *
+ * **Which variant.** `default` (the crimson fill) is the *one* primary action
+ * of a view — never one per row, never a toggle's "on" state. An action on a
+ * row is `outline`, whatever it does: an irreversible one earns its weight from
+ * its confirmation (`DestructiveConfirm`), not from a red fill. A toggle is
+ * `outline` with `aria-pressed`. `ghost` is for low-weight chrome (clear,
+ * collapse), not for a destructive verb dressed in crimson text.
  */
 const DISABLED_OUTLINED =
   "disabled:bg-transparent disabled:border disabled:border-border disabled:text-muted-foreground";

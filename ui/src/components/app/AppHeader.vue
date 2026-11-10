@@ -217,7 +217,7 @@ function handleLogout() {
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'block px-3 py-2.5 text-xs uppercase tracking-[0.1em] transition-colors',
+            'block px-3 py-2 text-xs uppercase tracking-[0.1em] transition-colors',
             isActive(link.to)
               ? 'bg-foreground text-background font-bold'
               : 'text-muted-foreground hover:text-foreground',
@@ -229,7 +229,7 @@ function handleLogout() {
           :href="DOCS_URL"
           target="_blank"
           rel="noopener noreferrer"
-          class="flex items-center gap-2 px-3 py-2.5 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
+          class="flex items-center gap-2 px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
           @click="mobileOpen = false"
         >
           <BookOpen class="h-3.5 w-3.5" />
@@ -239,7 +239,7 @@ function handleLogout() {
       <button
         v-if="isAuthenticated"
         type="button"
-        class="mt-3 block w-full border border-border px-3 py-2.5 text-left text-xs uppercase tracking-[0.1em] text-destructive transition-colors hover:border-destructive"
+        class="mt-3 block w-full border border-border px-3 py-2 text-left text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         @click="handleLogout"
       >
         {{ t("appHeader.signOut") }}

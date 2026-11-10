@@ -224,6 +224,26 @@ describe("no native dialogs", () => {
   });
 });
 
+/**
+ * DESIGN.md § Layout: "One 4px-based scale, six steps: 4 / 8 / 12 / 16 / 24 /
+ * 40 … a value not on the scale is a defect." In Tailwind's 4px units that is
+ * 1 / 2 / 3 / 4 / 6 / 10 (plus 0 and px). The audit found 41 files off it —
+ * mostly 1.5 and 0.5, the half-steps shadcn ships with — and nothing stopped
+ * the next one. Padding, margin, gap and space only: positions (`top-2.5`)
+ * and sizes (`h-3.5`) are not rhythm.
+ */
+const OFF_SCALE_SPACING =
+  /(?<![\w-])(?:[a-z0-9]+:)*-?(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap-y|space-x|space-y)-(?!(?:0|px|1|2|3|4|6|10|auto)(?![\w.]))\d+(?:\.\d+)?(?![\w.\-\]])/g;
+
+describe("the spacing scale", () => {
+  it("spaces nothing off DESIGN.md's six steps", () => {
+    expect(
+      census(OFF_SCALE_SPACING),
+      "4 / 8 / 12 / 16 / 24 / 40 px — Tailwind 1/2/3/4/6/10",
+    ).toEqual({});
+  });
+});
+
 describe("the radius scale", () => {
   it("uses no suffix-less `rounded` anywhere in src/", () => {
     expect(

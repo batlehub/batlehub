@@ -65,7 +65,7 @@ async function save() {
 <template>
   <Card>
     <CardHeader>
-      <CardTitle class="text-base">{{ t("packageVisibility.packageVisibility") }}</CardTitle>
+      <CardTitle>{{ t("packageVisibility.packageVisibility") }}</CardTitle>
       <CardDescription>{{ t("packageVisibility.controlsWhoCanDownload") }}</CardDescription>
     </CardHeader>
     <CardContent>
@@ -75,9 +75,8 @@ async function save() {
         <div class="flex items-center gap-3 flex-wrap">
           <Badge
             :variant="
-              selected === 'public' ? 'default' : selected === 'internal' ? 'secondary' : 'outline'
+              selected === 'public' ? 'known' : selected === 'internal' ? 'secondary' : 'outline'
             "
-            :class="selected === 'team' ? 'border-primary text-primary' : ''"
             class="capitalize text-xs"
           >
             {{ visibilityData?.visibility ?? "public" }}

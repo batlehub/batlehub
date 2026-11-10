@@ -62,7 +62,7 @@ function handleLogout() {
         class="z-50 min-w-[11rem] rounded-sm border border-border bg-ground-sunk p-1"
       >
         <DropdownMenuLabel
-          class="px-2 py-1.5 text-xs text-muted-foreground font-mono font-normal truncate"
+          class="px-2 py-2 text-xs text-muted-foreground font-mono font-normal truncate"
         >
           {{ identity?.user_id }}
         </DropdownMenuLabel>
@@ -70,7 +70,7 @@ function handleLogout() {
         <DropdownMenuItem as-child>
           <RouterLink
             to="/me/profile"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
+            class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
           >
             <User class="h-3.5 w-3.5" />
             {{ t("userMenu.myProfile") }}
@@ -79,7 +79,7 @@ function handleLogout() {
         <DropdownMenuItem v-if="isOidcSession" as-child>
           <RouterLink
             to="/me/tokens"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
+            class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
           >
             <KeyRound class="h-3.5 w-3.5" />
             {{ t("userMenu.myTokens") }}
@@ -88,7 +88,7 @@ function handleLogout() {
         <DropdownMenuItem as-child>
           <RouterLink
             to="/me/namespace"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
+            class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
           >
             <FolderKey class="h-3.5 w-3.5" />
             {{ t("userMenu.myNamespace") }}
@@ -97,7 +97,7 @@ function handleLogout() {
         <DropdownMenuItem as-child>
           <RouterLink
             to="/me/cli"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
+            class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
           >
             <Terminal class="h-3.5 w-3.5" />
             {{ t("userMenu.downloadCli") }}
@@ -117,7 +117,7 @@ function handleLogout() {
         <DropdownMenuItem as-child>
           <RouterLink
             to="/tools/access-check"
-            class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
+            class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"
           >
             <Wrench class="h-3.5 w-3.5" />
             {{ t("tools.title") }}
@@ -125,7 +125,7 @@ function handleLogout() {
         </DropdownMenuItem>
         <DropdownMenuSeparator class="my-1 h-px bg-border" />
         <DropdownMenuItem
-          class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent text-destructive hover:text-destructive outline-none transition-colors"
+          class="flex items-center gap-2 px-2 py-2 text-sm rounded-sm cursor-pointer hover:bg-accent text-muted-foreground hover:text-foreground outline-none transition-colors"
           @select="handleLogout"
         >
           <LogOut class="h-3.5 w-3.5" />

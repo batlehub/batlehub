@@ -243,6 +243,8 @@
     "setting": "Définition…",
     "showDiff": "Afficher le diff",
     "sourceLabel": "Source :",
+    "statusApplied": "Appliqué",
+    "statusRejected": "Rejeté",
     "thisInstance": "cette instance",
     "validWithWarnings": "Cette configuration est valide mais soulève {count} avertissement(s) :",
     "validate": "Valider",

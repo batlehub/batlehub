@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Resolution } from "@/components/ui/resolution";
+import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
@@ -107,7 +107,13 @@ const headline = computed(() => (result.value ? HEADLINE[result.value.headline] 
 const nextStep = computed(
   () => result.value?.causes.find((c) => c.state === "refuse" || c.state === "wait")?.next ?? null,
 );
-const STATE_ICON: Record<string, string> = { pass: "✅", warn: "⚠️", wait: "⏳", refuse: "⛔" };
+/** Each cause in the system's own state grammar (matrix, word, hue), not emoji. */
+const STATE_RESOLUTION: Record<string, ResolutionState> = {
+  pass: "cached",
+  warn: "stale",
+  wait: "held",
+  refuse: "blocked",
+};
 /** Spelled out so the catalogue check can see every key. */
 const STATE_LABEL: Record<string, string> = {
   pass: "accessCheck.state.pass",
@@ -119,9 +125,9 @@ const formatTime = (iso: string) => new Date(iso).toLocaleString();
 </script>
 
 <template>
-  <Card class="max-w-lg">
+  <Card>
     <CardHeader>
-      <CardTitle class="text-lg">{{ t("accessCheck.accessCheck") }}</CardTitle>
+      <CardTitle>{{ t("accessCheck.accessCheck") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
       <div class="grid gap-3">
@@ -209,13 +215,16 @@ const formatTime = (iso: string) => new Date(iso).toLocaleString();
             {{ t("accessCheck.resolvesTo", { version: result.resolved_version }) }}
           </p>
           <!-- In the server's order, which is also the reading and focus
-               order; every icon has its state word beside it (RFC 0040 §11). -->
+               order; every state carries its word with its matrix (RFC 0040 §11). -->
           <ol class="space-y-1 text-sm">
             <li v-for="(cause, i) in result.causes" :key="i" class="flex gap-2">
-              <span aria-hidden="true">{{ STATE_ICON[cause.state] ?? "•" }}</span>
-              <span class="font-mono w-14 shrink-0">{{
-                STATE_LABEL[cause.state] ? t(STATE_LABEL[cause.state]) : cause.state
-              }}</span>
+              <Resolution
+                v-if="STATE_RESOLUTION[cause.state]"
+                class="w-24 shrink-0"
+                :state="STATE_RESOLUTION[cause.state]"
+                :label="t(STATE_LABEL[cause.state])"
+              />
+              <span v-else class="font-mono w-24 shrink-0">{{ cause.state }}</span>
               <span class="font-mono w-20 shrink-0 text-muted-foreground">{{ cause.kind }}</span>
               <span class="break-words">
                 <code v-if="cause.reason_code">{{ cause.reason_code }}</code>

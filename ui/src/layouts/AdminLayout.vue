@@ -60,7 +60,7 @@ watch(
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'flex items-center gap-2.5 border-l px-3 py-2 font-mono text-sm',
+            'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
             isActive(link.to)
               ? 'border-primary text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -112,7 +112,7 @@ watch(
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'flex items-center gap-2.5 border-l px-3 py-2.5 font-mono text-sm',
+            'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
             isActive(link.to)
               ? 'border-primary text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',

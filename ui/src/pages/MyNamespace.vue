@@ -51,7 +51,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-4xl">
+  <div class="space-y-6">
     <PageHeader
       as="h2"
       :title="t('myNamespace.teamNamespace')"
@@ -69,7 +69,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
       <!-- Groups -->
       <Card>
         <CardHeader
-          ><CardTitle class="text-base">{{ t("myNamespace.yourGroups") }}</CardTitle></CardHeader
+          ><CardTitle>{{ t("myNamespace.yourGroups") }}</CardTitle></CardHeader
         >
         <CardContent>
           <div class="flex flex-wrap gap-2">
@@ -83,7 +83,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
       <!-- Namespaces list -->
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">{{ t("myNamespace.myNamespaces") }}</CardTitle>
+          <CardTitle>{{ t("myNamespace.myNamespaces") }}</CardTitle>
           <CardDescription>{{ t("myNamespace.chooseANamespaceTo") }}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -125,8 +125,8 @@ function selectNamespace(ns: TeamNamespaceDto) {
                   :key="`${ns.registry}:${ns.prefix}`"
                   :class="
                     selectedNs?.registry === ns.registry && selectedNs?.prefix === ns.prefix
-                      ? 'bg-muted/60'
-                      : 'hover:bg-muted/40'
+                      ? 'border-l border-l-primary bg-accent font-semibold'
+                      : ''
                   "
                 >
                   <TableCell class="font-mono text-xs">{{ ns.registry }}</TableCell>
@@ -158,7 +158,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
       <!-- Packages for selected namespace -->
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">
+          <CardTitle>
             {{ t("common.packages") }}
             <span
               v-if="selectedNs"
@@ -183,7 +183,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
       <!-- Upload -->
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">{{ t("myNamespace.uploadPackage") }}</CardTitle>
+          <CardTitle>{{ t("myNamespace.uploadPackage") }}</CardTitle>
           <CardDescription>{{ t("myNamespace.publishANewPackage") }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-4">

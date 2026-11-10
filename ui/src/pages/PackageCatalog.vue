@@ -937,9 +937,9 @@ onMounted(() => {
         <!-- Search + sort bar -->
         <div class="flex gap-2 flex-wrap">
           <div class="relative flex-1 min-w-48">
-            <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              class="pl-8"
+              class="pl-10"
               :placeholder="t('packageCatalog.searchPackages')"
               :aria-label="t('packageCatalog.searchPackages2')"
               :value="search"

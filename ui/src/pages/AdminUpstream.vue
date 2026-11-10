@@ -206,7 +206,7 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
         <!-- The policy, first. -->
         <Card data-testid="upstream-policy">
           <CardHeader class="pb-2">
-            <CardTitle class="text-base">{{ t("adminUpstream.policyTitle") }}</CardTitle>
+            <CardTitle>{{ t("adminUpstream.policyTitle") }}</CardTitle>
           </CardHeader>
           <CardContent class="flex flex-wrap items-center gap-3 text-sm">
             <Badge :variant="data.policy === 'block' ? 'destructive' : 'secondary'">

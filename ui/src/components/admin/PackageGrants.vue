@@ -148,7 +148,7 @@ async function confirmRemove() {
 <template>
   <Card>
     <CardHeader class="pb-3">
-      <CardTitle class="text-base">{{ t("packageGrants.whoCanReachThis") }}</CardTitle>
+      <CardTitle>{{ t("packageGrants.whoCanReachThis") }}</CardTitle>
       <CardDescription>{{ t("packageGrants.grantsOnlyWiden") }}</CardDescription>
     </CardHeader>
     <CardContent class="space-y-4">
@@ -273,12 +273,12 @@ async function confirmRemove() {
       <template #title>{{ t("packageGrants.addGrant") }}</template>
       <template #description>{{ t("packageGrants.dialogDescription") }}</template>
       <div class="space-y-4">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="grant-subject">{{ t("packageGrants.subject") }}</Label>
           <Input id="grant-subject" v-model="form.subject" placeholder="group:oidc1:eng" />
           <p class="text-xs text-muted-foreground">{{ t("packageGrants.subjectHint") }}</p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="grant-actions">{{ t("packageGrants.actions") }}</Label>
           <Input id="grant-actions" v-model="form.actions" placeholder="releases:read" />
           <p class="text-xs text-muted-foreground">{{ t("packageGrants.actionsHint") }}</p>

@@ -49,7 +49,7 @@ withDefaults(
       <p
         v-if="description || $slots.description"
         :class="
-          cn('text-sm text-muted-foreground max-w-[64ch]', variant === 'poster' ? 'mt-3' : 'mt-0.5')
+          cn('text-sm text-muted-foreground max-w-[64ch]', variant === 'poster' ? 'mt-3' : 'mt-1')
         "
       >
         <slot name="description">{{ description }}</slot>

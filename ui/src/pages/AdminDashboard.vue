@@ -257,7 +257,7 @@ const trendText = computed(() => {
       </p>
 
       <section v-if="stats && stats.per_registry.length > 0" class="space-y-2">
-        <h2 class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
           {{ t("adminDashboard.perRegistry") }}
         </h2>
         <Table :label="t('adminDashboard.perRegistry')">

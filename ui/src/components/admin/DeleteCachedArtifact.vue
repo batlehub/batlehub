@@ -96,7 +96,7 @@ async function remove() {
     </CardHeader>
     <CardContent class="space-y-4">
       <div class="grid gap-4 sm:grid-cols-2">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="del-registry">{{ t("common.registry") }}</Label>
           <Select
             id="del-registry"
@@ -107,7 +107,7 @@ async function remove() {
             ]"
           />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="del-mode">{{ t("adminHealth.identifyBy") }}</Label>
           <Select
             id="del-mode"
@@ -122,16 +122,16 @@ async function remove() {
       </div>
 
       <div v-if="mode === 'package'" class="grid gap-4 sm:grid-cols-2">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="del-name">{{ t("common.name") }}</Label>
           <Input id="del-name" v-model="name" class="font-mono" />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="del-version">{{ t("common.version") }}</Label>
           <Input id="del-version" v-model="version" class="font-mono" />
         </div>
       </div>
-      <div v-else class="space-y-1.5">
+      <div v-else class="space-y-2">
         <Label for="del-path">{{ t("adminWarming.pathMode") }}</Label>
         <Input id="del-path" v-model="path" class="font-mono" />
       </div>

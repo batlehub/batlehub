@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AsyncState } from "@/components/ui/async-state";
@@ -135,14 +136,20 @@ function formatDate(iso: string) {
         <TableRow
           v-for="pkg in pkgsData"
           :key="`${pkg.name}@${pkg.version}`"
-          :class="pkg.yanked ? 'opacity-50' : ''"
+          :class="pkg.yanked ? 'text-muted-foreground' : ''"
         >
           <TableCell class="font-mono text-xs">{{ pkg.name }}</TableCell>
           <TableCell class="font-mono text-xs">
             {{ pkg.version }}
-            <span v-if="pkg.yanked" class="ml-1 text-destructive">{{
-              t("namespacePackagesTable.yanked")
-            }}</span>
+            <!-- The state's own grammar (matrix + word), not a faded row and a
+                 crimson word: half-opacity text failed AA, and crimson means
+                 refused, which a yank is not. -->
+            <Resolution
+              v-if="pkg.yanked"
+              class="ml-2"
+              state="yanked"
+              :label="t('namespacePackagesTable.yanked')"
+            />
           </TableCell>
           <TableCell>
             <template v-if="editing[pkgKey(pkg)] !== undefined">
@@ -170,7 +177,7 @@ function formatDate(iso: string) {
                   >{{ t("common.cancel") }}</Button
                 >
               </div>
-              <p v-if="saveError[pkgKey(pkg)]" class="text-xs text-destructive mt-0.5">
+              <p v-if="saveError[pkgKey(pkg)]" class="text-xs text-destructive mt-1">
                 {{ saveError[pkgKey(pkg)] }}
               </p>
             </template>
@@ -178,7 +185,6 @@ function formatDate(iso: string) {
               v-else
               :variant="visVariant(pkg.visibility)"
               class="capitalize text-xs cursor-pointer"
-              :class="pkg.visibility === 'team' ? 'border-primary text-primary' : ''"
               @click="startEdit(pkg)"
             >
               {{ pkg.visibility }}

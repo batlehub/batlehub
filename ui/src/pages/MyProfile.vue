@@ -29,18 +29,18 @@ const parsedGroups = computed(() => {
 });
 
 function roleVariant(role: string) {
-  if (role === "admin") return "destructive" as const;
+  if (role === "admin") return "known" as const;
   if (role === "user") return "secondary" as const;
   return "outline" as const;
 }
 </script>
 
 <template>
-  <div class="space-y-6 max-w-2xl">
+  <div class="space-y-6">
     <!-- Identity card -->
     <Card>
       <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-lg">
+        <CardTitle class="flex items-center gap-2">
           <User class="h-4 w-4" />
           {{ t("common.identity") }}
         </CardTitle>
@@ -62,7 +62,7 @@ function roleVariant(role: string) {
 
           <dt class="text-muted-foreground font-medium">{{ t("myProfile.authProvider") }}</dt>
           <dd>
-            <span v-if="displayProvider" class="flex items-center gap-1.5">
+            <span v-if="displayProvider" class="flex items-center gap-2">
               <KeyRound class="h-3.5 w-3.5 text-muted-foreground" />
               <span class="font-mono">{{ displayProvider }}</span>
             </span>
@@ -75,7 +75,7 @@ function roleVariant(role: string) {
     <!-- Groups card -->
     <Card>
       <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-lg">
+        <CardTitle class="flex items-center gap-2">
           <Users class="h-4 w-4" />
           {{ t("common.groups") }}
           <span v-if="parsedGroups.length" class="ml-1 text-muted-foreground font-normal text-base">
@@ -102,7 +102,7 @@ function roleVariant(role: string) {
           <li
             v-for="g in parsedGroups"
             :key="g.raw"
-            class="flex items-center gap-1.5 font-mono text-sm"
+            class="flex items-center gap-2 font-mono text-sm"
           >
             <!-- Provider prefix as a muted badge -->
             <template v-if="g.provider">

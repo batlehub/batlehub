@@ -243,6 +243,8 @@
     "setting": "Setting…",
     "showDiff": "Show the diff",
     "sourceLabel": "Source:",
+    "statusApplied": "Applied",
+    "statusRejected": "Rejected",
     "thisInstance": "this running instance",
     "validWithWarnings": "This config is valid but raises {count} warning(s):",
     "validate": "Validate",

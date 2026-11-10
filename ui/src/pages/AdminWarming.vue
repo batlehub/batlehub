@@ -217,7 +217,7 @@ onMounted(() => void loadStatus());
                     }}
                   </p>
                 </TableCell>
-                <TableCell class="space-y-1.5">
+                <TableCell class="space-y-2">
                   <Input
                     v-if="addressing(reg.name) === 'package'"
                     :id="`warm-${reg.name}`"
@@ -238,7 +238,7 @@ onMounted(() => void loadStatus());
                     {{ errors[reg.name] }}
                   </p>
 
-                  <div v-if="results[reg.name]" class="space-y-1.5">
+                  <div v-if="results[reg.name]" class="space-y-2">
                     <div class="flex gap-2 flex-wrap">
                       <Badge class="text-xs">{{
                         t("adminWarming.warmedCount", { count: results[reg.name].warmed })

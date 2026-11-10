@@ -13,7 +13,7 @@ const { banner } = useBanner();
   <div
     v-if="banner"
     :class="[
-      'border-b px-4 md:px-6 py-1.5 flex items-center gap-2 text-sm font-medium',
+      'border-b px-4 md:px-6 py-2 flex items-center gap-2 text-sm font-medium',
       banner.level === 'error'
         ? 'border-destructive/40 text-destructive'
         : banner.level === 'warning'

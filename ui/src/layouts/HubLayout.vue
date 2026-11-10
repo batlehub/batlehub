@@ -48,6 +48,10 @@ const isActive = (to: string): boolean => route.path === to || route.path.starts
       </ul>
     </nav>
 
-    <RouterView />
+    <!-- One measure for every tab of a hub, so switching tab does not move the
+         content's edge: each page used to pick its own max-width. -->
+    <div class="max-w-4xl">
+      <RouterView />
+    </div>
   </div>
 </template>

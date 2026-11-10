@@ -25,7 +25,7 @@ const { t } = useI18n();
 
 <template>
   <section :aria-labelledby="headingId">
-    <h2 :id="headingId" class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+    <h2 :id="headingId" class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
       {{ title }}
     </h2>
     <div class="mt-3">

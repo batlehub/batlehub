@@ -18,7 +18,7 @@ function fullUrl(path: string): string {
 
 <template>
   <div v-if="paths.length" class="space-y-2">
-    <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
       {{ t("registryPathResults.proxyPaths") }}
     </h2>
     <div class="rounded-sm border divide-y">
@@ -26,7 +26,7 @@ function fullUrl(path: string): string {
         v-for="entry in paths"
         :key="entry.url"
         class="flex items-center gap-3 px-4 py-3"
-        :class="entry.available ? '' : 'opacity-40'"
+        :class="entry.available ? '' : 'text-muted-foreground'"
       >
         <span class="w-44 shrink-0 text-xs text-muted-foreground">{{ entry.label }}</span>
         <code class="flex-1 text-xs font-mono truncate" :title="fullUrl(entry.url)">

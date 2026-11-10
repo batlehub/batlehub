@@ -286,7 +286,7 @@ async function purge() {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <SectionTabs :tabs="OBSERVABILITY_TABS" />
     <Announcer :message="announcement" />
     <PageHeader variant="display">
@@ -444,7 +444,7 @@ async function purge() {
                   </Badge>
                   <p
                     v-if="ev.result.outcome === 'denied'"
-                    class="mt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                    class="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
                   >
                     {{ ev.result.reason }}
                   </p>

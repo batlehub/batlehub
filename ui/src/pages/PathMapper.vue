@@ -100,7 +100,7 @@ watch(pastedUrl, parseUrl);
 </script>
 
 <template>
-  <div class="max-w-2xl space-y-6">
+  <div class="space-y-6">
     <PageHeader
       as="h2"
       :title="t('pathMapper.urlMapper')"
@@ -110,7 +110,7 @@ watch(pastedUrl, parseUrl);
 
     <!-- Universal paste input -->
     <Card>
-      <CardContent class="space-y-2 pt-5">
+      <CardContent class="space-y-2 pt-6">
         <Label for="paste-url">{{ t("pathMapper.pasteAnUpstreamUrl") }}</Label>
         <Input
           id="paste-url"
