@@ -3,6 +3,8 @@ import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
+import BulkActionBar from "@/components/admin/BulkActionBar.vue";
+import { useRowSelection } from "@/composables/useRowSelection";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
 import { PACKAGES_TABS } from "@/config/adminSections";
@@ -216,7 +218,6 @@ async function deletePkg(pkg: AdminPackageSummary) {
 
 // ── Multi-select + bulk actions ───────────────────────────────────────────────
 
-const selected = ref<Set<string>>(new Set());
 const bulkLoading = ref(false);
 const bulkResultMsg = ref<string | null>(null);
 
@@ -244,27 +245,13 @@ function pkgKey(pkg: AdminPackageSummary) {
   return `${pkg.package_id.registry}:${pkg.package_id.name}:${pkg.package_id.version}:${pkg.package_id.artifact ?? ""}`;
 }
 
-const allSelected = computed(
-  () =>
-    filteredPackages.value.length > 0 &&
-    filteredPackages.value.every((p) => selected.value.has(pkgKey(p))),
-);
-
-function toggleAll() {
-  if (allSelected.value) {
-    filteredPackages.value.forEach((p) => selected.value.delete(pkgKey(p)));
-  } else {
-    filteredPackages.value.forEach((p) => selected.value.add(pkgKey(p)));
-  }
-  selected.value = new Set(selected.value);
-}
-
-function toggleOne(pkg: AdminPackageSummary) {
-  const k = pkgKey(pkg);
-  if (selected.value.has(k)) selected.value.delete(k);
-  else selected.value.add(k);
-  selected.value = new Set(selected.value);
-}
+const {
+  selected,
+  allSelected,
+  toggleAll,
+  toggle: toggleOne,
+  clear: clearSelection,
+} = useRowSelection(filteredPackages, pkgKey);
 
 const selectedPackages = computed(() =>
   (packages.value ?? []).filter((p) => selected.value.has(pkgKey(p))),
@@ -303,7 +290,7 @@ async function bulkBlock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -335,7 +322,7 @@ async function bulkUnblock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -376,7 +363,7 @@ async function bulkDelete() {
     actionError.value = extractMessage(e);
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -524,13 +511,11 @@ async function runPending(): Promise<void> {
          outlined control (its confirmation carries the weight), and Delete is
          the bar's one filled action, set apart at the far end so it is never
          the button beside the one you meant. -->
-    <div
+    <BulkActionBar
       v-if="selected.size > 0"
-      class="sticky top-[var(--masthead-h,4rem)] z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2"
+      :label="t('adminPackages.selectedCount', { count: selected.size }, selected.size)"
+      @clear="clearSelection"
     >
-      <span class="text-sm font-medium">{{
-        t("adminPackages.selectedCount", { count: selected.size }, selected.size)
-      }}</span>
       <Button
         size="sm"
         variant="outline"
@@ -548,18 +533,17 @@ async function runPending(): Promise<void> {
         @click="pending = { kind: 'bulk-unblock' }"
         >{{ t("adminPackages.unblockSelected") }}</Button
       >
-      <Button size="sm" variant="ghost" @click="selected = new Set()">
-        {{ t("common.clearAction") }}
-      </Button>
-      <Button
-        size="sm"
-        variant="destructive"
-        class="ml-auto"
-        :disabled="bulkLoading"
-        @click="pending = { kind: 'bulk-delete' }"
-        >{{ t("adminPackages.deleteSelected") }}</Button
-      >
-    </div>
+      <template #end>
+        <Button
+          size="sm"
+          variant="destructive"
+          class="ml-auto"
+          :disabled="bulkLoading"
+          @click="pending = { kind: 'bulk-delete' }"
+          >{{ t("adminPackages.deleteSelected") }}</Button
+        >
+      </template>
+    </BulkActionBar>
 
     <!-- Outside the selection-gated bar above: every bulk handler clears the
          selection in its `finally`, so a message rendered inside that bar was
