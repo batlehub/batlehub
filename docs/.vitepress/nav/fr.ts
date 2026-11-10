@@ -25,8 +25,8 @@
 // même liste. Pas d'entrée « Accueil » : le logo à gauche y mène déjà.
 //
 // Les libellés restent plus courts que ceux de la nav anglaise (65 caractères) :
-// les seuils de `custom.css` (menu replié sous 1280 px, icônes masquées jusqu'à
-// 1380) ont été mesurés sur elle. À 87 caractères (« Générateur de config »,
+// les seuils de `custom.css` (menu replié sous 1340 px, icônes masquées de 1280
+// à 1439) ont été mesurés sur elle. À 87 caractères (« Générateur de config »,
 // « Guide utilisateur », « Administration »), la nav débordait de l'écran entre
 // 1280 et 1650 px et emportait le bouton d'apparence avec elle.
 export const nav = [
