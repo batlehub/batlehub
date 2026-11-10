@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/maven.md
-sourceHash: cbdc5d915876af08
+sourceHash: 0e7d2275f702e35b
 ---
 
 # Maven
@@ -175,12 +175,16 @@ mvn dependency:get -Dartifact=com.example:mylib:1.0.0
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/maven -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/maven2/{path}` | Proxy or serve a Maven repository request. |
 | `PUT` | `/proxy/{registry}/maven2/{path}` | Upload a Maven artifact to the local registry. |
 <!-- END endpoints -->
+
+:::
 
 `{group}` s'écrit en segments de chemin : `com/example` correspond au groupId
 `com.example`.

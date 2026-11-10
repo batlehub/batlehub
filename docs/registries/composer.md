@@ -178,6 +178,8 @@ curl -X DELETE \
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/composer -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -190,6 +192,8 @@ curl -X DELETE \
 | `GET` | `/proxy/{registry}/packages.json` | Composer registry root index. |
 | `GET` | `/proxy/{registry}/search.json` | `composer search`. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

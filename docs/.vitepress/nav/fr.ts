@@ -24,25 +24,25 @@
 // Le détail vit dans la barre latérale, de sorte que les deux ne répètent pas la
 // même liste. Pas d'entrée « Accueil » : le logo à gauche y mène déjà.
 //
-// Les libellés restent plus courts que ceux de la nav anglaise (65 caractères) :
-// les seuils de `custom.css` (menu replié sous 1340 px, icônes masquées de 1280
-// à 1439) ont été mesurés sur elle. À 87 caractères (« Générateur de config »,
-// « Guide utilisateur », « Administration »), la nav débordait de l'écran entre
-// 1280 et 1650 px et emportait le bouton d'apparence avec elle.
+// Cinq entrées tiennent dès 1200 px, icônes comprises : c'est le seuil de
+// repli de `custom.css`, mesuré sur les deux langues. Un libellé ajouté ici se
+// remesure — à sept entrées et 87 caractères, la nav sortait de l'écran
+// jusqu'à 1650 px et emportait le bouton d'apparence avec elle.
 export const nav = [
+  // Cinq entrées, une par espace : le serveur, l'usage, les registres,
+  // l'exploitation et le projet. Les sept entrées à plat (Installer, Générateur
+  // et Admin à côté des espaces qui les contiennent) chargeaient la barre et
+  // forçaient le menu replié là où cinq tiennent. Le générateur reste à un clic,
+  // à côté d'Installer : qui vient de décider d'installer a besoin d'un
+  // `config.toml` juste après.
   {
-    text: "Installer",
-    link: "/fr/guide/installation",
-    activeMatch: "/fr/guide/installation",
-  },
-  // La seule page qui est un outil plutôt qu'un document. Elle est dans la barre
-  // de navigation parce qu'un visiteur qui a décidé d'installer a besoin d'un
-  // `config.toml` juste après, et que le générer vaut mieux que lire une
-  // référence de 12 000 mots pour l'écrire à la main.
-  {
-    text: "Générateur",
-    link: "/fr/guide/config-generator",
-    activeMatch: "/fr/guide/config-generator",
+    text: "Serveur",
+    items: [
+      { text: "Installer", link: "/fr/guide/installation" },
+      { text: "Générateur de config", link: "/fr/guide/config-generator" },
+      { text: "Administration", link: "/fr/guide/administration" },
+    ],
+    activeMatch: "^/fr/guide/",
   },
   {
     text: "Utiliser",
@@ -55,19 +55,13 @@ export const nav = [
     activeMatch: "/fr/registries/",
   },
   {
-    text: "Admin",
-    link: "/fr/guide/administration",
-    activeMatch: "/fr/guide/admin",
-  },
-  {
     text: "Exploitation",
     link: "/fr/operations/",
     activeMatch: "/fr/operations/",
   },
   // Trois espaces qui parlent du projet plutôt que de son exploitation, et qui
-  // restent en anglais. Un menu déroulant plutôt que trois entrées de plus :
-  // personne n'arrive sur la documentation d'un proxy de paquets en cherchant
-  // l'index des RFC.
+  // restent en anglais. Personne n'arrive sur la documentation d'un proxy de
+  // paquets en cherchant l'index des RFC.
   {
     text: "Projet",
     items: [

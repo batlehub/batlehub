@@ -98,6 +98,8 @@ The index a local registry serves is composed from what was published — each e
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/helm -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -109,6 +111,8 @@ The index a local registry serves is composed from what was published — each e
 | `GET` | `/proxy/{registry}/helm/charts/{file}` | A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names. |
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
+
+:::
 
 ## Hybrid mode: `hybrid_merge`
 

@@ -80,6 +80,8 @@ password <your-token>
 
 ## Endpoints
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/sdkman -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -95,6 +97,8 @@ password <your-token>
 | `GET` | `/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}` | A pre- or post-install hook: bash the client sources and runs, relayed |
 | `GET` | `/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}` | The self-update script for a channel and platform — bash the client |
 <!-- END endpoints -->
+
+:::
 
 ## See also
 

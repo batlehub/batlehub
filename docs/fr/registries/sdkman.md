@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/sdkman.md
-sourceHash: 73dbd78d94f4d085
+sourceHash: 25511e1df13a03c4
 ---
 
 # SDKMAN
@@ -155,6 +155,8 @@ password <your-token>
 
 ## Endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/sdkman -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -170,6 +172,8 @@ password <your-token>
 | `GET` | `/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}` | A pre- or post-install hook: bash the client sources and runs, relayed |
 | `GET` | `/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}` | The self-update script for a channel and platform — bash the client |
 <!-- END endpoints -->
+
+:::
 
 ## Voir aussi
 

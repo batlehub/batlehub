@@ -1,6 +1,6 @@
 ---
 sourcePath: use/index.md
-sourceHash: b389356de281e393
+sourceHash: a3d16c374760ae65
 ---
 
 # Utiliser BatleHub
@@ -8,6 +8,8 @@ sourceHash: b389356de281e393
 **Pour la personne dont le gestionnaire de paquets parle à BatleHub.** Configurer
 son environnement local pour passer par lui, et publier des paquets privés quand
 l'administrateur a activé le mode `local` ou `hybrid`.
+
+<SectionGrid section="use" />
 
 Si c'est vous qui *exploitez* le serveur — installation, configuration des
 registres, attribution des accès — c'est le

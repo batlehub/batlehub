@@ -176,6 +176,8 @@ What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-sign
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/openvsx -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -199,6 +201,8 @@ What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-sign
 | `GET` | `/proxy/{registry}/vscode/item` | `GET …/vscode/item?itemName=publisher.name` |
 | `GET` | `/proxy/{registry}/vscode/unpkg/{publisher}/{name}/{version}/{path}` | `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}` |
 <!-- END endpoints -->
+
+:::
 
 ---
 

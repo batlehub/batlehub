@@ -123,6 +123,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/nuget -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -138,6 +140,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/index.json` | Proxy the NuGet vulnerability database index. |
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/page/{page}` | Proxy a single page of NuGet vulnerability records. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/openvsx.md
-sourceHash: 0aada629d13d33fb
+sourceHash: 69193d7116870008
 ---
 
 # OpenVSX
@@ -215,6 +215,8 @@ Ce qui s'installe où, mesuré avec VS Code 1.136.1
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/openvsx -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -238,6 +240,8 @@ Ce qui s'installe où, mesuré avec VS Code 1.136.1
 | `GET` | `/proxy/{registry}/vscode/item` | `GET …/vscode/item?itemName=publisher.name` |
 | `GET` | `/proxy/{registry}/vscode/unpkg/{publisher}/{name}/{version}/{path}` | `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}` |
 <!-- END endpoints -->
+
+:::
 
 ---
 

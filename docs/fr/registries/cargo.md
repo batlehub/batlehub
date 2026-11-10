@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/cargo.md
-sourceHash: 1f4db53b601d63a3
+sourceHash: 6e5f8a8406d549f4
 ---
 
 # Cargo
@@ -112,6 +112,8 @@ cargo add my-lib --registry internal
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/cargo -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -126,6 +128,8 @@ cargo add my-lib --registry internal
 | `GET` | `/proxy/{registry}/registry/{path}` | Cargo sparse registry index entries. |
 | `GET` | `/proxy/{registry}/registry/config.json` | Cargo sparse registry `config.json`. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nodedist.md
-sourceHash: d5050f1f3e141c56
+sourceHash: 247a8b4c6fef08c6
 ---
 
 # Distributions Node (nvm, fnm, n, mise)
@@ -137,6 +137,8 @@ d'où le serveur le lit.
 
 ## Endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nodedist -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -144,6 +146,8 @@ d'où le serveur le lit.
 | `GET` | `/proxy/{registry}/nodedist/index.json` | The same release table as JSON — what fnm and mise read. |
 | `GET` | `/proxy/{registry}/nodedist/index.tab` | The release table nvm resolves every install through, blocked releases |
 <!-- END endpoints -->
+
+:::
 
 ## Voir aussi
 

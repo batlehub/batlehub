@@ -134,6 +134,8 @@ go get example.com/mymod@v1.0.0
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/goproxy -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -146,6 +148,8 @@ go get example.com/mymod@v1.0.0
 | `GET` | `/proxy/{registry}/v1/index.json` | Proxy the Go Vulnerability Database index. |
 | `POST` | `/proxy/{registry}/v1/query` | Proxy a Go vulnerability database query. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

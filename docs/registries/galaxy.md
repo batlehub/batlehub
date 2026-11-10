@@ -136,6 +136,8 @@ A duplicate version answers `409`, which `ansible-galaxy` renders as *"(HTTP Cod
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/galaxy -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -150,6 +152,8 @@ A duplicate version answers `409`, which `ansible-galaxy` renders as *"(HTTP Cod
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/` | One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked. |
 | `GET` | `/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/` | The import task a publish returned — always `completed`, because the work is done before the task exists. |
 <!-- END endpoints -->
+
+:::
 
 ## Hybrid mode: local wins whole, not per version
 

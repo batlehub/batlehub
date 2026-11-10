@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: 22f54024a2a0e09b
+sourceHash: af8f911ef575780e
 ---
 
 # Cache binaire Nix
@@ -9,7 +9,7 @@ Le protocole *substituter* de Nix est relayé et mis en cache comme un registre 
 
 **À lire d'abord : bloquer un binaire ne bloque pas le logiciel.** Une machine qui possède la dérivation — c'est le cas de toute machine NixOS — compile `hello-1.0.0.2` depuis les sources dès qu'aucun cache ne le sert, et rien dans ce protocole ne peut l'en empêcher. Le levier dont dispose un parc est `max-jobs = 0` sur les machines qui ne doivent pas compiler : c'est une configuration de Nix, pas de ce proxy.
 
-## En bref
+## En un coup d'œil
 
 | Propriété | Valeur |
 |---|---|
@@ -260,6 +260,8 @@ Un chemin que le paquet ne transporte pas répond `503` et non `404` : il existe
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nix -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -274,6 +276,8 @@ Un chemin que le paquet ne transporte pas répond `503` et non `404` : il existe
 | `GET` | `/proxy/{registry}/nix/public-key` | `GET public-key` — the line an operator pastes into `trusted-public-keys`. |
 | `GET` | `/proxy/{registry}/nix/realisations/{id}.doi` | `realisations/{id}.doi` — the derivation-to-output mapping of a content-addressed derivation. |
 <!-- END endpoints -->
+
+:::
 
 ## Non pris en charge
 

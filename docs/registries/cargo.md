@@ -97,6 +97,8 @@ cargo add my-lib --registry internal
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/cargo -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -111,6 +113,8 @@ cargo add my-lib --registry internal
 | `GET` | `/proxy/{registry}/registry/{path}` | Cargo sparse registry index entries. |
 | `GET` | `/proxy/{registry}/registry/config.json` | Cargo sparse registry `config.json`. |
 <!-- END endpoints -->
+
+:::
 
 ---
 
