@@ -84,3 +84,12 @@ listener holds without it. Not re-measured with `breaking-point` at 20.
 ## 4. `/healthz` runs 3 statements
 
 `SELECT 1` plus a storage probe that resolves a key through the dedup tables. Keep the storage probe on readiness only; liveness needs no database round trip at all.
+
+**Paid** (`perf(web): /healthz probes the store without the dedup tables`).
+Liveness was already `/livez`, which does no I/O, and the chart points its
+`livenessProbe` there; `/healthz` is the readiness probe. Its storage probe now
+looks up a `staging:` key, which a storage router hands straight to the backend
+instead of resolving it through `artifact_dedup_refs`/`artifact_storage`, so
+it probes the object store rather than the database a second time.
+`db_calls.sh`: `healthz` runs 1 statement (`SELECT 1`), down from 3, and the
+budget says so.

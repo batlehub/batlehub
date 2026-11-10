@@ -9,6 +9,8 @@ use batlehub_core::services::ProxyService;
 const STATUS_OK: &str = "ok";
 const STATUS_ERROR: &str = "error";
 const STATUS_UNCONFIGURED: &str = "unconfigured";
+/// The key the storage probe looks up; it never exists.
+const HEALTHZ_PROBE_KEY: &str = "staging:healthz/__healthz__";
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -67,7 +69,11 @@ pub async fn healthz(
         None => STATUS_UNCONFIGURED,
     };
 
-    let storage: &'static str = match proxy_svc.storage.exists("__healthz__").await {
+    // A staging key goes straight to the backend: through a storage router a
+    // plain key would first be resolved in the dedup tables, two more
+    // statements that probe the database again rather than the object store
+    // (TD-0004 §4).
+    let storage: &'static str = match proxy_svc.storage.exists(HEALTHZ_PROBE_KEY).await {
         Ok(_) => STATUS_OK,
         Err(e) => {
             tracing::warn!(error = %e, "healthz: storage check failed");
