@@ -726,6 +726,16 @@
   opacity: 1 !important;
 }
 
+/* A label is a <p> inside the SVG, so the Reading rule at the top of this file
+   reached it: 16px at line-height 1.7, after mermaid had sized the box for its
+   own 1.5. Two lines then needed 54px in a 48px box and the last one was cut.
+   A node label is data, not prose. */
+.vp-doc .mermaid :is(p, span, div) {
+  font-size: inherit;
+  line-height: 1.5;
+  max-width: none;
+}
+
 .mermaid .node :is(rect, polygon, circle, ellipse, path),
 .mermaid .cluster :is(rect, polygon) {
   fill: var(--ground-sunk) !important;
