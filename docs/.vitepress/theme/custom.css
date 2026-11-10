@@ -353,6 +353,10 @@
   font-size: var(--t-row);
   font-variant-numeric: tabular-nums;
   border: 1px solid var(--rule-soft);
+  /* A row of facts reads top-down. Centred, a key sat at the bottom of a
+     15-line value cell — RFC 0015's `Status` row, and every key/value table
+     whose value wraps. */
+  vertical-align: top;
 }
 
 /* Column heads take the Tracking Ladder's 0.14em step. */
@@ -604,6 +608,13 @@
   font-size: var(--t-meta);
 }
 
+/* The default theme truncates each entry to one line with an ellipsis — sized
+   for a sans. In the mono face "12. Decisions and open questions" came out as
+   "12. Decisions and open q…"; wrapping costs a line, hiding costs the title. */
+:root .outline-link {
+  white-space: normal;
+}
+
 .VPDocOutlineItem.is-active a {
   color: var(--accent);
   font-weight: 600;
@@ -664,8 +675,9 @@
   border-radius: var(--radius);
 }
 
+/* Ink, not crimson: a scrollbar is none of the accent's four jobs. */
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--ink-dim);
 }
 
 /* ── Reduced motion ──────────────────────────────────────────────────────────
@@ -697,9 +709,13 @@
    16.64:1 light. `!important` is not decoration here — mermaid injects a
    <style> block inside each SVG, and these rules have to outrank it.
 
-   Only the edge labels are touched. Node fills and their text come from
-   mermaid's theme and passed the gate as they are; restyling them would be a
-   second palette to keep in agreement with the first. */
+   The nodes followed in a second pass. They had been left to mermaid's theme
+   on the grounds that restyling them would be a second palette — but mermaid's
+   theme *was* the second palette: cyan and magenta subgraphs on paper, neutral
+   grey boxes on near-black, neither of which this world contains. Repainting
+   them in tokens removes that palette rather than adding one: boxes are the
+   sunk ground under a strong rule, labels are ink, edges are dim ink, and the
+   whole diagram flips with the rendition because the tokens do. */
 .mermaid .edgeLabel,
 .mermaid .edgeLabel p,
 .mermaid .edgeLabel foreignObject div {
@@ -711,6 +727,45 @@
 .mermaid .labelBkg {
   background-color: var(--ground) !important;
   opacity: 1 !important;
+}
+
+.mermaid .node :is(rect, polygon, circle, ellipse, path),
+.mermaid .cluster :is(rect, polygon) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid :is(.nodeLabel, .cluster-label, .cluster-label span, .label foreignObject div) {
+  color: var(--ink) !important;
+}
+
+.mermaid :is(.node, .cluster) text {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.flowchart-link, .messageLine0, .messageLine1, .relation) {
+  stroke: var(--ink-dim) !important;
+}
+
+/* Sequence diagrams (50 of the 148) draw with their own classes: lavender
+   actors and yellow notes by default. Same three tokens. */
+.mermaid :is(rect.actor, rect.note, polygon.labelBox, rect[class^="activation"]) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid :is(text.actor, text.actor tspan, .noteText, .messageText, .labelText, .loopText, .loopText tspan) {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.actor-line, line[class^="actor-line"], .loopLine) {
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid #arrowhead path,
+.mermaid :is(marker path, .arrowheadPath, .arrowMarkerPath) {
+  fill: var(--ink-dim) !important;
+  stroke: var(--ink-dim) !important;
 }
 
 /* A diagram is wider than a phone. Scroll it inside its own box rather than
