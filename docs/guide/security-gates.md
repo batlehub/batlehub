@@ -587,7 +587,7 @@ and carries `scan_status_unavailable: true`; the console then draws "—" in
 place of each badge.
 
 **The verdict endpoint carries the same status**, as `scan_status`, and for a
-holder of `system:read` a `next_rescan` block: when the verdict is rescanned
+holder of `quarantine:read` at the instance tier a `next_rescan` block: when the verdict is rescanned
 (`last_scanned_at` plus `[registries.security.rescan] interval_secs`; absent
 without an interval, and in the past means due) and when the registry-wide SBOM
 re-check runs next (its last run plus `[vulnerability_scan] interval_secs`;
@@ -608,9 +608,11 @@ package page's Security tab shows both as *Next rescan*.
 - **Verdicts by state**: the verdicts of one registry, from
   `GET /api/v1/admin/verdicts`.
 
-Opening the page needs `system:read`. Rows then come only from the registries
-where you also hold `quarantine:read`, and the last error only where you hold
-`findings:read`, so `system:read` alone names no held version. [Rescan] appears
+Opening the page needs `quarantine:read` at the instance tier, the verb the
+security console reads with (RFC 0042); the registry-tier `quarantine:read`
+every user holds is not enough. Rows then come only from the registries where
+you hold `quarantine:read`, minus the packages under a namespace seal, and the
+last error only where you hold `findings:read`. [Rescan] appears
 where the configured grants give you `gates:exempt` on the registry — nobody
 holds it by default — and the rescan endpoint checks it again. `per_page` is at
 most 200.

@@ -49,7 +49,7 @@ third-party provider under DORA.
 | [SOC 2 checklist](./soc2-checklist.md) | your auditor works from the Trust Service Criteria |
 | [SIEM integration](./siem.md) | you need the audit stream and its detection rules |
 
-Every page uses the same status words as the SOC 2 checklist: **✅ Implemented**
+Every page uses the same status words as the SOC 2 checklist: **Implemented**
 means the control exists in the code, at the place named in the evidence
 column; **Documented** means a written procedure exists; **Manual process**
 means a process *you* run, which BatleHub cannot run for you. The NIS2 and

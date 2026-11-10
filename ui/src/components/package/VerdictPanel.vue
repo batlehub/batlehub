@@ -192,13 +192,13 @@ async function rescan() {
 <template>
   <section
     v-if="verdict"
-    class="rounded-md border border-rule-soft p-4 space-y-3"
+    class="space-y-3 border-t border-rule-soft pt-6"
     aria-labelledby="verdict-heading"
     data-testid="verdict-panel"
   >
     <div class="flex flex-wrap items-center gap-2">
       <component :is="icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
-      <h2 id="verdict-heading" class="font-mono text-sm text-foreground">
+      <h2 id="verdict-heading" class="font-mono text-base text-foreground">
         {{ t("verdictPanel.title", { version: verdict.package.version }) }}
       </h2>
       <Badge :variant="stateVariant" class="text-xs" data-testid="verdict-state">
@@ -293,7 +293,7 @@ async function rescan() {
         <RefreshCw class="mr-1 h-3.5 w-3.5" aria-hidden="true" />
         {{ t("verdictPanel.rescan") }}
       </Button>
-      <span v-if="rescanNote" class="text-xs text-muted-foreground">{{ rescanNote }}</span>
+      <span role="status" class="text-xs text-muted-foreground">{{ rescanNote }}</span>
     </div>
   </section>
 </template>

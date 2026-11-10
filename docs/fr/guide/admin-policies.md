@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 6447a8b0fb836ba4
+sourceHash: 5c22493f29b68a81
 ---
 
 # Politiques et paquets
@@ -345,6 +345,8 @@ sans danger :
 | devfile | legacy stack index (`/index`, with `/sample` and `/all`) | yes — a legacy entry names one version, the default, so blocking it removes the stack from this index rather than substituting another version |
 | helm | `index.yaml` | yes — the index describes the whole repository, so a new block reaches it within the blocked-set snapshot's 30-second TTL; and `helm` reads its own cached copy until the next `helm repo update`, so until then the archive download is what refuses |
 | helm | ChartMuseum `api/charts` listings | yes |
+| mise-versions | `data/<tool>.toml` | yes |
+| mise-versions | `data/python-precompiled-<triple>.gz` | no — relayed byte-exact until its format is read from mise's python plugin (RFC 0043 decision 3); a blocked Python version is refused at its asset |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

@@ -35,7 +35,7 @@ import { Resolution } from "@/components/ui/resolution";
 import { AsyncState } from "@/components/ui/async-state";
 const { t } = useI18n();
 
-const { token } = useAuth();
+const { token, can } = useAuth();
 
 const {
   data: stats,
@@ -272,39 +272,54 @@ const trendText = computed(() => {
       </p>
 
       <section v-if="stats && stats.per_registry.length > 0" class="space-y-2">
-        <h2 class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
           {{ t("adminDashboard.perRegistry") }}
         </h2>
-        <Table>
+        <Table :label="t('adminDashboard.perRegistry')">
+          <!-- On a phone the three raw counts leave the table whole rather than
+               pushing State off-screen: State is the answer, the counts are detail. -->
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>
               <TableHead class="text-right">{{ t("adminDashboard.hitRate") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.hits") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.misses") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.cached") }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{ t("common.hits") }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{
+                t("common.misses")
+              }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{
+                t("common.cached")
+              }}</TableHead>
               <TableHead>{{ t("common.state") }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow v-for="r in stats.per_registry" :key="r.registry">
               <TableCell class="font-mono text-sm">
+                <!-- The registry page asks system:read; this page only stats:read. -->
                 <RouterLink
+                  v-if="can('system:read')"
                   :to="`/admin/observability/registries/${encodeURIComponent(r.registry)}`"
                   class="hover:underline underline-offset-[3px]"
                   >{{ r.registry }}</RouterLink
                 >
+                <template v-else>{{ r.registry }}</template>
               </TableCell>
               <TableCell class="text-right font-mono text-sm">
                 {{ fmtPct(r.hit_rate ?? null) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ formatCount(r.artifact_hits) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ formatCount(r.artifact_misses) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ fmtBytes(r.cached_bytes) }}
               </TableCell>
               <!-- State as the system draws it — pattern, word, hue — on the

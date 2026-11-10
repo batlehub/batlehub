@@ -125,7 +125,7 @@ async function exportSbom() {
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
           <!-- Registry filter -->
-          <div class="space-y-1.5">
+          <div class="space-y-2">
             <Label for="sbom-registry"
               >{{ t("common.registry") }}
               <span class="text-muted-foreground font-normal">{{
@@ -145,20 +145,21 @@ async function exportSbom() {
           </div>
 
           <!-- Format -->
-          <div class="space-y-1.5">
+          <div class="space-y-2">
             <Label for="sbom-format">{{ t("common.format") }}</Label>
-            <select
+            <Select
               id="sbom-format"
-              v-model="format"
-              class="w-full border border-input rounded-sm px-2 py-2 font-mono text-sm bg-background"
-            >
-              <option value="spdx">{{ t("adminSbom.spdx23") }}</option>
-              <option value="cyclonedx">{{ t("adminSbom.cyclonedx14") }}</option>
-            </select>
+              :model-value="format"
+              :options="[
+                { value: 'spdx', label: t('adminSbom.spdx23') },
+                { value: 'cyclonedx', label: t('adminSbom.cyclonedx14') },
+              ]"
+              @update:model-value="(v: string) => (format = v as 'spdx' | 'cyclonedx')"
+            />
           </div>
 
           <!-- From date -->
-          <div class="space-y-1.5">
+          <div class="space-y-2">
             <Label for="sbom-from"
               >{{ t("common.from") }}
               <span class="text-muted-foreground font-normal">{{
@@ -169,7 +170,7 @@ async function exportSbom() {
           </div>
 
           <!-- To date -->
-          <div class="space-y-1.5">
+          <div class="space-y-2">
             <Label for="sbom-to"
               >To
               <span class="text-muted-foreground font-normal">{{
@@ -199,7 +200,7 @@ async function exportSbom() {
     <!-- About card -->
     <Card>
       <CardHeader>
-        <CardTitle class="text-base">{{ t("adminSbom.aboutSbomFormats") }}</CardTitle>
+        <CardTitle>{{ t("adminSbom.aboutSbomFormats") }}</CardTitle>
       </CardHeader>
       <CardContent class="text-sm text-muted-foreground space-y-2">
         <p>

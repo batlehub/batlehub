@@ -473,10 +473,17 @@ impl ProxyService {
             "allowed download",
         );
         // The catalogue lists this package from the status row `record_access`
-        // has just written and the artifact row above; until now its cached
-        // listing held neither, for up to `ExploreCache`'s TTL. Once per cached
-        // artifact, never on a hit — after both writes, so a listing read in
-        // between cannot put the old answer back.
+        // writes and the artifact row above; until now its cached listing held
+        // neither, for up to `ExploreCache`'s TTL. Once per cached artifact,
+        // never on a hit — after both writes, so a listing read in between
+        // cannot put the old answer back.
+        //
+        // `record_access` only *queues* the event since access events are
+        // batched (TD-0004 §2), so the status row is waited for here: without
+        // it the console's Fetch answered 200 while the upstream search still
+        // said `already_cached: false`, and the listing re-cached the old
+        // answer for the whole TTL.
+        self.repo.flush_access_events().await;
         if let Some(cache) = &self.explore_cache {
             cache.invalidate(Some(&registry)).await;
         }

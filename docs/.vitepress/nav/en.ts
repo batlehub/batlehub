@@ -14,28 +14,31 @@
  * nothing and reports every page as an orphan.
  */
 
-// Navbar = top-level section entry points (plain links). The detailed
+// Navbar = top-level section entry points (a link, or a short dropdown). The detailed
 // page tree for each section lives in the sidebar, so the two don't repeat
 // the same items. Reference topics (Caching, Access Control, Package
-// Explorer, SBOM, HA) and Config Generator are reached via the guide sidebar.
+// Explorer, SBOM, HA) are reached via the guide sidebar.
 // No "Home" entry: the wordmark to its left already links there, and the
 // navbar has exactly as much room as it has. Spending a slot on the one
 // destination every visitor can already reach is what pushed the appearance
 // toggle off the edge when the Config Generator was added.
 export const nav = [
+  // Five entries, one per space a visitor arrives for (RFC 0005-bis's spaces):
+  // running the server, using it, a registry's snippet, operating it, and the
+  // project. Seven flat entries — Install, Config Generator and Admin side by
+  // side with the spaces they belong to — crowded the bar and forced the
+  // hamburger at widths where five fit. The Config Generator stays one click
+  // from the bar, next to Install, for the reason it was promoted: a visitor
+  // who has decided to install needs a `config.toml` next.
   {
-    text: "Install",
-    link: "/guide/installation",
-    activeMatch: "/guide/installation",
-  },
-  // The one page that is a tool rather than a document. It is in the navbar
-  // because a visitor who has decided to install needs a `config.toml`
-  // next, and generating one beats reading a 12 000-word reference to
-  // write it by hand — which is where it was buried until now.
-  {
-    text: "Config Generator",
-    link: "/guide/config-generator",
-    activeMatch: "/guide/config-generator",
+    text: "Server",
+    items: [
+      { text: "Install", link: "/guide/installation" },
+      { text: "Config Generator", link: "/guide/config-generator" },
+      { text: "Administration", link: "/guide/administration" },
+    ],
+    // Every /guide/ page except the roadmap, which is the project's.
+    activeMatch: "^/guide/(?!roadmap)",
   },
   {
     text: "User Guide",
@@ -48,19 +51,12 @@ export const nav = [
     activeMatch: "/registries/",
   },
   {
-    text: "Admin",
-    link: "/guide/administration",
-    activeMatch: "/guide/admin",
-  },
-  {
     text: "Operations",
     link: "/operations/",
     activeMatch: "/operations/",
   },
-  // Three sections that are about the project rather than about running it.
-  // A dropdown rather than three more top-level entries: the navbar is the
-  // list of things a visitor came for, and nobody arrives at a package
-  // proxy's documentation wanting the RFC index.
+  // About the project rather than about running it: nobody arrives at a
+  // package proxy's documentation wanting the RFC index.
   {
     text: "Project",
     items: [
@@ -69,7 +65,7 @@ export const nav = [
       { text: "Design history", link: "/rfc/" },
       { text: "Technical debt", link: "/techdebt/" },
     ],
-    activeMatch: "/(contributing|rfc|techdebt)/",
+    activeMatch: "^/((contributing|rfc|techdebt)/|guide/roadmap)",
   },
 ];
 
@@ -138,6 +134,7 @@ export const sidebar = {
       text: "Toolchains",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
+        { text: "mise versions host", link: "/registries/mise-versions" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
         { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
         { text: "SDKMAN", link: "/registries/sdkman" },
@@ -175,7 +172,7 @@ export const sidebar = {
       items: [
         { text: "What it does", link: "/guide/features" },
         { text: "Installation", link: "/guide/installation" },
-        { text: "Configuration", link: "/guide/configuration" },
+        { text: "Configuration reference", link: "/guide/configuration" },
         { text: "Worked examples", link: "/guide/configuration-examples" },
         { text: "Config Generator", link: "/guide/config-generator" },
       ],
@@ -184,7 +181,7 @@ export const sidebar = {
       text: "Administration",
       items: [
         { text: "Overview", link: "/guide/administration" },
-        { text: "Configuration", link: "/guide/admin-config" },
+        { text: "Server configuration", link: "/guide/admin-config" },
         { text: "Storage & health", link: "/guide/admin-storage-health" },
         { text: "Policies & packages", link: "/guide/admin-policies" },
         { text: "Access & audit", link: "/guide/admin-access" },
@@ -396,6 +393,10 @@ export const sidebar = {
       text: "Ready to build",
       items: [
         {
+          text: "0043 — mise versions host",
+          link: "/rfc/0043-mise-versions-host",
+        },
+        {
           text: "0044 — Scan visibility and admin views",
           link: "/rfc/0044-scan-visibility-and-admin-views",
         },
@@ -551,6 +552,10 @@ export const sidebar = {
         {
           text: "0040 — CLI grammar and coverage",
           link: "/rfc/0040-cli-grammar-and-coverage",
+        },
+        {
+          text: "0042 — Security console by verb",
+          link: "/rfc/0042-security-console-by-verb",
         },
       ],
     },

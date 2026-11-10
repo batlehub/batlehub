@@ -6,6 +6,8 @@ Everything here assumes BatleHub is already running. If you are still setting it
 up, start with [Installation](/guide/installation) and
 [Configuration](/guide/configuration).
 
+<SectionGrid section="operations" />
+
 ::: warning Guidance, not a commitment
 BatleHub is self-hosted software under the Apache 2.0 licence, and **you are the
 operator**. Every page in this space is material to help you run your own

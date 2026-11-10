@@ -32,8 +32,8 @@ describe("ScanBadge (RFC 0044 §4.5)", () => {
   });
 
   it.each([
-    ["allowed", "border-secondary"],
-    ["warned", "border-border"],
+    ["allowed", "text-foreground"],
+    ["warned", "text-muted-foreground"],
     ["quarantined", "border-copper"],
     ["denied", "border-destructive"],
   ] as const)("uses VerdictPanel's variant for scanned · %s", (verdict, cls) => {

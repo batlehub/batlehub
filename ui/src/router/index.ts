@@ -6,7 +6,13 @@ import {
   type RouteLocationRaw,
 } from "vue-router";
 import { useAuth, storeTokens } from "@/composables/useAuth";
-import { LEGACY_REDIRECTS, SECTION_INDEXES } from "@/config/navigation";
+import {
+  LEGACY_REDIRECTS,
+  packagePath,
+  SECTION_INDEXES,
+  SECURITY_VERBS,
+} from "@/config/navigation";
+import { ADMIN_PAGE_VERBS, firstAdminPage } from "@/config/adminSections";
 
 const OIDC_STATE_KEY = "oidc_state";
 
@@ -134,18 +140,37 @@ function checkMetaGuards(
   to: RouteLocationNormalized,
   {
     isAuthenticated,
-    identity,
-    isAdmin,
-  }: Pick<AuthState, "isAuthenticated" | "identity" | "isAdmin">,
+    can,
+    canAny,
+    isOidcSession,
+  }: Pick<AuthState, "isAuthenticated" | "can" | "canAny" | "isOidcSession">,
 ): RouteLocationRaw | undefined {
   if (to.meta.requiresAuth && !isAuthenticated.value) {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
-  if (to.meta.requiresOidcAuth && !identity.value?.auth_provider) {
+  if (to.meta.requiresOidcAuth && !isOidcSession.value) {
+    // Signed in, just not through OIDC: sending them to "Sign in" reads as
+    // being logged out. Their account hub is where the session does work.
+    if (isAuthenticated.value) return { path: "/me/profile" };
     return { path: "/login", query: { redirect: to.fullPath } };
   }
-  if (to.meta.requiresAdmin && !isAdmin.value) {
-    return { path: "/login", query: { redirect: to.fullPath } };
+  // RFC 0042 §4.3: an admin page is gated on the verb its reads ask for, not
+  // on the role. A page missing from the table is refused (fail closed). A
+  // signed-in caller is not sent to sign in again: they land on the first page
+  // of the same section they may open, else of any section, else home.
+  if (to.meta.securityArea && !canAny(SECURITY_VERBS)) {
+    return isAuthenticated.value
+      ? { path: "/" }
+      : { path: "/login", query: { redirect: to.fullPath } };
+  }
+  if (to.meta.adminArea) {
+    // A dynamic page (`…/registries/:name`) names its verb in `meta.verb`.
+    const verb = (to.meta.verb as string | undefined) ?? ADMIN_PAGE_VERBS[to.path];
+    if (!verb || !can(verb)) {
+      if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
+      const section = to.path.split("/").slice(0, 3).join("/") + "/";
+      return { path: firstAdminPage(can, section) ?? firstAdminPage(can) ?? "/" };
+    }
   }
 }
 
@@ -184,7 +209,7 @@ function handleCatalogPath(to: RouteLocationNormalized): RouteLocationRaw | null
     if (!registry || !name) return { path: "/packages" };
     const { registry: _r, name: _n, ...rest } = to.query;
     return {
-      path: `/packages/${encodeURIComponent(registry)}/${encodeURIComponent(name)}`,
+      path: packagePath(registry, name),
       query: rest,
       hash: to.hash,
     };
@@ -266,9 +291,14 @@ export const router = createRouter({
     },
 
     {
+      path: "/security",
+      component: () => import("@/pages/SecurityDashboard.vue"),
+      meta: { securityArea: true },
+    },
+    {
       path: "/admin",
       component: () => import("@/layouts/AdminLayout.vue"),
-      meta: { requiresAdmin: true },
+      meta: { adminArea: true },
       children: [
         /**
          * Real redirect routes for the section roots, not just `SECTION_INDEXES`.
@@ -324,6 +354,8 @@ export const router = createRouter({
         {
           path: "observability/registries/:name",
           component: () => import("@/pages/AdminRegistry.vue"),
+          // GET /admin/registries/{name} asks system:read.
+          meta: { verb: "system:read" },
         },
         { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
         { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },

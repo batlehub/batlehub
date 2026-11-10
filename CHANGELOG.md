@@ -53,7 +53,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   [Exempt…]) and one page per **registry** (`GET /api/v1/admin/registries/{name}`:
   health, scanning, suggestions and an allow-listed view of its
   configuration). The verdict endpoint carries `scan_status` and, for
-  `system:read`, `next_rescan`.
+  `quarantine:read` at the instance tier, `next_rescan`. The Scans page and
+  `next_rescan` follow RFC 0042's verb model (`quarantine:read`, instance
+  tier), not `system:read`.
+- **Fixed, from the review of #311**: RFC 0042's verdict listing and summary
+  honour namespace and registry seals; `encode_path` makes a dots-only
+  segment inert (`%2E%2E` was decoded back to `..`); the request-path
+  access-event flush is bounded to 2 s and a connection failure is not
+  retried row by row; the mise listing honours `deny_missing_timestamp`; the
+  inkdex job fails without its token.
 - **`[stats] dashboard_url` and `registry_dashboard_url`**: [Monitoring ↗]
   links on the Dashboard and on each registry page, validated at load and
   reloaded without a restart. **An older release refuses a config that sets

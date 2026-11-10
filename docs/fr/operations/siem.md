@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/siem.md
-sourceHash: ba19596c827f91e9
+sourceHash: ba14a10b7f3855e0
 ---
 
 # Intégration SIEM
@@ -95,7 +95,8 @@ token sans adresse encore enregistrée — sa première utilisation après une m
 
 Les rechargements de configuration rejoignent le flux sous `config_applied` et
 `config_rejected`, cette dernière pour un candidat que le watcher de fichier ou
-l'éditeur de la console a refusé.
+l'éditeur de la console a refusé. Les deux portent dans `user.id` l'admin qui a
+envoyé le candidat ; un candidat venu du watcher de fichier porte `file-watcher`.
 
 ## Les règles livrées
 

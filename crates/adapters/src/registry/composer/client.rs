@@ -2,6 +2,7 @@ use super::http_client::{
     apply_upstream_options, basic_auth_get, to_registry_error, UpstreamHttpOptions,
 };
 use super::models::PackagistV2Response;
+use crate::registry::encode_path;
 use batlehub_core::error::CoreError;
 
 /// Composer / Packagist registry proxy client.
@@ -93,7 +94,7 @@ impl ComposerRegistryClient {
         &self,
         package: &str,
     ) -> Result<PackagistV2Response, CoreError> {
-        let url = format!("{}/p2/{package}.json", self.base_url);
+        let url = format!("{}/p2/{}.json", self.base_url, encode_path(package));
         let resp = self.send_p2_request(&url, package).await?;
         resp.json::<PackagistV2Response>()
             .await
@@ -107,7 +108,11 @@ impl ComposerRegistryClient {
         package: &str,
         url_suffix: &str,
     ) -> Result<(bytes::Bytes, Option<String>), CoreError> {
-        let url = format!("{}/p2/{package}{url_suffix}.json", self.base_url);
+        let url = format!(
+            "{}/p2/{}{url_suffix}.json",
+            self.base_url,
+            encode_path(package)
+        );
         let resp = self.send_p2_request(&url, package).await?;
 
         let cache_control = resp

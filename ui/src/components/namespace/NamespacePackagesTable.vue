@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AsyncState } from "@/components/ui/async-state";
 import { computed, ref, watch, toRef } from "vue";
 import { myNamespacePackages, setPackageVisibility } from "@/client/sdk.gen";
 import type { Visibility, TeamNamespaceDto, NamespacePackageDto } from "@/client/types.gen";
@@ -34,6 +36,7 @@ const {
   data: pkgsData,
   error,
   loading,
+  reload,
 } = useApi<NamespacePackageDto[]>(
   () =>
     myNamespacePackages({
@@ -111,17 +114,13 @@ function formatDate(iso: string) {
 </script>
 
 <template>
-  <p v-if="loading" class="text-sm text-muted-foreground">
-    {{ t("namespacePackagesTable.loading") }}
-  </p>
-  <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
-  <p v-else-if="!pkgsData?.length" class="text-sm text-muted-foreground">
-    <EmptyState
-      :title="t('namespace.noPackagesTitle')"
-      :description="t('namespace.noPackagesBody')"
-    />
-  </p>
-  <template v-else>
+  <AsyncState :loading="loading" :error="error" :empty="!pkgsData?.length" :on-retry="reload">
+    <template #empty>
+      <EmptyState
+        :title="t('namespace.noPackagesTitle')"
+        :description="t('namespace.noPackagesBody')"
+      />
+    </template>
     <Table>
       <TableHeader>
         <TableRow>
@@ -137,14 +136,20 @@ function formatDate(iso: string) {
         <TableRow
           v-for="pkg in pkgsData"
           :key="`${pkg.name}@${pkg.version}`"
-          :class="pkg.yanked ? 'opacity-50' : ''"
+          :class="pkg.yanked ? 'text-muted-foreground' : ''"
         >
           <TableCell class="font-mono text-xs">{{ pkg.name }}</TableCell>
           <TableCell class="font-mono text-xs">
             {{ pkg.version }}
-            <span v-if="pkg.yanked" class="ml-1 text-destructive">{{
-              t("namespacePackagesTable.yanked")
-            }}</span>
+            <!-- The state's own grammar (matrix + word), not a faded row and a
+                 crimson word: half-opacity text failed AA, and crimson means
+                 refused, which a yank is not. -->
+            <Resolution
+              v-if="pkg.yanked"
+              class="ml-2"
+              state="yanked"
+              :label="t('namespacePackagesTable.yanked')"
+            />
           </TableCell>
           <TableCell>
             <template v-if="editing[pkgKey(pkg)] !== undefined">
@@ -172,18 +177,14 @@ function formatDate(iso: string) {
                   >{{ t("common.cancel") }}</Button
                 >
               </div>
-              <p v-if="saveError[pkgKey(pkg)]" class="text-xs text-destructive mt-0.5">
+              <p v-if="saveError[pkgKey(pkg)]" class="text-xs text-destructive mt-1">
                 {{ saveError[pkgKey(pkg)] }}
               </p>
             </template>
-            <Badge
-              v-else
-              :variant="visVariant(pkg.visibility)"
-              class="capitalize text-xs cursor-pointer"
-              :class="pkg.visibility === 'team' ? 'border-primary text-primary' : ''"
-              @click="startEdit(pkg)"
-            >
-              {{ pkg.visibility }}
+            <Badge v-else :variant="visVariant(pkg.visibility)" class="capitalize text-xs">
+              {{
+                visibilityOptions.find((o) => o.value === pkg.visibility)?.label ?? pkg.visibility
+              }}
             </Badge>
           </TableCell>
           <TableCell class="text-xs">{{ pkg.published_by }}</TableCell>
@@ -207,5 +208,5 @@ function formatDate(iso: string) {
       :has-next="(pkgsData?.length ?? 0) >= PAGE_SIZE"
       @update:page="page = $event"
     />
-  </template>
+  </AsyncState>
 </template>

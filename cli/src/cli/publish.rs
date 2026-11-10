@@ -269,7 +269,8 @@ pub async fn run(
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Sdkman
-        | RegistryKind::Rustup => {
+        | RegistryKind::Rustup
+        | RegistryKind::MiseVersions => {
             // Answered by `refusal` and the devfile branch above.
             return Err(usage(format!("nothing to publish to a {kind} registry")));
         }

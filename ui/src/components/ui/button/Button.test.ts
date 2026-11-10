@@ -48,7 +48,7 @@ describe("Button", () => {
     expect(wrapper.classes()).toContain("bg-primary");
   });
 
-  const classesOf = (variant: "default" | "destructive" | "outline" | "secondary" | "ghost") =>
+  const classesOf = (variant: "default" | "destructive" | "outline" | "ghost") =>
     mount(Button, { props: { variant }, slots: { default: "x" } }).classes();
 
   /**
@@ -74,7 +74,7 @@ describe("Button", () => {
     });
 
     it("dims the unfilled ones, which is what the rule gives them", () => {
-      for (const variant of ["outline", "secondary", "ghost"] as const) {
+      for (const variant of ["outline", "ghost"] as const) {
         expect(classesOf(variant), variant).toContain("disabled:opacity-50");
       }
     });

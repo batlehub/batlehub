@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -74,7 +75,8 @@ impl MavenRegistryClient {
     /// Build the upstream URL for the given `PackageId`.
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> Result<String, CoreError> {
         let (group_id, artifact_id) = decode_name(&pkg.name)?;
-        let group_path = group_id.replace('.', "/");
+        let group_path = encode_path(&group_id.replace('.', "/"));
+        let artifact_id = encode_path(artifact_id);
         let base = self.base_url.trim_end_matches('/');
 
         if pkg.version == "maven-metadata.xml" {
@@ -82,13 +84,13 @@ impl MavenRegistryClient {
                 "{base}/{group_path}/{artifact_id}/maven-metadata.xml"
             ))
         } else {
+            let version = encode_path(&pkg.version);
             let filename = match pkg.artifact.as_deref() {
-                Some(f) => f.to_owned(),
-                None => format!("{artifact_id}-{}.pom", pkg.version),
+                Some(f) => encode_path(f),
+                None => format!("{artifact_id}-{version}.pom"),
             };
             Ok(format!(
-                "{base}/{group_path}/{artifact_id}/{}/{filename}",
-                pkg.version
+                "{base}/{group_path}/{artifact_id}/{version}/{filename}"
             ))
         }
     }
@@ -99,11 +101,12 @@ impl MavenRegistryClient {
         pkg: &PackageId,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
         let (group_id, artifact_id) = decode_name(&pkg.name).ok()?;
-        let group_path = group_id.replace('.', "/");
+        let group_path = encode_path(&group_id.replace('.', "/"));
+        let artifact_id = encode_path(artifact_id);
         let base = self.base_url.trim_end_matches('/');
         let url = format!(
-            "{base}/{group_path}/{artifact_id}/{}/{artifact_id}-{}.pom",
-            pkg.version, pkg.version
+            "{base}/{group_path}/{artifact_id}/{v}/{artifact_id}-{v}.pom",
+            v = encode_path(&pkg.version)
         );
         let resp = self.head(&url).send().await.ok()?;
         if !resp.status().is_success() {
@@ -120,7 +123,8 @@ impl MavenRegistryClient {
         pkg: &PackageId,
     ) -> Result<(String, Option<String>), CoreError> {
         let (group_id, artifact_id) = decode_name(&pkg.name)?;
-        let group_path = group_id.replace('.', "/");
+        let group_path = encode_path(&group_id.replace('.', "/"));
+        let artifact_id = encode_path(artifact_id);
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{base}/{group_path}/{artifact_id}/maven-metadata.xml");
 

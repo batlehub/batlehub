@@ -22,6 +22,48 @@ import {
   Shield,
 } from "@lucide/vue";
 
+/**
+ * The verb each admin page's own reads ask for (RFC 0042 §4.3). One table for
+ * the router guard, the sidebar and the tab strips, so a page is never linked
+ * where the router would refuse it — and never gated on the role.
+ */
+export const ADMIN_PAGE_VERBS: Record<string, string> = {
+  "/admin/dashboard": "stats:read",
+  "/admin/packages/all": "packages:read",
+  "/admin/packages/bulk": "packages:block",
+  "/admin/security/blocks": "blocks:read",
+  // RFC 0044: GET /admin/scans is instance-tier quarantine:read.
+  "/admin/security/scans": "quarantine:read",
+  // shortcut: the server also answers findings:read held on one registry only;
+  // the console checks the instance tier, like the security console's panel.
+  "/admin/security/findings": "findings:read",
+  "/admin/security/access-check": "authz:read",
+  "/admin/security/authorization": "authz:read",
+  "/admin/namespaces/team-namespaces": "owners:read",
+  "/admin/namespaces/beta-channel": "owners:read",
+  "/admin/operations/upstream": "system:read",
+  "/admin/operations/config-reload": "config:read",
+  "/admin/operations/banner": "config:write",
+  "/admin/operations/warming": "cache:warm",
+  "/admin/operations/imports": "cache:warm",
+  "/admin/operations/sbom": "packages:read",
+  "/admin/operations/air-gap": "system:read",
+  "/admin/observability/health": "system:read",
+  // The list reads /admin/stats; one registry's page (a dynamic path) carries
+  // its own `meta.verb` in the router.
+  "/admin/observability/registries": "stats:read",
+  "/admin/observability/audit-log": "audit:read",
+  "/admin/notifications/subscriptions": "system:read",
+  "/admin/notifications/inbound": "system:read",
+};
+
+/** The first page under `prefix` the caller may open, in table order. */
+export function firstAdminPage(can: (verb: string) => boolean, prefix = "/admin/") {
+  return Object.entries(ADMIN_PAGE_VERBS).find(
+    ([path, verb]) => path.startsWith(prefix) && can(verb),
+  )?.[0];
+}
+
 export const ADMIN_SIDEBAR = [
   { to: "/admin/dashboard", label: "adminNav.dashboard", icon: LayoutDashboard },
   { to: "/admin/packages", label: "adminNav.packages", icon: Package },

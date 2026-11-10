@@ -19,6 +19,7 @@ use batlehub_core::{
     ports::{PackageRepository, RecentErrorRecord},
 };
 
+pub mod access_batch;
 pub mod audit_trail;
 pub mod crud;
 pub mod explore;
@@ -313,6 +314,9 @@ pub(super) fn str_to_action(s: &str) -> Result<AccessAction, CoreError> {
 
 pub struct PgPackageRepository {
     pub(super) pool: PgPool,
+    /// Set by [`Self::start_access_batching`]; until then every access event
+    /// is its own statement, which is what the integration tests read back.
+    access_batch: std::sync::OnceLock<access_batch::AccessBatcher>,
 }
 
 /// Connection pool sizing, taken from `DatabaseConfig` (`crates/config/src/schema/server.rs`).
@@ -333,7 +337,24 @@ impl PgPackageRepository {
             .connect(database_url)
             .await
             .db_err()?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            access_batch: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Write access events in batches from now on (TD-0004 §2). The server
+    /// calls [`Self::flush_access_events`] once it stops taking requests.
+    pub fn start_access_batching(&self) {
+        self.access_batch
+            .get_or_init(|| access_batch::AccessBatcher::spawn(self.pool.clone()));
+    }
+
+    /// Return once every access event queued so far is written.
+    pub async fn flush_access_events(&self) {
+        if let Some(b) = self.access_batch.get() {
+            b.flush().await;
+        }
     }
 
     pub async fn run_migrations(&self) -> Result<(), CoreError> {
@@ -349,12 +370,41 @@ impl PgPackageRepository {
     }
 }
 
+/// How long a request waits for queued access events to be written.
+const REQUEST_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[async_trait]
 impl PackageRepository for PgPackageRepository {
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
+        // A full queue gives the event back to be written inline.
+        let event = match self.access_batch.get() {
+            Some(b) => match b.send(event) {
+                Ok(()) => return Ok(()),
+                Err(event) => *event,
+            },
+            None => event,
+        };
         let result = crud::record_access_impl(&self.pool, &event).await;
         batlehub_core::services::audit_stream::emit(&event, result.is_ok());
         result
+    }
+
+    /// The request-path flush (first cache write, pullers) is bounded: a sick
+    /// database must not hold a download behind the writer's retries (review
+    /// of #311). The shutdown flush, the inherent method, still waits.
+    async fn flush_access_events(&self) {
+        if tokio::time::timeout(
+            REQUEST_FLUSH_TIMEOUT,
+            PgPackageRepository::flush_access_events(self),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                timeout_ms = REQUEST_FLUSH_TIMEOUT.as_millis() as u64,
+                "access events not flushed in time; answering without them"
+            );
+        }
     }
 
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError> {

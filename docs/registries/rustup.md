@@ -6,13 +6,13 @@ This is the toolchain, not the crates. `cargo` resolves dependencies against a s
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `rustup` |
 | **Default upstream** | `static.rust-lang.org` |
 | **Modes** | proxy-only |
 | **Addressing** | one package per channel, one version per release, one file per target triple |
-| **Private publish** | ❌ proxy-only |
+| **Private publish** | proxy-only |
 | **Client switch** | `RUSTUP_DIST_SERVER` (and `RUSTUP_UPDATE_ROOT` for rustup's own updates) |
 
 ## Proxy setup

@@ -1606,10 +1606,8 @@ async fn purge_audit_log_requires_admin() {
 
 #[actix_web::test]
 async fn purge_audit_log_returns_200_with_deleted_count() {
-    // `InMemoryPackageRepository` doesn't override `purge_events_before`, so it
-    // falls back to the port's default no-op (`Ok(0)`) — only Postgres actually
-    // purges. This still exercises the handler's query parsing, admin check,
-    // and response shape end to end.
+    // An empty event log, so nothing to delete. This exercises the handler's
+    // query parsing, admin check, and response shape end to end.
     let app = make_app(InMemoryRepo::new()).await;
     // Avoid a literal `+` in the query string (form-urlencoded decoding turns
     // it into a space), so format with a bare `Z` offset instead of `to_rfc3339`.

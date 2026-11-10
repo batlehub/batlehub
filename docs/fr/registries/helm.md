@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: f33b54e665249cfe
+sourceHash: 8d27de5e710701e7
 ---
 
 # Helm
@@ -17,13 +17,13 @@ Les registres de charts OCI (`helm pull oci://…`) ne sont pas un dépôt de ch
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `helm` |
 | **Amont par défaut** | aucun — un registre est un dépôt de charts, et c'est vous qui le nommez |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | un paquet par chart, une version par entrée d'index, le `.tgz` et son `.prov` comme fichiers de cette version |
-| **Publication privée** | ✅ `POST api/charts` de ChartMuseum (`curl`, `helm cm-push`) |
+| **Publication privée** | oui — `POST api/charts` de ChartMuseum (`curl`, `helm cm-push`) |
 | **Bascule côté client** | `helm repo add` |
 
 ## Configuration du proxy
@@ -103,6 +103,8 @@ L'index que sert un registre local est composé à partir de ce qui a été publ
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/helm -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -114,6 +116,8 @@ L'index que sert un registre local est composé à partir de ce qui a été publ
 | `GET` | `/proxy/{registry}/helm/charts/{file}` | A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names. |
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
+
+:::
 
 ## Mode hybride : `hybrid_merge`
 

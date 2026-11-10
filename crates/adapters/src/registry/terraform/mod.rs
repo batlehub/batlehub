@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use serde::Deserialize;
 use tracing as log;
 
@@ -101,14 +102,14 @@ impl TerraformRegistryClient {
         }
 
         if pkg.version == "versions" {
-            return Ok(format!("{base}/v1/{}/versions", pkg.name));
+            return Ok(format!("{base}/v1/{}/versions", encode_path(&pkg.name)));
         }
 
         if is_provider {
             match pkg.artifact.as_deref() {
                 None => {
                     // Provider version metadata (not a standard endpoint; fall back to versions)
-                    Ok(format!("{base}/v1/{}/versions", pkg.name))
+                    Ok(format!("{base}/v1/{}/versions", encode_path(&pkg.name)))
                 }
                 // The checksum manifest and its signature are named *inside*
                 // the download document rather than addressed by a path, so the
@@ -119,7 +120,8 @@ impl TerraformRegistryClient {
                 // is not an offline install.
                 Some("shasums") | Some("shasums.sig") => Ok(format!(
                     "{base}/v1/{}/{}/download/linux/amd64",
-                    pkg.name, pkg.version
+                    encode_path(&pkg.name),
+                    encode_path(&pkg.version)
                 )),
                 Some(platform) => {
                     // platform = "linux/amd64"
@@ -129,17 +131,22 @@ impl TerraformRegistryClient {
                         ))
                     })?;
                     Ok(format!(
-                        "{base}/v1/{}/{}/download/{os}/{arch}",
-                        pkg.name, pkg.version
+                        "{base}/v1/{}/{}/download/{}/{}",
+                        encode_path(&pkg.name),
+                        encode_path(&pkg.version),
+                        encode_path(os),
+                        encode_path(arch)
                     ))
                 }
             }
         } else {
             // module
             match pkg.artifact.as_deref() {
-                Some("download") | None => {
-                    Ok(format!("{base}/v1/{}/{}/download", pkg.name, pkg.version))
-                }
+                Some("download") | None => Ok(format!(
+                    "{base}/v1/{}/{}/download",
+                    encode_path(&pkg.name),
+                    encode_path(&pkg.version)
+                )),
                 Some(other) => Err(CoreError::Registry(format!(
                     "terraform: unknown module artifact '{other}'"
                 ))),

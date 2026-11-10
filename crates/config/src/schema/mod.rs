@@ -869,11 +869,12 @@ impl AppConfig {
                     ),
                 ));
             }
-            let anonymous_reads = reg
-                .rbac
-                .anonymous
-                .iter()
-                .any(|p| p == "releases:read" || p == "*");
+            // Expanded as authz expands it, so `releases:*` counts (TD-0002 §3).
+            let anonymous_reads = batlehub_core::entities::expand_patterns(
+                &reg.rbac.anonymous,
+                batlehub_core::entities::WildcardScope::Legacy,
+            )
+            .is_ok_and(|a| a.contains(&batlehub_core::entities::Action::ReleasesRead));
             if !anonymous_reads {
                 out.push(ConfigWarning::new(
                     warnings::DEVFILE_NOT_ANONYMOUS,

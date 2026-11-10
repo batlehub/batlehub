@@ -43,6 +43,10 @@ pub trait PackageRepository: Send + Sync {
     /// Record an access event (download attempt, block action, etc.).
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError>;
 
+    /// Return once every event [`Self::record_access`] accepted so far is
+    /// written. A repository that writes them inline has nothing to wait for.
+    async fn flush_access_events(&self) {}
+
     /// Get the current administrative status of a package.
     /// Returns `PackageStatus::Available` if the package has never been seen.
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError>;

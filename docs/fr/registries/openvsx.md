@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/openvsx.md
-sourceHash: 753fab8bebc35006
+sourceHash: 69193d7116870008
 ---
 
 # OpenVSX
@@ -14,13 +14,13 @@ l'interroger. Les identifiants d'extension suivent la convention
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `openvsx` |
 | **Amont par défaut** | `open-vsx.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi de VSIX (`PUT …/vsix`) |
+| **Publication privée** | oui — envoi de VSIX (`PUT …/vsix`) |
 | **Coupure réseau** | pas de listing composé hors ligne : une galerie répond à des requêtes |
 | **Signatures** | le registre signe ce qu'il héberge (`[registries.vsx_signing]`), relaie celle de l'amont pour ce dont il fait proxy, et conserve celle attachée à une version republiée |
 
@@ -215,6 +215,8 @@ Ce qui s'installe où, mesuré avec VS Code 1.136.1
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/openvsx -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -238,6 +240,8 @@ Ce qui s'installe où, mesuré avec VS Code 1.136.1
 | `GET` | `/proxy/{registry}/vscode/item` | `GET …/vscode/item?itemName=publisher.name` |
 | `GET` | `/proxy/{registry}/vscode/unpkg/{publisher}/{name}/{version}/{path}` | `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}` |
 <!-- END endpoints -->
+
+:::
 
 ---
 

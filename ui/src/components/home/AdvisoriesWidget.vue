@@ -26,10 +26,10 @@ import { SEVERITY_KEYS } from "@/config/severity";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { severityVariant } from "@/lib/badge-variants";
-import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
+import { packagePath } from "@/config/navigation";
+import HomeSection from "./HomeSection.vue";
 
 const { t } = useI18n();
 const { token } = useAuth();
@@ -48,29 +48,19 @@ const relationLabel = (relation: MyAdvisoryDto["relation"]) =>
 
 const severityLabel = (severity: MyAdvisoryDto["highest_severity"]) =>
   t(SEVERITY_KEYS[severity] ?? SEVERITY_KEYS.unknown);
-
-/** The canonical package URL RFC 0003 settled on. */
-const packageHref = (row: MyAdvisoryDto) =>
-  `/packages/${encodeURIComponent(row.registry)}/${encodeURIComponent(row.name)}`;
 </script>
 
 <template>
-  <section aria-labelledby="advisories-widget-heading">
-    <h2
-      id="advisories-widget-heading"
-      class="font-mono text-xs uppercase tracking-wider text-muted-foreground"
-    >
-      {{ t("advisoriesWidget.title") }}
-    </h2>
-
-    <Skeleton v-if="loading" class="mt-3" :lines="2" />
-    <Alert v-else-if="error" variant="destructive" class="mt-3">{{ error }}</Alert>
-
+  <HomeSection
+    heading-id="advisories-widget-heading"
+    :title="t('advisoriesWidget.title')"
+    :loading="loading"
+    :error="error"
+  >
     <!-- Nothing recorded, because nothing scans. Not the same as "you're clear",
          and the copy must not let a reader hear the second. -->
     <EmptyState
-      v-else-if="!scanningAvailable"
-      class="mt-3"
+      v-if="!scanningAvailable"
       :title="t('advisoriesWidget.noScanningTitle')"
       :description="t('advisoriesWidget.noScanningBody')"
       data-testid="advisories-unknown"
@@ -78,16 +68,18 @@ const packageHref = (row: MyAdvisoryDto) =>
 
     <EmptyState
       v-else-if="!advisories.length"
-      class="mt-3"
       :title="t('advisoriesWidget.clearTitle')"
       :description="t('advisoriesWidget.clearBody', { days: windowDays })"
       data-testid="advisories-clear"
     />
 
-    <ul v-else class="mt-3 divide-y divide-border border border-border">
+    <ul v-else class="divide-y divide-border border border-border">
       <li v-for="row in advisories" :key="`${row.registry}/${row.name}/${row.version}`" class="p-4">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
-          <RouterLink :to="packageHref(row)" class="font-mono text-sm text-primary hover:underline">
+          <RouterLink
+            :to="packagePath(row.registry, row.name)"
+            class="font-mono text-sm text-primary hover:underline"
+          >
             {{ row.name }}<span class="text-muted-foreground">@{{ row.version }}</span>
           </RouterLink>
           <div class="flex items-center gap-2">
@@ -113,5 +105,5 @@ const packageHref = (row: MyAdvisoryDto) =>
         </ul>
       </li>
     </ul>
-  </section>
+  </HomeSection>
 </template>

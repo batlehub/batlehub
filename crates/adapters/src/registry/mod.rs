@@ -4,8 +4,8 @@ pub mod offline;
 pub mod readme_image;
 pub mod ssrf;
 pub use http_client::{
-    apply_upstream_options, apply_upstream_tls, basic_auth_get, cache_control, parse_http_date,
-    percent_encode, to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    apply_upstream_options, apply_upstream_tls, basic_auth_get, cache_control, encode_path,
+    parse_http_date, percent_encode, to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
 };
 pub use readme_image::HttpReadmeImageFetcher;
 
@@ -143,6 +143,11 @@ pub use pypi::PypiRegistryClient;
 pub mod conda;
 #[cfg(feature = "registry-conda")]
 pub use conda::CondaRegistryClient;
+
+#[cfg(feature = "registry-mise-versions")]
+pub mod mise_versions;
+#[cfg(feature = "registry-mise-versions")]
+pub use mise_versions::MiseVersionsRegistryClient;
 
 #[cfg(feature = "registry-nodedist")]
 pub mod nodedist;

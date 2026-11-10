@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nodedist.md
-sourceHash: f91bed3572acdaa5
+sourceHash: 247a8b4c6fef08c6
 ---
 
 # Distributions Node (nvm, fnm, n, mise)
@@ -15,13 +15,13 @@ d'eux.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nodedist` |
 | **Amont par défaut** | `nodejs.org/dist` (io.js demande un second registre pointé vers `iojs.org/dist`) |
 | **Modes** | proxy seul |
 | **Adressage** | un paquet (`node`), une version par publication, un fichier par plateforme |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | hors ligne, `index.tab` et `index.json` sont composés à partir des fichiers de distribution détenus, datés à leur réception et avec `lts` inconnu |
 
 ## Mise en place du proxy
@@ -137,6 +137,8 @@ d'où le serveur le lit.
 
 ## Endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nodedist -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -144,6 +146,8 @@ d'où le serveur le lit.
 | `GET` | `/proxy/{registry}/nodedist/index.json` | The same release table as JSON — what fnm and mise read. |
 | `GET` | `/proxy/{registry}/nodedist/index.tab` | The release table nvm resolves every install through, blocked releases |
 <!-- END endpoints -->
+
+:::
 
 ## Voir aussi
 

@@ -675,6 +675,45 @@ pub async fn config_tier_holds(
         .collect()
 }
 
+/// What one caller holds, for `/me` (RFC 0042 §5.1).
+///
+/// `instance` is the set a control endpoint naming no registry checks;
+/// `registries` the set one naming a registry checks — the same two paths
+/// [`authorize_control`] walks, so the console cannot be told a verb the
+/// server then refuses at either tier. Keyed, absent-on-no-hierarchy and
+/// shadow-blind for [`installable_registries`]' reasons.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EffectiveVerbs {
+    pub instance: std::collections::BTreeSet<Action>,
+    pub registries: std::collections::BTreeMap<String, std::collections::BTreeSet<Action>>,
+}
+
+pub async fn effective_verbs(hot: &HotConfigLock, identity: &Identity) -> EffectiveVerbs {
+    let (instance, grants) = {
+        let hot = hot.read().await;
+        (hot.instance.clone(), hot.grants.clone())
+    };
+    let subject = crate::entities::Subject::Identity(identity.clone());
+    let prefix: Vec<crate::entities::Node> = instance.iter().map(|n| (**n).clone()).collect();
+    let registries = grants
+        .iter()
+        .map(|(name, registry)| {
+            let mut path = prefix.clone();
+            path.push(registry.registry.clone());
+            let held = crate::entities::resolve(&path, &subject)
+                .actions()
+                .collect();
+            (name.clone(), held)
+        })
+        .collect();
+    EffectiveVerbs {
+        instance: crate::entities::resolve(&prefix, &subject)
+            .actions()
+            .collect(),
+        registries,
+    }
+}
+
 /// The first node on the path whose shadow is still in force today.
 fn active_shadow(path: &[crate::entities::Node]) -> Option<&crate::entities::Node> {
     let today = chrono::Utc::now().date_naive();
@@ -1794,6 +1833,40 @@ mod instance_tier_tests {
         )
         .await
         .is_err());
+    }
+
+    // ── effective_verbs (RFC 0042 §5.1) ──────────────────────────────────────
+
+    /// An instance grant shows at the instance tier and on every registry, for
+    /// its subject only; and agrees with `authorize_control` on both tiers.
+    #[tokio::test]
+    async fn effective_verbs_agree_with_authorize_control() {
+        let lock = hot(
+            Some(node(
+                Tier::Instance,
+                "instance",
+                Role::User,
+                &[Action::FlagsRead],
+            )),
+            Some(irrelevant_registry()),
+        );
+        let user = identity(Role::User);
+        let got = effective_verbs(&lock, &user).await;
+        assert!(got.instance.contains(&Action::FlagsRead));
+        assert!(got.registries["reg"].contains(&Action::FlagsRead));
+        assert!(authorize_control(&lock, None, &user, Action::FlagsRead)
+            .await
+            .is_ok());
+        assert!(!got.instance.contains(&Action::ConfigRead));
+        assert!(authorize_control(&lock, None, &user, Action::ConfigRead)
+            .await
+            .is_err());
+        let anon = effective_verbs(&lock, &Identity::anonymous()).await;
+        assert!(anon.instance.is_empty());
+        assert!(effective_verbs(&hot(None, None), &user)
+            .await
+            .registries
+            .is_empty());
     }
 
     // ── installable_registries (RFC 0038 §4.4) ───────────────────────────────

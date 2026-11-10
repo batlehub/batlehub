@@ -26,6 +26,7 @@
 //!
 //! No redirect chain: the tree serves its own bytes.
 
+use crate::registry::encode_path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -102,9 +103,18 @@ impl RustupRegistryClient {
     fn manifest_url(&self, channel: &str) -> String {
         match channel.split_once('/') {
             Some((date, name)) => {
-                format!("{}/dist/{date}/channel-rust-{name}.toml", self.base_url)
+                format!(
+                    "{}/dist/{}/channel-rust-{}.toml",
+                    self.base_url,
+                    encode_path(date),
+                    encode_path(name)
+                )
             }
-            None => format!("{}/dist/channel-rust-{channel}.toml", self.base_url),
+            None => format!(
+                "{}/dist/channel-rust-{}.toml",
+                self.base_url,
+                encode_path(channel)
+            ),
         }
     }
 
@@ -165,12 +175,19 @@ impl RustupRegistryClient {
         };
         if pkg.name == RUSTUP_PACKAGE {
             return Ok(format!(
-                "{}/rustup/archive/{}/{artifact}",
-                self.base_url, pkg.version
+                "{}/rustup/archive/{}/{}",
+                self.base_url,
+                encode_path(&pkg.version),
+                encode_path(artifact)
             ));
         }
         let date = self.date_for(&pkg.version).await?;
-        Ok(format!("{}/dist/{date}/{artifact}", self.base_url))
+        Ok(format!(
+            "{}/dist/{}/{}",
+            self.base_url,
+            encode_path(&date),
+            encode_path(artifact)
+        ))
     }
 
     /// Whether an artifact exists upstream, without reading a 200 MB tarball to

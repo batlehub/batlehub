@@ -85,7 +85,8 @@ first use after an upgrade — is not "new".
 
 Configuration reloads join the stream as `config_applied` and
 `config_rejected`, the latter for a candidate the file watcher or the console
-editor refused.
+editor refused. Both carry the admin who sent the candidate in `user.id`; a
+candidate from the file watcher carries `file-watcher`.
 
 ## The shipped rules
 

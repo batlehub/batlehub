@@ -23,23 +23,29 @@
 // La barre de navigation liste les points d'entrée de chaque espace, en clair.
 // Le détail vit dans la barre latérale, de sorte que les deux ne répètent pas la
 // même liste. Pas d'entrée « Accueil » : le logo à gauche y mène déjà.
+//
+// Cinq entrées tiennent dès 1200 px, icônes comprises : c'est le seuil de
+// repli de `custom.css`, mesuré sur les deux langues. Un libellé ajouté ici se
+// remesure — à sept entrées et 87 caractères, la nav sortait de l'écran
+// jusqu'à 1650 px et emportait le bouton d'apparence avec elle.
 export const nav = [
+  // Cinq entrées, une par espace : le serveur, l'usage, les registres,
+  // l'exploitation et le projet. Les sept entrées à plat (Installer, Générateur
+  // et Admin à côté des espaces qui les contiennent) chargeaient la barre et
+  // forçaient le menu replié là où cinq tiennent. Le générateur reste à un clic,
+  // à côté d'Installer : qui vient de décider d'installer a besoin d'un
+  // `config.toml` juste après.
   {
-    text: "Installer",
-    link: "/fr/guide/installation",
-    activeMatch: "/fr/guide/installation",
+    text: "Serveur",
+    items: [
+      { text: "Installer", link: "/fr/guide/installation" },
+      { text: "Générateur de config", link: "/fr/guide/config-generator" },
+      { text: "Administration", link: "/fr/guide/administration" },
+    ],
+    activeMatch: "^/fr/guide/",
   },
-  // La seule page qui est un outil plutôt qu'un document. Elle est dans la barre
-  // de navigation parce qu'un visiteur qui a décidé d'installer a besoin d'un
-  // `config.toml` juste après, et que le générer vaut mieux que lire une
-  // référence de 12 000 mots pour l'écrire à la main.
   {
-    text: "Générateur de config",
-    link: "/fr/guide/config-generator",
-    activeMatch: "/fr/guide/config-generator",
-  },
-  {
-    text: "Guide utilisateur",
+    text: "Utiliser",
     link: "/fr/use/",
     activeMatch: "/fr/use/",
   },
@@ -49,19 +55,13 @@ export const nav = [
     activeMatch: "/fr/registries/",
   },
   {
-    text: "Administration",
-    link: "/fr/guide/administration",
-    activeMatch: "/fr/guide/admin",
-  },
-  {
     text: "Exploitation",
     link: "/fr/operations/",
     activeMatch: "/fr/operations/",
   },
   // Trois espaces qui parlent du projet plutôt que de son exploitation, et qui
-  // restent en anglais. Un menu déroulant plutôt que trois entrées de plus :
-  // personne n'arrive sur la documentation d'un proxy de paquets en cherchant
-  // l'index des RFC.
+  // restent en anglais. Personne n'arrive sur la documentation d'un proxy de
+  // paquets en cherchant l'index des RFC.
   {
     text: "Projet",
     items: [
@@ -142,6 +142,7 @@ export const sidebar = {
       text: "Chaînes d'outils",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
+        { text: "Hôte de versions de mise", link: "/fr/registries/mise-versions" },
         { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
         { text: "Registre devfile (Che, odo)", link: "/fr/registries/devfile" },
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
@@ -177,7 +178,7 @@ export const sidebar = {
       items: [
         { text: "Ce que fait BatleHub", link: "/fr/guide/features" },
         { text: "Installation", link: "/fr/guide/installation" },
-        { text: "Configuration", link: "/fr/guide/configuration" },
+        { text: "Référence de configuration", link: "/fr/guide/configuration" },
         {
           text: "Exemples commentés",
           link: "/fr/guide/configuration-examples",
@@ -189,7 +190,7 @@ export const sidebar = {
       text: "Administration",
       items: [
         { text: "Vue d'ensemble", link: "/fr/guide/administration" },
-        { text: "Configuration", link: "/fr/guide/admin-config" },
+        { text: "Configuration du serveur", link: "/fr/guide/admin-config" },
         { text: "Stockage et santé", link: "/fr/guide/admin-storage-health" },
         { text: "Politiques et paquets", link: "/fr/guide/admin-policies" },
         { text: "Accès et audit", link: "/fr/guide/admin-access" },

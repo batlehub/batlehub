@@ -10,35 +10,27 @@ BatleHub sits between your build tools and upstream registries. This page explai
 
 Every request to `/proxy/{registry}/...` passes through this pipeline:
 
+```mermaid
+flowchart TD
+  C[Client] --> A[AuthMiddleware]
+  A --> R[RateLimitMiddleware]
+  R -->|bucket exhausted| E429[429]
+  R --> B[RBAC check]
+  B -->|denied| E403a[403]
+  B --> U[Rules check]
+  U -->|a rule fires| E403b[403]
+  U --> M{Metadata cache}
+  M -->|HIT| S{Artifact storage}
+  M -->|MISS| S
+  S -->|HIT or MISS| D[Stream to client]
 ```
-Client
-  │
-  ▼
-AuthMiddleware          ← validates bearer token / OIDC / Kubernetes SA
-  │  sets Identity (user_id, role, groups)
-  ▼
-RateLimitMiddleware     ← checks + increments counters in the cache backend
-  │  429 if any bucket exhausted (block mode)
-  ▼
-RBAC check              ← validates registry permissions for the caller's role
-  │  403 if permission denied
-  ▼
-Rules check             ← release age gate, deny_latest, require_signed_release
-  │  403 if a rule fires
-  ▼
-Metadata cache lookup   ← checked in the cache backend (memory / postgres / redis)
-  │
-  ├─ HIT:  proceed with cached metadata
-  │
-  └─ MISS: fetch from upstream, store in cache backend with TTL
-              │
-              ▼
-          Artifact storage lookup   ← checked in blob storage (filesystem / S3)
-            │
-            ├─ HIT:  stream artifact from storage to client
-            │
-            └─ MISS: fetch from upstream, store in blob storage, stream to client
-```
+
+- **AuthMiddleware** validates the bearer token / OIDC / Kubernetes SA and sets the Identity (`user_id`, role, groups).
+- **RateLimitMiddleware** checks and increments its counters in the cache backend; an exhausted bucket answers `429` in block mode.
+- **RBAC check** validates the registry permissions for the caller's role.
+- **Rules check** runs the release-age gate, `deny_latest` and `require_signed_release`.
+- **Metadata cache** lives in the cache backend (memory / postgres / redis). A HIT proceeds with the cached metadata; a MISS fetches from upstream and stores it with a TTL.
+- **Artifact storage** lives in blob storage (filesystem / S3). A HIT streams from storage; a MISS fetches from upstream, stores the blob and streams it to the client.
 
 ### Two layers of state
 

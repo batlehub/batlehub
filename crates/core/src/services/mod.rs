@@ -23,6 +23,7 @@ pub mod integrity;
 pub mod listing_synthesis;
 pub mod local_registry;
 pub mod metrics;
+pub mod mise_versions;
 pub mod nix;
 pub mod nodedist;
 pub mod openpgp;

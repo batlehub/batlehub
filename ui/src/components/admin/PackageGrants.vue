@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
+import { AsyncState } from "@/components/ui/async-state";
 import { Dialog } from "@/components/ui/dialog";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Announcer } from "@/components/ui/announcer";
@@ -147,7 +148,7 @@ async function confirmRemove() {
 <template>
   <Card>
     <CardHeader class="pb-3">
-      <CardTitle class="text-base">{{ t("packageGrants.whoCanReachThis") }}</CardTitle>
+      <CardTitle>{{ t("packageGrants.whoCanReachThis") }}</CardTitle>
       <CardDescription>{{ t("packageGrants.grantsOnlyWiden") }}</CardDescription>
     </CardHeader>
     <CardContent class="space-y-4">
@@ -161,18 +162,15 @@ async function confirmRemove() {
         <span class="pl-2">{{ w }}</span>
       </Alert>
 
-      <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
-      <div v-else-if="loading" class="text-sm text-muted-foreground">
-        {{ t("common.loading") }}
-      </div>
-
-      <template v-else>
-        <Table v-if="packageGrants.length">
+      <AsyncState :loading="loading" :error="error" :on-retry="reload">
+        <Table v-if="packageGrants.length" :label="t('packageGrants.whoCanReachThis')">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("packageGrants.subject") }}</TableHead>
               <TableHead>{{ t("packageGrants.actions") }}</TableHead>
-              <TableHead class="w-24" />
+              <TableHead class="w-24">
+                <span class="sr-only">{{ t("common.actions") }}</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -243,7 +241,7 @@ async function confirmRemove() {
             {{ t("packageGrants.versionGrants") }}
           </p>
           <p class="text-xs text-muted-foreground">{{ t("packageGrants.versionGrantsCli") }}</p>
-          <Table>
+          <Table :label="t('packageGrants.versionGrants')">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t("packageGrants.version") }}</TableHead>
@@ -268,19 +266,19 @@ async function confirmRemove() {
             </TableBody>
           </Table>
         </div>
-      </template>
+      </AsyncState>
     </CardContent>
 
     <Dialog :open="showAdd" @update:open="showAdd = $event">
       <template #title>{{ t("packageGrants.addGrant") }}</template>
       <template #description>{{ t("packageGrants.dialogDescription") }}</template>
       <div class="space-y-4">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="grant-subject">{{ t("packageGrants.subject") }}</Label>
           <Input id="grant-subject" v-model="form.subject" placeholder="group:oidc1:eng" />
           <p class="text-xs text-muted-foreground">{{ t("packageGrants.subjectHint") }}</p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="grant-actions">{{ t("packageGrants.actions") }}</Label>
           <Input id="grant-actions" v-model="form.actions" placeholder="releases:read" />
           <p class="text-xs text-muted-foreground">{{ t("packageGrants.actionsHint") }}</p>

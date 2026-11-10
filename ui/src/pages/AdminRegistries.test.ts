@@ -5,6 +5,12 @@ const { adminStatsMock } = vi.hoisted(() => ({ adminStatsMock: vi.fn() }));
 vi.mock("@/client/sdk.gen", () => ({ adminStats: adminStatsMock }));
 
 import AdminRegistries from "./AdminRegistries.vue";
+import { useAuth } from "@/composables/useAuth";
+
+/** RFC 0042: the registry page asks system:read; the list only stats:read. */
+const holdVerbs = (verbs: string[]) => {
+  useAuth().identity.value = { verbs, registries: {} } as never;
+};
 
 const row = (registry: string, over: Record<string, unknown> = {}) => ({
   registry,
@@ -31,7 +37,10 @@ async function mountPage() {
 }
 
 describe("AdminRegistries", () => {
-  beforeEach(() => adminStatsMock.mockReset());
+  beforeEach(() => {
+    adminStatsMock.mockReset();
+    holdVerbs(["stats:read", "system:read"]);
+  });
 
   it("links each registry to its page, with its hit rate and upstream state", async () => {
     adminStatsMock.mockResolvedValue({
@@ -50,6 +59,11 @@ describe("AdminRegistries", () => {
     expect(w.text()).toContain("90.0%");
     expect(w.text()).toContain("degraded");
     expect(w.text()).toContain("—");
+    // Without system:read the name is text, not a link the router would refuse.
+    holdVerbs(["stats:read"]);
+    await w.vm.$nextTick();
+    expect(w.findAll("a[data-to]")).toHaveLength(0);
+    expect(w.text()).toContain("npm-q");
   });
 
   it("says when nothing is configured", async () => {

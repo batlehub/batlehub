@@ -25,9 +25,11 @@ const props = defineProps<{
   status?: ScanStatusDto | null;
   /** The page's status batch failed. */
   unavailable: boolean;
-  /** `gates:exempt`; an admin also always holds `quarantine:read`, so for
-      them an absent status can only mean the registry scans nothing. */
-  isAdmin: boolean;
+  /** `gates:exempt` on this registry (RFC 0042 §4.3): the rescan button. */
+  canRescan: boolean;
+  /** `quarantine:read` at the instance tier: for such a caller an absent
+      status can only mean the registry scans nothing. */
+  canReadQuarantine: boolean;
   /** Why the poll stopped, if it did. */
   pollStopped: PollStop | null;
 }>();
@@ -51,7 +53,7 @@ const detailLine = computed(() => {
   return "";
 });
 
-const noScanning = computed(() => props.isAdmin && !props.status && !props.unavailable);
+const noScanning = computed(() => props.canReadQuarantine && !props.status && !props.unavailable);
 </script>
 
 <template>
@@ -91,7 +93,7 @@ const noScanning = computed(() => props.isAdmin && !props.status && !props.unava
       :registry="registry"
       :name="name"
       :version="version"
-      :can-rescan="isAdmin"
+      :can-rescan="canRescan"
     />
 
     <slot />

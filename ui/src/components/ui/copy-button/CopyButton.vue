@@ -3,8 +3,8 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
 
-type ButtonVariant = "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
-type ButtonSize = "default" | "sm" | "lg" | "icon";
+type ButtonVariant = "default" | "destructive" | "outline" | "ghost";
+type ButtonSize = "default" | "sm" | "icon";
 
 const props = withDefaults(
   defineProps<{
@@ -36,7 +36,13 @@ const emit = defineEmits<{ copied: [] }>();
 const copied = ref(false);
 
 async function copy() {
-  await navigator.clipboard.writeText(props.text);
+  try {
+    await navigator.clipboard.writeText(props.text);
+  } catch {
+    // Refused clipboard (no permission, plain-HTTP homelab): the text is on
+    // screen and selectable, so stay silent rather than reject unhandled.
+    return;
+  }
   copied.value = true;
   emit("copied");
   setTimeout(() => {

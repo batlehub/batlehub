@@ -2062,6 +2062,74 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "mise-versions",
+    label: "mise versions host",
+    fileHint: "mise.toml",
+    description:
+      `mise's versions host (<code>mise-versions.jdx.dev</code>): the version lists mise ` +
+      `reads for a registry tool <em>before</em> any backend's own. Served through the ` +
+      `block list (and the age gate, if the registry has one), so <code>latest</code> ` +
+      `never lands on a version this instance refuses; the install beacon is answered ` +
+      `here and sent nowhere. The bytes still come from the tool's own registry. ` +
+      `Proxy-only.`,
+    snippets: [
+      {
+        key: "mise-versions-mise",
+        label: "mise url_replacements",
+        lang: "toml",
+        template: (ctx) => {
+          const lines: string[] = [];
+          if (ctx.isAuthenticated) {
+            lines.push(
+              `# Authentication: mise reads ~/.netrc for HTTP Basic Auth`,
+              ...netrcStanzas([hostOf(ctx.registryUrl)], ctx),
+              ``,
+            );
+          }
+          lines.push(
+            `# First in [settings.url_replacements]: mise applies the first rule that`,
+            `# matches. Keep the GitHub rules in the same table — with them, mise skips`,
+            `# the versions host's GitHub mirror, which this instance refuses (503).`,
+            `[settings.url_replacements]`,
+            String.raw`"regex:^https://mise-versions\\.jdx\\.dev/(.+)" = "${ctx.registryUrl}/mise-versions/$1"`,
+            ``,
+            `# mise ls-remote jq   # reads data/jq.toml through the proxy, filtered`,
+          );
+          return lines.join("\n");
+        },
+        note:
+          `mise asks this host only for a tool whose backend is the registry default ` +
+          `(<code>jq</code>, <code>node</code>), never for <code>github:owner/repo</code>. ` +
+          `<code>batlehub-cli setup apply --only mise</code> writes this rule for you.`,
+      },
+      {
+        key: "mise-versions-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name = "${ctx.registryName}"`,
+            `type = "mise-versions"`,
+            `mode = "proxy"                                  # the only mode: nobody publishes here`,
+            `upstreams = ["https://mise-versions.jdx.dev"]   # the default`,
+            ``,
+            `[registries.rbac]`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# Optional: hide versions younger than a week from the list, so latest`,
+            `# lands on one the backend registry's own gate lets through.`,
+            `# [[registries.rules]]`,
+            `# kind = "release_age_gate"`,
+            `# min_age_secs = 604800`,
+          ].join("\n"),
+        note:
+          `A block here hides a version from mise's list; block the same release on the ` +
+          `tool's own registry too, which is the one that refuses the download.`,
+      },
+    ],
+  },
+  {
     id: "nodedist",
     label: "Node (nvm, fnm, n, mise)",
     fileHint: ".nvmrc",

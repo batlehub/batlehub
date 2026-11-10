@@ -156,6 +156,8 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         // rustup prints the status and its reason phrase; text is what a
         // person sees when they curl the same URL.
         | RegistryKind::Rustup
+        // mise logs the status of a failed version list and falls back.
+        | RegistryKind::MiseVersions
         // Nix never reads the body of a failed substituter request:
         // `HttpBinaryCacheStore::getFile` maps 404/410 to
         // `FileTransfer::NotFound` and 403 to `Forbidden` from the *status*,
@@ -461,8 +463,9 @@ pub struct VerdictResponse {
     /// §4.2). The same field the lists carry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_status: Option<ScanStatusDto>,
-    /// When the version is looked at again; only with `system:read` at the
-    /// instance tier (RFC 0044 §7.2).
+    /// When the version is looked at again; only with `quarantine:read` at
+    /// the instance tier, the verb RFC 0042 gives the security reads (RFC 0044
+    /// §7.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_rescan: Option<batlehub_core::services::scan_status::NextRescan>,
 }
@@ -568,31 +571,34 @@ pub async fn get_verdict(
         verdict.findings.clear();
     }
     let (statuses, _) = scan_status_for(&svc.hot, &identity.0, std::slice::from_ref(&pkg)).await;
-    let next_rescan = if authz::authorize_control(&svc.hot, None, &identity.0, Action::SystemRead)
-        .await
-        .is_ok()
-    {
-        let interval = exposure.as_ref().and_then(|e| e.sbom_recheck_interval);
-        // A failed read drops the SBOM clock, not the answer.
-        let sbom_last_run = match (&advisories, interval) {
-            (Some(repo), Some(_)) => repo
-                .list_scan_state()
-                .await
-                .inspect_err(|e| tracing::warn!(error = %e, "next_rescan: scan state unreadable"))
-                .ok()
-                .and_then(|rows| rows.into_iter().find(|r| r.registry == registry))
-                .map(|r| r.last_scan_at),
-            _ => None,
+    let next_rescan =
+        if authz::authorize_control(&svc.hot, None, &identity.0, Action::QuarantineRead)
+            .await
+            .is_ok()
+        {
+            let interval = exposure.as_ref().and_then(|e| e.sbom_recheck_interval);
+            // A failed read drops the SBOM clock, not the answer.
+            let sbom_last_run = match (&advisories, interval) {
+                (Some(repo), Some(_)) => repo
+                    .list_scan_state()
+                    .await
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "next_rescan: scan state unreadable"),
+                    )
+                    .ok()
+                    .and_then(|rows| rows.into_iter().find(|r| r.registry == registry))
+                    .map(|r| r.last_scan_at),
+                _ => None,
+            };
+            Some(batlehub_core::services::scan_status::next_rescan(
+                &verdict,
+                policy.rescan_interval,
+                sbom_last_run,
+                interval,
+            ))
+        } else {
+            None
         };
-        Some(batlehub_core::services::scan_status::next_rescan(
-            &verdict,
-            policy.rescan_interval,
-            sbom_last_run,
-            interval,
-        ))
-    } else {
-        None
-    };
     Ok(web::Json(VerdictResponse {
         verdict,
         findings_withheld,
@@ -886,9 +892,12 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
     }
 }
 
-/// The verdicts of a registry, by state. `system:read`. Findings are
-/// included: the reader is an administrator, and the listing exists to
-/// answer "what is held, and why" in one page.
+/// The verdicts of a registry, by state. `quarantine:read` at the instance
+/// tier (RFC 0042 decision 8): the listing names every held coordinate of the
+/// registry, private packages included, so the per-registry `quarantine:read`
+/// every user holds is not enough. Findings need `findings:read` there too,
+/// and are emptied without it. Each row is then re-checked at its registry
+/// and namespace, so a seal cuts the listing as it cuts the per-version GET.
 #[utoipa::path(
     get,
     path = "/api/v1/admin/verdicts",
@@ -897,7 +906,7 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
     responses(
         (status = 200, description = "The verdicts, newest first per state", body = VerdictListResponse),
         (status = 400, description = "An unknown `state`"),
-        (status = 403, description = "`system:read` required"),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -908,13 +917,11 @@ pub async fn list_verdicts(
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
 ) -> Result<HttpResponse, AppError> {
-    crate::handlers::back_office::require_verb(
-        &identity,
-        Action::SystemRead,
-        Some(&query.registry),
-        &svc.hot,
-    )
-    .await?;
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
+        .await?;
+    let with_findings = authz::authorize_control(&svc.hot, None, &identity.0, Action::FindingsRead)
+        .await
+        .is_ok();
     let verdicts = {
         let hot = svc.hot.read().await;
         let Some(policy) = hot.security.get(&query.registry).cloned() else {
@@ -940,10 +947,43 @@ pub async fn list_verdicts(
                 .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy)),
         );
     }
+    let items = sealed_out(&svc.hot, &identity.0, items, with_findings).await;
     Ok(HttpResponse::Ok().json(VerdictListResponse {
         registry: query.registry.clone(),
         items,
     }))
+}
+
+/// Drops the verdicts the caller may not learn of at their own registry and
+/// namespace, and their findings where `findings:read` does not reach. The
+/// instance-tier check alone ignores a seal below it (a sealed namespace or
+/// registry drops the inherited grant), which `hold_visibility` honours on
+/// the per-version GET.
+async fn sealed_out(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    identity: &Identity,
+    items: Vec<Verdict>,
+    with_findings: bool,
+) -> Vec<Verdict> {
+    let coords: Vec<PackageId> = items.iter().map(|v| v.package.clone()).collect();
+    let holds = authz::config_tier_holds(
+        hot,
+        identity,
+        &coords,
+        &[Action::QuarantineRead, Action::FindingsRead],
+    )
+    .await;
+    items
+        .into_iter()
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(mut v, h)| {
+            if !(with_findings && h.get(1).copied().unwrap_or(false)) {
+                v.findings.clear();
+            }
+            v
+        })
+        .collect()
 }
 
 // ── the Scans page (RFC 0044 phase 2) ────────────────────────────────────────
@@ -996,17 +1036,20 @@ pub struct ScanJobRow {
 /// A page of `/admin/scans`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ScanQueuePage {
+    /// At most `per_page`, fewer when a namespace seal withheld rows.
     pub items: Vec<ScanJobRow>,
-    /// Matching rows across every page.
+    /// Matching rows inside the caller's registries across every page,
+    /// counted before the namespace check: an upper bound.
     pub total: u64,
     pub page: u64,
     pub per_page: u64,
 }
 
-/// The scan queue and its failures (RFC 0044 §4.4). `system:read` at the
-/// instance tier; then rows only from registries where the caller holds
-/// `quarantine:read`, and `last_error` only with `findings:read` there, so
-/// `system:read` alone names no held version (T16).
+/// The scan queue and its failures (RFC 0044 §4.4). `quarantine:read` at the
+/// instance tier, as RFC 0042's verdict listing (its decision 8); then rows
+/// only from registries where the caller holds `quarantine:read`, each row
+/// re-checked at its namespace so a seal cuts the queue as it cuts the
+/// per-version GET, and `last_error` only with `findings:read` (T16).
 #[utoipa::path(
     get,
     path = "/api/v1/admin/scans",
@@ -1015,7 +1058,7 @@ pub struct ScanQueuePage {
     responses(
         (status = 200, description = "One page of scan jobs", body = ScanQueuePage),
         (status = 400, description = "An unknown `state`, or `per_page` over 200"),
-        (status = 403, description = "`system:read` required"),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
     ),
     security(("bearer_token" = [])),
 )]
@@ -1026,7 +1069,7 @@ pub async fn list_scans(
     svc: web::Data<Arc<ProxyService>>,
 ) -> Result<HttpResponse, AppError> {
     use batlehub_core::entities::{ScanJobFilter, ScanState};
-    crate::handlers::back_office::require_verb(&identity, Action::SystemRead, None, &svc.hot)
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
         .await?;
     let filter = match query.state.as_deref().map(str::trim) {
         None | Some("") => ScanJobFilter::Open,
@@ -1083,13 +1126,19 @@ pub async fn list_scans(
         .await
         .map_err(AppError::from)?;
     let coords: Vec<PackageId> = jobs.iter().map(|j| j.package.clone()).collect();
-    let rescan =
-        authz::config_tier_holds(&svc.hot, &identity.0, &coords, &[Action::GatesExempt]).await;
+    let holds = authz::config_tier_holds(
+        &svc.hot,
+        &identity.0,
+        &coords,
+        &[Action::QuarantineRead, Action::GatesExempt],
+    )
+    .await;
     let now = chrono::Utc::now();
     let items = jobs
         .into_iter()
-        .zip(rescan)
-        .map(|(j, may_rescan)| {
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(j, h)| {
             let failed = j.completed_at.is_some();
             let state = if failed {
                 ScanState::Failed
@@ -1118,7 +1167,7 @@ pub async fn list_scans(
                 deferred_since: j.deferred_since,
                 last_error: error.filter(|_| shown).map(redact_error),
                 error_withheld: error.is_some() && !shown,
-                can_rescan: may_rescan.first().copied().unwrap_or(false),
+                can_rescan: h.get(1).copied().unwrap_or(false),
                 registry: j.package.registry,
                 name: j.package.name,
                 version: j.package.version,
@@ -1346,6 +1395,140 @@ pub async fn list_findings(
     }))
 }
 
+/// How many verdicts a registry holds in each state.
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct VerdictCounts {
+    pub allowed: u64,
+    pub warned: u64,
+    pub quarantined: u64,
+    pub denied: u64,
+}
+
+/// A recently held version, as the summary names it: the coordinate, the
+/// state and its reason codes — never the findings, which stay behind
+/// `findings:read` in the per-registry listing (RFC 0042 §4.3).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HeldVersion {
+    pub name: String,
+    pub version: String,
+    pub state: VerdictState,
+    pub reason_codes: Vec<String>,
+    pub evaluated_at: chrono::DateTime<chrono::Utc>,
+    pub available_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// One registry with a `[security]` profile, summarised.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RegistryVerdictSummary {
+    pub registry: String,
+    pub counts: VerdictCounts,
+    /// Denied and quarantined versions, newest evaluation first, at most 10.
+    pub recent: Vec<HeldVersion>,
+}
+
+/// The security console's summary (RFC 0042 §5.2).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VerdictSummaryResponse {
+    pub registries: Vec<RegistryVerdictSummary>,
+}
+
+const RECENT_HOLDS: usize = 10;
+
+/// Verdict counts per state and recent holds, across every registry with a
+/// `[security]` profile. `quarantine:read` at the instance tier, as the
+/// listing (RFC 0042 decision 8).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/verdicts/summary",
+    tag = "security",
+    responses(
+        (status = 200, description = "Counts and recent holds per registry", body = VerdictSummaryResponse),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
+        (status = 404, description = "No verdict store in this process"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/verdicts/summary")]
+pub async fn verdict_summary(
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
+        .await?;
+    let (verdicts, mut names) = {
+        let hot = svc.hot.read().await;
+        let names: Vec<String> = hot.security.keys().cloned().collect();
+        (hot.verdicts.clone(), names)
+    };
+    let Some(verdicts) = verdicts else {
+        return Err(AppError::not_found("no verdict store in this process"));
+    };
+    names.sort();
+    let counted = verdicts
+        .count_by_registry_and_state()
+        .await
+        .map_err(AppError::from)?;
+    let mut registries = Vec::with_capacity(names.len());
+    for registry in names {
+        // A sealed registry node drops the instance grant: not summarised.
+        // shortcut: the counts still include versions under a sealed
+        // namespace (numbers, no coordinate); count per namespace if a seal
+        // ever has to hide how many versions it holds.
+        if authz::authorize_control(
+            &svc.hot,
+            Some(&registry),
+            &identity.0,
+            Action::QuarantineRead,
+        )
+        .await
+        .is_err()
+        {
+            continue;
+        }
+        let mut counts = VerdictCounts::default();
+        for (_, state, n) in counted.iter().filter(|(r, _, _)| *r == registry) {
+            *match state {
+                VerdictState::Allowed => &mut counts.allowed,
+                VerdictState::Warned => &mut counts.warned,
+                VerdictState::Quarantined => &mut counts.quarantined,
+                VerdictState::Denied => &mut counts.denied,
+            } += n;
+        }
+        let mut recent = Vec::new();
+        for state in [VerdictState::Denied, VerdictState::Quarantined] {
+            recent.extend(
+                verdicts
+                    .list_by_state(&registry, state, RECENT_HOLDS as u64)
+                    .await
+                    .map_err(AppError::from)?,
+            );
+        }
+        let mut recent = sealed_out(&svc.hot, &identity.0, recent, false).await;
+        recent.sort_by_key(|v| std::cmp::Reverse(v.evaluated_at));
+        recent.truncate(RECENT_HOLDS);
+        registries.push(RegistryVerdictSummary {
+            registry,
+            counts,
+            recent: recent
+                .into_iter()
+                .map(|v| HeldVersion {
+                    name: v.package.name,
+                    version: v.package.version,
+                    state: v.state,
+                    reason_codes: v
+                        .reason_codes
+                        .iter()
+                        .map(|c| c.as_str().to_owned())
+                        .collect(),
+                    evaluated_at: v.evaluated_at,
+                    available_at: v.available_at,
+                })
+                .collect(),
+        });
+    }
+    Ok(HttpResponse::Ok().json(VerdictSummaryResponse { registries }))
+}
+
 /// A bulk rescan or a backfill.
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct BulkScanRequest {
@@ -1368,7 +1551,7 @@ pub struct BulkScanResponse {
 }
 
 /// Queue a `Rescan` for every verdict of a registry, or every verdict in
-/// one state (RFC 0018 §4.2 *CLI*). `system:write`.
+/// one state (RFC 0018 §4.2 *CLI*). `scans:run` (RFC 0042).
 #[utoipa::path(
     post,
     path = "/api/v1/admin/verdicts/rescan",
@@ -1377,7 +1560,7 @@ pub struct BulkScanResponse {
     responses(
         (status = 202, description = "The rescans are queued", body = BulkScanResponse),
         (status = 400, description = "An unknown `state`"),
-        (status = 403, description = "`system:write` required"),
+        (status = 403, description = "`scans:run` required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -1391,7 +1574,7 @@ pub async fn bulk_rescan(
     let req = body.into_inner();
     crate::handlers::back_office::require_verb(
         &identity,
-        Action::SystemWrite,
+        Action::ScansRun,
         Some(&req.registry),
         &svc.hot,
     )
@@ -1443,7 +1626,7 @@ pub async fn bulk_rescan(
 /// Queue a `Backfill` — the lowest priority — for every cached version of
 /// a registry (RFC 0018 §4.2 *CLI*: `batlehub verdicts backfill`), so an
 /// estate that turned `[security]` on with a warm cache judges what it
-/// already holds without a user waiting on any of it. `system:write`.
+/// already holds without a user waiting on any of it. `scans:run` (RFC 0042).
 #[utoipa::path(
     post,
     path = "/api/v1/admin/verdicts/backfill",
@@ -1451,7 +1634,7 @@ pub async fn bulk_rescan(
     request_body = BulkScanRequest,
     responses(
         (status = 202, description = "The backfill is queued", body = BulkScanResponse),
-        (status = 403, description = "`system:write` required"),
+        (status = 403, description = "`scans:run` required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -1466,7 +1649,7 @@ pub async fn backfill_verdicts(
     let req = body.into_inner();
     crate::handlers::back_office::require_verb(
         &identity,
-        Action::SystemWrite,
+        Action::ScansRun,
         Some(&req.registry),
         &svc.hot,
     )

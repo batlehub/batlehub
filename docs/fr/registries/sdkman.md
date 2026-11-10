@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/sdkman.md
-sourceHash: e5c7b93519002f07
+sourceHash: 25511e1df13a03c4
 ---
 
 # SDKMAN
@@ -16,13 +16,13 @@ JDK de 200 Mo est mis en cache ici plutôt que renvoyé ailleurs.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `sdkman` |
 | **Amont par défaut** | `api.sdkman.io/2` (API des candidats) · `broker.sdkman.io` (`broker_url`) |
 | **Modes** | proxy seul |
 | **Adressage** | `{candidate}/{version}/{platform}` — une archive par plateforme |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | hors ligne, `versions/all` et `candidates/default` sont composés à partir des archives de candidats détenues pour la plateforme |
 
 ## Mise en place du proxy
@@ -155,6 +155,8 @@ password <your-token>
 
 ## Endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/sdkman -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -170,6 +172,8 @@ password <your-token>
 | `GET` | `/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}` | A pre- or post-install hook: bash the client sources and runs, relayed |
 | `GET` | `/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}` | The self-update script for a channel and platform — bash the client |
 <!-- END endpoints -->
+
+:::
 
 ## Voir aussi
 

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains.md
-sourceHash: 9499a08130a4b000
+sourceHash: b93ef4748d3d9559
 ---
 
 # IDE JetBrains
@@ -13,13 +13,13 @@ n'y a pas de modèle de publication privée pour les archives d'IDE.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `jetbrains` |
 | **Amont par défaut** | `download.jetbrains.com` |
 | **Modes** | proxy seul |
 | **Adressage** | par chemin |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | pas d'index composé hors ligne ; un fichier détenu est servi par chemin |
 
 ## Mise en place du proxy

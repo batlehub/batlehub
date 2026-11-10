@@ -85,9 +85,13 @@ describe("NamespacePackagesTable", () => {
     const rows = wrapper.findAll("tbody tr");
     expect(rows).toHaveLength(4);
     expect(rows[1].text()).toContain("(yanked)");
-    expect(rows[1].classes()).toContain("opacity-50");
-    expect(rows[0].classes()).not.toContain("opacity-50");
-    expect(rows[2].html()).toContain("border-primary");
+    // The yank is a state (matrix + word), not a half-opacity row.
+    expect(rows[1].find('[data-state="yanked"]').exists()).toBe(true);
+    expect(rows[0].find('[data-state="yanked"]').exists()).toBe(false);
+    expect(rows[1].classes()).not.toContain("opacity-50");
+    // A visibility is a neutral fact: crimson is for refusals, not for "team".
+    expect(rows[2].text()).toContain("Team");
+    expect(rows[2].html()).not.toContain("border-primary");
     expect(listMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { registry: "npm", prefix: "@acme" },
@@ -109,7 +113,7 @@ describe("NamespacePackagesTable", () => {
       body: { visibility: "team" },
     });
     expect(wrapper.find("select").exists()).toBe(false);
-    expect(wrapper.find("tbody").text()).toContain("team");
+    expect(wrapper.find("tbody").text()).toContain("Team");
   });
 
   it("keeps the editor open with the error when the save is refused", async () => {
@@ -149,14 +153,14 @@ describe("NamespacePackagesTable", () => {
     expect(button(wrapper, "…").attributes("disabled")).toBeDefined();
   });
 
-  it("cancels an edit, and the badge opens one too", async () => {
+  it("cancels an edit; the badge is a fact, not a second button", async () => {
     const wrapper = await mountTable([pkg("@acme/a")]);
     await button(wrapper, "Edit visibility").trigger("click");
     await button(wrapper, "Cancel").trigger("click");
     expect(wrapper.find("select").exists()).toBe(false);
 
     await wrapper.find("tbody .capitalize").trigger("click");
-    expect(wrapper.find("select").exists()).toBe(true);
+    expect(wrapper.find("select").exists()).toBe(false);
   });
 
   it("pages forward when a page is full", async () => {

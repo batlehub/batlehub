@@ -5,19 +5,18 @@ import { useRoute, RouterLink } from "vue-router";
 import { adminAccessCheck } from "@/client/sdk.gen";
 import type { AccessSimulationResponse } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
+import CoordinateFields from "@/components/admin/CoordinateFields.vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { SECURITY_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Select } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
-import {
-  usePackageNameSuggestions,
-  useSubjectSuggestions,
-  useVersionSuggestions,
-} from "@/composables/useSuggestions";
+import { useSubjectSuggestions } from "@/composables/useSuggestions";
 
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 const { t } = useI18n();
 
 /** RFC 0004-bis §6.2: the registry set is closed, small and already fetched. */
@@ -40,13 +39,24 @@ const clientIp = ref("");
  * whole point is answering about a coordinate that may not be cached, so a
  * field that only took what it could offer would break it.
  */
-const packageSuggestions = usePackageNameSuggestions(packageName, registry);
-const versionSuggestions = useVersionSuggestions(registry, packageName);
 const subjectSuggestions = useSubjectSuggestions(userId);
 
 const result = ref<AccessSimulationResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+// The verdict block is mounted by `v-if`, so it cannot be its own live region.
+const verdictAnnouncement = computed(() =>
+  result.value
+    ? [
+        result.value.decision === "allow"
+          ? t("adminAccessCheck.allow")
+          : t("adminAccessCheck.deny"),
+        result.value.reason,
+      ]
+        .filter(Boolean)
+        .join(". ")
+    : "",
+);
 
 /** The layers the answer did not account for, named so the gap is visible. */
 const uncovered = computed(() => {
@@ -153,12 +163,9 @@ async function simulate() {
     />
 
     <form class="space-y-4 max-w-lg" @submit.prevent="simulate">
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-registry" class="text-sm font-medium">{{ t("common.registry") }}</label>
-          <!-- Was a bare `<input>` with hand-rolled border classes rather than
-               the `Input` primitive, so it inherited nothing the system does
-               next. It is a closed set either way. -->
           <Select
             id="aac-registry"
             v-model="registry"
@@ -166,43 +173,21 @@ async function simulate() {
             :placeholder="t('adminHealth.chooseRegistry')"
           />
         </div>
-        <div class="space-y-1">
-          <label for="aac-package" class="text-sm font-medium">{{
-            t("adminAccessCheck.packageName")
-          }}</label>
-          <Combobox
-            id="aac-package"
-            v-model="packageName"
-            :options="packageSuggestions.options.value"
-            :loading="packageSuggestions.loading.value"
-            placeholder="lodash"
-          />
-        </div>
-        <div class="space-y-1">
-          <label for="aac-version" class="text-sm font-medium">{{ t("common.version") }}</label>
-          <!-- Closed once its parents are answered, and disabled with a stated
-               reason until then rather than merely dark. -->
-          <Combobox
-            id="aac-version"
-            v-model="version"
-            :options="versionSuggestions.options.value"
-            :loading="versionSuggestions.loading.value"
-            :disabled="!versionSuggestions.ready()"
-            :disabled-reason="t('adminAccessCheck.versionNeedsPackage')"
-            placeholder="1.0.0"
-          />
-        </div>
+        <CoordinateFields
+          v-model:name="packageName"
+          v-model:version="version"
+          id-prefix="aac"
+          :registry="registry"
+        />
         <div class="space-y-1">
           <label for="aac-resource-type" class="text-sm font-medium">{{
             t("adminAccessCheck.resourceType")
           }}</label>
-          <select
+          <Select
             id="aac-resource-type"
             v-model="resourceType"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          >
-            <option v-for="rt in RESOURCE_TYPES" :key="rt" :value="rt">{{ rt }}</option>
-          </select>
+            :options="RESOURCE_TYPES.map((rt) => ({ value: rt, label: rt }))"
+          />
         </div>
       </div>
 
@@ -212,18 +197,14 @@ async function simulate() {
         {{ t("adminAccessCheck.simulatedIdentity") }}
       </p>
 
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-role" class="text-sm font-medium">{{ t("common.role") }}</label>
-          <select
+          <Select
             id="aac-role"
             v-model="role"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          >
-            <option value="anonymous">anonymous</option>
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
+            :options="['anonymous', 'user', 'admin'].map((r) => ({ value: r, label: r }))"
+          />
         </div>
         <div class="space-y-1">
           <label for="aac-user-id" class="text-sm font-medium"
@@ -248,11 +229,10 @@ async function simulate() {
               t("adminAccessCheck.commaSeparated")
             }}</span></label
           >
-          <input
+          <Input
             id="aac-groups"
             v-model="groups"
             :placeholder="t('adminAccessCheck.oidc1TeamATeam')"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
           />
         </div>
         <!--
@@ -266,12 +246,7 @@ async function simulate() {
             >{{ t("adminAccessCheck.clientIp") }}
             <span class="text-muted-foreground">{{ t("adminAccessCheck.optional") }}</span></label
           >
-          <input
-            id="aac-client-ip"
-            v-model="clientIp"
-            placeholder="10.0.0.7"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          />
+          <Input id="aac-client-ip" v-model="clientIp" placeholder="10.0.0.7" />
           <p class="text-xs text-muted-foreground">
             {{ t("adminAccessCheck.clientIpHelp") }}
           </p>
@@ -285,11 +260,13 @@ async function simulate() {
 
     <div
       v-if="error"
+      role="alert"
       class="rounded-sm border border-destructive/50 px-4 py-3 text-sm text-destructive"
     >
       {{ error }}
     </div>
 
+    <Announcer :message="verdictAnnouncement" />
     <div
       v-if="result"
       class="rounded-sm border px-4 py-3 space-y-1"
@@ -314,15 +291,19 @@ async function simulate() {
       -->
       <p v-if="result.blocked_by === 'account'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByAccount") }}
-        <RouterLink to="/admin/security/blocks" class="text-primary hover:underline">{{
-          t("adminAccessCheck.seeBlocks")
-        }}</RouterLink>
+        <RouterLink
+          to="/admin/security/blocks"
+          class="text-primary underline underline-offset-[3px]"
+          >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
+        >
       </p>
       <p v-else-if="result.blocked_by === 'ip'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByIp") }}
-        <RouterLink to="/admin/security/blocks" class="text-primary hover:underline">{{
-          t("adminAccessCheck.seeBlocks")
-        }}</RouterLink>
+        <RouterLink
+          to="/admin/security/blocks"
+          class="text-primary underline underline-offset-[3px]"
+          >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
+        >
       </p>
       <!--
         And what it did *not* look at. An `allow` over two unconsulted layers

@@ -156,6 +156,11 @@ impl VerdictRepository for Verdicts {
     ) -> Result<(Vec<batlehub_core::entities::FindingRow>, u64), CoreError> {
         self.0.list_findings(f, l, o).await
     }
+    async fn count_by_registry_and_state(
+        &self,
+    ) -> Result<Vec<(String, VerdictState, u64)>, CoreError> {
+        self.0.count_by_registry_and_state().await
+    }
 }
 
 // ── the app ──────────────────────────────────────────────────────────────────
@@ -218,8 +223,8 @@ async fn app(
     app_with(shadow, false).await
 }
 
-/// `delegate`: `role:user` also holds `system:read` at the instance tier,
-/// and `SEC2`'s node grants `quarantine:read` to administrators only — the
+/// `delegate`: `role:user` also holds `quarantine:read` and `system:read` at
+/// the instance tier, and `SEC2`'s node is sealed — the
 /// T16 caller, who may open the Scans page but not see `SEC2`'s holds.
 async fn app_with(
     shadow: bool,
@@ -364,11 +369,10 @@ async fn app_opts(
                 }
                 g.registry.grants = Some(node);
             }
+            // Sealed (an empty node is the only seal): the delegate's
+            // instance-tier `quarantine:read` stops at this registry.
             if delegate && *n == SEC2 {
-                g.registry.grants = Some(GrantMap::new().grant(
-                    SubjectMatcher::Role(Role::Admin),
-                    [Action::QuarantineRead, Action::FindingsRead],
-                ));
+                g.registry.grants = Some(GrantMap::sealed());
             }
             (n.to_string(), Arc::new(g))
         })
@@ -382,8 +386,10 @@ async fn app_opts(
             batlehub_core::services::authz::translate::instance_node(
                 delegate
                     .then(|| {
-                        GrantMap::new()
-                            .grant(SubjectMatcher::Role(Role::User), [Action::SystemRead])
+                        GrantMap::new().grant(
+                            SubjectMatcher::Role(Role::User),
+                            [Action::QuarantineRead, Action::SystemRead],
+                        )
                     })
                     .as_ref(),
             ),
@@ -848,13 +854,77 @@ async fn admin_lists_reject_per_page_over_200() {
 }
 
 #[actix_web::test]
-async fn scans_list_needs_system_read() {
+async fn scans_list_needs_instance_quarantine_read() {
+    // `role:user` holds `quarantine:read` on every registry by default; the
+    // registry tier is not enough for a list naming a whole registry's queue.
     let (app, _lab) = app(false).await;
     assert_eq!(status_of(&app, SCANS, Some(USER_TOKEN)).await, 403);
     assert_eq!(status_of(&app, SCANS, None).await, 403);
 }
 
-/// T16: `system:read` opens the page, not every registry's holds, and not
+/// RFC 0042 alignment: the namespace seal cuts the queue, as it cuts the
+/// findings list and the per-version GET.
+#[actix_web::test]
+async fn scans_list_respects_namespace_seal() {
+    let (app, lab) = app_opts(Opts {
+        delegate: true,
+        sec_findings_reader: true,
+        ..Opts::default()
+    })
+    .await;
+    for name in ["@sealed/core", "open"] {
+        lab.queue
+            .enqueue(
+                &PackageId::new(SEC, name, "1"),
+                None,
+                ScanTrigger::FirstSeen,
+            )
+            .await
+            .unwrap();
+    }
+    let page = get(&app, SCANS, Some(USER_TOKEN)).await;
+    assert_eq!(names(&page), [format!("{SEC}/open")], "{page}");
+}
+
+/// Review of #311: RFC 0042's verdict listing and summary are instance-tier
+/// reads, and the seal below the instance must still cut them — a sealed
+/// namespace drops its rows, a sealed registry drops out of the summary.
+#[actix_web::test]
+async fn verdict_listing_and_summary_respect_seals() {
+    let (app, lab) = app_opts(Opts {
+        delegate: true,
+        sec_findings_reader: true,
+        ..Opts::default()
+    })
+    .await;
+    for name in ["@sealed/core", "open"] {
+        lab.verdict(SEC, name, "1.0.0", VerdictState::Denied).await;
+    }
+    lab.verdict(SEC2, "other", "1.0.0", VerdictState::Denied)
+        .await;
+
+    let list = get(
+        &app,
+        &format!("/api/v1/admin/verdicts?registry={SEC}"),
+        Some(USER_TOKEN),
+    )
+    .await;
+    assert!(!list.to_string().contains("@sealed"), "{list}");
+    assert!(list.to_string().contains("\"open\""), "the control: {list}");
+
+    let summary = get(&app, "/api/v1/admin/verdicts/summary", Some(USER_TOKEN)).await;
+    assert!(!summary.to_string().contains("@sealed"), "{summary}");
+    assert!(
+        !summary.to_string().contains(SEC2),
+        "sealed registry: {summary}"
+    );
+    assert!(
+        summary.to_string().contains("\"open\""),
+        "the control: {summary}"
+    );
+}
+
+/// T16: instance-tier `quarantine:read` opens the page, not every registry's holds, and not
 /// the worker's error text without `findings:read`.
 #[actix_web::test]
 async fn scans_list_omits_registry_without_quarantine_read() {
@@ -882,10 +952,10 @@ async fn scans_list_omits_registry_without_quarantine_read() {
     assert!(!failed.to_string().contains("SECRET-ERROR"));
 }
 
-/// T9: the bulk rescan the Scans page links to refuses without
-/// `system:write`; the UI hiding the button is cosmetic.
+/// T9: the bulk rescan refuses without `scans:run` (RFC 0042 §4.2); the UI
+/// hiding the button is cosmetic.
 #[actix_web::test]
-async fn bulk_rescan_without_system_write_is_403() {
+async fn bulk_rescan_without_scans_run_is_403() {
     let (app, _lab) = app_with(false, true).await;
     let req = TestRequest::post()
         .uri("/api/v1/admin/verdicts/rescan")
@@ -1186,7 +1256,7 @@ async fn findings_reference_filter_escapes_like_metacharacters() {
 /// interval, the verdict GET now carries `scan_status`, and without an
 /// interval the clock is absent rather than invented.
 #[actix_web::test]
-async fn verdict_get_carries_next_rescan_and_scan_status_for_system_read() {
+async fn verdict_get_carries_next_rescan_and_scan_status_for_quarantine_read() {
     let (app, lab) = app_opts(Opts {
         hourly_rescan: true,
         ..Opts::default()
@@ -1227,10 +1297,11 @@ async fn verdict_get_carries_next_rescan_and_scan_status_for_system_read() {
     );
 }
 
-/// §7.2: the clocks are `system:read`'s; a `quarantine:read` holder reads
-/// the verdict and its status, not when it is looked at again.
+/// §7.2: the clocks need `quarantine:read` at the instance tier; the
+/// registry-tier holder every user is reads the verdict and its status, not
+/// when it is looked at again.
 #[actix_web::test]
-async fn verdict_get_omits_next_rescan_without_system_read() {
+async fn verdict_get_omits_next_rescan_without_instance_quarantine_read() {
     let (app, lab) = app_opts(Opts {
         hourly_rescan: true,
         ..Opts::default()

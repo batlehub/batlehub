@@ -123,6 +123,9 @@ function templateOf(source) {
 function scriptOf(source) {
   const region = source.includes("<template>") ? source.slice(0, source.indexOf("<template>")) : source;
   return region
+    // The opening tag's own attributes (`generic="TItem, TForm extends object"`)
+    // are TypeScript, not text, and read as an assignment otherwise.
+    .replace(/<script\b[^>]*>/g, "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1")
     // No trailing `(from …)?` group: `[^;\n]*` has already eaten the rest of the

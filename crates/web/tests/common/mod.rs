@@ -2054,6 +2054,15 @@ pub async fn make_app_with_defaults_and_access(
         ("galaxy", "galaxy"),
         ("nix", "nix"),
         ("helm", "helm"),
+        // No client behind these: they are here so a path of their kind
+        // routes on its kind's scope (TD-0004 §1), which is all
+        // `protocol_conformance.rs` asks of them.
+        ("rubygems", "rubygems"),
+        ("conda", "conda"),
+        ("terraform", "terraform"),
+        ("apk", "apk"),
+        ("maven", "maven"),
+        ("py", "pypi"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

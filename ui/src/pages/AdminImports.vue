@@ -168,7 +168,7 @@ onMounted(() => void loadImports());
 
       <Card>
         <CardContent class="p-0">
-          <Table>
+          <Table :label="t('adminImports.releaseImports')">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t("adminImports.registry") }}</TableHead>
@@ -232,6 +232,7 @@ onMounted(() => void loadImports());
                       class="w-40"
                     />
                     <Button
+                      variant="outline"
                       size="sm"
                       :disabled="running[key(row.registry, row.repo)]"
                       @click="triggerImport(row.registry, row.repo)"

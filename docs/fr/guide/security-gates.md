@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: cff271fe09b853d8
+sourceHash: 5abdb425918a6199
 ---
 
 # Contrôles de sécurité
@@ -619,7 +619,7 @@ porte `scan_status_unavailable: true` ; la console affiche alors « — » à la
 place de chaque badge.
 
 **L'endpoint de verdict porte le même état**, dans `scan_status`, et pour un
-détenteur de `system:read` un bloc `next_rescan` : quand le verdict sera
+détenteur de `quarantine:read` au niveau instance un bloc `next_rescan` : quand le verdict sera
 réanalysé (`last_scanned_at` plus `[registries.security.rescan]
 interval_secs` ; absent sans intervalle, et une date passée signifie « dû ») et
 quand la revérification SBOM du registre aura lieu (sa dernière exécution plus
@@ -642,10 +642,12 @@ paquet affiche les deux sous *Prochaine réanalyse*.
 - **Verdicts par état** : les verdicts d'un registre, depuis
   `GET /api/v1/admin/verdicts`.
 
-Ouvrir la page demande `system:read`. Les lignes ne viennent ensuite que des
-registres où vous détenez aussi `quarantine:read`, et la dernière erreur
-seulement là où vous détenez `findings:read` : `system:read` seul ne nomme
-aucune version retenue. [Relancer l'analyse] apparaît là où les droits
+Ouvrir la page demande `quarantine:read` au niveau instance, le verbe avec
+lequel lit la console sécurité (RFC 0042) ; le `quarantine:read` de niveau
+registre que détient tout utilisateur ne suffit pas. Les lignes ne viennent
+ensuite que des registres où vous détenez `quarantine:read`, moins les paquets
+sous un scellé de namespace, et la dernière erreur seulement là où vous
+détenez `findings:read`. [Relancer l'analyse] apparaît là où les droits
 configurés vous donnent `gates:exempt` sur le registre — personne ne le détient
 par défaut — et l'endpoint de relance le vérifie à nouveau. `per_page` vaut au
 plus 200.

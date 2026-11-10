@@ -103,8 +103,8 @@ describe("locale catalogues", () => {
    */
   it("resolves every navigation label to a real key in both catalogues", () => {
     const viewers = [
-      { isAuthenticated: true, isAdmin: true, hasRegistryAccess: true },
-      { isAuthenticated: false, isAdmin: false, hasRegistryAccess: true },
+      { isAuthenticated: true, hasAdminPage: true, hasSecurity: true, hasRegistryAccess: true },
+      { isAuthenticated: false, hasAdminPage: false, hasSecurity: false, hasRegistryAccess: true },
     ];
     const labels = [
       ...ADMIN_SIDEBAR,

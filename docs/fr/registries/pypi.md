@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/pypi.md
-sourceHash: e8325e5fb7087441
+sourceHash: ba4e1d51e95aa620
 ---
 
 # PyPI
@@ -12,13 +12,13 @@ cache les wheels et les distributions source après le premier téléchargement.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `pypi` |
 | **Amont par défaut** | `pypi.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `twine upload` |
+| **Publication privée** | oui — `twine upload` |
 | **Coupure réseau** | hors ligne, la page simple (JSON et HTML) est composée à partir des fichiers détenus ; `pip install` s'y résout |
 
 ## Mise en place du proxy

@@ -1237,9 +1237,26 @@ impl ProxyService {
             public_base,
         };
 
-        let blocked = self
+        let mut blocked = self
             .blocked_versions_for(&req.package_id.registry, blocking_name, kind)
             .await;
+        // The one listing an age gate filters: `mise-versions` has no artifact
+        // for the gate to fire on, so the too-young versions are hidden from the
+        // list instead (RFC 0043 §11, decision 2).
+        if kind == crate::entities::RegistryKind::MiseVersions {
+            let gate = prelude.policy.as_ref().and_then(|p| {
+                p.rules
+                    .iter()
+                    .find_map(|r| r.listing_age_gate(&req.identity))
+            });
+            if let (Some(gate), Some(body)) = (gate, doc.body.as_text()) {
+                blocked.extend(crate::services::mise_versions::younger_than(
+                    body,
+                    gate,
+                    chrono::Utc::now(),
+                ));
+            }
+        }
 
         crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
         crate::services::blocking::rewrite_urls(&ctx, &mut doc);

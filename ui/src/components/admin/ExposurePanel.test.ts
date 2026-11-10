@@ -89,13 +89,13 @@ describe("ExposurePanel", () => {
     exposureReport.mockResolvedValueOnce(page([]));
     const w = mount(ExposurePanel);
     await flushPromises();
-    expect(w.find('[data-testid="exposure-empty"]').exists()).toBe(true);
+    expect(w.find('[data-testid="empty-state"]').text()).toContain("No pull of a flagged version");
     exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
     await w.find('[data-testid="exposure-apply"]').trigger("click");
     await flushPromises();
     expect(w.text()).toMatch(/could not|impossible/i);
     // A failure is not an empty window: the two used to show side by side.
-    expect(w.find('[data-testid="exposure-empty"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("No pull of a flagged version");
   });
 
   it("drops the previous query's rows when a fresh load fails", async () => {

@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 
 import { Combobox } from "@/components/ui/combobox";
+import { Select } from "@/components/ui/select";
 import { AsyncState } from "@/components/ui/async-state";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 const { t } = useI18n();
@@ -167,7 +168,7 @@ function clearFilters() {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
-const exportFormat = ref<"json" | "csv">("csv");
+const exportFormat = ref("csv");
 const exporting = ref(false);
 /** Said, not swallowed — see the `catch` in `exportAuditLog`. */
 const exportError = ref<string | null>(null);
@@ -285,31 +286,26 @@ async function purge() {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <SectionTabs :tabs="OBSERVABILITY_TABS" />
     <Announcer :message="announcement" />
-    <PageHeader variant="display">
-      <template #title>
-        {{ t("adminNav.auditLog") }}
-        <!-- `total`, not the loaded page: the endpoint returns 100 rows by
+    <!-- `total`, not the loaded page: the endpoint returns 100 rows by
              default and the count must not silently mean "the first 100". -->
-        <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ total }})</span
-        >
-      </template>
-    </PageHeader>
+    <PageHeader variant="display" :title="t('adminNav.auditLog')" :count="total" />
     <Card>
       <CardHeader class="space-y-3 pb-3">
         <div class="flex flex-row items-center justify-end space-y-0">
           <div class="flex gap-2 items-center">
-            <select
+            <Label for="al-export-format" class="sr-only">{{ t("auditLog.exportFormat") }}</Label>
+            <Select
+              id="al-export-format"
               v-model="exportFormat"
-              :aria-label="t('auditLog.exportFormat')"
-              class="h-8 rounded-sm border border-input bg-transparent px-2 text-sm text-foreground"
-            >
-              <option value="csv">CSV</option>
-              <option value="json">JSON</option>
-            </select>
+              :options="[
+                { value: 'csv', label: 'CSV' },
+                { value: 'json', label: 'JSON' },
+              ]"
+              class="h-8 w-24"
+            />
             <Button variant="outline" size="sm" :disabled="exporting" @click="exportAuditLog">
               {{ exporting ? t("adminSbom.exporting") : t("auditLog.export") }}
             </Button>
@@ -364,42 +360,48 @@ async function purge() {
           </Button>
         </div>
       </CardHeader>
-      <CardContent class="p-0">
-        <p v-if="loading" class="p-6 text-sm text-muted-foreground">{{ t("auditLog.loading") }}</p>
-        <div v-else-if="error" class="p-6">
-          <AsyncState
-            :loading="false"
-            :error="error"
-            :title="t('auditLog.couldNotLoad')"
-            :on-retry="reload"
-          />
-        </div>
-
-        <Table v-else-if="events.length">
-          <TableHeader>
-            <TableRow>
-              <TableHead>{{ t("common.time") }}</TableHead>
-              <TableHead>{{ t("common.user") }}</TableHead>
-              <TableHead>{{ t("common.registry") }}</TableHead>
-              <TableHead>{{ t("common.package") }}</TableHead>
-              <TableHead>{{ t("common.action") }}</TableHead>
-              <TableHead>{{ t("common.result") }}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <!-- No row tint: 1.03:1 is not a channel. The outcome cell carries
+      <!-- The table runs to the card's edges; the state panel keeps a gutter. -->
+      <CardContent :class="loading || error || !events.length ? 'px-6' : 'p-0'">
+        <!--
+          Which question was answered. "No events match these filters" and "this
+          instance has recorded nothing" are different facts, and an audit
+          surface that conflates them tells an operator the wrong one.
+        -->
+        <AsyncState
+          :loading="loading"
+          :error="error"
+          :empty="!events.length"
+          :empty-message="
+            hasFilters ? t('auditLog.noEventsMatchTheCurrent') : t('auditLog.noEventsRecorded')
+          "
+          :title="t('auditLog.couldNotLoad')"
+          :on-retry="reload"
+        >
+          <Table :label="t('adminNav.auditLog')">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t("common.time") }}</TableHead>
+                <TableHead>{{ t("common.user") }}</TableHead>
+                <TableHead>{{ t("common.registry") }}</TableHead>
+                <TableHead>{{ t("common.package") }}</TableHead>
+                <TableHead>{{ t("common.action") }}</TableHead>
+                <TableHead>{{ t("common.result") }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <!-- No row tint: 1.03:1 is not a channel. The outcome cell carries
                  it in words and in hue. -->
-            <TableRow v-for="ev in events" :key="ev.id">
-              <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                {{ formatDate(ev.timestamp) }}
-              </TableCell>
-              <TableCell class="text-sm font-mono">
-                <span v-if="ev.user_id">{{ ev.user_id }}</span>
-                <span v-else class="text-muted-foreground font-sans">{{
-                  t("auditLog.anonymousSubject")
-                }}</span>
-              </TableCell>
-              <!--
+              <TableRow v-for="ev in events" :key="ev.id">
+                <TableCell class="whitespace-nowrap text-xs tabular-nums">
+                  {{ formatDate(ev.timestamp) }}
+                </TableCell>
+                <TableCell class="text-sm font-mono">
+                  <span v-if="ev.user_id">{{ ev.user_id }}</span>
+                  <span v-else class="text-muted-foreground font-sans">{{
+                    t("auditLog.anonymousSubject")
+                  }}</span>
+                </TableCell>
+                <!--
                 `package_id` is null for account- and network-wide actions —
                 blocking a user, blocking an IP, purging the trail itself.
                 The hand-written interface this page used to carry declared it
@@ -407,51 +409,43 @@ async function purge() {
                 generated type is honest about it, and those rows would have
                 thrown on render once the envelope fix let them through.
               -->
-              <TableCell class="font-mono text-xs">
-                {{ ev.package_id?.registry ?? "—" }}
-              </TableCell>
-              <TableCell class="font-mono text-xs">
-                <template v-if="ev.package_id">
-                  {{ ev.package_id.name }}@{{ ev.package_id.version }}
-                  <span v-if="ev.package_id.artifact" class="text-muted-foreground">
-                    ({{ ev.package_id.artifact }})
-                  </span>
-                </template>
-                <span v-else class="text-muted-foreground">{{ t("auditLog.accountWide") }}</span>
-              </TableCell>
-              <TableCell class="text-xs font-mono">
-                {{ ev.action }}
-              </TableCell>
-              <!-- The reason in full, wrapping: it is the answer the row exists
+                <TableCell class="font-mono text-xs">
+                  {{ ev.package_id?.registry ?? "—" }}
+                </TableCell>
+                <TableCell class="font-mono text-xs">
+                  <template v-if="ev.package_id">
+                    {{ ev.package_id.name }}@{{ ev.package_id.version }}
+                    <span v-if="ev.package_id.artifact" class="text-muted-foreground">
+                      ({{ ev.package_id.artifact }})
+                    </span>
+                  </template>
+                  <span v-else class="text-muted-foreground">{{ t("auditLog.accountWide") }}</span>
+                </TableCell>
+                <TableCell class="text-xs font-mono">
+                  {{ ev.action }}
+                </TableCell>
+                <!-- The reason in full, wrapping: it is the answer the row exists
                    to give, and a 220px ellipsis with a hover-only title hid it
                    from keyboard and touch readers alike. -->
-              <TableCell class="min-w-[16rem]">
-                <Badge :variant="ev.result.outcome === 'denied' ? 'destructive' : 'secondary'">
-                  {{
-                    ev.result.outcome === "denied"
-                      ? t("accessCheck.denied")
-                      : t("accessCheck.allowed")
-                  }}
-                </Badge>
-                <p
-                  v-if="ev.result.outcome === 'denied'"
-                  class="mt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]"
-                >
-                  {{ ev.result.reason }}
-                </p>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-
-        <!--
-          Which question was answered. "No events match these filters" and "this
-          instance has recorded nothing" are different facts, and an audit
-          surface that conflates them tells an operator the wrong one.
-        -->
-        <div v-else-if="!loading" class="p-6 text-sm text-muted-foreground text-center">
-          {{ hasFilters ? t("auditLog.noEventsMatchTheCurrent") : t("auditLog.noEventsRecorded") }}
-        </div>
+                <TableCell class="min-w-[16rem]">
+                  <Badge :variant="ev.result.outcome === 'denied' ? 'destructive' : 'secondary'">
+                    {{
+                      ev.result.outcome === "denied"
+                        ? t("accessCheck.denied")
+                        : t("accessCheck.allowed")
+                    }}
+                  </Badge>
+                  <p
+                    v-if="ev.result.outcome === 'denied'"
+                    class="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                  >
+                    {{ ev.result.reason }}
+                  </p>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </AsyncState>
       </CardContent>
     </Card>
 

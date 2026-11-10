@@ -33,6 +33,12 @@ describe("EmptyState", () => {
   });
 
   /** No nested card: cards inside cards are the lazy container. */
+  it("sets a sentence as copy, with no bitmap heading, when there is no title", () => {
+    const w = mount(EmptyState, { props: { description: "No changes recorded yet." } });
+    expect(w.find(".font-display").exists()).toBe(false);
+    expect(w.text()).toBe("No changes recorded yet.");
+  });
+
   it("is a single ruled panel, not a card", () => {
     const w = mount(EmptyState, { props: { title: "x" } });
     expect(w.classes()).toContain("border");

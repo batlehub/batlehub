@@ -217,5 +217,6 @@ async fn a_github_registry_does_not_serve_the_forgejo_attachment_path() {
     let resp = get(&app, &format!("/proxy/local-gh/attachments/{UUID}")).await;
     assert_eq!(resp.status(), 404);
     let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
-    assert!(body.contains("not a forgejo registry"), "{body}");
+    // Not even routed: the forgejo routes are not in a github registry's scope.
+    assert!(body.contains("has no route"), "{body}");
 }

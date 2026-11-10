@@ -1,6 +1,7 @@
 use batlehub_core::{entities::PackageId, error::CoreError};
 
 use super::http_client::{basic_auth_get, new_http_client, UpstreamHttpOptions};
+use crate::registry::encode_path;
 
 mod client;
 mod models;
@@ -52,7 +53,7 @@ impl RubyGemsRegistryClient {
 
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> Result<String, CoreError> {
         let base = self.base_url.trim_end_matches('/');
-        let name = &pkg.name;
+        let name = &encode_path(&pkg.name);
         let version = &pkg.version;
 
         if name == "_index" {
@@ -67,9 +68,10 @@ impl RubyGemsRegistryClient {
         }
 
         match pkg.artifact.as_deref() {
-            Some("gem") => Ok(format!("{base}/gems/{name}-{version}.gem")),
+            Some("gem") => Ok(format!("{base}/gems/{name}-{}.gem", encode_path(version))),
             Some("gemspec") => Ok(format!(
-                "{base}/quick/Marshal.4.8/{name}-{version}.gemspec.rz"
+                "{base}/quick/Marshal.4.8/{name}-{}.gemspec.rz",
+                encode_path(version)
             )),
             None => match version.as_str() {
                 "versions" => Ok(format!("{base}/api/v1/versions/{name}.json")),

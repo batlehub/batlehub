@@ -237,7 +237,7 @@ tasks:
     desc: Test the per-page meta description extractor
     dir: docs
     cmds:
-      - node --test build/page-description.test.mjs
+      - node --test build/page-description.test.mjs build/rfc-meta.test.mjs
 
   docs:generator:check:
     desc: Fail if the config generator's fixtures have drifted from the generator

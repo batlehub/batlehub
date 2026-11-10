@@ -1253,6 +1253,90 @@ async fn the_admin_listing_lists_by_state_and_bulk_rescan_queues_each() {
     assert_eq!(call_service(&app, req).await.status(), 403);
 }
 
+/// RFC 0042 §5.2: the summary counts per state and names recent holds,
+/// without their findings; registry-tier `quarantine:read` does not reach it.
+#[actix_web::test]
+async fn the_summary_counts_by_state_and_names_recent_holds() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let _ = status(&app, &tarball("1.0.0")).await;
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+
+    let uri = "/api/v1/admin/verdicts/summary";
+    assert_eq!(get_as(&app, uri, Some(USER_TOKEN)).await.status(), 403);
+    let resp = get_as(&app, uri, Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    let reg = &body["registries"][0];
+    assert_eq!(reg["registry"], REG, "{body}");
+    assert_eq!(reg["counts"]["denied"], 1, "{body}");
+    assert_eq!(reg["counts"]["allowed"], 1, "{body}");
+    assert_eq!(reg["recent"][0]["version"], "1.1.0", "{body}");
+    assert!(reg["recent"][0].get("findings").is_none(), "{body}");
+    assert!(!reg["recent"][0]["reason_codes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+/// RFC 0042 §4.2: the listing follows `quarantine:read` at the instance tier,
+/// withholds findings without `findings:read`, and the bulk operations follow
+/// `scans:run` rather than `system:write`.
+#[actix_web::test]
+async fn a_delegated_reader_lists_without_findings_and_cannot_rescan() {
+    use batlehub_core::entities::{Action, GrantMap, Role, SubjectMatcher};
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let uri = format!("/api/v1/admin/verdicts?registry={REG}");
+
+    // Registry-tier `quarantine:read`, every user's default, is not enough.
+    assert_eq!(get_as(&app, &uri, Some(USER_TOKEN)).await.status(), 403);
+
+    let delegate = |actions: Vec<Action>| {
+        Some(Arc::new(
+            batlehub_core::services::authz::translate::instance_node(Some(
+                &GrantMap::new().grant(SubjectMatcher::Role(Role::User), actions),
+            )),
+        ))
+    };
+    lab.hot.write().await.instance = delegate(vec![Action::QuarantineRead]);
+    let resp = get_as(&app, &uri, Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["items"][0]["state"], "denied", "{body}");
+    assert_eq!(
+        body["items"][0]["findings"],
+        serde_json::json!([]),
+        "{body}"
+    );
+
+    lab.hot.write().await.instance = delegate(vec![Action::QuarantineRead, Action::FindingsRead]);
+    let body: serde_json::Value =
+        actix_web::test::read_body_json(get_as(&app, &uri, Some(USER_TOKEN)).await).await;
+    assert!(body["items"][0]["findings"]
+        .as_array()
+        .is_some_and(|f| !f.is_empty()));
+
+    lab.hot.write().await.instance = delegate(vec![Action::SystemWrite]);
+    let rescan = |token: &'static str| {
+        actix_web::test::TestRequest::post()
+            .uri("/api/v1/admin/verdicts/rescan")
+            .insert_header(("Authorization", bearer(token)))
+            .set_json(serde_json::json!({ "registry": REG }))
+            .to_request()
+    };
+    let resp = call_service(&app, rescan(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403, "system:write no longer reaches it");
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("scans:run"), "{body}");
+
+    lab.hot.write().await.instance = delegate(vec![Action::ScansRun]);
+    assert_eq!(call_service(&app, rescan(USER_TOKEN)).await.status(), 202);
+}
+
 /// `GET /api/v1/verdicts/…`: the verdict for `quarantine:read`, findings
 /// for `findings:read`, `404` for nobody else and for a version never seen.
 #[actix_web::test]

@@ -4,13 +4,13 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `openvsx` |
 | **Default upstream** | `open-vsx.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Private publish** | yes — VSIX upload (`PUT …/vsix`) |
 | **Air gap** | no composed listing offline: a gallery answers by query |
 | **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 
@@ -176,6 +176,8 @@ What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-sign
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/openvsx -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -199,6 +201,8 @@ What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-sign
 | `GET` | `/proxy/{registry}/vscode/item` | `GET …/vscode/item?itemName=publisher.name` |
 | `GET` | `/proxy/{registry}/vscode/unpkg/{publisher}/{name}/{version}/{path}` | `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}` |
 <!-- END endpoints -->
+
+:::
 
 ---
 

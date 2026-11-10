@@ -63,5 +63,11 @@ pub fn broker_download_url(
     version: &str,
     platform: &str,
 ) -> String {
-    format!("{broker_base}/download/{candidate}/{version}/{platform}")
+    use crate::registry::encode_path;
+    format!(
+        "{broker_base}/download/{}/{}/{}",
+        encode_path(candidate),
+        encode_path(version),
+        encode_path(platform)
+    )
 }

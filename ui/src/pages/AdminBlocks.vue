@@ -285,7 +285,7 @@ async function confirmUnblock() {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <SectionTabs :tabs="SECURITY_TABS" />
     <Announcer :message="announcement" />
     <PageHeader

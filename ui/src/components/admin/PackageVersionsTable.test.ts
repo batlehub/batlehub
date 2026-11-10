@@ -315,6 +315,8 @@ describe("PackageVersionsTable", () => {
     // The catalogue owns the whole sentence and pluralises the noun, so the
     // singular case reads "1 version" rather than the assembled "1 version(s)".
     expect((wrapper.vm as unknown as { bulkMsg: string }).bulkMsg).toBe("Blocked 1 version.");
+    // Rendered, not only set: it lived in the bar the success just unmounted.
+    expect(wrapper.find("output").text()).toBe("Blocked 1 version.");
     expect(wrapper.emitted("reload")).toHaveLength(1);
   });
 

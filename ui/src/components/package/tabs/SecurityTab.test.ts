@@ -13,7 +13,8 @@ function tab(
   over: {
     status?: ScanStatusDto | null;
     unavailable?: boolean;
-    isAdmin?: boolean;
+    canRescan?: boolean;
+    canReadQuarantine?: boolean;
     pollStopped?: "timeout" | "failed" | null;
   } = {},
 ) {
@@ -23,7 +24,8 @@ function tab(
       name: "left-pad",
       version: "1.3.0",
       unavailable: false,
-      isAdmin: false,
+      canRescan: false,
+      canReadQuarantine: false,
       pollStopped: null,
       ...over,
     },
@@ -31,8 +33,10 @@ function tab(
 }
 
 describe("SecurityTab (RFC 0044 §4.5)", () => {
-  it("tells an admin the registry scans nothing when no status came back", () => {
-    expect(tab({ isAdmin: true }).find('[data-testid="no-scanning"]').exists()).toBe(true);
+  it("tells a quarantine:read holder the registry scans nothing when no status came back", () => {
+    expect(tab({ canReadQuarantine: true }).find('[data-testid="no-scanning"]').exists()).toBe(
+      true,
+    );
     // A reader without the verb cannot tell that from being withheld: nothing.
     const reader = tab();
     expect(reader.find('[data-testid="no-scanning"]').exists()).toBe(false);

@@ -121,7 +121,23 @@ export function rfcStatus(srcDir, filePath) {
         `the page that misleads (RFC 0005 §6.8).`,
     );
   }
-  return parseStatus(value, filePath);
+  const status = parseStatus(value, filePath);
+  return { ...status, note: bannerNote(status.note) };
+}
+
+/**
+ * The banner's note: the first sentence of the `Status` note, as plain text.
+ *
+ * The full note is the header table's `Status` cell, one line below the
+ * banner — repeating it verbatim put a 16-line paragraph above RFC 0015's
+ * title, and the banner renders text, not markdown, so `*widened*` and
+ * `` `immutable` `` reached the reader as source. The banner answers "where is
+ * this document"; the row carries the detail.
+ */
+export function bannerNote(note, max = 160) {
+  const plain = note.replace(/\*\*?|`/g, "").replace(/\s+/g, " ").trim();
+  const first = plain.split(/(?<=[.;:])\s/)[0].replace(/[;:]$/, "");
+  return first.length > max ? first.slice(0, max - 1).trimEnd() + "…" : first;
 }
 
 /** `0004-bis-what-rfc-0004-left.md` → `{ num: 4, bis: true, id: "0004-bis" }`. */

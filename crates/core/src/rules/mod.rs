@@ -95,6 +95,23 @@ pub trait Rule: Send + Sync {
     /// Evaluate the rule against `ctx`. Rules are called in order; the first
     /// `Deny` short-circuits the chain.
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision;
+
+    /// What this rule would hide from a *listing* for `identity`, or `None`.
+    /// Only `release_age_gate` answers, and only the `mise-versions` kind
+    /// asks: it has no artifact for the gate to fire on (RFC 0043 §11,
+    /// decision 2).
+    fn listing_age_gate(&self, _identity: &crate::entities::Identity) -> Option<ListingAgeGate> {
+        None
+    }
+}
+
+/// A `release_age_gate` as a listing applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListingAgeGate {
+    pub min_age: std::time::Duration,
+    /// `deny_missing_timestamp`: an entry without a readable date is hidden
+    /// too, as the gate would refuse its artifact (RFC 0043 §6.2).
+    pub deny_missing_timestamp: bool,
 }
 
 /// Evaluate a list of rules in order. Returns the first `Deny`, or `Allow`.

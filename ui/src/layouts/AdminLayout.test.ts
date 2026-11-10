@@ -8,6 +8,11 @@ vi.mock("vue-router", () => ({
   RouterView: { template: "<div data-testid='outlet' />" },
 }));
 
+const held = { verbs: null as string[] | null };
+vi.mock("@/composables/useAuth", () => ({
+  useAuth: () => ({ can: (verb: string) => held.verbs === null || held.verbs.includes(verb) }),
+}));
+
 import AdminLayout from "./AdminLayout.vue";
 import { ADMIN_SIDEBAR } from "@/config/adminSections";
 
@@ -25,6 +30,20 @@ function mountAdmin(path = "/admin/dashboard") {
  * design gate was measuring that width.
  */
 describe("AdminLayout", () => {
+  it("offers a delegate only the sections holding a page of their verbs (RFC 0042)", () => {
+    held.verbs = ["audit:read"];
+    try {
+      const hrefs = new Set(
+        mountAdmin("/admin/observability/audit-log")
+          .findAll("a")
+          .map((a) => a.attributes("href")),
+      );
+      expect(hrefs).toEqual(new Set(["/admin/observability"]));
+    } finally {
+      held.verbs = null;
+    }
+  });
+
   it("stacks on mobile and only becomes a row from md up", () => {
     // The template opens with a comment, so the component's root is a fragment
     // and `wrapper.element` is that comment rather than the container.

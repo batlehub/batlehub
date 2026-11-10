@@ -195,7 +195,29 @@ function logout() {
 // ── Computed ───────────────────────────────────────────────────────────────────
 
 const isAdmin = computed(() => identity.value?.role === "admin");
+/**
+ * Signed in through the OIDC browser flow — the only session that may mint or
+ * list API tokens. Read from the provider the callback stored, not from
+ * `identity.auth_provider`: that is set for every provider, `"static-token"`
+ * included, so it offered the Tokens surface to sessions the server refuses.
+ */
+const isOidcSession = computed(() => !!token.value && !!oidcProvider.value);
 const isAuthenticated = computed(() => !!token.value && identity.value?.role !== "anonymous");
+
+/**
+ * Whether the caller holds `verb`, as `/me` reports it (RFC 0042 §4.3) — what
+ * the console gates a surface on, never the role. With `registry`, the set the
+ * server checks for that registry; a registry with no grant hierarchy is
+ * checked against the instance tier alone, as `authorize_control` does.
+ * Presentation only: the server enforces every verb whatever this answers.
+ */
+function can(verb: string, registry?: string): boolean {
+  const id = identity.value;
+  if (!id) return false;
+  const held = (registry !== undefined && id.registries[registry]) || id.verbs;
+  return held.includes(verb);
+}
+const canAny = (verbs: readonly string[]) => verbs.some((verb) => can(verb));
 
 export function useAuth() {
   return {
@@ -207,6 +229,9 @@ export function useAuth() {
     identityReady,
     isAdmin,
     isAuthenticated,
+    isOidcSession,
+    can,
+    canAny,
     logout,
     doRefresh,
   };

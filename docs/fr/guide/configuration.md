@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 7659821444aed832
+sourceHash: 759c90b1b9ffc167
 ---
 
 # Référence de configuration
@@ -424,21 +424,24 @@ tokens d'utilisateur.
 [database]
 type = "postgresql"
 url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
-max_connections = 10    # défaut
+max_connections = 20    # défaut
 ```
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
 | `type` | chaîne | — | Doit valoir `"postgresql"` |
 | `url` | chaîne | — | DSN PostgreSQL complet, identifiants compris |
-| `max_connections` | u32 | `10` | Taille du pool de connexions |
+| `max_connections` | u32 | `20` | Taille du pool de connexions, par instance |
 
 Le champ `url` se remplace à l'exécution par
 `PROXY_CACHE__DATABASE__URL`, sans toucher au fichier de configuration.
 
 #### Dimensionner `max_connections`
 
-La valeur par défaut, **10, est petite**, et ce qu'elle coûte est de la latence
+La valeur par défaut est **20** ; elle valait 10 jusqu'à TD-0004 §3, et 10 est
+le pool sur lequel un réplica casse : à 400–800 req/s, chaque bras à 10
+connexions du test de rupture a manqué de connexions quand le bras à 50 servait
+800 req/s proprement. En dessous, ce que coûte un petit pool est de la latence
 plutôt que du débit. Mesuré sur la matrice du test de rupture (scénario 14,
 S3 + Redis, même build et même charge, seule la taille du pool change) :
 
@@ -464,7 +467,14 @@ Trois points à garder en tête pour choisir :
 - **Le pool est par instance.** Ce qui atteint PostgreSQL vaut
   `réplicas × max_connections`, et son propre `max_connections` vaut 100 par
   défaut — trois réplicas à 50 l'épuisent, et l'échec est un refus de connexion
-  au démarrage, pas une requête lente.
+  au démarrage, pas une requête lente. Le défaut de 20 tient quatre réplicas ;
+  au-delà, ou plus tôt si d'autres clients partagent la base, placez PgBouncer en
+  mode **transaction** devant et réglez `listen_url` sur une connexion directe
+  (le `LISTEN` du cache de lecture exige une session, voir
+  [haute disponibilité](./high-availability#config-db-listen)).
+- **Une connexion n'est pas aux requêtes.** Sans `listen_url`, l'écouteur
+  d'invalidation du cache de lecture garde une connexion du pool pendant toute la
+  vie du processus.
 - **Les connexions inactives sont recyclées.** sqlx retire une connexion trente
   minutes après son ouverture (`max_lifetime`), ce qui explique aussi qu'un pool
   qui a travaillé rende sa mémoire de lui-même.
@@ -3056,7 +3066,9 @@ pseudonymisée, rien n'est scellé, et le serveur l'indique une fois
 (`audit.no-retention`). Les valeurs ci-dessus sont l'exemple documenté, pas un
 défaut. Le chargement refuse un intervalle de scellement sans clé, une clé qui
 n'est pas une graine, une pseudonymisation postérieure à la rétention des
-accès, et une rétention de sécurité plus courte que celle des accès.
+accès, et une rétention de sécurité plus courte que celle des accès — où `0`
+conserve pour toujours, si bien qu'une rétention de sécurité avec
+`access_retention_days = 0` est refusée elle aussi.
 
 **Les classes.** `download` et `view_metadata` forment la classe d'accès ;
 toutes les autres actions — actions d'administration, connexions, événements
@@ -3078,7 +3090,11 @@ tronquée ([Intégration SIEM](../operations/siem.md)).
 
 **La purge manuelle** (`DELETE /api/v1/admin/audit-log`) ne supprime que les
 lignes de la classe d'accès ; l'enregistrement d'une purge survit à toutes les
-purges suivantes. Les lignes déjà pseudonymisées ou supprimées ne se récupèrent
+purges suivantes. Sans scellement, c'est un seul `DELETE` ; avec scellement,
+elle procède par lots de 5 000 pour que chaque fenêtre scellée qu'elle touche
+reçoive son enregistrement `expire`, et sur une grande table elle peut dépasser
+le délai d'un client ou d'un ingress — relancez-la pour la terminer. Les lignes
+déjà pseudonymisées ou supprimées ne se récupèrent
 pas — c'est l'objet du réglage.
 
 Les deux tâches tournent sur le rôle `worker`, un processus à la fois. La

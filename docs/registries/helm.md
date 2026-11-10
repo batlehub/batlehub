@@ -12,13 +12,13 @@ OCI chart registries (`helm pull oci://…`) are not a chart repository and are 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `helm` |
 | **Default upstream** | none — a registry is one chart repository, and you name it |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | one package per chart, one version per index entry, the `.tgz` and its `.prov` as files of it |
-| **Private publish** | ✅ ChartMuseum's `POST api/charts` (`curl`, `helm cm-push`) |
+| **Private publish** | yes — ChartMuseum's `POST api/charts` (`curl`, `helm cm-push`) |
 | **Client switch** | `helm repo add` |
 
 ## Proxy setup
@@ -98,6 +98,8 @@ The index a local registry serves is composed from what was published — each e
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/helm -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -109,6 +111,8 @@ The index a local registry serves is composed from what was published — each e
 | `GET` | `/proxy/{registry}/helm/charts/{file}` | A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names. |
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
+
+:::
 
 ## Hybrid mode: `hybrid_merge`
 

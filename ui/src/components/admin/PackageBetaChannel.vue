@@ -42,7 +42,10 @@ const {
     <CardHeader>
       <div class="flex items-center justify-between">
         <button
+          type="button"
           class="flex items-center gap-2 text-base font-semibold hover:text-primary transition-colors"
+          :aria-expanded="expanded"
+          :aria-controls="expanded ? 'beta-channel-members' : undefined"
           @click="expanded = !expanded"
         >
           {{ t("packageBetaChannel.betaChannelAccess") }}
@@ -50,7 +53,7 @@ const {
             expanded ? t("packageBetaChannel.hide") : t("packageBetaChannel.show")
           }}</span>
           <Badge v-if="members && members.length > 0" variant="secondary" class="text-xs ml-1">
-            {{ members.length }} member{{ members.length > 1 ? "s" : "" }}
+            {{ t("packageBetaChannel.memberCount", members.length) }}
           </Badge>
         </button>
         <Button v-if="expanded" variant="outline" size="sm" :disabled="loading" @click="reload">
@@ -58,7 +61,7 @@ const {
         </Button>
       </div>
     </CardHeader>
-    <CardContent v-if="expanded" class="p-0">
+    <CardContent v-if="expanded" id="beta-channel-members" class="p-0">
       <p class="px-6 py-2 text-xs text-muted-foreground border-b">
         {{ t("packageBetaChannel.preReleaseVersionsAre") }}
       </p>
@@ -74,7 +77,7 @@ const {
           <TableRow v-for="m in members" :key="m.principal_type + ':' + m.principal_id">
             <TableCell>
               <Badge
-                :variant="m.principal_type === 'user' ? 'default' : 'secondary'"
+                :variant="m.principal_type === 'user' ? 'known' : 'secondary'"
                 class="text-xs capitalize"
               >
                 {{ m.principal_type }}

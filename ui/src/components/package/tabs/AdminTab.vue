@@ -15,7 +15,7 @@ import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 /**
  * The package page's Administration tab (RFC 0044 §6.4): everything
  * AdminPackageDetail used to be, moved unchanged. The page renders it only for
- * an administrator, so it loads only for one.
+ * a caller holding `packages:read` (RFC 0042 §4.3), so it loads only for one.
  */
 const props = defineProps<{ registry: string; name: string }>();
 
@@ -41,7 +41,7 @@ const {
   <section class="space-y-4" aria-labelledby="admin-heading">
     <h2
       id="admin-heading"
-      class="font-mono text-sm font-semibold uppercase tracking-wider text-muted-foreground"
+      class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground"
     >
       {{ t("common.administration") }}
     </h2>

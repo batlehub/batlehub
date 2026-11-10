@@ -185,6 +185,9 @@ pub async fn run(
                 if !me.groups.is_empty() {
                     table.add_row(["Groups", &me.groups.join(", ")]);
                 }
+                if !me.verbs.is_empty() {
+                    table.add_row(["Verbs", &me.verbs.join(", ")]);
+                }
                 println!("{table}");
             }
         }

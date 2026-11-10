@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { AsyncState } from "@/components/ui/async-state";
 
 const { t } = useI18n();
 
@@ -21,7 +23,12 @@ const props = defineProps<{ registry: string; name: string }>();
 
 const { token } = useAuth();
 
-const { data: visibilityData, reload } = useApi<{ visibility: Visibility }>(() => {
+const {
+  data: visibilityData,
+  loading,
+  error: loadError,
+  reload,
+} = useApi<{ visibility: Visibility }>(() => {
   if (!props.registry || !props.name) return Promise.resolve({ data: undefined });
   return getPackageVisibility({ path: { registry: props.registry, name: props.name } }) as Promise<{
     data?: unknown;
@@ -58,35 +65,41 @@ async function save() {
 <template>
   <Card>
     <CardHeader>
-      <CardTitle class="text-base">{{ t("packageVisibility.packageVisibility") }}</CardTitle>
+      <CardTitle>{{ t("packageVisibility.packageVisibility") }}</CardTitle>
       <CardDescription>{{ t("packageVisibility.controlsWhoCanDownload") }}</CardDescription>
     </CardHeader>
     <CardContent>
-      <div class="flex items-center gap-3 flex-wrap">
-        <Badge
-          :variant="
-            selected === 'public' ? 'default' : selected === 'internal' ? 'secondary' : 'outline'
-          "
-          :class="selected === 'team' ? 'border-primary text-primary' : ''"
-          class="capitalize text-xs"
-        >
-          {{ visibilityData?.visibility ?? "public" }}
-        </Badge>
-        <Select
-          v-model="selected"
-          :options="visibilityOptions"
-          :aria-label="t('packageVisibility.packageVisibility')"
-          class="w-72"
-        />
-        <Button
-          size="sm"
-          :disabled="saving || selected === (visibilityData?.visibility ?? 'public')"
-          @click="save"
-        >
-          {{ saving ? t("packageVisibility.saving") : t("packageVisibility.save") }}
-        </Button>
-      </div>
-      <p v-if="error" class="mt-2 text-sm text-destructive">{{ error }}</p>
+      <!-- A failed load is not "public": the badge's fallback would say it is.
+           A reload after a save keeps the controls on screen. -->
+      <AsyncState :loading="loading && !visibilityData" :error="loadError" :on-retry="reload">
+        <div class="flex items-center gap-3 flex-wrap">
+          <Badge
+            :variant="
+              selected === 'public' ? 'known' : selected === 'internal' ? 'secondary' : 'outline'
+            "
+            class="capitalize text-xs"
+          >
+            {{ visibilityData?.visibility ?? "public" }}
+          </Badge>
+          <Label for="package-visibility" class="sr-only">{{
+            t("packageVisibility.packageVisibility")
+          }}</Label>
+          <Select
+            id="package-visibility"
+            v-model="selected"
+            :options="visibilityOptions"
+            class="w-72"
+          />
+          <Button
+            size="sm"
+            :disabled="saving || selected === (visibilityData?.visibility ?? 'public')"
+            @click="save"
+          >
+            {{ saving ? t("packageVisibility.saving") : t("packageVisibility.save") }}
+          </Button>
+        </div>
+        <p v-if="error" class="mt-2 text-sm text-destructive">{{ error }}</p>
+      </AsyncState>
     </CardContent>
   </Card>
 </template>

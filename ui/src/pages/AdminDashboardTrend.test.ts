@@ -14,6 +14,7 @@ vi.mock("@/client/sdk.gen", () => ({
 }));
 
 import AdminDashboard from "./AdminDashboard.vue";
+import { useAuth } from "@/composables/useAuth";
 
 const stats = {
   since_startup: "2026-08-12T10:00:00Z",
@@ -187,6 +188,8 @@ describe("AdminDashboard — monitoring link", () => {
   beforeEach(() => {
     adminStatsHistoryMock.mockReset().mockResolvedValue({ data: trend() });
     registryHealthMock.mockReset().mockResolvedValue({ data: [] });
+    // The registry page's own verb (RFC 0042 §4.3).
+    useAuth().identity.value = { verbs: ["stats:read", "system:read"], registries: {} } as never;
   });
 
   async function mountWithLinks() {

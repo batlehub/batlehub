@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/table";
 
 const { t } = useI18n();
-const { token } = useAuth();
+const { token, can } = useAuth();
 const { data, loading, error, reload } = useApi<StatsResponse>(
   () => adminStats() as Promise<{ data?: unknown; error?: unknown }>,
   [token],
@@ -62,11 +62,14 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
             <TableBody>
               <TableRow v-for="r in data?.per_registry ?? []" :key="r.registry">
                 <TableCell class="font-mono text-sm">
+                  <!-- The registry page asks system:read; this list only stats:read. -->
                   <RouterLink
+                    v-if="can('system:read')"
                     :to="`/admin/observability/registries/${encodeURIComponent(r.registry)}`"
                     class="hover:underline underline-offset-[3px]"
                     >{{ r.registry }}</RouterLink
                   >
+                  <template v-else>{{ r.registry }}</template>
                 </TableCell>
                 <TableCell class="text-right font-mono text-sm">{{ pct(r.hit_rate) }}</TableCell>
                 <TableCell :class="r.upstream_degraded ? 'text-destructive' : ''">{{

@@ -105,7 +105,11 @@ impl PathProxyRegistryClient {
     /// subtree the allowlist was written against. Comparing after the parse is
     /// what makes the allowlist mean what it says.
     fn upstream_url(&self, path: &str) -> Result<String, CoreError> {
-        let url = format!("{}/{}", self.base_url, path);
+        let url = format!(
+            "{}/{}",
+            self.base_url,
+            super::http_client::encode_path(path)
+        );
         super::http_client::ensure_url_under_base(&url, &self.base_url)?;
         Ok(url)
     }

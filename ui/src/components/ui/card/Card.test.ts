@@ -52,7 +52,7 @@ describe("CardTitle", () => {
     expect(wrapper.element.tagName).toBe("H2");
     expect(wrapper.classes()).toContain("font-mono");
     // The Head step, regular — not 24px bold competing with the page h1.
-    expect(wrapper.classes()).toContain("text-lg");
+    expect(wrapper.classes()).toContain("text-base");
     expect(wrapper.classes()).not.toContain("font-bold");
   });
 

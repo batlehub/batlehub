@@ -29,9 +29,8 @@ import { AsyncState } from "@/components/ui/async-state";
 const { t, locale } = useI18n();
 
 const base = computed(() => API_BASE_URL || globalThis.location.origin);
-const copied = ref<string | null>(null);
 
-const { token, identity, isAuthenticated, isAdmin, expiresAt } = useAuth();
+const { token, identity, isAuthenticated, can, expiresAt } = useAuth();
 
 const netrcLogin = computed(() => identity.value?.user_id ?? "token");
 const isOidc = computed(() => expiresAt.value > 0);
@@ -186,34 +185,21 @@ function selectorOptions(def: RegistryTypeDef) {
 function showSelector(def: RegistryTypeDef): boolean {
   return selectorOptions(def).length > 1;
 }
-
-async function copy(key: string, text: string) {
-  await navigator.clipboard.writeText(text);
-  copied.value = key;
-  setTimeout(() => {
-    copied.value = null;
-  }, 1500);
-}
 </script>
 
 <template>
-  <div class="max-w-7xl space-y-8">
+  <div class="max-w-7xl space-y-6">
     <PageHeader
       :title="t('setupGuide.setupGuide')"
       :description="t('setupGuide.configureYourToolsToRoute')"
       variant="poster"
     />
 
-    <!-- Loading state -->
-    <output v-if="loading" class="block text-sm text-muted-foreground">
-      {{ t("setupGuide.loadingRegistries") }}
-    </output>
-
     <!-- A failed list said nothing at all: the page fell through to its
          tabs with no registry in them and left a lone `.netrc` tab. -->
     <AsyncState
-      v-else-if="error"
-      :loading="false"
+      v-if="loading || error"
+      :loading="loading"
       :error="error"
       :title="t('setupGuide.registriesCouldNotLoad')"
       :on-retry="reload"
@@ -226,7 +212,7 @@ async function copy(key: string, text: string) {
         :description="t('setupGuide.noRegistriesAreConfiguredOn')"
       >
         <template #action>
-          <Button v-if="isAdmin" as-child size="sm">
+          <Button v-if="can('config:read')" as-child size="sm">
             <RouterLink to="/admin/operations/config-reload">{{
               t("setupGuide.openConfig")
             }}</RouterLink>
@@ -259,7 +245,7 @@ async function copy(key: string, text: string) {
               :href="docsUrl('use/cli#setup-apply', locale)"
               target="_blank"
               rel="noopener noreferrer"
-              class="underline underline-offset-2 hover:text-foreground"
+              class="text-primary underline underline-offset-[3px]"
               >{{ t("setupGuide.setupApplyLink") }}</a
             ></template
           >
@@ -284,11 +270,9 @@ async function copy(key: string, text: string) {
       <p v-else-if="isOidc" class="mb-3 text-xs text-muted-foreground">
         <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
           <template #link
-            ><RouterLink
-              to="/me/tokens"
-              class="underline underline-offset-2 hover:text-foreground"
-              >{{ t("setupGuide.personalApiToken") }}</RouterLink
-            ></template
+            ><RouterLink to="/me/tokens" class="text-primary underline underline-offset-[3px]">{{
+              t("setupGuide.personalApiToken")
+            }}</RouterLink></template
           >
         </i18n-t>
       </p>
@@ -305,13 +289,11 @@ async function copy(key: string, text: string) {
         {{ t("setup.noToolMatch", { query: toolFilter }) }}
       </p>
 
-      <TabsList
-        class="flex flex-wrap h-auto gap-1 justify-start bg-transparent border-none p-0 mb-2"
-      >
-        <TabsTrigger v-for="def in visibleDefs" :key="def.id" :value="def.id" class="rounded-sm">
+      <TabsList class="mb-2">
+        <TabsTrigger v-for="def in visibleDefs" :key="def.id" :value="def.id">
           {{ def.label }}
         </TabsTrigger>
-        <TabsTrigger v-if="isAuthenticated" value="netrc" class="rounded-sm"> .netrc </TabsTrigger>
+        <TabsTrigger v-if="isAuthenticated" value="netrc"> .netrc </TabsTrigger>
       </TabsList>
 
       <!-- Dynamic registry tabs -->
@@ -342,11 +324,7 @@ async function copy(key: string, text: string) {
                   />
                 </div>
               </div>
-              <Badge
-                v-if="def.fileHint"
-                variant="outline"
-                class="shrink-0 font-mono text-xs mt-0.5"
-              >
+              <Badge v-if="def.fileHint" variant="outline" class="shrink-0 font-mono text-xs mt-1">
                 {{ def.fileHint }}
               </Badge>
             </div>
@@ -355,20 +333,15 @@ async function copy(key: string, text: string) {
           <CardContent class="space-y-4">
             <template v-for="snippet in def.snippets" :key="snippet.key">
               <div v-if="!snippet.showWhen || snippet.showWhen(ctxFor(def))">
-                <p v-if="snippet.label" class="text-xs text-muted-foreground mb-1.5">
+                <p v-if="snippet.label" class="text-xs text-muted-foreground mb-2">
                   {{ snippet.label }}
                 </p>
-                <CodeBlock :code="snippet.template(ctxFor(def))" :lang="snippet.lang">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    class="absolute top-2 right-2 h-7 px-2 text-xs"
-                    @click="copy(snippet.key, snippet.template(ctxFor(def, true)))"
-                  >
-                    {{ copied === snippet.key ? t("common.copied") : t("common.copy") }}
-                  </Button>
-                </CodeBlock>
-                <p v-if="snippet.note" class="text-xs text-muted-foreground mt-1.5">
+                <CodeBlock
+                  :code="snippet.template(ctxFor(def))"
+                  :lang="snippet.lang"
+                  :copy="snippet.template(ctxFor(def, true))"
+                />
+                <p v-if="snippet.note" class="text-xs text-muted-foreground mt-2">
                   <RichText
                     :markup="
                       typeof snippet.note === 'function' ? snippet.note(ctxFor(def)) : snippet.note
@@ -404,22 +377,13 @@ async function copy(key: string, text: string) {
             </div>
           </CardHeader>
           <CardContent class="space-y-3">
-            <CodeBlock :code="netrcSnippetFor(false)" lang="ini">
-              <Button
-                size="sm"
-                variant="ghost"
-                class="absolute top-2 right-2 h-7 px-2 text-xs"
-                @click="copy('netrc', netrcSnippetFor(true))"
-              >
-                {{ copied === "netrc" ? t("common.copied") : t("common.copy") }}
-              </Button>
-            </CodeBlock>
+            <CodeBlock :code="netrcSnippetFor(false)" lang="ini" :copy="netrcSnippetFor(true)" />
             <p v-if="isOidc" class="text-xs text-muted-foreground">
               <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
                 <template #link
                   ><RouterLink
                     to="/me/tokens"
-                    class="underline underline-offset-2 hover:text-foreground transition-colors"
+                    class="text-primary underline underline-offset-[3px]"
                     >{{ t("setupGuide.personalApiToken") }}</RouterLink
                   ></template
                 >

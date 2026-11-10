@@ -4,13 +4,13 @@ Proxy and cache the NuGet gallery for `dotnet`, or host private packages. BatleH
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `nuget` |
 | **Default upstream** | `api.nuget.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `dotnet nuget push` |
+| **Private publish** | yes — `dotnet nuget push` |
 | **Air gap** | offline, the flat index is composed from the held packages and the registration page from each package's `.nuspec` read at import; `dotnet restore` reads the flat index |
 
 ## Proxy setup
@@ -123,6 +123,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/nuget -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -138,6 +140,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/index.json` | Proxy the NuGet vulnerability database index. |
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/page/{page}` | Proxy a single page of NuGet vulnerability records. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

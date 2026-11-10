@@ -56,6 +56,10 @@ const BASE = process.env.BASE ?? "http://localhost:5174";
 const CDP_WS = process.env.CDP_WS_URL ?? "";
 const CDP = process.env.CDP_URL ?? "http://127.0.0.1:9222";
 const TOKEN_KEY = "batlehub_access_token";
+/* Read by `isOidcSession`: `/me/tokens` is OIDC-only, and a static token
+   alone is sent to the profile (UI audit lot B). The provider name is only a
+   marker; nothing here refreshes against it. */
+const OIDC_PROVIDER_KEY = "batlehub_oidc_provider";
 
 /** WCAG 2.2 AA, the same tag set the unauthenticated gate uses. */
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
@@ -143,7 +147,8 @@ const ADMIN_ROUTES = [
   "/admin/notifications/inbound",
 ];
 
-// `/me/tokens` needs `auth_provider` set, which a static token satisfies.
+// `/me/tokens` is OIDC-only: the plan seeds `OIDC_PROVIDER_KEY` beside the
+// token, as the OIDC callback does.
 //
 // `/` is here as well as in the unauthenticated scan, and both are needed: the
 // quota and advisory widgets (RFC 0004 §4.2) render *only* for a signed-in
@@ -309,18 +314,21 @@ for (const { role, token, routes } of plans) {
       // has no token, and seeding a `null` would make `initAuth` read the
       // string "null" as a bearer credential.
       await page.evaluateOnNewDocument(
-        (key, value) => {
+        (key, value, providerKey) => {
           /* Cleared, not merely left unset. Every page here shares one browser
              profile — locally the `che-browser` sidecar — so an anonymous plan
              that only declines to seed still reads whatever an authenticated
              plan left behind, and the admin plan runs first. That made `/login`
              redirect to `/packages` and the "anonymous" pass measure a
              signed-in console. */
-          if (value) localStorage.setItem(key, value);
-          else localStorage.clear();
+          if (value) {
+            localStorage.setItem(key, value);
+            localStorage.setItem(providerKey, "design-gate");
+          } else localStorage.clear();
         },
         TOKEN_KEY,
         token,
+        OIDC_PROVIDER_KEY,
       );
       /* `networkidle2` is the right settle signal for a *built* app and a poor
          one for a dev server: Vite transforms each module on first request, so

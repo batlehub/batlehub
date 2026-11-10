@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 1–5 built 2026-11-10 (§17.1–§17.5); the real-client proof of §6.P not yet run |
+| Status      | Accepted — phases 1–5 built 2026-11-10 (§17.1–§17.5); aligned with RFC 0042 (§18); the real-client proof of §6.P not yet run |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1337,8 +1337,8 @@ Each row has its negative test in §14.
 | --- | --- | --- |
 | `scan_status` coarse | `quarantine:read` (default `user`, `admin`) | `hold_visibility` via `scan_status_for` |
 | `scan_status.detail` | `findings:read` (default `admin`) | same |
-| `next_rescan` on verdict GET | `system:read` (instance tier) | `authorize_control(hot, None, …)` |
-| `/admin/scans` | `system:read` (instance tier) | `require_verb(…, None, …)`; `403` otherwise |
+| `next_rescan` on verdict GET | `quarantine:read` (instance tier; was `system:read`, §18) | `authorize_control(hot, None, …)` |
+| `/admin/scans` | `quarantine:read` (instance tier; was `system:read`, §18), then per registry and per namespace | `require_verb(…, None, …)`; `403` otherwise; rows re-checked with `config_tier_holds` |
 | `/admin/findings` | `findings:read`, per configured registry | `authorize_control(hot, Some(r), …)` per registry, bound into the query; `403` when held on none |
 | `/admin/registries/{n}` | `system:read` (instance tier); `config` block `config:read`; URL fields `upstreams:read` on `n` | `require_verb`, then per block |
 | `monitoring_url` (both responses) | `system:read` (instance tier) | `authorize_control(hot, None, …)` |
@@ -1710,13 +1710,13 @@ availability here grants nothing.
 | 2 | UI only, or new endpoints too? | **Read endpoints allowed; no new persisted data.** Everything is computable from existing tables. |
 | 3 | What does "propose changes" to a registry mean? | **Computed suggestions + a link to the existing editor.** A four-eyes proposal workflow is a non-goal: new state, new approval model. |
 | 4 | Long package page: tabs, collapsing, or a separate page? | **Tabs, linkable with `?tab=`, sticky header with the badge.** A link to "the security of this package" is the common need. |
-| 5 | Who sees the scan indicator? | **Coarse state to every caller allowed to learn a version is held; detail to `findings:read`; next-rescan and queue to `system:read`.** Refined from the draft's "every reader" by decision 15's finding: `hold_visibility` already defines this, and anonymous callers must not learn of a hold. |
+| 5 | Who sees the scan indicator? | **Coarse state to every caller allowed to learn a version is held; detail to `findings:read`; next-rescan and queue to `system:read`.** Refined from the draft's "every reader" by decision 15's finding: `hold_visibility` already defines this, and anonymous callers must not learn of a hold. *Revised by §18:* next-rescan and the queue are at instance-tier `quarantine:read` (RFC 0042). |
 | 6 | How are the states derived? | **Computed server-side by one function, five states, §4.2 order.** `scan_jobs` has no status column, and the UI must not recombine fields. |
 | 7 | What is the "bypass"? | **The existing gate exemption plus "rescan now"; no serve-before-scan.** Quarantine exists to prevent exactly that. |
 | 8 | What does the findings view look like? | **A paginated `GET /admin/findings`, by finding or by reference; no per-finding triage.** Triage would be new state and a second override path. |
 | 9 | Should the raw `content` endpoint also be restricted? | **No, out of scope; the new view shows less than it does.** Changing what `config:read` returns breaks the editor. |
 | 10 | Is a new verb needed? | **No.** Every surface maps to an existing verb (§7.2). |
-| 11 | Which next-rescan dates are shown? | **Both clocks, labelled; "never" when unconfigured; at `system:read`.** They answer different questions. |
+| 11 | Which next-rescan dates are shown? | **Both clocks, labelled; "never" when unconfigured; at `system:read`.** They answer different questions. *Revised by §18:* next-rescan and the queue are at instance-tier `quarantine:read` (RFC 0042). |
 | 12 | What status do lists carry? | **The most recently cached version, batched; per version in the Versions tab.** No N+1. |
 | 13 | What goes on the registry page? | **Allow-listed effective config, health, scan freshness, three suggestions, an editor link; no provenance, no configurable thresholds.** `load_layered` keeps no provenance. |
 | 14 | Approver = author in config staging? | **Out of scope, recorded as a non-goal.** It deserves its own change. |
@@ -2130,3 +2130,62 @@ absent in this workspace; CI runs it) and the rendered design gate
    `monitoring_url_rejects_non_http_schemes`, run through the same
    `validate()` a reload calls.
 
+---
+
+## 18. Alignment with RFC 0042 (2026-11-10)
+
+This RFC was written in parallel with [RFC 0042](/rfc/0042-security-console-by-verb)
+(a security console beside the admin), which reached the tree first. Both
+numbered themselves 0042; this one became **0044**. RFC 0042 settles the
+verb model the console uses, and this RFC follows it:
+
+| Surface | Before (§7.2 as accepted) | Now | Why |
+| --- | --- | --- | --- |
+| `/admin/scans` | `system:read`, instance tier | `quarantine:read`, instance tier, then per registry, then each row at its namespace | RFC 0042 §4.2 and decision 8: a security read asks for the verb naming what it discloses; `system:read` also opens health and wiring. The per-row check is new: a seal now cuts the queue as it cuts the findings list (`scans_list_respects_namespace_seal`). |
+| `next_rescan` on the verdict GET | `system:read`, instance tier | `quarantine:read`, instance tier | The scan schedule is part of what a security team follows; the registry-tier `quarantine:read` every user holds is still not enough. |
+| Bulk rescan / backfill (linked from the Scans page) | `system:write` | `scans:run` (RFC 0042's new verb) | Taken from RFC 0042 unchanged; T9 now asserts `scans:run`. |
+| `/admin/findings` | `findings:read` per registry, per-row seal check | unchanged | Already the verb RFC 0042 names, and stricter at the namespace tier than its listing. |
+| `/admin/registries/{name}`, `monitoring_url` | `system:read` | unchanged | Health and wiring are what `system:read` names (RFC 0042 §4.2). |
+| Console gating | `role === "admin"` on every `/admin` route | `ADMIN_PAGE_VERBS` and `can(verb)` | RFC 0042 §4.3: the verb of each route is defined once, beside the route. |
+
+Decisions 5, 10 and 11 are revised accordingly: next-rescan and the queue
+are at instance-tier `quarantine:read`, not `system:read`; and the "no new
+verb" of decision 10 stands for this RFC, which adds none, while RFC 0042's
+`scans:run` is used where it applies.
+
+The test fixture's T16 caller now holds instance-tier `quarantine:read` and
+`SEC2` is sealed with an empty node: in RFC 0015's model only an empty node
+stops an inherited grant, so a registry cannot exclude an instance-tier
+delegate while still granting its own administrators.
+
+The migration this RFC adds moved from `067` to `068`, after RFC 0042's
+branch took `067`.
+
+
+### 18.1 Fixes carried from the review of #311
+
+The review of #311 (the branch that carries RFC 0042 and RFC 0043) found six
+major issues; this branch fixes them, since it merges after #311:
+
+1. **RFC 0042's verdict listing and summary ignored seals.** Both checked
+   `quarantine:read` at the instance tier only, which a sealed namespace or
+   registry below it does not see. Each row is now re-checked with
+   `config_tier_holds`, as `/admin/findings` and `/admin/scans` do, and a
+   sealed registry drops out of the summary
+   (`verdict_listing_and_summary_respect_seals`). The summary's counts still
+   include versions under a sealed namespace: numbers, never a coordinate.
+2. **`encode_path` left `..` live.** `%2E%2E` is decoded back to `..` by the
+   `url` crate reqwest parses with. A dots-only segment is now `%252E…`,
+   kept as a name (`dot_segments_survive_the_url_parser`, asserted on the
+   parsed URL).
+3. **A request could wait hours on the access-event writer.** The
+   request-path flush is bounded to 2 s, and a batch that failed for want of
+   a connection is not retried row by row.
+4. **The mise listing ignored `deny_missing_timestamp`.** An entry with no
+   readable `created_at` is now hidden under it, as RFC 0043 §6.2 says.
+5. **`mise latest` reads GitHub's `releases/latest` first.** A guard test
+   now fails if the github kind ever serves that route without the block
+   filter.
+6. **inkdex could pass without a token.** A step before the action fails the
+   job when `INKDEX_TOKEN` is empty. Naming `inkdex.yaml / required` in the
+   `main` ruleset is still to do, after the secret exists.

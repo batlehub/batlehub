@@ -28,18 +28,18 @@ own publish client, and Nexus keeps serving until the last client has moved.
 
 | Nexus format | BatleHub `type` | Hosted equivalent |
 |--------------|-----------------|:-----------------:|
-| `maven2` | [`maven`](/registries/maven) | ✅ |
-| `npm` | [`npm`](/registries/npm) | ✅ |
-| `pypi` | [`pypi`](/registries/pypi) | ✅ |
-| `nuget` | [`nuget`](/registries/nuget) (v3 protocol) | ✅ |
-| `rubygems` | [`rubygems`](/registries/rubygems) | ✅ |
-| `go` | [`goproxy`](/registries/goproxy) | ✅ |
-| `apt` | [`deb`](/registries/deb) | ✅ |
-| `yum` | [`rpm`](/registries/rpm) | ✅ |
-| `conda` | [`conda`](/registries/conda) | ✅ |
-| `cargo` | [`cargo`](/registries/cargo) | ✅ |
-| `composer` | [`composer`](/registries/composer) | ✅ |
-| `raw` | [`generic`](/registries/generic) | ❌ proxy only |
+| `maven2` | [`maven`](/registries/maven) | yes |
+| `npm` | [`npm`](/registries/npm) | yes |
+| `pypi` | [`pypi`](/registries/pypi) | yes |
+| `nuget` | [`nuget`](/registries/nuget) (v3 protocol) | yes |
+| `rubygems` | [`rubygems`](/registries/rubygems) | yes |
+| `go` | [`goproxy`](/registries/goproxy) | yes |
+| `apt` | [`deb`](/registries/deb) | yes |
+| `yum` | [`rpm`](/registries/rpm) | yes |
+| `conda` | [`conda`](/registries/conda) | yes |
+| `cargo` | [`cargo`](/registries/cargo) | yes |
+| `composer` | [`composer`](/registries/composer) | yes |
+| `raw` | [`generic`](/registries/generic) | no — proxy only |
 | `docker`, `helm`, `r`, `conan`, `cocoapods`, `p2`, `bower`, `gitlfs` | — | — |
 
 The last row is **not supported yet**. Some of those formats are on the

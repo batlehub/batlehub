@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/terraform.md
-sourceHash: fb34f620b39a8858
+sourceHash: 7e5a2562e0f28dd7
 ---
 
 # Terraform
@@ -13,13 +13,13 @@ modules, sous contrôle du RBAC et du garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `terraform` |
 | **Amont par défaut** | `registry.terraform.io` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ modules · ⚠️ envoi de providers, que `terraform init` ne sait pas encore installer ([ci-dessous](#publishing-providers)) |
+| **Publication privée** | oui — modules · partiel — envoi de providers, que `terraform init` ne sait pas encore installer ([ci-dessous](#publishing-providers)) |
 | **Coupure réseau** | hors ligne, les `versions` de providers et de modules sont composées à partir de l'ensemble détenu, ainsi que le document `download` d'un provider pour une plateforme dont l'archive, les `shasums` et la `shasums.sig` sont toutes détenues — le plan doit nommer les trois chemins — les clés de signature du publieur étant portées par le manifeste du lot que produit `mise export` ; `terraform init` vérifie la signature du publieur comme il le ferait connecté, et cette instance ne signe rien. Une plateforme à laquelle il manque l'un des trois donne un `503` |
 
 ## Mise en place du proxy
@@ -423,6 +423,8 @@ curl -X POST \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/terraform -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -449,6 +451,8 @@ curl -X POST \
 | `DELETE` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}` | Yank a Terraform provider version (local/hybrid registries only). |
 | `POST` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}/unyank` | Unyank a Terraform provider version (local/hybrid registries only). |
 <!-- END endpoints -->
+
+:::
 
 ---
 

@@ -215,30 +215,19 @@
   font-size: var(--t-meta);
 }
 
-/* The default theme reveals the social links at 1280px, a width computed for
-   its own sentence-case navbar. Ours is Meta: uppercase and tracked 0.1em, which
-   is wider for the same words — at 1280 the icons landed 77px past the edge and
-   the appearance toggle was clipped. Measured, at 1440 / 1280 / 1100.
-
-   Raised rather than retracked: the tracking is the Tracking Ladder's step for
-   inline chrome, and a nav item is inline chrome whatever the viewport is. */
-@media (min-width: 1280px) and (max-width: 1379px) {
-  :root .VPNavBarSocialLinks {
-    display: none;
-  }
-}
-
-/* The same arithmetic, one step down. The default theme lays the navbar out
-   flat from 768px up; with Meta labels this world's navbar needs 1280, and
-   below that it was clipping — at 1000px "Operations", "Project" and the
-   appearance toggle were simply off the right edge, unreachable rather than
-   merely tight. That predates the Config Generator entry (the nav is 65
-   characters now against 67 before), which is why it is fixed here rather than
-   worked around by shortening another label.
+/* When the navbar collapses. The default theme lays it out flat from 768px up,
+   a width computed for its own sentence-case labels; ours are Meta, uppercase
+   and tracked 0.1em, and wider for the same words. Seven flat entries needed
+   1340px on a page with a sidebar (whose title block takes the sidebar's
+   width), plus a rule hiding the social icons up to 1439. Five entries — two
+   of them dropdowns — need 1200 with the icons in, in both locales: measured
+   on /, /fr/, /guide/caching and /fr/guide/caching, where the bar's right edge
+   is 1174 at 1200 and 1103 at 1100.
 
    Collapsing to the hamburger is the default theme's own answer to a navbar
-   that does not fit; this only tells it when. */
-@media (min-width: 768px) and (max-width: 1279px) {
+   that does not fit; this only tells it when. Retracking instead was ruled
+   out: a nav item is inline chrome, and the Tracking Ladder sets that step. */
+@media (min-width: 768px) and (max-width: 1199px) {
   /* `:root`-prefixed for the reason every override in this file is: the default
      theme's rules are single-file-component styles and carry a `[data-v-…]` on
      top of their class, so a bare `.VPNavBarMenu` loses silently. */
@@ -348,11 +337,22 @@
   font-size: var(--t-row);
 }
 
+/* A first cell that is only a link is a label ("Docker / Compose"); wrapped it
+   breaks mid-name and reads as two entries. Tables scroll in their own box, so
+   keeping it on one line costs nothing. */
+.vp-doc td:first-child:has(> a:only-child) {
+  white-space: nowrap;
+}
+
 .vp-doc th,
 .vp-doc td {
   font-size: var(--t-row);
   font-variant-numeric: tabular-nums;
   border: 1px solid var(--rule-soft);
+  /* A row of facts reads top-down. Centred, a key sat at the bottom of a
+     15-line value cell — RFC 0015's `Status` row, and every key/value table
+     whose value wraps. */
+  vertical-align: top;
 }
 
 /* Column heads take the Tracking Ladder's 0.14em step. */
@@ -371,6 +371,65 @@
 .vp-doc tr,
 .vp-doc tbody tr:nth-child(2n) {
   background: transparent;
+}
+
+/* ── The spec sheet at the top of a registry page ────────────────────────────
+   Every registry page opens with "At a glance": six facts as a two-column
+   table. Boxed and gridded like a reference table it took 400px — the whole
+   first screen — and pushed the snippet the reader came for below the fold.
+   These are a caption's facts, not data to compare across rows, so they set as
+   the specimen sheet sets them: ruled rows, a Meta label, the value in ink. No
+   box (The No-Container Rule); dashed separators at rest.
+
+   Selected by the heading's id rather than a class because the table is
+   markdown, and the id is the one thing all 58 pages (both locales) share. The
+   header row (Property / Value) stays in the DOM for assistive tech and is
+   only moved off-screen. */
+:is(#at-a-glance, #en-un-coup-d-œil) + table {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  align-items: baseline;
+  column-gap: var(--s5);
+  width: 100%;
+  max-width: 68ch;
+  border: 0;
+  border-bottom: 1px dashed var(--rule-soft);
+  overflow: visible;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table :is(tbody, tr) {
+  display: contents;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table td {
+  border: 0;
+  border-top: 1px dashed var(--rule-soft);
+  /* A fact is scanned, not read for minutes: the Row step's 1.5, not 1.7. */
+  padding: 6px 0;
+  line-height: 1.5;
+}
+
+/* The label column: Meta, uppercase, the Tracking Ladder's column-head step. */
+:is(#at-a-glance, #en-un-coup-d-œil) + table td:first-child {
+  font-size: var(--t-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table td:first-child strong {
+  font-weight: inherit;
+  color: inherit;
 }
 
 /* ── Blockquotes and callouts ────────────────────────────────────────────────
@@ -506,14 +565,6 @@
   border-color: var(--rule-strong);
 }
 
-:root .VPFeature .icon {
-  border: 1px solid var(--rule-soft);
-  background: var(--ground-raised);
-  /* The feature glyphs are emoji, so this is an icon size rather than a step in
-     the ramp; it takes the Head step so it is still a size the system names. */
-  font-size: var(--t-head);
-}
-
 .VPFeature .title {
   font-family: var(--face-display);
   font-weight: 700;
@@ -572,6 +623,10 @@
   line-height: 1.7;
   border-left: 2px solid var(--rule-strong);
   color: var(--ink-dim);
+  /* The theme centres the quote; against a left rule that leaves the rule
+     floating beside a centred paragraph, so the text sits flush to it. */
+  text-align: left;
+  padding-left: var(--s4);
 }
 
 :root .NotFound .action .link {
@@ -602,6 +657,18 @@
   text-transform: uppercase;
   letter-spacing: 0.16em;
   font-size: var(--t-meta);
+}
+
+/* The default theme truncates each entry to one line with an ellipsis — sized
+   for a sans. In the mono face "12. Decisions and open questions" came out as
+   "12. Decisions and open q…"; wrapping costs a line, hiding costs the title. */
+:root .outline-link {
+  white-space: normal;
+  /* The theme's 32px line box would set a wrapped title's second line as far
+     from its first as the next entry is; 1.5 plus 6px each side keeps a
+     one-line entry at the same 32px and binds a wrapped one together. */
+  line-height: 1.5;
+  padding-block: 6px;
 }
 
 .VPDocOutlineItem.is-active a {
@@ -664,8 +731,9 @@
   border-radius: var(--radius);
 }
 
+/* Ink, not crimson: a scrollbar is none of the accent's four jobs. */
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--ink-dim);
 }
 
 /* ── Reduced motion ──────────────────────────────────────────────────────────
@@ -697,9 +765,13 @@
    16.64:1 light. `!important` is not decoration here — mermaid injects a
    <style> block inside each SVG, and these rules have to outrank it.
 
-   Only the edge labels are touched. Node fills and their text come from
-   mermaid's theme and passed the gate as they are; restyling them would be a
-   second palette to keep in agreement with the first. */
+   The nodes followed in a second pass. They had been left to mermaid's theme
+   on the grounds that restyling them would be a second palette — but mermaid's
+   theme *was* the second palette: cyan and magenta subgraphs on paper, neutral
+   grey boxes on near-black, neither of which this world contains. Repainting
+   them in tokens removes that palette rather than adding one: boxes are the
+   sunk ground under a strong rule, labels are ink, edges are dim ink, and the
+   whole diagram flips with the rendition because the tokens do. */
 .mermaid .edgeLabel,
 .mermaid .edgeLabel p,
 .mermaid .edgeLabel foreignObject div {
@@ -711,6 +783,58 @@
 .mermaid .labelBkg {
   background-color: var(--ground) !important;
   opacity: 1 !important;
+}
+
+/* A label is a <p> inside the SVG, so the Reading rule at the top of this file
+   reached it: 16px at line-height 1.7, after mermaid had sized the box for its
+   own 1.5. Two lines then needed 54px in a 48px box and the last one was cut.
+   A node label is data, not prose. */
+.vp-doc .mermaid :is(p, span, div) {
+  font-size: inherit;
+  line-height: 1.5;
+  max-width: none;
+}
+
+.mermaid .node :is(rect, polygon, circle, ellipse, path),
+.mermaid .cluster :is(rect, polygon) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+  /* Mermaid's dark theme drops a blurred shadow under every node; nothing in
+     this world casts a shadow at rest. */
+  filter: none !important;
+}
+
+.mermaid :is(.nodeLabel, .cluster-label, .cluster-label span, .label foreignObject div) {
+  color: var(--ink) !important;
+}
+
+.mermaid :is(.node, .cluster) text {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.flowchart-link, .messageLine0, .messageLine1, .relation) {
+  stroke: var(--ink-dim) !important;
+}
+
+/* Sequence diagrams (50 of the 148) draw with their own classes: lavender
+   actors and yellow notes by default. Same three tokens. */
+.mermaid :is(rect.actor, rect.note, polygon.labelBox, rect[class^="activation"]) {
+  fill: var(--ground-sunk) !important;
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid :is(text.actor, text.actor tspan, .noteText, .messageText, .labelText, .loopText, .loopText tspan) {
+  fill: var(--ink) !important;
+}
+
+.mermaid :is(.actor-line, line[class^="actor-line"], .loopLine) {
+  stroke: var(--rule-strong) !important;
+}
+
+.mermaid #arrowhead path,
+.mermaid :is(marker path, .arrowheadPath, .arrowMarkerPath) {
+  fill: var(--ink-dim) !important;
+  stroke: var(--ink-dim) !important;
 }
 
 /* A diagram is wider than a phone. Scroll it inside its own box rather than

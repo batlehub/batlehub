@@ -1516,8 +1516,16 @@ const ALL_TARGETS: [TargetId; 19] = [
 /// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules.
-const MISE_TYPES: [&str; 8] = [
-    "github", "forgejo", "gitlab", "npm", "cargo", "openvsx", "nodedist", "generic",
+const MISE_TYPES: [&str; 9] = [
+    "mise-versions",
+    "github",
+    "forgejo",
+    "gitlab",
+    "npm",
+    "cargo",
+    "openvsx",
+    "nodedist",
+    "generic",
 ];
 
 /// mise's `gitlab:` backend, sent at the typed `{project}/-/releases` route,

@@ -106,3 +106,24 @@ async fn a_direct_request_for_a_blocked_release_is_still_denied() {
     let req = admin_get("/proxy/local-gh/acme/widget/releases/tags/v1.1.0");
     assert_eq!(call_service(&app, req).await.status(), 403);
 }
+
+/// Guard (review of #311, RFC 0043): mise 2026.11 asks the GitHub API's
+/// `releases/latest` before it reads the mise-versions list. A mise-versions
+/// block or age gate governs `latest` only because this kind does not serve
+/// that route. Adding it must come with the same block filter the listing
+/// applies — otherwise every block on `latest` silently stops working.
+#[actix_web::test]
+async fn releases_latest_is_not_served_so_mise_falls_back_to_the_filtered_list() {
+    let app = app("local-gh", "github").await;
+    block_version(&app, "local-gh", "acme/widget", "v1.1.0").await;
+    for uri in [
+        "/proxy/local-gh/acme/widget/releases/latest",
+        "/proxy/local-gh/repos/acme/widget/releases/latest",
+    ] {
+        let status = call_service(&app, admin_get(uri)).await.status();
+        assert!(
+            status.is_client_error() && status != 403,
+            "{uri} answered {status}: a served `latest` bypasses mise-versions blocks"
+        );
+    }
+}
