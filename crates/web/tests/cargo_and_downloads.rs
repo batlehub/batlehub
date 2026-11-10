@@ -124,12 +124,21 @@ async fn cargo_registry_config_returns_dl_url() {
 #[actix_web::test]
 async fn cargo_registry_config_returns_404_for_unknown_registry() {
     let app = make_app(InMemoryRepo::new()).await;
-    // 'npm' is not a cargo registry
+    // 'npm' is not a cargo registry: the path is npm's `{package}/{version}`
+    // there (TD-0004 §1 routes a request on its own kind's routes only), and
+    // never the cargo index config.
     let req = TestRequest::get()
         .uri("/proxy/npm/registry/config.json")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 404);
+    assert_ne!(
+        resp.request().match_pattern().as_deref(),
+        Some("/proxy/{registry}/registry/config.json")
+    );
+    let req = TestRequest::get()
+        .uri("/proxy/nope/registry/config.json")
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
 }
 
 #[actix_web::test]

@@ -102,7 +102,7 @@ standard AWS SDK chain: the instance or pod role, or `AWS_ACCESS_KEY_ID` /
 
 ### Database connection pool {#config-db}
 
-Each replica opens its own connection pool. Lower `max_connections` per replica when running behind PgBouncer, or leave it at the default (10) when connecting directly.
+Each replica opens its own connection pool. Lower `max_connections` per replica when running behind PgBouncer, or leave it at the default (20) when connecting directly — see [sizing `max_connections`](./configuration#sizing-max-connections).
 
 ```toml
 [database]

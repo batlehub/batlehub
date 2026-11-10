@@ -1114,7 +1114,10 @@ async fn main() -> Result<()> {
     // endpoint covers the deployment that would rather look first.
     spawn_coherence_sweep_if_enabled(&config, &eviction_map);
 
-    server_factory::run_actix_server(server_factory::ServerParams {
+    // One multi-row INSERT per ~100 ms instead of one statement per request
+    // (TD-0004 §2), flushed below once actix has drained its requests.
+    repo.start_access_batching();
+    let served = server_factory::run_actix_server(server_factory::ServerParams {
         bind_addr: format!("{}:{}", config.server.host, config.server.port),
         static_dir: config.server.static_dir.clone(),
         scalar_agent: config
@@ -1196,7 +1199,9 @@ async fn main() -> Result<()> {
         banner_svc,
         storage_admin_repo,
     })
-    .await
+    .await;
+    repo.flush_access_events().await;
+    served
 }
 
 /// The host name, for a worker id that says where it ran.

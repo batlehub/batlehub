@@ -38,7 +38,7 @@ cors_allowed_origins = [
 [database]
 type = "postgresql"
 url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
-max_connections = 10
+max_connections = 20
 
 # ── Auth providers (evaluated in order; first match wins) ─────────────────────
 

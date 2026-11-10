@@ -125,7 +125,8 @@ l'environnement du processus.
 ### Le pool de connexions à la base {#config-db}
 
 Chaque réplica ouvre son propre pool de connexions. Baissez `max_connections` par
-réplica derrière un PgBouncer, ou laissez le défaut (10) en connexion directe.
+réplica derrière un PgBouncer, ou laissez le défaut (20) en connexion directe — voir
+[dimensionner `max_connections`](./configuration#dimensionner-max-connections).
 
 ```toml
 [database]

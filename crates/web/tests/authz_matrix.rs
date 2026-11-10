@@ -2688,9 +2688,8 @@ fn report_write_surface_coverage() {
 /// approximation to get wrong. The inventory stays stated; this asserts the
 /// statement against the router instead of against a count.
 ///
-/// One app routes every row: the route table is registered in full regardless of
-/// registry type, and which handler *answers* is a question about guards, not
-/// about matching.
+/// Each row is routed on an app of its own kind: a registry's protocol routes
+/// sit in a scope guarded by its kind (TD-0004 §1).
 ///
 /// # The two spellings
 ///
@@ -2707,42 +2706,10 @@ fn report_write_surface_coverage() {
 async fn coverage_claims_match_the_routes_rows_actually_reach() {
     use std::collections::BTreeSet;
 
-    let parts = local_only_app_parts_with_policy(
-        "reg",
-        "npm",
-        RegistryMode::Local,
-        true,
-        rbac_policy_deny_anonymous,
-    )
-    .await;
-    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
-    // The devfile routes carry a registry-type guard (RFC 0035): they match a
-    // devfile registry and nothing else, so on the npm app above their paths
-    // fall through to npm's wildcards — which is the guard working. Their rows
-    // are routed on a devfile app instead.
-    let devfile_parts = local_only_app_parts_with_policy(
-        "reg",
-        "devfile",
-        RegistryMode::Local,
-        true,
-        rbac_policy_deny_anonymous,
-    )
-    .await;
-    let devfile_app =
-        build_local_registry_app(devfile_parts, batlehub_web::CargoIndexMap::default(), None).await;
-    // The helm routes carry the same kind of guard (RFC 0029), for the same
-    // reason: `…/helm/index.yaml` is an npm version route on the app above.
-    let helm_parts = local_only_app_parts_with_policy(
-        "reg",
-        "helm",
-        RegistryMode::Local,
-        true,
-        rbac_policy_deny_anonymous,
-    )
-    .await;
-    let helm_app =
-        build_local_registry_app(helm_parts, batlehub_web::CargoIndexMap::default(), None).await;
-
+    // Since TD-0004 §1 a registry's routes live in a scope guarded by its
+    // kind: a path only routes on a registry of a kind that serves it. So each
+    // row is routed on an app of its own kind, built once per kind.
+    let mut apps = std::collections::HashMap::new();
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut unrouted: Vec<&str> = Vec::new();
 
@@ -2753,14 +2720,21 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
         if row.post.is_some() {
             continue;
         }
+        if !apps.contains_key(row.kind) {
+            let parts = local_only_app_parts_with_policy(
+                "reg",
+                row.kind,
+                RegistryMode::Local,
+                true,
+                rbac_policy_deny_anonymous,
+            )
+            .await;
+            let app =
+                build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+            apps.insert(row.kind, app);
+        }
         let req = TestRequest::get().uri(row.uri).to_request();
-        let resp = if row.kind == "devfile" {
-            call_service(&devfile_app, req).await
-        } else if row.kind == "helm" {
-            call_service(&helm_app, req).await
-        } else {
-            call_service(&app, req).await
-        };
+        let resp = call_service(&apps[row.kind], req).await;
         match resp.request().match_pattern() {
             Some(pattern) => {
                 reached.insert(canonical(&pattern));

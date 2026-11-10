@@ -387,8 +387,11 @@ async fn the_routes_refuse_a_registry_of_another_kind() {
         "healthcheck",
         "broker/download/java/1.1.0/linuxx64",
     ] {
+        // Since TD-0004 §1 a request is routed on its own registry kind's
+        // routes only: no sdkman route is reached, whatever answers.
         let resp = call_service(&app, admin_get(&format!("/proxy/npm-reg/sdkman/{path}"))).await;
-        assert_eq!(resp.status(), 404, "{path}");
+        let pattern = resp.request().match_pattern().unwrap_or_default();
+        assert!(!pattern.contains("/sdkman/"), "{path} reached {pattern}");
     }
 }
 

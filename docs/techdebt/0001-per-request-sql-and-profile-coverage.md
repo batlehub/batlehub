@@ -96,6 +96,29 @@ spread holds, item 3 comes before item 2.
 **Paid when** a metadata read on a warm cache runs at most one statement, and
 the profile's SQL column shows it.
 
+**Nearly paid**, measured 2026-11-10 with
+`tests/heavy/db_calls.sh` on a local Postgres 17 at `2cbea74`. The two
+statements named above are gone from a warm read: `user_blocks.is_blocked` and
+`find_by_hash` are both served from the `LISTEN/NOTIFY` read cache of PR #297
+(`CACHES.user_blocks`, `CACHES.tokens`), so neither the fold into
+`find_by_hash` nor a TTL was needed. A warm `npm` packument runs one statement,
+the request's own work (the version's block list), anonymously or with a
+static token. With a PAT the first repeat still runs two and only the third
+read one; the harness reports the count, not which statement the second read
+added, so that is the one left to name:
+
+| Scenario | cold | warm |
+| --- | ---: | ---: |
+| `proxy-packument-anon` | 1 | 1 |
+| `proxy-packument-static-token` | 2 | 1 |
+| `proxy-packument-pat` | 4 | 2 on the second read, 1 on the third |
+| `proxy-tarball-pat` | 1 | 1, the batched audit write, outside the request |
+
+Item 3, the writes on the download path, is
+[TD-0004 §2](/techdebt/0004-request-routing-and-db-writes): the audit row is
+now written in batches, off the request. The profile's SQL column has not been
+re-read since; that is a `profile` run on the next PR.
+
 ## 2. A cached download waits, and the wait is not attributed yet
 
 ### What was measured
@@ -188,6 +211,11 @@ move:
   `perf/profile_routes.txt` keep their keys. Check it, don't assume it.
 
 **Paid when** the router's share of CPU on `composer_root` is under 10 %.
+
+**Fixed, not yet re-profiled** (2026-11-10): the scoped router of
+[TD-0004 §1](/techdebt/0004-request-routing-and-db-writes) took a composer
+request from 54.6 to 11.9 µs in process. This section is Paid once a
+`profile` run shows the router under 10 % on `composer_root`.
 
 ## 4. 321 of 372 API operations have no profile arm
 

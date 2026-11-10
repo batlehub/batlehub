@@ -415,8 +415,13 @@ async fn composer_wrong_registry_type_returns_404() {
         .uri("/proxy/npm/packages.json")
         .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
+    // Since TD-0004 §1 a request is routed on its own registry kind's routes
+    // only: the other kind's handler is never reached, whatever answers.
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 404);
+    assert_ne!(
+        resp.request().match_pattern().as_deref(),
+        Some("/proxy/{registry}/packages.json")
+    );
 }
 
 /// Composer verifies `dist.shasum` with **SHA-1** — RFC 0009 §12.16.

@@ -77,8 +77,9 @@ D'une mesure à l'autre, un même niveau varie de ±0,15 ms au plus. Le coût pa
 
 ## Base de données (PostgreSQL)
 
-- **Connexions :** le `max_connections = 10` par défaut convient en dessous de 50
-  requêtes simultanées. Montez à 25 ou 50 pour un déploiement chargé. La base
+- **Connexions :** `max_connections = 20` par instance par défaut ; voir
+  [dimensionner `max_connections`](./configuration#dimensionner-max-connections)
+  avant de monter plus haut. La base
   elle-même doit autoriser au moins
   `max_connections × (nombre d'instances) + 10` de marge.
 - **Disque :** la table `access_events` grossit d'environ 1 Ko par événement. À
