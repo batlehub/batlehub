@@ -181,13 +181,10 @@ function formatDate(iso: string) {
                 {{ saveError[pkgKey(pkg)] }}
               </p>
             </template>
-            <Badge
-              v-else
-              :variant="visVariant(pkg.visibility)"
-              class="capitalize text-xs cursor-pointer"
-              @click="startEdit(pkg)"
-            >
-              {{ pkg.visibility }}
+            <Badge v-else :variant="visVariant(pkg.visibility)" class="capitalize text-xs">
+              {{
+                visibilityOptions.find((o) => o.value === pkg.visibility)?.label ?? pkg.visibility
+              }}
             </Badge>
           </TableCell>
           <TableCell class="text-xs">{{ pkg.published_by }}</TableCell>

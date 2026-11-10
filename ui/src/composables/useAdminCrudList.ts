@@ -109,7 +109,11 @@ export function useAdminCrudList<TItem, TAddForm extends object>(
     }
   }
 
+  /** The add button's guard, for the dialog's submit button. */
+  const canAdd = computed(() => !options.canSubmitAdd || options.canSubmitAdd(addForm.value));
+
   return {
+    canAdd,
     registryOptions,
     selectedRegistry,
     items,
@@ -127,3 +131,7 @@ export function useAdminCrudList<TItem, TAddForm extends object>(
     confirmRemove,
   };
 }
+
+export type AdminCrudList<TItem, TAddForm extends object> = ReturnType<
+  typeof useAdminCrudList<TItem, TAddForm>
+>;

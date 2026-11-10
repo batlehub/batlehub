@@ -241,7 +241,7 @@ const formatTime = (iso: string) => new Date(iso).toLocaleString();
               :href="`${API_BASE_URL}${result.proxy_url}`"
               target="_blank"
               rel="noopener"
-              class="font-mono underline underline-offset-2 hover:text-foreground"
+              class="font-mono text-primary underline underline-offset-[3px]"
               >{{ API_BASE_URL }}{{ result.proxy_url }}</a
             >
           </p>

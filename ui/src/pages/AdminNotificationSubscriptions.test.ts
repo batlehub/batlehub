@@ -388,8 +388,10 @@ describe("AdminNotificationSubscriptions", () => {
 
     await rowButton(wrapper, /^Delete$/).trigger("click");
     await flushPromises();
-    expect(dialogText()).toContain("Delete subscription?");
+    expect(dialogText()).toContain("Delete 1 subscription of my-slack");
 
+    // Irreversible, so the channel's name is typed before Delete enables.
+    await fill("#destructive-confirm-name", "my-slack");
     await clickInDialog(/^Delete$/);
 
     expect(mocks.deleteSubscription).toHaveBeenCalledWith({ path: { id: "sub-1" } });
@@ -402,6 +404,7 @@ describe("AdminNotificationSubscriptions", () => {
 
     await rowButton(wrapper, /^Delete$/).trigger("click");
     await flushPromises();
+    await fill("#destructive-confirm-name", "my-slack");
     await clickInDialog(/^Delete$/);
 
     expect(dialogText()).toContain("subscription is locked");

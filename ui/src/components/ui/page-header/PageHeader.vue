@@ -8,6 +8,8 @@ withDefaults(
     variant?: "default" | "display" | "poster";
     /** `h2` for a page rendered inside a hub, whose layout already owns the `h1`. */
     as?: "h1" | "h2";
+    /** A count after the title, in parentheses; nothing when 0 or absent. */
+    count?: number;
   }>(),
   { variant: "default", as: "h1" },
 );
@@ -45,6 +47,9 @@ withDefaults(
         "
       >
         <slot name="title">{{ title }}</slot>
+        <span v-if="count" class="font-mono text-base font-normal text-muted-foreground"
+          >({{ count }})</span
+        >
       </component>
       <p
         v-if="description || $slots.description"

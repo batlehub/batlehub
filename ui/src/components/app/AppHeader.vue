@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { computed } from "vue";
+import { computed, useTemplateRef } from "vue";
+import { useResizeObserver } from "@vueuse/core";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Menu, X, BookOpen } from "@lucide/vue";
 import { useAuth } from "@/composables/useAuth";
@@ -62,6 +63,13 @@ function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
 
+/* The masthead's real height, for the bars that stick under it (`--masthead-h`):
+   it is 57px bare, and taller still while `GlobalBanner` is up. */
+useResizeObserver(useTemplateRef<HTMLElement>("masthead"), ([entry]) => {
+  const height = (entry.target as HTMLElement).offsetHeight;
+  document.documentElement.style.setProperty("--masthead-h", `${height}px`);
+});
+
 function handleLogout() {
   logout();
   router.push("/login");
@@ -70,7 +78,7 @@ function handleLogout() {
 </script>
 
 <template>
-  <header class="sticky top-0 z-40 border-b border-rule-soft bg-ground-sunk">
+  <header ref="masthead" class="sticky top-0 z-40 border-b border-rule-soft bg-ground-sunk">
     <!-- The instance's announcement, above the masthead rather than under it.
 
          It sat below the nav, which put a maintenance or outage notice *third*

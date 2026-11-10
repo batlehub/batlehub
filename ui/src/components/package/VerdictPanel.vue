@@ -245,7 +245,7 @@ async function rescan() {
         <RefreshCw class="mr-1 h-3.5 w-3.5" aria-hidden="true" />
         {{ t("verdictPanel.rescan") }}
       </Button>
-      <span v-if="rescanNote" class="text-xs text-muted-foreground">{{ rescanNote }}</span>
+      <span role="status" class="text-xs text-muted-foreground">{{ rescanNote }}</span>
     </div>
   </section>
 </template>

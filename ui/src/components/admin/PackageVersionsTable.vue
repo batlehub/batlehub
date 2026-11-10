@@ -15,6 +15,8 @@ import type { PackageVersionDetail } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
 import { formatDate as fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import BulkActionBar from "@/components/admin/BulkActionBar.vue";
+import { useRowSelection } from "@/composables/useRowSelection";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
@@ -136,7 +138,6 @@ async function doInvalidate(v: PackageVersionDetail) {
 
 // ── Multi-select ──────────────────────────────────────────────────────────────
 
-const selectedIds = ref<Set<string>>(new Set());
 const bulkLoading = ref(false);
 const bulkMsg = ref<string | null>(null);
 
@@ -151,19 +152,16 @@ function bulkOutcome(verb: keyof typeof BULK_KEYS, ok: number, failed: number): 
   return failed ? t("packageVersionsTable.bulkWithFailures", { done, failed }, failed) : done;
 }
 
-const allSelected = computed(
-  () => props.versions.length > 0 && props.versions.every((v) => selectedIds.value.has(v.id)),
+const {
+  selected: selectedIds,
+  allSelected,
+  toggleAll,
+  toggle,
+  clear: clearSelection,
+} = useRowSelection(
+  () => props.versions,
+  (v) => v.id,
 );
-
-function toggleAll() {
-  selectedIds.value = allSelected.value ? new Set() : new Set(props.versions.map((v) => v.id));
-}
-
-function toggle(v: PackageVersionDetail) {
-  if (selectedIds.value.has(v.id)) selectedIds.value.delete(v.id);
-  else selectedIds.value.add(v.id);
-  selectedIds.value = new Set(selectedIds.value);
-}
 
 const selected = computed(() => props.versions.filter((v) => selectedIds.value.has(v.id)));
 
@@ -309,7 +307,7 @@ async function bulkBlock() {
     bulkLoading.value = false;
     // The selection survives a refusal, so the operator can fix the cause and
     // press the button again rather than re-tick every row.
-    if (!actionError.value) selectedIds.value = new Set();
+    if (!actionError.value) clearSelection();
     emit("reload");
   }
 }
@@ -336,7 +334,7 @@ async function bulkUnblock() {
     }
   } finally {
     bulkLoading.value = false;
-    if (!actionError.value) selectedIds.value = new Set();
+    if (!actionError.value) clearSelection();
     emit("reload");
   }
 }
@@ -344,13 +342,11 @@ async function bulkUnblock() {
 
 <template>
   <!-- Bulk action bar -->
-  <div
+  <BulkActionBar
     v-if="selectedIds.size > 0"
-    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-ground-raised px-4 py-2"
+    :label="t('packageVersionsTable.versionsSelected', selectedIds.size)"
+    @clear="clearSelection"
   >
-    <span class="text-sm font-medium">{{
-      t("packageVersionsTable.versionsSelected", selectedIds.size)
-    }}</span>
     <Button
       size="sm"
       variant="outline"
@@ -365,10 +361,7 @@ async function bulkUnblock() {
       @click="ask({ kind: 'bulk-unblock' })"
       >{{ t("packageVersionsTable.unblockSelected") }}</Button
     >
-    <Button size="sm" variant="ghost" @click="selectedIds = new Set()">{{
-      t("common.clearAction")
-    }}</Button>
-  </div>
+  </BulkActionBar>
   <!-- Outside the selection-gated bar: a success clears the selection, which
        destroyed the message in the same tick (same fix as AdminPackages). -->
   <output v-if="bulkMsg" class="block text-sm text-muted-foreground">{{ bulkMsg }}</output>
@@ -422,7 +415,7 @@ async function bulkUnblock() {
                 v-if="isPreRelease(v.version)"
                 variant="outline"
                 class="ml-1 text-xs align-middle"
-                >pre-release</Badge
+                >{{ t("packageVersionsTable.preRelease") }}</Badge
               >
               <!-- In the version cell rather than a column of its own: RFC
                    0004-bis §6.1's verdict on this table is that it is already

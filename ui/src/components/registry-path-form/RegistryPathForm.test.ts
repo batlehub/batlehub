@@ -34,14 +34,14 @@ describe("RegistryPathForm", () => {
 
   it("groups fields sharing a row number into one grid container", () => {
     const wrapper = mountForm("github");
-    // owner+repo share row 1, ref+assetId share row 2 -> two grid-cols-2 rows.
-    const grids = wrapper.findAll(".grid-cols-2");
+    // owner+repo share row 1, ref+assetId share row 2 -> two sm:grid-cols-2 rows.
+    const grids = wrapper.findAll(".sm\\:grid-cols-2");
     expect(grids).toHaveLength(2);
   });
 
   it("renders a 3-column grid for terraform's namespace/name/provider row", () => {
     const wrapper = mountForm("terraform");
-    expect(wrapper.findAll(".grid-cols-3")).toHaveLength(2);
+    expect(wrapper.findAll(".sm\\:grid-cols-3")).toHaveLength(2);
   });
 
   it("renders the suffix text next to the label", () => {

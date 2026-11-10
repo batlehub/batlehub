@@ -201,12 +201,7 @@ onMounted(load);
 
         <Card>
           <CardHeader>
-            <CardTitle>
-              {{ t("airGap.missing") }}
-              <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-                >({{ total }})</span
-              >
-            </CardTitle>
+            <CardTitle :count="total">{{ t("airGap.missing") }}</CardTitle>
           </CardHeader>
           <CardContent class="space-y-3">
             <p class="text-sm text-muted-foreground">{{ t("airGap.missingIntro") }}</p>

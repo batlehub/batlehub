@@ -13,12 +13,13 @@
  * reader. Native radios, so the arrow keys move within a group and Tab moves
  * between them with no script of ours.
  */
-import { ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useColorMode } from "@vueuse/core";
 import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverContent } from "radix-vue";
 import { SlidersHorizontal } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { readPreference, setLocalePreference, systemLocale, type LocalePreference } from "@/i18n";
 
 const { t } = useI18n();
@@ -50,6 +51,27 @@ function chooseLocale(value: LocalePreference): void {
   setLocalePreference(value);
 }
 
+const labelOf = (list: readonly { value: string; key: string }[], value: string) =>
+  t(list.find((o) => o.value === value)?.key ?? value);
+
+/* What "System" resolves to right now, said under its group (DESIGN § preferences). */
+const systemTheme = computed(() => labelOf(THEMES, mode.system.value));
+const systemLanguage = computed(() => labelOf(LOCALES, systemLocale()));
+
+const announcement = ref("");
+watch(mode, (value) => {
+  announcement.value = t("displaySettings.changed", {
+    setting: t("displaySettings.theme"),
+    value: labelOf(THEMES, value),
+  });
+});
+watch(locale, (value) => {
+  announcement.value = t("displaySettings.changed", {
+    setting: t("locale.label"),
+    value: labelOf(LOCALES, value),
+  });
+});
+
 const CELL =
   "flex-1 cursor-pointer px-1 py-2 text-center font-mono text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground has-[:checked]:bg-foreground has-[:checked]:text-background has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--focus)]";
 </script>
@@ -70,7 +92,7 @@ const CELL =
       <!-- DESIGN's popover: the sunk ground, a rule, no shadow, 264px. -->
       <PopoverContent
         align="end"
-        :side-offset="6"
+        :side-offset="8"
         class="z-50 w-[264px] space-y-4 border border-rule-strong bg-ground-sunk p-4 text-foreground"
       >
         <fieldset>
@@ -89,6 +111,9 @@ const CELL =
               {{ t(opt.key) }}
             </label>
           </div>
+          <p v-if="mode === 'auto'" class="mt-2 font-mono text-xs text-muted-foreground">
+            {{ t("displaySettings.systemNote", { value: systemTheme }) }}
+          </p>
         </fieldset>
         <fieldset>
           <legend class="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -110,8 +135,13 @@ const CELL =
               >
             </label>
           </div>
+          <p v-if="locale === 'system'" class="mt-2 font-mono text-xs text-muted-foreground">
+            {{ t("displaySettings.systemNote", { value: systemLanguage }) }}
+          </p>
         </fieldset>
       </PopoverContent>
     </PopoverPortal>
   </PopoverRoot>
+  <!-- Outside the popover, so a change made just before it closes is still heard. -->
+  <Announcer :message="announcement" />
 </template>

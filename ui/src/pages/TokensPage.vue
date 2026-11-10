@@ -377,7 +377,7 @@ const lifetimePresets = [7, 30, 90];
           <Input
             id="token-name"
             v-model="form.name"
-            placeholder="e.g. CI pipeline"
+            placeholder="ci-github-actions"
             @keyup.enter="submitCreate"
           />
         </div>
@@ -445,7 +445,7 @@ const lifetimePresets = [7, 30, 90];
               :aria-pressed="form.expires_in_days === days"
               @click="form.expires_in_days = days"
             >
-              {{ days }}d
+              {{ t("tokensPage.daysShort", { days }) }}
             </Button>
           </div>
           <div class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -464,7 +464,7 @@ const lifetimePresets = [7, 30, 90];
                 )
               "
             />
-            <span>days</span>
+            <span>{{ t("tokensPage.days") }}</span>
           </div>
         </fieldset>
 

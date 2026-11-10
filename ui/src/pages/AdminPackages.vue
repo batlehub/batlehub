@@ -3,6 +3,9 @@ import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
+import BulkActionBar from "@/components/admin/BulkActionBar.vue";
+import PackageFilterBar from "@/components/admin/PackageFilterBar.vue";
+import { useRowSelection } from "@/composables/useRowSelection";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
 import { PACKAGES_TABS } from "@/config/adminSections";
@@ -26,8 +29,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Announcer } from "@/components/ui/announcer";
@@ -216,7 +217,6 @@ async function deletePkg(pkg: AdminPackageSummary) {
 
 // ── Multi-select + bulk actions ───────────────────────────────────────────────
 
-const selected = ref<Set<string>>(new Set());
 const bulkLoading = ref(false);
 const bulkResultMsg = ref<string | null>(null);
 
@@ -244,27 +244,13 @@ function pkgKey(pkg: AdminPackageSummary) {
   return `${pkg.package_id.registry}:${pkg.package_id.name}:${pkg.package_id.version}:${pkg.package_id.artifact ?? ""}`;
 }
 
-const allSelected = computed(
-  () =>
-    filteredPackages.value.length > 0 &&
-    filteredPackages.value.every((p) => selected.value.has(pkgKey(p))),
-);
-
-function toggleAll() {
-  if (allSelected.value) {
-    filteredPackages.value.forEach((p) => selected.value.delete(pkgKey(p)));
-  } else {
-    filteredPackages.value.forEach((p) => selected.value.add(pkgKey(p)));
-  }
-  selected.value = new Set(selected.value);
-}
-
-function toggleOne(pkg: AdminPackageSummary) {
-  const k = pkgKey(pkg);
-  if (selected.value.has(k)) selected.value.delete(k);
-  else selected.value.add(k);
-  selected.value = new Set(selected.value);
-}
+const {
+  selected,
+  allSelected,
+  toggleAll,
+  toggle: toggleOne,
+  clear: clearSelection,
+} = useRowSelection(filteredPackages, pkgKey);
 
 const selectedPackages = computed(() =>
   (packages.value ?? []).filter((p) => selected.value.has(pkgKey(p))),
@@ -303,7 +289,7 @@ async function bulkBlock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -335,7 +321,7 @@ async function bulkUnblock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -376,7 +362,7 @@ async function bulkDelete() {
     actionError.value = extractMessage(e);
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -495,14 +481,7 @@ async function runPending(): Promise<void> {
          person able to perform destructive actions. -->
     <Announcer :message="bulkResultMsg ?? ''" />
     <SectionTabs :tabs="PACKAGES_TABS" />
-    <PageHeader variant="display">
-      <template #title>
-        {{ t("adminNav.allPackages") }}
-        <span v-if="packages?.length" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ packages.length }})</span
-        >
-      </template>
-    </PageHeader>
+    <PageHeader variant="display" :title="t('adminNav.allPackages')" :count="packages?.length" />
     <!-- The form that used to sit here is `/admin/packages/bulk`, one tab
          away and better at the job. A link, not a second implementation. -->
     <p class="text-sm text-muted-foreground">
@@ -531,13 +510,11 @@ async function runPending(): Promise<void> {
          outlined control (its confirmation carries the weight), and Delete is
          the bar's one filled action, set apart at the far end so it is never
          the button beside the one you meant. -->
-    <div
+    <BulkActionBar
       v-if="selected.size > 0"
-      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2"
+      :label="t('adminPackages.selectedCount', { count: selected.size }, selected.size)"
+      @clear="clearSelection"
     >
-      <span class="text-sm font-medium">{{
-        t("adminPackages.selectedCount", { count: selected.size }, selected.size)
-      }}</span>
       <Button
         size="sm"
         variant="outline"
@@ -555,25 +532,25 @@ async function runPending(): Promise<void> {
         @click="pending = { kind: 'bulk-unblock' }"
         >{{ t("adminPackages.unblockSelected") }}</Button
       >
-      <Button size="sm" variant="ghost" @click="selected = new Set()">
-        {{ t("common.clearAction") }}
-      </Button>
-      <Button
-        size="sm"
-        variant="destructive"
-        class="ml-auto"
-        :disabled="bulkLoading"
-        @click="pending = { kind: 'bulk-delete' }"
-        >{{ t("adminPackages.deleteSelected") }}</Button
-      >
-    </div>
+      <template #end>
+        <Button
+          size="sm"
+          variant="destructive"
+          class="ml-auto"
+          :disabled="bulkLoading"
+          @click="pending = { kind: 'bulk-delete' }"
+          >{{ t("adminPackages.deleteSelected") }}</Button
+        >
+      </template>
+    </BulkActionBar>
 
     <!-- Outside the selection-gated bar above: every bulk handler clears the
          selection in its `finally`, so a message rendered inside that bar was
          written into a node destroyed in the same tick and never seen. -->
-    <output v-if="bulkResultMsg" class="block text-sm text-muted-foreground">
+    <!-- A plain paragraph: the Announcer at the top already speaks it. -->
+    <p v-if="bulkResultMsg" class="text-sm text-muted-foreground">
       {{ bulkResultMsg }}
-    </output>
+    </p>
 
     <!-- Package list -->
     <Card>
@@ -581,30 +558,12 @@ async function runPending(): Promise<void> {
         <div class="flex flex-row items-center justify-end space-y-0">
           <Button variant="outline" size="sm" @click="reload"> {{ t("common.refresh") }} </Button>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <Input
-            v-model="search"
-            :placeholder="t('adminPackages.filterByNameRegistry')"
-            :aria-label="t('adminPackages.filterPackages')"
-            class="max-w-sm h-8 text-sm"
-          />
-          <!-- Both go to the server. `blocked_only` answers half this page's
-               question and had no control at all. -->
-          <Label for="ap-registry" class="sr-only">{{ t("common.registry") }}</Label>
-          <Select
-            id="ap-registry"
-            v-model="registryFilter"
-            :options="[
-              { value: '', label: t('adminPackages.allRegistries') },
-              ...(registries ?? []).map((r) => ({ value: r.name, label: r.name })),
-            ]"
-            class="h-8 w-auto"
-          />
-          <div class="flex items-center gap-2 h-8">
-            <Switch id="ap-blocked" v-model="blockedOnly" />
-            <Label for="ap-blocked" class="text-sm">{{ t("adminPackages.blockedOnly") }}</Label>
-          </div>
-        </div>
+        <PackageFilterBar
+          v-model:search="search"
+          v-model:registry-filter="registryFilter"
+          v-model:blocked-only="blockedOnly"
+          :registries="registries"
+        />
       </CardHeader>
       <CardContent class="p-0">
         <p v-if="actionError" class="px-6 pt-4 text-sm text-destructive">
@@ -794,11 +753,7 @@ async function runPending(): Promise<void> {
     <template v-if="pending?.kind === 'block-one' || pending?.kind === 'bulk-block'">
       <div class="space-y-1">
         <Label for="block-reason">{{ t("common.reason") }}</Label>
-        <Input
-          id="block-reason"
-          v-model="blockReason"
-          placeholder="CVE-2025-XXXX or policy violation"
-        />
+        <Input id="block-reason" v-model="blockReason" placeholder="CVE-2025-29927" />
       </div>
     </template>
   </DestructiveConfirm>
