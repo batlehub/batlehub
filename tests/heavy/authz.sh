@@ -3985,6 +3985,10 @@ only looks covered."
 # audit_lines — every audit line the server has written so far. `cargo run`
 # puts its own stderr in the same file, so only JSON lines are kept.
 audit_lines() {
+  # Access events are written in 100 ms batches (TD-0004 §2) and their stream
+  # line is printed when the batch lands, so a count read the instant the
+  # client exits misses the last one.
+  sleep 0.5
   grep -F '"event.dataset":"batlehub.audit"' "$HEAVY_WORK/server.log" || true
   return 0
 }

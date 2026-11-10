@@ -145,7 +145,12 @@ pub async fn mise_versions_data(
     let base = upstreams
         .upstream_for(&registry)
         .unwrap_or_else(|| batlehub_adapters::registry::mise_versions::DEFAULT_BASE.to_owned());
-    let url = format!("{}/data/{file}", base.trim_end_matches('/'));
+    // Rebuilt from the validated triple (`[a-z0-9_]` parts), never from the
+    // request's own `file`.
+    let url = format!(
+        "{}/data/python-precompiled-{triple}.gz",
+        base.trim_end_matches('/')
+    );
     let offline = air_gapped(&svc).await;
     // shortcut: held-or-503 in an air gap, no miss recorded; a bundle cannot
     // carry this index yet (RFC 0043 §4.3).

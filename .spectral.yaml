@@ -81,10 +81,14 @@ overrides:
     rules:
       owasp:api2:2023-no-credentials-in-url: off
   # Never succeed, by design: the air-gap sink always answers 501 (RFC 0008
-  # §6.4), and npm dist-tags are derived, so writing one is declined with 501.
+  # §6.4), npm dist-tags are derived, so writing one is declined with 501, and
+  # mise-versions refuses the GitHub-mirror family with the 503 that sends mise
+  # to api.github.com (RFC 0043 §11, decision 5).
   - files:
       - 'ui/openapi.json#/paths/~1_air-gap~1unmirrored~1%7Btail%7D'
       - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1-~1package~1%7Bpackage%7D~1dist-tags~1%7Btag%7D'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1mise-versions~1api~1github~1%7Btail%7D'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1mise-versions~1data~1github~1%7Btail%7D'
     rules:
       operation-success-response: off
   # Public reads, by design: none of these handlers takes an identity. Login,

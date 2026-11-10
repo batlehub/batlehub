@@ -145,6 +145,9 @@ pub async fn collect(
     since: DateTime<Utc>,
     refused: bool,
 ) -> Result<Vec<Puller>, CoreError> {
+    // Access events are batched (TD-0004 §2): a refusal recorded a moment ago
+    // would otherwise be missing from the hold's release recipients.
+    repo.flush_access_events().await;
     let events = read_all(repo, pullers_filter(pkg, since, refused)).await?;
     Ok(aggregate(&events, pkg, refused))
 }

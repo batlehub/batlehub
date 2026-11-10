@@ -1452,6 +1452,7 @@ const composerAuthSnippet = `{
                 <option value="galaxy">Ansible Galaxy</option>
                 <option value="nix">Nix binary cache</option>
                 <option value="nodedist">Node.js distributions</option>
+                <option value="mise-versions">mise versions host</option>
                 <option value="sdkman">SDKMAN</option>
                 <option value="rustup">Rust toolchain (rustup)</option>
                 <option value="devfile">Devfile registry (Che, odo)</option>

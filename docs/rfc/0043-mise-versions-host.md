@@ -384,7 +384,7 @@ compiler then forces an answer from every exhaustive match listed in
 | `supports_local_mode()` | `false` |
 | `requires_explicit_upstream_in_proxy_mode()` | `false` (defaults to jdx.dev) |
 | `is_path_addressed()` | `false` |
-| `listing_filter()` | `Filtered("`data/<tool>.toml`", ["versions"])`, `Filtered("`python-precompiled-*.gz`", [])` |
+| `listing_filter()` | ``Filtered("data/<tool>.toml", ["versions"])``, ``Filtered("python-precompiled-*.gz", [])`` |
 | `readme_support()` | `None("a version list carries no prose about a tool")` |
 | `upstream_detail()` | `Document("versions")`: the console's version table, with `created_at` as the date |
 | `fetchable_by_version()` | `None("this kind lists versions; the bytes come from the backend's own registry")` |
