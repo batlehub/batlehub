@@ -286,11 +286,6 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
     },
   );
 
-  /** Where the row's version link points: this page, with that version selected. */
-  function versionLink(version: string) {
-    return { path: route.path, query: { ...route.query, version } };
-  }
-
   /**
    * Which version is being fetched, and what came of the last attempt
    * (RFC 0007-bis §4.4).
@@ -566,7 +561,6 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
     filterVersions,
     togglePrereleases,
     turnToPage,
-    versionLink,
     fetching,
     fetchResult,
     onFetchVersion,
