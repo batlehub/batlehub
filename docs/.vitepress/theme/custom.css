@@ -610,6 +610,11 @@
    "12. Decisions and open q…"; wrapping costs a line, hiding costs the title. */
 :root .outline-link {
   white-space: normal;
+  /* The theme's 32px line box would set a wrapped title's second line as far
+     from its first as the next entry is; 1.5 plus 6px each side keeps a
+     one-line entry at the same 32px and binds a wrapped one together. */
+  line-height: 1.5;
+  padding-block: 6px;
 }
 
 .VPDocOutlineItem.is-active a {
