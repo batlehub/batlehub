@@ -24,6 +24,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Announcer } from "@/components/ui/announcer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -37,7 +38,6 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
-import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { Select } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
@@ -237,6 +237,9 @@ async function submitForm() {
 // ── Delete ────────────────────────────────────────────────────────────────────
 
 const deleteTarget = ref<string | null>(null);
+const deleteChannel = computed(
+  () => subscriptions.value?.find((s) => s.id === deleteTarget.value)?.channel_name ?? "",
+);
 const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
 
@@ -570,13 +573,14 @@ async function testSubscription(id: string) {
   </Dialog>
 
   <!-- Delete confirmation -->
-  <ConfirmDialog
+  <DestructiveConfirm
     :open="deleteTarget !== null"
-    :title="t('adminNotifications.deleteSubscription')"
-    :description="t('adminNotifications.thisActionCannotBeUndone')"
-    :confirm-label="t('common.delete')"
-    :loading-label="t('common.deleting')"
-    destructive
+    :action="t('common.delete')"
+    :count="1"
+    :item-noun="t('adminNotifications.subscriptionNoun')"
+    :scope="deleteChannel"
+    :consequence="t('adminNotifications.deleteConsequence')"
+    :confirm-name="deleteChannel"
     :loading="deleteLoading"
     :error="deleteError"
     @update:open="

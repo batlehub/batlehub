@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -255,8 +256,21 @@ const principalTypeOptions = computed(() => [
   </Dialog>
 
   <!-- Remove confirmation dialog -->
-  <Dialog
+  <DestructiveConfirm
     :open="removeTarget !== null"
+    :action="t('common.remove')"
+    :count="1"
+    :item-noun="t('adminBetaChannel.memberNoun')"
+    :scope="selectedRegistry"
+    :consequence="
+      t('adminBetaChannel.willLoseAccess', {
+        principal: removeTarget?.principal_id,
+        registry: selectedRegistry,
+      })
+    "
+    reversible
+    :loading="removeLoading"
+    :error="removeError"
     @update:open="
       (v) => {
         if (!v) {
@@ -265,38 +279,6 @@ const principalTypeOptions = computed(() => [
         }
       }
     "
-  >
-    <template #title>{{ t("adminBetaChannel.removeMember") }}</template>
-    <template #description>
-      <i18n-t keypath="adminBetaChannel.willLoseAccess" tag="span">
-        <template #principal
-          ><span class="font-mono">{{ removeTarget?.principal_id }}</span></template
-        >
-        <template #registry
-          ><span class="font-mono">{{ selectedRegistry }}</span></template
-        >
-      </i18n-t>
-    </template>
-    <div class="space-y-4">
-      <p v-if="removeError" class="text-sm text-destructive">
-        {{ removeError }}
-      </p>
-      <div class="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="removeLoading"
-          @click="
-            removeTarget = null;
-            removeError = null;
-          "
-        >
-          {{ t("common.cancel") }}
-        </Button>
-        <Button variant="destructive" size="sm" :disabled="removeLoading" @click="confirmRemove">
-          {{ removeLoading ? t("adminBetaChannel.removing") : t("common.remove") }}
-        </Button>
-      </div>
-    </div>
-  </Dialog>
+    @confirm="confirmRemove"
+  />
 </template>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { registryHealth, clearRegistryCache, invalidateExploreCache } from "@/client/sdk.gen";
 import type { RegistryHealthDto } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
@@ -20,6 +20,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { OBSERVABILITY_TABS } from "@/config/adminSections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -44,6 +45,9 @@ const { data, error, loading, reload } = useApi<RegistryHealthDto[]>(
 const expandedErrors = ref<Set<string>>(new Set());
 
 const clearTarget = ref<string | null>(null);
+const clearCount = computed(
+  () => data.value?.find((r) => r.registry === clearTarget.value)?.cached_artifact_count ?? 0,
+);
 
 /**
  * The explore-cache invalidation, relocated from `/admin/operations/explore-cache`
@@ -448,11 +452,16 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
   </div>
 
   <!-- Clear cache confirmation dialog -->
-  <ConfirmDialog
+  <DestructiveConfirm
     :open="clearTarget !== null"
-    :confirm-label="t('adminHealth.clearCache')"
-    :loading-label="t('adminHealth.clearing')"
-    destructive
+    :action="t('adminHealth.clear')"
+    :count="clearCount"
+    :item-noun="t('adminHealth.cachedArtifact')"
+    :item-noun-plural="t('adminHealth.cachedArtifacts')"
+    :scope="clearTarget ?? ''"
+    :consequence="t('adminHealth.allCachedArtifactsFor')"
+    :confirm-name="clearTarget ?? ''"
+    allow-empty
     :loading="clearing"
     :error="clearError"
     @update:open="
@@ -464,16 +473,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
       }
     "
     @confirm="confirmClearCache"
-  >
-    <template #title>
-      <i18n-t keypath="adminHealth.clearCacheFor" tag="span">
-        <template #registry
-          ><span class="font-mono">{{ clearTarget }}</span></template
-        >
-      </i18n-t>
-    </template>
-    <template #description>{{ t("adminHealth.allCachedArtifactsFor") }}</template>
-  </ConfirmDialog>
+  />
 
   <!-- Explore-cache invalidation, relocated here from its own route. Confirmed
        like its neighbour: it is cheap and self-healing, but it is still a

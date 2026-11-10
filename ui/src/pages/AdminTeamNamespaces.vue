@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -289,8 +290,21 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
   </Dialog>
 
   <!-- Release confirmation dialog -->
-  <Dialog
+  <DestructiveConfirm
     :open="releaseTarget !== null"
+    :action="t('adminTeamNamespaces.release')"
+    :count="1"
+    :item-noun="t('adminTeamNamespaces.claimNoun')"
+    :scope="releaseTarget?.prefix ?? ''"
+    :consequence="
+      t('adminTeamNamespaces.releaseExplanation', {
+        prefix: releaseTarget?.prefix,
+        group: releaseTarget?.group_id,
+      })
+    "
+    reversible
+    :loading="releaseLoading"
+    :error="releaseError"
     @update:open="
       (v) => {
         if (!v) {
@@ -299,42 +313,6 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
         }
       }
     "
-  >
-    <template #title>{{ t("adminTeamNamespaces.releaseNamespaceClaim") }}</template>
-    <template #description>
-      <i18n-t keypath="adminTeamNamespaces.releaseExplanation" tag="span">
-        <template #prefix
-          ><span class="font-mono">{{ releaseTarget?.prefix }}</span></template
-        >
-        <template #group
-          ><span class="font-mono">{{ releaseTarget?.group_id }}</span></template
-        >
-      </i18n-t>
-    </template>
-    <div class="space-y-4">
-      <p v-if="releaseError" class="text-sm text-destructive">
-        {{ releaseError }}
-      </p>
-      <div class="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="releaseLoading"
-          @click="
-            releaseTarget = null;
-            releaseError = null;
-          "
-        >
-          {{ t("common.cancel") }}
-        </Button>
-        <Button variant="destructive" size="sm" :disabled="releaseLoading" @click="confirmRelease">
-          {{
-            releaseLoading
-              ? t("adminTeamNamespaces.releasing")
-              : t("adminTeamNamespaces.releaseClaim")
-          }}
-        </Button>
-      </div>
-    </div>
-  </Dialog>
+    @confirm="confirmRelease"
+  />
 </template>
