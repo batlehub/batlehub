@@ -5,7 +5,8 @@ import { RouterLink } from "vue-router";
 
 import { verdictSummary } from "@/client/sdk.gen";
 import type { RegistryVerdictSummary } from "@/client/types.gen";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Resolution } from "@/components/ui/resolution";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { AsyncState } from "@/components/ui/async-state";
 import {
@@ -18,13 +19,22 @@ import {
 } from "@/components/ui/table";
 import { formatDay } from "@/lib/format";
 import { packagePath } from "@/config/navigation";
+import { HOLD_LABEL_KEYS, HOLD_RESOLUTION } from "@/config/verdict";
 
 /**
  * What the supply-chain layer holds, across every registry with a
  * `[security]` profile (RFC 0042 §5.2): counts per state, then the most
  * recent holds with their reason codes. Never the findings — those stay
- * behind `findings:read` on the package page.
+ * behind `findings:read`: with `canOpenFindings`, each registry row offers
+ * its listing, which the dashboard draws as its own section.
  */
+const props = defineProps<{
+  canOpenFindings?: boolean;
+  /** The registry whose findings are open, so its row reads as pressed. */
+  findingsFor?: string | null;
+}>();
+const emit = defineEmits<{ openFindings: [registry: string] }>();
+
 const { t } = useI18n();
 
 const registries = ref<RegistryVerdictSummary[]>([]);
@@ -74,6 +84,9 @@ onMounted(load);
               <TableHead>{{ t("holdsPanel.quarantined") }}</TableHead>
               <TableHead>{{ t("holdsPanel.warned") }}</TableHead>
               <TableHead>{{ t("holdsPanel.allowed") }}</TableHead>
+              <TableHead v-if="props.canOpenFindings">
+                <span class="sr-only">{{ t("findingsPanel.title") }}</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -83,6 +96,18 @@ onMounted(load);
               <TableCell class="font-mono text-sm">{{ r.counts.quarantined }}</TableCell>
               <TableCell class="font-mono text-sm">{{ r.counts.warned }}</TableCell>
               <TableCell class="font-mono text-sm">{{ r.counts.allowed }}</TableCell>
+              <TableCell v-if="props.canOpenFindings" class="text-right">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :aria-pressed="props.findingsFor === r.registry"
+                  :aria-label="t('findingsPanel.openFor', { registry: r.registry })"
+                  :data-testid="`open-findings-${r.registry}`"
+                  @click="emit('openFindings', r.registry)"
+                >
+                  {{ t("findingsPanel.open") }}
+                </Button>
+              </TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -105,7 +130,12 @@ onMounted(load);
                   </RouterLink>
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline" class="text-xs">{{ h.state }}</Badge>
+                  <Resolution
+                    v-if="HOLD_RESOLUTION[h.state]"
+                    :state="HOLD_RESOLUTION[h.state]!"
+                    :label="t(HOLD_LABEL_KEYS[h.state]!)"
+                  />
+                  <span v-else class="font-mono text-xs uppercase">{{ h.state }}</span>
                 </TableCell>
                 <TableCell class="font-mono text-xs">{{ h.reason_codes.join(", ") }}</TableCell>
                 <TableCell class="text-xs">{{ formatDay(h.evaluated_at) }}</TableCell>

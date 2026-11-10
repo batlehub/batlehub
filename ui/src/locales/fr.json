@@ -1280,7 +1280,7 @@
   },
   "holdsPanel": {
     "title": "Versions retenues",
-    "intro": "Le nombre de verdicts par registre doté d'un profil de sécurité, puis les dernières versions refusées ou en quarantaine. Les constats restent sur la page du paquet.",
+    "intro": "Le nombre de verdicts par registre doté d'un profil de sécurité, puis les dernières versions refusées ou en quarantaine. Les constats d'un registre s'ouvrent depuis sa ligne.",
     "empty": "Aucun registre n'a de profil de sécurité.",
     "loadFailed": "Impossible de charger la synthèse des verdicts.",
     "denied": "Refusées",
@@ -1291,5 +1291,16 @@
     "state": "État",
     "reasons": "Motifs",
     "evaluated": "Évaluée"
+  },
+  "findingsPanel": {
+    "title": "Constats",
+    "titleFor": "Constats — {registry}",
+    "open": "Constats",
+    "openFor": "Ouvrir les constats de {registry}",
+    "close": "Fermer les constats",
+    "findings": "Constats",
+    "empty": "Aucune version de ce registre n'est dans cet état.",
+    "noProfile": "Ce registre n'a pas de profil de sécurité.",
+    "loadFailed": "Impossible de charger les verdicts de ce registre."
   }
 }

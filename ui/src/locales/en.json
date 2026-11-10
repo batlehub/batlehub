@@ -1280,7 +1280,7 @@
   },
   "holdsPanel": {
     "title": "Held versions",
-    "intro": "Verdict counts per registry with a security profile, then the most recent denied and quarantined versions. Findings stay on the package page.",
+    "intro": "Verdict counts per registry with a security profile, then the most recent denied and quarantined versions. The findings of a registry open from its row.",
     "empty": "No registry has a security profile.",
     "loadFailed": "Could not load the verdict summary.",
     "denied": "Denied",
@@ -1291,5 +1291,16 @@
     "state": "State",
     "reasons": "Reasons",
     "evaluated": "Evaluated"
+  },
+  "findingsPanel": {
+    "title": "Findings",
+    "titleFor": "Findings — {registry}",
+    "open": "Findings",
+    "openFor": "Open the findings of {registry}",
+    "close": "Close the findings",
+    "findings": "Findings",
+    "empty": "No version of this registry is in this state.",
+    "noProfile": "This registry has no security profile.",
+    "loadFailed": "Could not load the verdicts of this registry."
   }
 }
