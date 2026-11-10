@@ -12,6 +12,7 @@ import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { formatDate } from "@/lib/format";
 import { API_BASE_URL } from "@/config";
+import ConfigWarningList from "@/components/admin/ConfigWarningList.vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import ConfigReadOnlyView from "@/components/admin/ConfigReadOnlyView.vue";
 import { OPERATIONS_TABS } from "@/config/adminSections";
@@ -442,27 +443,7 @@ onUnmounted(() => {
         }}</CardTitle>
       </CardHeader>
       <CardContent class="space-y-2">
-        <!-- Opaque copper edge: alpha on the line that carries the contrast
-             was the one thing the other components had stopped doing. -->
-        <div
-          v-for="w in visibleWarnings"
-          :key="`${w.code}@${w.path}`"
-          class="flex items-start gap-3 border border-copper px-4 py-2 text-sm text-copper"
-        >
-          <!-- `min-w-0` so a long config path can shrink, and the code/badge
-               pair wraps: a warning names a TOML key, and TOML keys are long
-               enough to push the page sideways on a phone. -->
-          <div class="min-w-0 flex-1 space-y-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <code class="font-mono text-xs break-all">{{ w.path }}</code>
-              <Badge variant="outline">{{ w.code }}</Badge>
-            </div>
-            <p>{{ w.message }}</p>
-          </div>
-          <Button variant="ghost" size="sm" @click="dismissWarning(w)">{{
-            t("common.dismiss")
-          }}</Button>
-        </div>
+        <ConfigWarningList :warnings="visibleWarnings" dismissible @dismiss="dismissWarning" />
       </CardContent>
     </Card>
 
@@ -524,14 +505,7 @@ onUnmounted(() => {
                   })
                 }}
               </p>
-              <div
-                v-for="w in pendingReload.warnings"
-                :key="`pending-${w.code}@${w.path}`"
-                class="border border-copper px-3 py-2 text-xs text-copper"
-              >
-                <code class="font-mono break-all">{{ w.path }}</code>
-                — {{ w.message }}
-              </div>
+              <ConfigWarningList :warnings="pendingReload.warnings" />
             </div>
             <div class="flex gap-2 flex-wrap">
               <Badge v-for="r in pendingReload.diff.added_registries" :key="r" variant="copper"
@@ -651,13 +625,7 @@ onUnmounted(() => {
                 <template #count>{{ candidateWarnings.length }}</template>
               </i18n-t>
             </p>
-            <div
-              v-for="w in candidateWarnings"
-              :key="`${w.code}@${w.path}`"
-              class="border border-copper px-4 py-2 text-sm text-copper"
-            >
-              <code class="font-mono text-xs">{{ w.path }}</code> — {{ w.message }}
-            </div>
+            <ConfigWarningList :warnings="candidateWarnings" />
           </div>
           <Alert v-if="editorError" variant="destructive">{{ editorError }}</Alert>
           <!-- One filled action per view: staging is it here — unless a reload

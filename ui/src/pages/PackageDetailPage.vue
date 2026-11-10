@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/badge";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
+import { RuleNote } from "@/components/ui/rule-note";
 import { Input } from "@/components/ui/input";
 import { Pagination } from "@/components/ui/pagination";
 import {
@@ -1388,70 +1389,51 @@ const {
              It is the answer the page exists to give, so it is simply on the
              page. The tie bar is the denial note's own, ported from the catalog
              rather than invented here. -->
-        <p
-          v-if="blockedInfo(selectedRow.firewall)"
-          class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
-        >
-          <span class="w-px flex-none bg-border" aria-hidden="true" />
-          <span class="min-w-0 [overflow-wrap:anywhere]">
-            <span class="text-primary">{{ t("common.reasonLabel") }}</span>
-            {{ blockedInfo(selectedRow.firewall)!.reason }}
-            <span class="px-2" aria-hidden="true">·</span>
-            {{
-              t("packageDetailPage.blockedByOn", {
-                who: blockedInfo(selectedRow.firewall)!.blocked_by,
-                when: formatDay(blockedInfo(selectedRow.firewall)!.blocked_at),
-              })
-            }}
-            <RouterLink
-              class="text-primary underline underline-offset-[3px]"
-              :to="{
-                path: '/tools/access-check',
-                query: { registry, name, version: selectedRow.version },
-              }"
-              >{{ t("packageDetailPage.why") }}</RouterLink
-            >
-          </span>
-        </p>
+        <RuleNote v-if="blockedInfo(selectedRow.firewall)" class="mt-4">
+          <span class="text-primary">{{ t("common.reasonLabel") }}</span>
+          {{ blockedInfo(selectedRow.firewall)!.reason }}
+          <span class="px-2" aria-hidden="true">·</span>
+          {{
+            t("packageDetailPage.blockedByOn", {
+              who: blockedInfo(selectedRow.firewall)!.blocked_by,
+              when: formatDay(blockedInfo(selectedRow.firewall)!.blocked_at),
+            })
+          }}
+          <RouterLink
+            class="text-primary underline underline-offset-[3px]"
+            :to="{
+              path: '/tools/access-check',
+              query: { registry, name, version: selectedRow.version },
+            }"
+            >{{ t("packageDetailPage.why") }}</RouterLink
+          >
+        </RuleNote>
 
         <!-- The deprecation message, which was a `title=` on a chip in the
              table — the upstream's own sentence about why not to use this
              version, available only to a mouse held still. -->
-        <p
-          v-if="selectedRow.deprecated"
-          class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
-        >
-          <span class="w-px flex-none bg-border" aria-hidden="true" />
-          <span class="min-w-0 [overflow-wrap:anywhere]">
-            <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
-            {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
-          </span>
-        </p>
+        <RuleNote v-if="selectedRow.deprecated" class="mt-4">
+          <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
+          {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
+        </RuleNote>
 
         <!-- Vulnerabilities as text, for the same reason. A severity chip whose
              identifier and summary appear only under a stationary mouse is a
              supply-chain fact this page is not really reporting. -->
         <ul v-if="selectedRow.vulnerabilities.length" class="mt-4 space-y-2">
-          <li
-            v-for="vuln in selectedRow.vulnerabilities"
-            :key="vuln.osv_id"
-            class="flex items-stretch gap-3 text-sm text-muted-foreground"
-          >
-            <span class="w-px flex-none bg-border" aria-hidden="true" />
-            <span class="min-w-0 [overflow-wrap:anywhere]">
-              <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
-                vuln.severity
-              }}</Badge>
-              <span class="font-mono text-foreground">{{ vuln.osv_id }}</span>
+          <RuleNote v-for="vuln in selectedRow.vulnerabilities" :key="vuln.osv_id" as="li">
+            <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
+              vuln.severity
+            }}</Badge>
+            <span class="font-mono text-foreground">{{ vuln.osv_id }}</span>
+            <span class="px-2" aria-hidden="true">·</span>
+            {{ vuln.summary }}
+            <template v-if="vuln.fixed_version">
               <span class="px-2" aria-hidden="true">·</span>
-              {{ vuln.summary }}
-              <template v-if="vuln.fixed_version">
-                <span class="px-2" aria-hidden="true">·</span>
-                {{ t("packageDetailPage.fixedIn") }}
-                <span class="font-mono text-foreground">{{ vuln.fixed_version }}</span>
-              </template>
-            </span>
-          </li>
+              {{ t("packageDetailPage.fixedIn") }}
+              <span class="font-mono text-foreground">{{ vuln.fixed_version }}</span>
+            </template>
+          </RuleNote>
         </ul>
         <p
           v-else-if="!selectedRow.vulnerabilities_scanned"

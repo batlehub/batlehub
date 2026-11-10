@@ -28,6 +28,7 @@ import type {
 } from "@/client/types.gen";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
+import { RuleNote } from "@/components/ui/rule-note";
 import { Announcer } from "@/components/ui/announcer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1206,10 +1207,9 @@ onMounted(() => {
               >
                 <TableCell class="pl-0 pr-3 pb-3 pt-0" />
                 <TableCell colspan="4" class="pl-0 pr-3 pb-3 pt-0">
-                  <p class="flex items-stretch gap-3 text-sm text-muted-foreground">
-                    <span class="w-px flex-none bg-border" aria-hidden="true" />
-                    <span class="min-w-0 [overflow-wrap:anywhere]">{{ rowSnippet(row) }}</span>
-                  </p>
+                  <RuleNote>
+                    {{ rowSnippet(row) }}
+                  </RuleNote>
                 </TableCell>
               </TableRow>
 
@@ -1282,28 +1282,22 @@ onMounted(() => {
               >
                 <TableCell class="pl-0 pr-3 pb-3 pt-0" />
                 <TableCell colspan="2" class="pl-0 pr-3 pb-3 pt-0">
-                  <p
-                    :id="`note-${rowId(row)}`"
-                    class="flex items-stretch gap-3 text-sm text-muted-foreground"
-                  >
-                    <span class="w-px flex-none bg-border" aria-hidden="true" />
-                    <span class="min-w-0 [overflow-wrap:anywhere]">
-                      {{ t(noteKey(row)!) }}
-                      <!-- Underlined at rest, not on hover. Crimson on the
+                  <RuleNote :id="`note-${rowId(row)}`">
+                    {{ t(noteKey(row)!) }}
+                    <!-- Underlined at rest, not on hover. Crimson on the
                            note's dim ink measures 1.28:1 against the surrounding
                            text, so colour alone cannot mark it as a link — axe's
                            `link-in-text-block` wants 3:1 or a non-colour cue,
                            and the design gate failed on exactly that. The proof
                            underlines it too: its links take the browser default
                            and it only sets the offset. -->
-                      <RouterLink
-                        v-if="row.kind === 'cached'"
-                        class="text-primary underline underline-offset-[3px]"
-                        :to="detailPath(row)"
-                        >{{ t("packageCatalog.noteDetails") }}</RouterLink
-                      >
-                    </span>
-                  </p>
+                    <RouterLink
+                      v-if="row.kind === 'cached'"
+                      class="text-primary underline underline-offset-[3px]"
+                      :to="detailPath(row)"
+                      >{{ t("packageCatalog.noteDetails") }}</RouterLink
+                    >
+                  </RuleNote>
                 </TableCell>
                 <TableCell class="hidden px-0 pb-3 pt-0 lg:table-cell" />
                 <TableCell class="hidden px-0 pb-3 pt-0 lg:table-cell" />
