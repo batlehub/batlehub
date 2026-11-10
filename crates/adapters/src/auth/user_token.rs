@@ -82,15 +82,21 @@ impl UserTokenAuthProvider {
         self
     }
 
-    /// The `token_new_source` event, when `tok` was last seen somewhere else.
+    /// The `token_new_source` event, when `tok` was last seen at `previous`
+    /// and is now presented from somewhere else.
     ///
-    /// Compared only when the last-used slot is claimed — once a minute per
-    /// token — so this costs no read the bookkeeping does not already make,
-    /// and a token bouncing between two hosts is one row a minute, not one
-    /// per request. A token with no recorded source yet is not "new": there
-    /// is nothing to have moved from.
-    fn new_source_event(tok: &UserToken, source_ip: Option<&str>) -> Option<AccessEvent> {
-        let (previous, current) = (tok.last_used_ip.as_deref()?, source_ip?);
+    /// `previous` is what `touch_last_used` read in its own statement, not the
+    /// (possibly cached) `tok.last_used_ip`, so this costs no extra read and is
+    /// right on every replica. Compared only when the last-used slot is
+    /// claimed — once a minute per token — so a token bouncing between two
+    /// hosts is one row a minute, not one per request. A token with no
+    /// recorded source yet is not "new": there is nothing to have moved from.
+    fn new_source_event(
+        tok: &UserToken,
+        previous: Option<&str>,
+        source_ip: Option<&str>,
+    ) -> Option<AccessEvent> {
+        let (previous, current) = (previous?, source_ip?);
         if previous == current {
             return None;
         }
@@ -160,15 +166,20 @@ impl AuthProvider for UserTokenAuthProvider {
                 // unbounded pile of writes behind the pool — the in-process
                 // throttle above is what keeps this off the hot path.
                 let source_ip = req.source_ip.as_deref();
-                if let (Some(audit), Some(event)) =
-                    (self.audit.as_ref(), Self::new_source_event(&tok, source_ip))
-                {
+                let previous = match self.repo.touch_last_used(tok.id, source_ip).await {
+                    Ok(previous) => previous,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "recording token last-used failed");
+                        None
+                    }
+                };
+                if let (Some(audit), Some(event)) = (
+                    self.audit.as_ref(),
+                    Self::new_source_event(&tok, previous.as_deref(), source_ip),
+                ) {
                     if let Err(e) = audit.record_access(event).await {
                         tracing::warn!(error = %e, "recording token_new_source failed");
                     }
-                }
-                if let Err(e) = self.repo.touch_last_used(tok.id, source_ip).await {
-                    tracing::debug!(error = %e, "recording token last-used failed");
                 }
                 Ok(Some(to_identity(tok)))
             }
@@ -202,18 +213,12 @@ mod tests {
 
     // ── token_new_source (RFC 0036 §6.1) ─────────────────────────────────────
 
-    fn seen_from(ip: Option<&str>) -> UserToken {
-        UserToken {
-            last_used_ip: ip.map(str::to_owned),
-            ..stub_token()
-        }
-    }
-
     #[test]
     fn a_token_seen_from_a_new_address_is_an_event_naming_the_old_one() {
-        let tok = seen_from(Some("10.0.0.1"));
-        let event = UserTokenAuthProvider::new_source_event(&tok, Some("10.9.9.9"))
-            .expect("a move is an event");
+        let tok = stub_token();
+        let event =
+            UserTokenAuthProvider::new_source_event(&tok, Some("10.0.0.1"), Some("10.9.9.9"))
+                .expect("a move is an event");
         assert_eq!(event.action, AccessAction::TokenNewSource);
         assert_eq!(event.ip_address.as_deref(), Some("10.9.9.9"));
         assert_eq!(event.user_id.as_deref(), Some("carol"));
@@ -223,19 +228,77 @@ mod tests {
 
     #[test]
     fn the_same_address_or_an_unknown_one_is_not_a_new_source() {
-        assert!(UserTokenAuthProvider::new_source_event(
-            &seen_from(Some("10.0.0.1")),
-            Some("10.0.0.1")
-        )
-        .is_none());
+        let tok = stub_token();
+        let event = |prev, cur| UserTokenAuthProvider::new_source_event(&tok, prev, cur);
+        assert!(event(Some("10.0.0.1"), Some("10.0.0.1")).is_none());
         assert!(
-            UserTokenAuthProvider::new_source_event(&seen_from(None), Some("10.0.0.1")).is_none(),
+            event(None, Some("10.0.0.1")).is_none(),
             "no recorded source yet: nothing to have moved from"
         );
-        assert!(
-            UserTokenAuthProvider::new_source_event(&seen_from(Some("10.0.0.1")), None).is_none()
-        );
+        assert!(event(Some("10.0.0.1"), None).is_none());
     }
+
+    /// TD-0001 §1: the cached row's `last_used_ip` may be stale (the cache no
+    /// longer evicts on a touch), so the move is judged from what
+    /// `touch_last_used` read, never from the row `find_by_hash` returned.
+    #[tokio::test]
+    async fn a_move_is_judged_from_the_touch_not_the_cached_row() {
+        struct MovedRepo;
+
+        #[async_trait]
+        impl UserTokenRepository for MovedRepo {
+            async fn create_token(
+                &self,
+                _: uuid::Uuid,
+                _: &TokenOwner,
+                _: &str,
+                _: &str,
+                _: Role,
+                _: DateTime<chrono::Utc>,
+                _: &[String],
+            ) -> Result<UserToken, CoreError> {
+                unreachable!()
+            }
+            // The cached row: never seen anywhere.
+            async fn find_by_hash(&self, _: &str) -> Result<Option<UserToken>, CoreError> {
+                Ok(Some(stub_token()))
+            }
+            async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
+                Ok(vec![])
+            }
+            // The database: last seen from 10.0.0.1.
+            async fn touch_last_used(
+                &self,
+                _: uuid::Uuid,
+                _: Option<&str>,
+            ) -> Result<Option<String>, CoreError> {
+                Ok(Some("10.0.0.1".to_owned()))
+            }
+            async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
+                Ok(false)
+            }
+        }
+
+        let audit = crate::in_memory::InMemoryPackageRepository::new();
+        let p = UserTokenAuthProvider::new(Arc::new(MovedRepo)).with_audit(audit.clone());
+        let request = RawAuthRequest {
+            source_ip: Some("10.9.9.9".to_owned()),
+            ..req("Bearer abc")
+        };
+        p.authenticate(&request).await.unwrap().unwrap();
+        let events = audit
+            .list_events(batlehub_core::entities::EventFilter::new())
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, AccessAction::TokenNewSource);
+        assert!(events[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("previous_ip=10.0.0.1"));
+    }
+
     use async_trait::async_trait;
     use batlehub_core::{
         entities::Role,
@@ -312,8 +375,12 @@ mod tests {
         async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
             Ok(vec![])
         }
-        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
-            Ok(())
+        async fn touch_last_used(
+            &self,
+            _: uuid::Uuid,
+            _: Option<&str>,
+        ) -> Result<Option<String>, CoreError> {
+            Ok(None)
         }
         async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
             Ok(true)
@@ -363,8 +430,12 @@ mod tests {
         async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
             Ok(vec![])
         }
-        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
-            Ok(())
+        async fn touch_last_used(
+            &self,
+            _: uuid::Uuid,
+            _: Option<&str>,
+        ) -> Result<Option<String>, CoreError> {
+            Ok(None)
         }
         async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
             Ok(true)
@@ -591,9 +662,13 @@ mod prefix_and_usage_tests {
         async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
             Ok(vec![])
         }
-        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
+        async fn touch_last_used(
+            &self,
+            _: uuid::Uuid,
+            _: Option<&str>,
+        ) -> Result<Option<String>, CoreError> {
             self.touches.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(None)
         }
         async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
             Ok(false)
@@ -661,7 +736,7 @@ mod prefix_and_usage_tests {
                 &self,
                 _: uuid::Uuid,
                 _: Option<&str>,
-            ) -> Result<(), CoreError> {
+            ) -> Result<Option<String>, CoreError> {
                 Err(CoreError::Database("pool exhausted".into()))
             }
             async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
