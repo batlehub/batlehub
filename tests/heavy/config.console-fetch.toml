@@ -36,6 +36,16 @@ value = "heavy-user-token"
 role = "user"
 user_id = "ci-user"
 
+# RFC 0042 §6.6 case 7: a security team, delegated at the instance tier and
+# nothing else, so the console must show it /security and keep /admin shut.
+[[auth.tokens]]
+value = "heavy-secops-token"
+role = "user"
+user_id = "ci-secops"
+
+[grants]
+"user:ci-secops" = ["quarantine:read", "findings:read", "flags:read", "audit:read"]
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-console-fetch-storage"

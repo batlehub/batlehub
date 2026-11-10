@@ -156,6 +156,14 @@ value = "authz-grants-reader-token"
 role = "user"
 user_id = "authz-grants-reader"
 
+# The security console's delegate (RFC 0042): instance-tier security verbs and
+# nothing else, so the suite can assert they open `/security`'s endpoints and
+# leave the configuration and health shut.
+[[auth.tokens]]
+value = "authz-secops-token"
+role = "user"
+user_id = "authz-secops"
+
 # Holds `gates:exempt`, which `role:admin` does not. The only token in this file
 # that can do something the administrator cannot.
 [[auth.tokens]]
@@ -178,6 +186,9 @@ user_id = "authz-gatekeeper"
 
 [grants]
 "user:authz-sre" = ["system:read", "cache:evict"]
+# RFC 0042: a security team, delegated without admin.
+"user:authz-secops" = ["quarantine:read", "findings:read", "flags:read", "audit:read",
+                       "scans:run"]
 "user:authz-auditor" = ["audit:read"]
 "user:authz-support" = ["quota:read"]
 "user:authz-grants-reader" = ["grants:read"]
