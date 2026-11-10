@@ -386,6 +386,10 @@ impl PackageRepository for PgPackageRepository {
         result
     }
 
+    async fn flush_access_events(&self) {
+        PgPackageRepository::flush_access_events(self).await
+    }
+
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError> {
         crud::get_status_impl(&self.pool, pkg).await
     }

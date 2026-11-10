@@ -225,12 +225,15 @@ impl CacheStore for TestCacheStore {
 
 struct SpyRepo {
     events: Mutex<Vec<AccessEvent>>,
+    /// How many events had been recorded at the last `flush_access_events`.
+    flushed: Mutex<usize>,
 }
 
 impl SpyRepo {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             events: Mutex::new(vec![]),
+            flushed: Mutex::new(0),
         })
     }
 
@@ -244,6 +247,9 @@ impl PackageRepository for SpyRepo {
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
         self.events.lock().unwrap().push(event);
         Ok(())
+    }
+    async fn flush_access_events(&self) {
+        *self.flushed.lock().unwrap() = self.events.lock().unwrap().len();
     }
     async fn get_status(&self, _pkg: &PackageId) -> Result<PackageStatus, CoreError> {
         Ok(PackageStatus::Available)
@@ -633,6 +639,14 @@ async fn artifact_cache_miss_fetches_from_upstream() {
         "artifact should be stored after fetch"
     );
     assert!(!repo.events().is_empty(), "access event should be recorded");
+    // The status row the catalogue lists this package from is written by the
+    // access event, which Postgres batches: unflushed, the console's Fetch
+    // answered 200 while the upstream search still said `already_cached: false`.
+    assert_eq!(
+        *repo.flushed.lock().unwrap(),
+        repo.events().len(),
+        "the first cache write must flush its access event before answering"
+    );
 }
 
 #[tokio::test]
