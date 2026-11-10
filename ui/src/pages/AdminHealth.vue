@@ -207,11 +207,9 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
         </CardContent>
       </Card>
 
-      <!-- Registry cards grid -->
-      <div
-        v-if="data && data.length > 0"
-        class="grid gap-4 sm:grid-cols-1 lg:grid-cols-2 xl:grid-cols-2"
-      >
+      <!-- One registry per row, full width: the two-column card grid is the
+           shape DESIGN refuses, and it halved the errors table. -->
+      <div v-if="data && data.length > 0" class="space-y-6">
         <!-- `min-w-0`: a grid item defaults to `min-width: auto` and will not
              shrink below its content, so the errors table inside it pushed the
              whole document sideways instead of scrolling in its own box
@@ -258,58 +256,50 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
           </CardHeader>
 
           <CardContent class="flex-1 space-y-4">
-            <!-- Stats row -->
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <!-- Packages -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
-                <p class="text-xs text-muted-foreground">{{ t("common.packages") }}</p>
-                <p class="text-xl font-semibold tabular-nums">
+            <!-- Facts on a ruled line, not five tiles: DESIGN refuses the stat
+                 row (RFC 0004-bis §6.1, UI audit 7.9). -->
+            <dl
+              class="grid grid-cols-2 gap-x-6 gap-y-3 border-y border-rule-soft py-3 text-sm sm:grid-cols-5"
+            >
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("common.packages") }}</dt>
+                <dd class="font-mono tabular-nums">
                   {{ formatCount(reg.package_count) }}
-                </p>
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.tracked") }}</p>
+                  <span class="text-xs text-muted-foreground">{{ t("adminHealth.tracked") }}</span>
+                </dd>
               </div>
-
-              <!-- Cache size -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.cacheSize") }}</p>
-                <p class="text-xl font-semibold">
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.cacheSize") }}</dt>
+                <dd class="font-mono">
                   {{ fmtBytes(reg.total_size_bytes ?? null) }}
-                </p>
-                <p class="text-xs text-muted-foreground">
-                  {{ t("adminHealth.artifactCount", reg.cached_artifact_count) }}
-                </p>
+                  <span class="block text-xs text-muted-foreground">{{
+                    t("adminHealth.artifactCount", reg.cached_artifact_count)
+                  }}</span>
+                </dd>
               </div>
-
-              <!-- Last pull -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.lastPull") }}</p>
-                <p class="text-base font-semibold">
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.lastPull") }}</dt>
+                <dd class="font-mono">
                   {{ fmtRelative(reg.last_pull_at ?? null) }}
-                </p>
-                <p v-if="reg.last_pull_at" class="text-xs text-muted-foreground">
-                  {{ fmtDate(reg.last_pull_at ?? "") }}
-                </p>
+                  <span v-if="reg.last_pull_at" class="block text-xs text-muted-foreground">{{
+                    fmtDate(reg.last_pull_at)
+                  }}</span>
+                </dd>
               </div>
-
-              <!-- Pulls / hour -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsHour") }}</p>
-                <p
-                  class="text-xl font-semibold tabular-nums"
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.pullsHour") }}</dt>
+                <dd
+                  class="font-mono tabular-nums"
                   :class="reg.pulls_last_hour > 0 ? 'text-foreground' : 'text-muted-foreground'"
                 >
                   {{ formatCount(reg.pulls_last_hour) }}
-                </p>
+                </dd>
               </div>
-
-              <!-- Pulls / day -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsDay") }}</p>
-                <p class="text-xl font-semibold tabular-nums">
-                  {{ formatCount(reg.pulls_last_day) }}
-                </p>
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.pullsDay") }}</dt>
+                <dd class="font-mono tabular-nums">{{ formatCount(reg.pulls_last_day) }}</dd>
               </div>
-            </div>
+            </dl>
 
             <!-- Recent errors -->
             <div>
