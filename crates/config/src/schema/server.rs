@@ -206,8 +206,11 @@ pub struct DatabaseConfig {
     pub read_cache: bool,
 }
 
+/// 20, not sqlx's 10: one replica on 10 breaks on the pool at 400–800 req/s
+/// where 50 served 800 clean (TD-0004 §3). 20 keeps four replicas under
+/// PostgreSQL's own default of 100.
 pub(super) fn default_max_connections() -> u32 {
-    10
+    20
 }
 
 pub(super) fn default_min_connections() -> u32 {

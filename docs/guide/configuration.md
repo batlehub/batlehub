@@ -374,21 +374,23 @@ batlehub uses PostgreSQL for storing registry metadata and user tokens.
 [database]
 type = "postgresql"
 url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
-max_connections = 10    # default
+max_connections = 20    # default
 ```
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `type` | string | — | Must be `"postgresql"` |
 | `url` | string | — | Full PostgreSQL DSN including credentials |
-| `max_connections` | u32 | `10` | Connection pool size |
+| `max_connections` | u32 | `20` | Connection pool size, per instance |
 
 The `url` field can be overridden at runtime via `PROXY_CACHE__DATABASE__URL` without touching the config file.
 
 #### Sizing `max_connections`
 
-The default of **10 is small**, and what it costs is latency rather than throughput. Measured on the
-breaking-point matrix (scenario 14, S3 + Redis, the same build and the same load, only the pool size
+The default is **20**; it was 10 until TD-0004 §3, and 10 is the pool one replica breaks on: at
+400–800 req/s every 10-connection arm of the breaking-point run ran out of connections while the
+50-connection arm served 800 req/s clean. Below that, what a small pool costs is latency rather than
+throughput. Measured on the breaking-point matrix (scenario 14, S3 + Redis, the same build and the same load, only the pool size
 changed):
 
 | offered | pool 10 | pool 50 |
@@ -410,7 +412,12 @@ Three things to hold when you pick a number:
 
 - **The pool is per instance.** `replicas × max_connections` is what reaches PostgreSQL, and its own
   `max_connections` defaults to 100 — three replicas at 50 exhaust it, and the failure is a refused
-  connection at startup, not a slow query.
+  connection at startup, not a slow query. The default of 20 fits four replicas; past that, or
+  sooner if other clients share the database, put PgBouncer in **transaction** mode in front and set
+  `listen_url` to a direct connection (the read cache's `LISTEN` needs a session, see
+  [high availability](./high-availability#config-db-listen)).
+- **One connection is not the requests'.** Without `listen_url`, the read cache's invalidation
+  listener holds one connection of the pool for the life of the process.
 - **Idle connections are recycled.** sqlx retires a connection 30 minutes after it was opened
   (`max_lifetime`), which is also why a pool that has been busy releases memory on its own.
 - **Size it against concurrency, not traffic.** The pool caps requests *in flight* that need the

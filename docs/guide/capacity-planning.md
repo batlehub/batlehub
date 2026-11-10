@@ -58,7 +58,7 @@ Run to run, the same level moves by up to ±0.15 ms. The per-request cost of eve
 
 ## Database (PostgreSQL)
 
-- **Connections:** Default `max_connections = 10` is fine for < 50 concurrent requests. Increase to 25–50 for busy deployments. The DB itself should allow at least `max_connections * (number of instances) + 10` headroom.
+- **Connections:** Default `max_connections = 20` per instance; see [sizing `max_connections`](./configuration#sizing-max-connections) before going higher. The DB itself should allow at least `max_connections * (number of instances) + 10` headroom.
 - **Disk:** The `access_events` table grows ~1 KB per event. At 1,000 events/day, that is ~365 MB/year. Schedule periodic purges: `batlehub-cli audit purge --before 2024-01-01T00:00:00Z`.
 - **IOPS:** Metadata reads and `record_access` writes are the hottest paths. An SSD with 3,000 IOPS is sufficient for most teams.
 

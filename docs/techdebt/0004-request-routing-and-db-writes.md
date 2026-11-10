@@ -72,6 +72,15 @@ the purge job's cost is left to [TD-0002](/techdebt/0002-feat-devfile-review-lef
 
 It is the measured ceiling (`s3-redis-pool50` serves 800 req/s clean where the 10-connection arms break). Raise the default to 20–30, document sizing per replica, and recommend PgBouncer (transaction mode) once there are several replicas; the read cache's `LISTEN` holds one connection of the pool.
 
+**Paid** (`perf(config): a 20-connection pool by default`). The default is 20
+(`default_max_connections`, `crates/config/src/schema/server.rs`), which keeps
+four replicas under PostgreSQL's own 100. The sizing section of the
+configuration guide (`docs/guide/configuration.md`, *Sizing
+`max_connections`*, and its French twin) now gives the measured reason, the
+PgBouncer (transaction mode) recommendation past four replicas with
+`listen_url` on a direct connection, and the connection the read cache's
+listener holds without it. Not re-measured with `breaking-point` at 20.
+
 ## 4. `/healthz` runs 3 statements
 
 `SELECT 1` plus a storage probe that resolves a key through the dedup tables. Keep the storage probe on readiness only; liveness needs no database round trip at all.
