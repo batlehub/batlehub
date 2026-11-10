@@ -89,6 +89,8 @@ password <your-token>
 
 ## Endpoints
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/nodedist -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -96,6 +98,8 @@ password <your-token>
 | `GET` | `/proxy/{registry}/nodedist/index.json` | The same release table as JSON — what fnm and mise read. |
 | `GET` | `/proxy/{registry}/nodedist/index.tab` | The release table nvm resolves every install through, blocked releases |
 <!-- END endpoints -->
+
+:::
 
 ## See also
 

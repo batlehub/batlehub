@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nuget.md
-sourceHash: 1039960e74635d16
+sourceHash: 143df3f89f205013
 ---
 
 # NuGet (.NET)
@@ -136,6 +136,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nuget -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -151,6 +153,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/index.json` | Proxy the NuGet vulnerability database index. |
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/page/{page}` | Proxy a single page of NuGet vulnerability records. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

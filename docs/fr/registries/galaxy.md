@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/galaxy.md
-sourceHash: fc07acce61c5560d
+sourceHash: ffc0277fd63ef18e
 ---
 
 # Ansible Galaxy
@@ -141,6 +141,8 @@ Une version en double répond `409`, qu'`ansible-galaxy` restitue sous la forme 
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/galaxy -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -155,6 +157,8 @@ Une version en double répond `409`, qu'`ansible-galaxy` restitue sous la forme 
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/` | One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked. |
 | `GET` | `/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/` | The import task a publish returned — always `completed`, because the work is done before the task exists. |
 <!-- END endpoints -->
+
+:::
 
 ## Mode hybride : le local l'emporte en entier, pas version par version
 

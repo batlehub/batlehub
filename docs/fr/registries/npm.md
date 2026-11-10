@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/npm.md
-sourceHash: 878ece5526bca16c
+sourceHash: 2019a56cae400973
 ---
 
 # npm
@@ -108,6 +108,8 @@ npm install @myorg/my-package
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/npm -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -126,6 +128,8 @@ npm install @myorg/my-package
 | `GET` | `/proxy/{registry}/{package}/{version}` | Fetch package version metadata. |
 | `GET` | `/proxy/{registry}/{package}/{version}/tarball` | Download npm package tarball for a specific version. |
 <!-- END endpoints -->
+
+:::
 
 Le packument est la réponse propre de BatleHub, pas une copie de celle de
 l'amont. Deux choses sont réécrites avant qu'il n'atteigne le client :

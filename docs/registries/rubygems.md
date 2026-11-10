@@ -116,6 +116,8 @@ curl -X PUT \
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/rubygems -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -133,6 +135,8 @@ curl -X PUT \
 | `GET` | `/proxy/{registry}/specs.4.8.gz` | Serve the full gem index (specs.4.8.gz). |
 | `GET` | `/proxy/{registry}/versions` | The whole-registry version list Bundler fetches first. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

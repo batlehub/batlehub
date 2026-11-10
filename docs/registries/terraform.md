@@ -394,6 +394,8 @@ curl -X POST \
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/terraform -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -420,6 +422,8 @@ curl -X POST \
 | `DELETE` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}` | Yank a Terraform provider version (local/hybrid registries only). |
 | `POST` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}/unyank` | Unyank a Terraform provider version (local/hybrid registries only). |
 <!-- END endpoints -->
+
+:::
 
 ---
 

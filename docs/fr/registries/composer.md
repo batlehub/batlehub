@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/composer.md
-sourceHash: 2a604b1cc8dcb95c
+sourceHash: 8d8d85f92c69f1ad
 ---
 
 # Composer (PHP)
@@ -198,6 +198,8 @@ curl -X DELETE \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/composer -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -210,6 +212,8 @@ curl -X DELETE \
 | `GET` | `/proxy/{registry}/packages.json` | Composer registry root index. |
 | `GET` | `/proxy/{registry}/search.json` | `composer search`. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

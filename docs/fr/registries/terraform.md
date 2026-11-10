@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/terraform.md
-sourceHash: e863945a6d5e6ade
+sourceHash: 7e5a2562e0f28dd7
 ---
 
 # Terraform
@@ -423,6 +423,8 @@ curl -X POST \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/terraform -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -449,6 +451,8 @@ curl -X POST \
 | `DELETE` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}` | Yank a Terraform provider version (local/hybrid registries only). |
 | `POST` | `/proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}/unyank` | Unyank a Terraform provider version (local/hybrid registries only). |
 <!-- END endpoints -->
+
+:::
 
 ---
 

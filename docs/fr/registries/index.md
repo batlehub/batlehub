@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 41810993502ecbb4
+sourceHash: 020cde666e8b713d
 ---
 
 # Registres
@@ -9,6 +9,8 @@ BatleHub sert par proxy, met en cache et héberge en privé **29 types de
 registres** — des gestionnaires de paquets par langage aux dépôts de paquets
 système, en passant par les places de marché d'extensions d'éditeur et les
 miroirs de fichiers génériques.
+
+<RegistryGrid />
 
 Chaque type de registre tourne dans l'un de trois **modes**, réglé registre par
 registre dans la configuration :

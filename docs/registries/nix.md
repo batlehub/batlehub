@@ -245,6 +245,8 @@ A store path the bundle does not carry answers `503` rather than `404`: it exist
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/nix -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -259,6 +261,8 @@ A store path the bundle does not carry answers `503` rather than `404`: it exist
 | `GET` | `/proxy/{registry}/nix/public-key` | `GET public-key` — the line an operator pastes into `trusted-public-keys`. |
 | `GET` | `/proxy/{registry}/nix/realisations/{id}.doi` | `realisations/{id}.doi` — the derivation-to-output mapping of a content-addressed derivation. |
 <!-- END endpoints -->
+
+:::
 
 ## Not supported
 

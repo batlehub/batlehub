@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: e67c7564142cc7b4
+sourceHash: 8d27de5e710701e7
 ---
 
 # Helm
@@ -103,6 +103,8 @@ L'index que sert un registre local est composé à partir de ce qui a été publ
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/helm -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -114,6 +116,8 @@ L'index que sert un registre local est composé à partir de ce qui a été publ
 | `GET` | `/proxy/{registry}/helm/charts/{file}` | A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names. |
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
+
+:::
 
 ## Mode hybride : `hybrid_merge`
 

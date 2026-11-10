@@ -382,6 +382,65 @@
   background: transparent;
 }
 
+/* ── The spec sheet at the top of a registry page ────────────────────────────
+   Every registry page opens with "At a glance": six facts as a two-column
+   table. Boxed and gridded like a reference table it took 400px — the whole
+   first screen — and pushed the snippet the reader came for below the fold.
+   These are a caption's facts, not data to compare across rows, so they set as
+   the specimen sheet sets them: ruled rows, a Meta label, the value in ink. No
+   box (The No-Container Rule); dashed separators at rest.
+
+   Selected by the heading's id rather than a class because the table is
+   markdown, and the id is the one thing all 58 pages (both locales) share. The
+   header row (Property / Value) stays in the DOM for assistive tech and is
+   only moved off-screen. */
+:is(#at-a-glance, #en-un-coup-d-œil) + table {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  align-items: baseline;
+  column-gap: var(--s5);
+  width: 100%;
+  max-width: 68ch;
+  border: 0;
+  border-bottom: 1px dashed var(--rule-soft);
+  overflow: visible;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table :is(tbody, tr) {
+  display: contents;
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table td {
+  border: 0;
+  border-top: 1px dashed var(--rule-soft);
+  /* A fact is scanned, not read for minutes: the Row step's 1.5, not 1.7. */
+  padding: 6px 0;
+  line-height: 1.5;
+}
+
+/* The label column: Meta, uppercase, the Tracking Ladder's column-head step. */
+:is(#at-a-glance, #en-un-coup-d-œil) + table td:first-child {
+  font-size: var(--t-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+}
+
+:is(#at-a-glance, #en-un-coup-d-œil) + table td:first-child strong {
+  font-weight: inherit;
+  color: inherit;
+}
+
 /* ── Blockquotes and callouts ────────────────────────────────────────────────
    The default theme ships `--vp-custom-block-*-border: transparent`, which
    leaves a callout separated from the page by its soft fill alone — exactly

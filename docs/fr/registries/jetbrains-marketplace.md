@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains-marketplace.md
-sourceHash: 1284f3cd1cedf343
+sourceHash: 0a0b2577d1ab1cdf
 ---
 
 # Place de marché JetBrains
@@ -134,6 +134,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/jetbrains-marketplace -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -159,6 +161,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 | `GET` | `/proxy/{registry}/plugins/list` | `/plugins/list?pluginId=` — classic plugin-repository XML: every version of |
 | `GET` | `/proxy/{registry}/updatePlugins.xml` | `updatePlugins.xml` — the custom-plugin-repository document the IDE polls |
 <!-- END endpoints -->
+
+:::
 
 ---
 

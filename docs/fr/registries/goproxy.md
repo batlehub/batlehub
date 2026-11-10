@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/goproxy.md
-sourceHash: b6c02602393d59d0
+sourceHash: ac4983b96eee249e
 ---
 
 # Modules Go
@@ -163,6 +163,8 @@ go get example.com/mymod@v1.0.0
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/goproxy -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -175,6 +177,8 @@ go get example.com/mymod@v1.0.0
 | `GET` | `/proxy/{registry}/v1/index.json` | Proxy the Go Vulnerability Database index. |
 | `POST` | `/proxy/{registry}/v1/query` | Proxy a Go vulnerability database query. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

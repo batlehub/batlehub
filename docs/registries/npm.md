@@ -93,6 +93,8 @@ npm install @myorg/my-package
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/npm -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -111,6 +113,8 @@ npm install @myorg/my-package
 | `GET` | `/proxy/{registry}/{package}/{version}` | Fetch package version metadata. |
 | `GET` | `/proxy/{registry}/{package}/{version}/tarball` | Download npm package tarball for a specific version. |
 <!-- END endpoints -->
+
+:::
 
 The packument is BatleHub's own answer, not a copy of the upstream's. Two things
 are rewritten before it reaches the client:

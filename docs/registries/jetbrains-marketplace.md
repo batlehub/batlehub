@@ -109,6 +109,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/jetbrains-marketplace -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -134,6 +136,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 | `GET` | `/proxy/{registry}/plugins/list` | `/plugins/list?pluginId=` — classic plugin-repository XML: every version of |
 | `GET` | `/proxy/{registry}/updatePlugins.xml` | `updatePlugins.xml` — the custom-plugin-repository document the IDE polls |
 <!-- END endpoints -->
+
+:::
 
 ---
 

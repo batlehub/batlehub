@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rubygems.md
-sourceHash: 93cd207af7eedd41
+sourceHash: 5925472dca7410c5
 ---
 
 # RubyGems
@@ -130,6 +130,8 @@ curl -X PUT \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/rubygems -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -147,6 +149,8 @@ curl -X PUT \
 | `GET` | `/proxy/{registry}/specs.4.8.gz` | Serve the full gem index (specs.4.8.gz). |
 | `GET` | `/proxy/{registry}/versions` | The whole-registry version list Bundler fetches first. |
 <!-- END endpoints -->
+
+:::
 
 ---
 
