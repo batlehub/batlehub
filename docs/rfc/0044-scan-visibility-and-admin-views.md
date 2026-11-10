@@ -394,7 +394,7 @@ and the latency come from `ProxyMetrics`, an in-process `AtomicBool` and
 counters (`services/metrics.rs:26,77`) that reset on restart. With several
 replicas behind a load balancer, two refreshes can show two different
 answers. The status strip therefore labels them "this replica, since
-<start time>". The estate-wide view is the monitoring link's job.
+`<start time>`". The estate-wide view is the monitoring link's job.
 
 **"Degraded" has one meaning.** The Dashboard's per-registry State column
 already marks a registry "Errors — see health" from `recent_errors`
@@ -2189,3 +2189,14 @@ major issues; this branch fixes them, since it merges after #311:
 6. **inkdex could pass without a token.** A step before the action fails the
    job when `INKDEX_TOKEN` is empty. Naming `inkdex.yaml / required` in the
    `main` ruleset is still to do, after the secret exists.
+
+### 18.2 What the first heavy run measured
+
+The first CI run of `quarantine.sh` (on `d09ea479`) failed at observation 1:
+the explore list had no row for the version npm had just been refused. A
+refused first contact caches nothing (the worker fetches the bytes itself,
+`security_registry.rs`), so the catalogue has no row until the version is
+first served; §6.P assumed otherwise. The transient status is read from the
+verdict GET instead, and observation 4 reads the verdict too rather than the
+catalogue row. The catalogue half of observation 1 (after `wait`) is
+unchanged.

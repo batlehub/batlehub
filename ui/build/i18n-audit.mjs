@@ -122,16 +122,31 @@ function templateOf(source) {
  */
 function scriptOf(source) {
   const region = source.includes("<template>") ? source.slice(0, source.indexOf("<template>")) : source;
-  return region
-    // The opening tag's own attributes (`generic="TItem, TForm extends object"`)
-    // are TypeScript, not text, and read as an assignment otherwise.
-    .replace(/<script\b[^>]*>/g, "")
+  return withoutScriptTags(region)
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1")
     // No trailing `(from …)?` group: `[^;\n]*` has already eaten the rest of the
     // line, so the optional group could only ever re-match what it consumed —
     // the overlap that makes this pattern backtrack super-linearly.
     .replace(/^[ \t]*(?:import|export)\s[^;\n]*;?/gm, "");
+}
+
+/**
+ * The `<script …>` opening tags removed: their attributes
+ * (`generic="T extends Record<string, number>"`) are TypeScript, not text, and
+ * read as an assignment otherwise. A quoted `>` does not end the tag, the match
+ * ignores case, and it repeats until nothing changes, so no tag is left behind
+ * by a removal that joined two halves.
+ */
+export function withoutScriptTags(text) {
+  const tag = /<script\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+  let prev;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(tag, "");
+  } while (out !== prev);
+  return out;
 }
 
 /**
