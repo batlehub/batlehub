@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 338b901cf47d2ace
+sourceHash: c8d94da7a0a70e3c
 ---
 
 # batlehub-cli

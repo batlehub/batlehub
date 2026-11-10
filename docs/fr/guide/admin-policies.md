@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 6447a8b0fb836ba4
+sourceHash: 5c22493f29b68a81
 ---
 
 # Politiques et paquets

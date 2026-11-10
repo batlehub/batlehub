@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: f78229f481aeff5d
+sourceHash: 4bed464921942c1e
 ---
 
 # Registres
@@ -91,6 +91,7 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 
 | Registre | `type` | Ce dont il fait proxy | Modes | Publication | Amont par défaut |
 |----------|--------|-----------------|-------|:-------:|------------------|
+| [Hôte de versions de mise](./mise-versions) | `mise-versions` | Les listes de versions que mise lit avant tout backend (`data/<tool>.toml`, filtrées par la liste de blocage et le garde-fou d'âge) ; la balise d'installation répondue sur place | proxy seul | non | `mise-versions.jdx.dev` |
 | [Distributions Node](./nodedist) | `nodedist` | `index.tab`/`index.json`, archives de publication, `SHASUMS256.txt` octet pour octet (nvm, fnm, n, mise) | proxy seul | non | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | API des candidats et courtier de téléchargement (le JDK, Gradle, Maven, Kotlin, …) ; le 302 du courtier est suivi côté serveur | proxy seul | non | `api.sdkman.io/2` et `broker.sdkman.io` |
 | [Chaîne d'outils Rust](./rustup) | `rustup` | Manifestes de canal (la liste filtrée), archives de composants par cible et leur `.sha256` ; le `.asc` est relayé octet pour octet | proxy seul | non | `static.rust-lang.org` |

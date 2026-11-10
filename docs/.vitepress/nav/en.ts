@@ -134,6 +134,7 @@ export const sidebar = {
       text: "Toolchains",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
+        { text: "mise versions host", link: "/registries/mise-versions" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
         { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
         { text: "SDKMAN", link: "/registries/sdkman" },

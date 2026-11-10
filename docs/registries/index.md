@@ -74,6 +74,7 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
+| [mise versions host](./mise-versions) | `mise-versions` | The version lists mise reads before any backend (`data/<tool>.toml`, filtered by the block list and the age gate); the install beacon answered on site | proxy-only | no | `mise-versions.jdx.dev` |
 | [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | no | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | no | `api.sdkman.io/2` + `broker.sdkman.io` |
 | [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | no | `static.rust-lang.org` |
