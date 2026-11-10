@@ -272,6 +272,11 @@ pub fn embedded_migrator() -> Migrator {
             "read cache invalidation",
             "../migrations/066_read_cache_invalidation.sql"
         ),
+        mig!(
+            67,
+            "rfc 0042 scan status indexes",
+            "../migrations/067_rfc0042_scan_status_indexes.sql"
+        ),
     ])
 }
 

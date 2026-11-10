@@ -243,6 +243,21 @@ new_consumer() {  # dir
 EOF
 }
 
+# ── RFC 0042 §6.P: the console's scan status, as the API serves it ──────────
+
+USER_TOKEN="heavy-user-token"
+
+# scan_row <token|-> <registry> <name> — the explore list's row for the
+# package, as JSON, or nothing when the list does not carry it.
+scan_row() {
+  local auth=()
+  [[ "$1" == "-" ]] || auth=(-H "Authorization: Bearer $1")
+  curl -s "${auth[@]}" "$HEAVY_BASE/api/v1/explore/packages?registry=$2&q=$3" \
+    | python3 -c 'import json,sys
+rows=[r for r in json.load(sys.stdin)["items"] if r["name"]==sys.argv[1]]
+print(json.dumps(rows[0]) if rows else "")' "$3"
+}
+
 # ── 1. First contact holds ───────────────────────────────────────────────────
 
 CONSUMER="$HEAVY_WORK/consumer"
@@ -277,6 +292,24 @@ grep -q "batlehub-cli why $REG/" "$HEAVY_WORK/install-1.err" \
 TARBALL_REQUESTS="$(heavy_wire_count_after first-contact "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 403")"
 heavy_log "HOLD-OK (npm exit $RC, $TARBALL_REQUESTS request(s) for the held tarball, SCAN_PENDING printed)"
 
+# RFC 0042 §6.P observation 1, first half: the version npm was just refused is
+# in the catalogue with a transient status, and the `user` tier carries no
+# detail. The embedded worker may already have finished, so `scanned` is
+# accepted here; the second half, after `wait`, is exact.
+ROW="$(scan_row "$USER_TOKEN" "$REG" "$PKG")"
+[[ -n "$ROW" ]] || heavy_fail "the explore list has no row for $PKG after npm's refused install"
+python3 - "$ROW" <<'PY' || heavy_fail "scan_status during the scan is wrong for the user tier: $ROW"
+import json, sys
+s = json.loads(sys.argv[1]).get("scan_status") or {}
+assert s.get("state") in ("queued", "scanning", "scanned"), s
+assert "detail" not in s, s
+PY
+# Observation 2: anonymous holds no quarantine:read — the row, and no key.
+ROW="$(scan_row - "$REG" "$PKG")"
+[[ -z "$ROW" ]] || python3 -c 'import json,sys; assert "scan_status" not in json.loads(sys.argv[1])' "$ROW" \
+  || heavy_fail "an anonymous caller was told the scan status of $PKG: $ROW"
+heavy_log "SCAN-STATUS-TRANSIENT-OK (user: $(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["scan_status"]["state"])' "$(scan_row "$USER_TOKEN" "$REG" "$PKG")"); anonymous: no scan_status)"
+
 # ── 2. The worker clears it ──────────────────────────────────────────────────
 
 heavy_log "batlehub wait $REG:$PKG@$CLEAN"
@@ -299,6 +332,17 @@ INSTALLED="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["ver
 heavy_wire_re_after "recover" "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 200" \
   "the tarball was not served through the proxy after the verdict cleared"
 heavy_log "RECOVER-OK ($PKG@$CLEAN installed, verdict allowed)"
+
+# RFC 0042 §6.P observation 1, second half: the same call now reads the
+# verdict `wait` saw, and the admin tier carries the detail.
+python3 - "$(scan_row "$USER_TOKEN" "$REG" "$PKG")" "$(scan_row "$ADMIN_TOKEN" "$REG" "$PKG")" <<'PY' \
+  || heavy_fail "the explore list does not read scanned/allowed for $PKG@$CLEAN after wait"
+import json, sys
+user, admin = (json.loads(a)["scan_status"] for a in sys.argv[1:3])
+assert user == {"state": "scanned", "verdict": "allowed"}, user
+assert admin["state"] == "scanned" and admin["detail"]["last_scanned_at"], admin
+PY
+heavy_log "SCAN-STATUS-OK (scanned · allowed for the user, with detail for the admin)"
 
 # ── 3. A finding refuses ─────────────────────────────────────────────────────
 #

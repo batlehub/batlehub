@@ -134,7 +134,7 @@ POST /api/v1/auth/tokens	skip: no arm yet
 DELETE /api/v1/auth/tokens/{id}	skip: no arm yet
 GET /api/v1/banner	skip: no arm yet
 GET /api/v1/cli/download	skip: no arm yet
-GET /api/v1/explore/packages	skip: no arm yet
+GET /api/v1/explore/packages	profiled
 GET /api/v1/explore/packages/{registry}/{name}	skip: no arm yet
 GET /api/v1/explore/packages/{registry}/{name}/readme	skip: no arm yet
 POST /api/v1/explore/packages/{registry}/{name}/{version}/fetch	skip: no arm yet

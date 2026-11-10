@@ -105,9 +105,7 @@ impl VerdictRepository for InMemoryVerdictRepository {
 #[derive(Debug, Clone)]
 struct Row {
     job: ScanJob,
-    leased_by: Option<String>,
     completed: bool,
-    last_error: Option<String>,
 }
 
 /// Pick up to `n` of `sorted` (already in priority-then-age order): `n - 1`
@@ -186,7 +184,7 @@ impl InMemoryScanQueue {
             .await
             .iter()
             .find(|r| r.job.id == id)
-            .and_then(|r| r.last_error.clone())
+            .and_then(|r| r.job.last_error.clone())
     }
 }
 
@@ -207,7 +205,7 @@ impl ScanQueue for InMemoryScanQueue {
             // running lease is left alone) — RFC 0041 decision 44.
             if trigger.priority() < open.job.trigger.priority() {
                 open.job.trigger = trigger;
-                if open.leased_by.is_none() {
+                if open.job.leased_by.is_none() {
                     open.job.leased_until = None;
                 }
             }
@@ -224,10 +222,10 @@ impl ScanQueue for InMemoryScanQueue {
                 leased_until: None,
                 created_at: Utc::now(),
                 deferred_since: None,
+                leased_by: None,
+                last_error: None,
             },
-            leased_by: None,
             completed: false,
-            last_error: None,
         });
         Ok(true)
     }
@@ -269,7 +267,7 @@ impl ScanQueue for InMemoryScanQueue {
             let r = &mut rows[i];
             r.job.attempts += 1;
             r.job.leased_until = Some(now + Duration::seconds(lease_secs as i64));
-            r.leased_by = Some(worker_id.to_owned());
+            r.job.leased_by = Some(worker_id.to_owned());
             out.push(r.job.clone());
         }
         Ok(out)
@@ -286,7 +284,7 @@ impl ScanQueue for InMemoryScanQueue {
     async fn complete(&self, job_id: Uuid, worker: Option<&str>) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
         if let Some(r) = rows.iter_mut().find(|r| {
-            r.job.id == job_id && worker.is_none_or(|w| r.leased_by.as_deref() == Some(w))
+            r.job.id == job_id && worker.is_none_or(|w| r.job.leased_by.as_deref() == Some(w))
         }) {
             r.completed = true;
             r.job.leased_until = None;
@@ -294,15 +292,46 @@ impl ScanQueue for InMemoryScanQueue {
         Ok(())
     }
 
+    async fn complete_exhausted(&self, job_id: Uuid, last_error: &str) -> Result<(), CoreError> {
+        let mut rows = self.rows.write().await;
+        if let Some(r) = rows.iter_mut().find(|r| r.job.id == job_id && !r.completed) {
+            r.completed = true;
+            r.job.leased_until = None;
+            r.job.last_error = Some(last_error.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Rows are kept in creation order and one coordinate has at most one
+    /// open job, so the last closed row met is the latest closed.
+    async fn jobs_for(
+        &self,
+        coords: &[PackageId],
+    ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
+        let rows = self.rows.read().await;
+        Ok(coords
+            .iter()
+            .map(|c| {
+                let same = |r: &&Row| {
+                    r.job.package.registry == c.registry
+                        && r.job.package.name == c.name
+                        && r.job.package.version == c.version
+                };
+                let open = rows.iter().filter(same).find(|r| !r.completed);
+                let closed = rows.iter().rev().filter(same).find(|r| r.completed);
+                (open.map(|r| r.job.clone()), closed.map(|r| r.job.clone()))
+            })
+            .collect())
+    }
+
     async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows
-            .iter_mut()
-            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
-        {
+        if let Some(r) = rows.iter_mut().find(|r| {
+            r.job.id == job_id && !r.completed && r.job.leased_by.as_deref() == Some(worker)
+        }) {
             r.job.leased_until = None;
-            r.leased_by = None;
-            r.last_error = Some(error.to_owned());
+            r.job.leased_by = None;
+            r.job.last_error = Some(error.to_owned());
         }
         Ok(())
     }
@@ -314,15 +343,14 @@ impl ScanQueue for InMemoryScanQueue {
         not_before: DateTime<Utc>,
     ) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows
-            .iter_mut()
-            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
-        {
+        if let Some(r) = rows.iter_mut().find(|r| {
+            r.job.id == job_id && !r.completed && r.job.leased_by.as_deref() == Some(worker)
+        }) {
             r.job.leased_until = Some(not_before);
-            r.leased_by = None;
+            r.job.leased_by = None;
             r.job.attempts = r.job.attempts.saturating_sub(1);
             r.job.deferred_since.get_or_insert_with(Utc::now);
-            r.last_error = Some(format!(
+            r.job.last_error = Some(format!(
                 "deferred since {}",
                 r.job.deferred_since.unwrap_or_else(Utc::now).to_rfc3339()
             ));
@@ -362,7 +390,7 @@ impl ScanQueue for InMemoryScanQueue {
             match r.job.leased_until {
                 None => e.0 += 1,
                 Some(u) if u < now => e.0 += 1,
-                Some(_) if r.leased_by.is_none() => e.1 += 1,
+                Some(_) if r.job.leased_by.is_none() => e.1 += 1,
                 Some(_) => {}
             }
         }

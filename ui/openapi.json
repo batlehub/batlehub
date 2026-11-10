@@ -22309,13 +22309,14 @@
           "items",
           "total",
           "page",
-          "per_page"
+          "per_page",
+          "scan_status_unavailable"
         ],
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PackageSummary"
+              "$ref": "#/components/schemas/AdminPackageRow"
             }
           },
           "page": {
@@ -22328,12 +22329,40 @@
             "format": "int64",
             "minimum": 0
           },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status` (RFC 0042 §10.2)."
+          },
           "total": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           }
         }
+      },
+      "AdminPackageRow": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PackageSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scan_status": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScanStatusDto",
+                    "description": "Absent on a registry without `[security]` and for a caller without\n`quarantine:read` alike."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One version, and where it stands in scanning (RFC 0042 §4.2)."
       },
       "AdvisoryRelation": {
         "type": "string",
@@ -24125,6 +24154,17 @@
           "registry": {
             "type": "string"
           },
+          "scan_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanStatusDto",
+                "description": "The scan status of `newest_version`, as last recorded (RFC 0042 §4.2).\nAbsent on a registry without `[security]` and for a caller without\n`quarantine:read` alike, so the two cannot be told apart."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "snippet": {
             "type": [
               "string",
@@ -24173,6 +24213,7 @@
           "versions",
           "versions_page",
           "upstream_unavailable",
+          "scan_status_unavailable",
           "upstream",
           "fetch"
         ],
@@ -24207,6 +24248,10 @@
           },
           "registry": {
             "type": "string"
+          },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no version carries\n`scan_status` (RFC 0042 §10.2)."
           },
           "selected": {
             "oneOf": [
@@ -24254,6 +24299,7 @@
           "page",
           "per_page",
           "upstream_unavailable",
+          "scan_status_unavailable",
           "readme_search_enabled",
           "searched_in",
           "truncated"
@@ -24278,6 +24324,10 @@
           "readme_search_enabled": {
             "type": "boolean",
             "description": "Whether `[search] readmes` is on for this instance.\n\nSo a client can tell \"no package here says that\" from \"this instance does\nnot search prose\". `in=readme` with the feature off is accepted and\nanswers as `in=name` does — a parameter that silently means something\nelse is the failure this RFC family keeps finding — and this field is how\nthe console says which happened (RFC 0007-bis §4.3)."
+          },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status`; the list is otherwise current (RFC 0042 §10.2)."
           },
           "searched_in": {
             "type": "string",
@@ -24384,6 +24434,17 @@
           "sbom": {
             "$ref": "#/components/schemas/SbomDto",
             "description": "Which SBOM formats this version has here — the answer the console needs\n*before* it draws a download control. See [`SbomDto`]."
+          },
+          "scan_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanStatusDto",
+                "description": "This version's scan status, as last recorded (RFC 0042 §4.2). Absent on\na registry without `[security]` and for a caller without\n`quarantine:read` alike."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "socket_badge_url": {
             "type": [
@@ -28278,6 +28339,95 @@
           "state": {
             "type": "string",
             "description": "`available` — [`Self::formats`] lists what can be downloaded;\n`none` — this instance holds no SBOM for the version;\n`unknown` — nothing has opened these bytes yet (an upstream-only row),\nor the lookup itself failed."
+          }
+        }
+      },
+      "ScanDetail": {
+        "type": "object",
+        "description": "The `findings:read` tier of a scan status: when, how many attempts, and\nthe error. Never the worker id, which is `system:read`'s (§9).",
+        "properties": {
+          "attempts": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The open job's attempts, else the latest closed one's.",
+            "minimum": 0
+          },
+          "deferred_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw as stored; the web layer redacts and truncates it before it leaves.\nNever the `deferred since ` anchor, which `deferred_since` carries."
+          },
+          "last_scanned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "queued_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The open job's `created_at`."
+          }
+        }
+      },
+      "ScanState": {
+        "type": "string",
+        "description": "Where one version stands in scanning (RFC 0042 §4.2), derived by\n`services::scan_status::derive` and nowhere else.",
+        "enum": [
+          "not_scanned",
+          "queued",
+          "scanning",
+          "failed",
+          "scanned"
+        ]
+      },
+      "ScanStatusDto": {
+        "type": "object",
+        "description": "Where a version stands in scanning, as one caller may see it (RFC 0042\n§4.2): `state` and `verdict` with `quarantine:read`, `detail` with\n`findings:read` too, nothing at all without.\n\nThe fields are private and the only constructor is private to this module,\nso a status reaches a response through [`scan_status_for`] or not at all.\nThere is no `Deserialize`: it cannot arrive from outside either.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanDetail",
+                "description": "Present only with `findings:read`. `last_error` redacted and cut to\n200 characters."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScanState"
+          },
+          "verdict": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerdictState",
+                "description": "Present only when `state` is `scanned`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

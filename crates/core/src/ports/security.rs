@@ -14,6 +14,18 @@ pub trait VerdictRepository: Send + Sync {
 
     async fn get(&self, package: &PackageId) -> Result<Option<Verdict>, CoreError>;
 
+    /// The verdicts of `coords`, across registries, findings **not** loaded
+    /// — the batch a list page reads its scan statuses from (RFC 0042 §5.1).
+    /// One entry per coordinate, in order. The default asks one at a time;
+    /// the stores override it with one statement.
+    async fn get_many(&self, coords: &[PackageId]) -> Result<Vec<Option<Verdict>>, CoreError> {
+        let mut out = Vec::with_capacity(coords.len());
+        for c in coords {
+            out.push(self.get(c).await?);
+        }
+        Ok(out)
+    }
+
     /// Every verdict recorded for one package — what the listing filter reads
     /// to hide held versions (RFC 0018 §4.2 *Listings*). Findings may be
     /// omitted: the filter reads states and clocks, not content.
@@ -100,6 +112,31 @@ pub trait ScanQueue: Send + Sync {
     /// another now holds. `None` is the exhausted-jobs sweep, which closes
     /// rows nobody holds.
     async fn complete(&self, job_id: uuid::Uuid, worker: Option<&str>) -> Result<(), CoreError>;
+
+    /// Close a job whose attempts ran out, nobody holding it, recording
+    /// `last_error` — [`crate::entities::EXHAUSTED_PREFIX`] and the last
+    /// error, which is how a reader tells a failed scan from a finished one
+    /// (RFC 0042 decision 34). The default closes without the record.
+    async fn complete_exhausted(
+        &self,
+        job_id: uuid::Uuid,
+        _last_error: &str,
+    ) -> Result<(), CoreError> {
+        self.complete(job_id, None).await
+    }
+
+    /// For each of `coords`, in order: its open job and its most recently
+    /// closed one, across registries, in one read (RFC 0042 §5.1). The
+    /// default refuses, so a queue that cannot answer makes the status
+    /// unavailable rather than wrong.
+    async fn jobs_for(
+        &self,
+        _coords: &[PackageId],
+    ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
+        Err(CoreError::Other(anyhow::anyhow!(
+            "this scan queue cannot list jobs per coordinate"
+        )))
+    }
 
     /// The attempt failed; the lease is released so another attempt can
     /// happen, or the row is closed once `attempts` reached `max_attempts`.

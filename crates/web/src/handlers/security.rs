@@ -289,6 +289,150 @@ pub async fn hold_http_response(
     hold_response(kind, verdict, visibility, chrono::Utc::now())
 }
 
+// ── scan status (RFC 0042) ───────────────────────────────────────────────────
+
+/// How long a list waits for its status batch before it is served without
+/// one (RFC 0042 §6.3).
+const SCAN_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The longest `last_error` a status carries, after redaction.
+const LAST_ERROR_MAX_CHARS: usize = 200;
+
+/// Where a version stands in scanning, as one caller may see it (RFC 0042
+/// §4.2): `state` and `verdict` with `quarantine:read`, `detail` with
+/// `findings:read` too, nothing at all without.
+///
+/// The fields are private and the only constructor is private to this module,
+/// so a status reaches a response through [`scan_status_for`] or not at all.
+/// There is no `Deserialize`: it cannot arrive from outside either.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ScanStatusDto {
+    state: batlehub_core::entities::ScanState,
+    /// Present only when `state` is `scanned`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verdict: Option<VerdictState>,
+    /// Present only with `findings:read`. `last_error` redacted and cut to
+    /// 200 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<batlehub_core::entities::ScanDetail>,
+}
+
+impl ScanStatusDto {
+    fn filtered(
+        status: batlehub_core::entities::ScanStatus,
+        visibility: HoldVisibility,
+    ) -> Option<Self> {
+        let detail = match visibility {
+            HoldVisibility::Hidden => return None,
+            HoldVisibility::Reason => None,
+            HoldVisibility::Findings => {
+                let mut d = status.detail;
+                // Redact first: a cut mid-URL would no longer parse as one.
+                d.last_error = d.last_error.map(|e| {
+                    batlehub_adapters::registry::http_client::redact_text_urls(&e)
+                        .chars()
+                        .take(LAST_ERROR_MAX_CHARS)
+                        .collect()
+                });
+                Some(d)
+            }
+        };
+        Some(Self {
+            state: status.state,
+            verdict: status.verdict,
+            detail,
+        })
+    }
+}
+
+/// The scan status of each of `coords` for `identity`, and whether the batch
+/// failed (RFC 0042 §5.1). The one way a status reaches a response.
+///
+/// - The tier is decided per registry from the config tiers, without a
+///   shadow ([`batlehub_core::services::authz::config_tier_holds`]), so a
+///   list is never wider than the per-version verdict GET.
+/// - When no coordinate is both on a `[security]` registry and visible, the
+///   batch is **not run**: an anonymous list on a default config stays at
+///   zero statements (T8b).
+/// - Jobs are read before verdicts, in one statement each, under a 500 ms
+///   timeout. A failure or a timeout drops every status and answers `true`:
+///   closed for disclosure, open for availability (§10.2).
+/// - Stored rows only. `VerdictService::current()` writes, and a page view
+///   must not enqueue a scan (T15).
+pub async fn scan_status_for(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    identity: &Identity,
+    coords: &[PackageId],
+) -> (Vec<Option<ScanStatusDto>>, bool) {
+    let mut out = vec![None; coords.len()];
+    let (security_on, verdicts, queue) = {
+        let hot = hot.read().await;
+        let on: Vec<bool> = coords
+            .iter()
+            .map(|c| hot.security.contains_key(&c.registry))
+            .collect();
+        (on, hot.verdicts.clone(), hot.scan_queue.clone())
+    };
+    if !security_on.contains(&true) {
+        return (out, false);
+    }
+    let holds = authz::config_tier_holds(
+        hot,
+        identity,
+        coords,
+        &[Action::QuarantineRead, Action::FindingsRead],
+    )
+    .await;
+    let visibility: Vec<HoldVisibility> = holds
+        .iter()
+        .zip(&security_on)
+        .map(|(h, on)| match (on, h.first(), h.get(1)) {
+            (true, Some(true), Some(true)) => HoldVisibility::Findings,
+            (true, Some(true), _) => HoldVisibility::Reason,
+            _ => HoldVisibility::Hidden,
+        })
+        .collect();
+    let wanted: Vec<usize> = (0..coords.len())
+        .filter(|&i| visibility[i] != HoldVisibility::Hidden)
+        .collect();
+    if wanted.is_empty() {
+        return (out, false);
+    }
+    let (Some(verdicts), Some(queue)) = (verdicts, queue) else {
+        tracing::warn!("scan status: a [security] registry with no verdict store; status withheld");
+        return (out, true);
+    };
+    let batch: Vec<PackageId> = wanted.iter().map(|&i| coords[i].clone()).collect();
+    let read = async {
+        let jobs = queue.jobs_for(&batch).await?;
+        let found = verdicts.get_many(&batch).await?;
+        Ok::<_, batlehub_core::error::CoreError>((jobs, found))
+    };
+    let (jobs, found) = match tokio::time::timeout(SCAN_STATUS_TIMEOUT, read).await {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "scan status: batch failed; list served without it");
+            return (out, true);
+        }
+        Err(_) => {
+            tracing::warn!("scan status: batch timed out; list served without it");
+            return (out, true);
+        }
+    };
+    let now = chrono::Utc::now();
+    for ((&i, (open, closed)), verdict) in wanted.iter().zip(&jobs).zip(&found) {
+        out[i] = batlehub_core::services::scan_status::derive(
+            true,
+            open.as_ref(),
+            closed.as_ref(),
+            verdict.as_ref(),
+            now,
+        )
+        .and_then(|s| ScanStatusDto::filtered(s, visibility[i]));
+    }
+    (out, false)
+}
+
 // ── the endpoint ─────────────────────────────────────────────────────────────
 
 /// A verdict as the endpoint serves it: the stored row, findings only for a

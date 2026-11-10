@@ -28,6 +28,13 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
+# RFC 0042 §6.P: the `user` role holds quarantine:read and not findings:read,
+# the tier between anonymous and admin that the console's badge is drawn for.
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-quarantine-storage"

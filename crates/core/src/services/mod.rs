@@ -38,6 +38,7 @@ pub mod rescan;
 pub mod retention;
 pub mod rustup;
 pub mod sbom;
+pub mod scan_status;
 pub mod scan_worker;
 pub mod scanners;
 pub mod sdkman;

@@ -43,17 +43,37 @@
     "cold": 4,
     "warm": 2
   },
+  "proxy-tarball-sec": {
+    "cold": 14,
+    "warm": 4
+  },
   "api-explore-list": {
+    "cold": 4,
+    "warm": 2
+  },
+  "api-explore-list-anon": {
     "cold": 2,
     "warm": 0
+  },
+  "api-explore-list-user": {
+    "cold": 5,
+    "warm": 2
   },
   "api-explore-detail": {
     "cold": 6,
     "warm": 6
   },
+  "api-explore-detail-sec-user": {
+    "cold": 10,
+    "warm": 9
+  },
   "api-packages-admin": {
     "cold": 2,
     "warm": 2
+  },
+  "api-admin-packages": {
+    "cold": 4,
+    "warm": 4
   },
   "api-me": {
     "cold": 0,

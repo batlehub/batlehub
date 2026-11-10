@@ -1,0 +1,543 @@
+//! RFC 0042 phase 1 — `scan_status` on the explore list, the explore detail
+//! and the admin package list: who sees it, what it costs, and what it never
+//! does (§4.2, §7.1 T1/T2/T5/T8b/T15).
+
+mod common;
+use common::*;
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use actix_web::test::{call_service, read_body_json, TestRequest};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+
+use batlehub_adapters::cache::InMemoryCacheStore;
+use batlehub_adapters::in_memory::{
+    InMemoryPackageRepository as InMemoryRepo, InMemoryScanQueue, InMemoryStorageBackend,
+    InMemoryVerdictRepository, NoopArtifactMetaRepository, NullUserTokenRepository,
+};
+use batlehub_core::entities::{
+    AccessEvent, PackageId, Role, ScanJob, ScanTrigger, SecurityPolicy, Verdict, VerdictState,
+};
+use batlehub_core::error::CoreError;
+use batlehub_core::ports::{
+    CacheStore, PackageRepository, QueuedCount, RegistryClient, ScanQueue, StorageBackend,
+    UserTokenRepository, VerdictRepository,
+};
+use batlehub_core::services::{
+    new_hot_lock, AdminService, HotConfig, ProxyMetrics, ProxyService, RegistryPolicy,
+};
+use batlehub_web::{new_access_lock, RegistryModeMap};
+
+/// Two registries behind `[security]`, one without.
+const SEC: &str = "npm-sec";
+const SEC2: &str = "npm-sec2";
+const PLAIN: &str = "npm";
+
+// ── stores that count what a request did ─────────────────────────────────────
+
+/// The in-memory stores, counting the batch reads and every write, and able
+/// to fail the batch.
+#[derive(Default)]
+struct Counts {
+    jobs_for: AtomicUsize,
+    get_many: AtomicUsize,
+    writes: AtomicUsize,
+    fail: AtomicBool,
+}
+
+struct Queue(Arc<InMemoryScanQueue>, Arc<Counts>);
+struct Verdicts(Arc<InMemoryVerdictRepository>, Arc<Counts>);
+
+#[async_trait]
+impl ScanQueue for Queue {
+    async fn enqueue(
+        &self,
+        p: &PackageId,
+        at: Option<DateTime<Utc>>,
+        t: ScanTrigger,
+    ) -> Result<bool, CoreError> {
+        self.1.writes.fetch_add(1, Ordering::SeqCst);
+        self.0.enqueue(p, at, t).await
+    }
+    async fn lease(
+        &self,
+        w: &str,
+        r: &[String],
+        n: u32,
+        s: u64,
+        m: u32,
+    ) -> Result<Vec<ScanJob>, CoreError> {
+        self.0.lease(w, r, n, s, m).await
+    }
+    async fn heartbeat(&self, id: uuid::Uuid, s: u64) -> Result<(), CoreError> {
+        self.0.heartbeat(id, s).await
+    }
+    async fn complete(&self, id: uuid::Uuid, w: Option<&str>) -> Result<(), CoreError> {
+        self.0.complete(id, w).await
+    }
+    async fn complete_exhausted(&self, id: uuid::Uuid, e: &str) -> Result<(), CoreError> {
+        self.0.complete_exhausted(id, e).await
+    }
+    async fn fail(&self, id: uuid::Uuid, w: &str, e: &str) -> Result<(), CoreError> {
+        self.0.fail(id, w, e).await
+    }
+    async fn exhausted(&self, m: u32, n: u32) -> Result<Vec<ScanJob>, CoreError> {
+        self.0.exhausted(m, n).await
+    }
+    async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {
+        self.0.queued().await
+    }
+    async fn try_lead(&self, k: i64) -> Result<bool, CoreError> {
+        self.0.try_lead(k).await
+    }
+    async fn jobs_for(
+        &self,
+        coords: &[PackageId],
+    ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
+        self.1.jobs_for.fetch_add(1, Ordering::SeqCst);
+        if self.1.fail.load(Ordering::SeqCst) {
+            return Err(CoreError::Other(anyhow::anyhow!("database is down")));
+        }
+        self.0.jobs_for(coords).await
+    }
+}
+
+#[async_trait]
+impl VerdictRepository for Verdicts {
+    async fn upsert(&self, v: &Verdict) -> Result<(), CoreError> {
+        self.1.writes.fetch_add(1, Ordering::SeqCst);
+        self.0.upsert(v).await
+    }
+    async fn get(&self, p: &PackageId) -> Result<Option<Verdict>, CoreError> {
+        self.0.get(p).await
+    }
+    async fn get_many(&self, c: &[PackageId]) -> Result<Vec<Option<Verdict>>, CoreError> {
+        self.1.get_many.fetch_add(1, Ordering::SeqCst);
+        self.0.get_many(c).await
+    }
+    async fn list_for_package(&self, r: &str, p: &str) -> Result<Vec<Verdict>, CoreError> {
+        self.0.list_for_package(r, p).await
+    }
+    async fn list_by_state(
+        &self,
+        r: &str,
+        s: VerdictState,
+        l: u64,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        self.0.list_by_state(r, s, l).await
+    }
+    async fn list_due_for_rescan(
+        &self,
+        r: &str,
+        b: DateTime<Utc>,
+        l: u64,
+    ) -> Result<Vec<PackageId>, CoreError> {
+        self.0.list_due_for_rescan(r, b, l).await
+    }
+}
+
+// ── the app ──────────────────────────────────────────────────────────────────
+
+struct Lab {
+    repo: Arc<InMemoryRepo>,
+    queue: Arc<InMemoryScanQueue>,
+    verdicts: Arc<InMemoryVerdictRepository>,
+    counts: Arc<Counts>,
+}
+
+impl Lab {
+    async fn seed(&self, registry: &str, name: &str, version: &str) {
+        self.repo
+            .record_access(AccessEvent::allowed_download(
+                PackageId::new(registry, name, version),
+                Some("user-1".to_owned()),
+                Role::User,
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn verdict(&self, registry: &str, name: &str, version: &str, state: VerdictState) {
+        self.verdicts
+            .upsert(&Verdict {
+                package: PackageId::new(registry, name, version),
+                state,
+                reason_codes: vec![],
+                findings: vec![],
+                policy_ref: format!("{registry}/default"),
+                available_at: None,
+                evaluated_at: Utc::now(),
+                last_scanned_at: Some(Utc::now()),
+                scanners_done: vec!["osv".into()],
+            })
+            .await
+            .unwrap();
+    }
+
+    fn reset(&self) {
+        self.counts.jobs_for.store(0, Ordering::SeqCst);
+        self.counts.get_many.store(0, Ordering::SeqCst);
+        self.counts.writes.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Explore open to every role on the three registries; `SEC` and `SEC2`
+/// behind `[security]`. `shadow` puts an active dry run on `SEC`'s node.
+async fn app(
+    shadow: bool,
+) -> (
+    impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+    Lab,
+) {
+    let repo = InMemoryRepo::new();
+    let repo_dyn: Arc<dyn PackageRepository> = repo.clone();
+    let storage: Arc<dyn StorageBackend> = InMemoryStorageBackend::new();
+    let cache: Arc<dyn CacheStore> = Arc::new(InMemoryCacheStore::new());
+    let names = [SEC, SEC2, PLAIN];
+    let registries: HashMap<String, Arc<dyn RegistryClient>> = names
+        .iter()
+        .map(|n| {
+            (
+                n.to_string(),
+                FixedRegistry::new("npm") as Arc<dyn RegistryClient>,
+            )
+        })
+        .collect();
+    let policies: HashMap<String, Arc<RegistryPolicy>> = names
+        .iter()
+        .map(|n| (n.to_string(), Arc::new(rbac_policy(repo_dyn.clone()).0)))
+        .collect();
+    let grants: HashMap<String, Arc<batlehub_core::entities::RegistryGrants>> = names
+        .iter()
+        .map(|n| {
+            let mut g = fixture_grants_with_explore(
+                n,
+                "npm",
+                &batlehub_config::schema::RegistryMode::Proxy,
+                &rbac_policy_perms(),
+                true,
+            );
+            if shadow && *n == SEC {
+                g.registry.dry_run = Some(batlehub_core::entities::DryRun {
+                    until: Utc::now().date_naive() + chrono::Days::new(30),
+                });
+            }
+            (n.to_string(), Arc::new(g))
+        })
+        .collect();
+    let counts = Arc::new(Counts::default());
+    let queue = InMemoryScanQueue::new();
+    let verdicts = InMemoryVerdictRepository::new();
+    let hot = new_hot_lock(HotConfig {
+        grants,
+        instance: Some(Arc::new(
+            batlehub_core::services::authz::translate::instance_node(None),
+        )),
+        registries,
+        policies,
+        security: [SEC, SEC2]
+            .iter()
+            .map(|n| (n.to_string(), SecurityPolicy::defaults_for(n)))
+            .collect(),
+        verdicts: Some(Arc::new(Verdicts(verdicts.clone(), counts.clone()))),
+        scan_queue: Some(Arc::new(Queue(queue.clone(), counts.clone()))),
+        versions_per_page: batlehub_core::services::hot_config::DEFAULT_VERSIONS_PER_PAGE,
+        packages_per_page: batlehub_core::services::hot_config::DEFAULT_PACKAGES_PER_PAGE,
+        ..Default::default()
+    });
+    let local_svc = make_local_svc(hot.clone(), storage.clone());
+    let proxy_svc = Arc::new(ProxyService {
+        hot: hot.clone(),
+        storage,
+        cache,
+        repo: repo_dyn.clone(),
+        artifact_meta: NoopArtifactMetaRepository::arc(),
+        metrics: Arc::new(ProxyMetrics::new(&[])),
+        sbom: None,
+        readme: None,
+        discovery: Default::default(),
+        explore_cache: None,
+    });
+    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullUserTokenRepository);
+    let regs: std::collections::HashSet<String> = names.iter().map(ToString::to_string).collect();
+    let access = new_access_lock(batlehub_web::AccessConfig {
+        anonymous: regs.clone(),
+        user: regs.clone(),
+        admin: regs.clone(),
+        groups: HashMap::new(),
+        explore_anonymous: regs.clone(),
+        explore_user: regs.clone(),
+        explore_admin: regs.clone(),
+    });
+    let registry_map = registry_map_for(&[(SEC, "npm"), (SEC2, "npm"), (PLAIN, "npm")]);
+    let app = finish_test_app(
+        proxy_svc,
+        admin_svc,
+        token_repo,
+        access,
+        registry_map,
+        local_svc,
+        RegistryModeMap::default(),
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults::default(),
+        test_auth_providers(),
+    )
+    .await;
+    (
+        app,
+        Lab {
+            repo,
+            queue,
+            verdicts,
+            counts,
+        },
+    )
+}
+
+async fn get<S>(app: &S, uri: &str, token: Option<&str>) -> Value
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    let mut req = TestRequest::get().uri(uri);
+    if let Some(t) = token {
+        req = req.insert_header(("Authorization", bearer(t)));
+    }
+    let resp = call_service(app, req.to_request()).await;
+    assert_eq!(resp.status(), 200, "{uri}");
+    read_body_json(resp).await
+}
+
+fn row<'a>(body: &'a Value, registry: &str) -> &'a Value {
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["registry"] == registry)
+        .unwrap_or_else(|| panic!("no {registry} row in {body}"))
+}
+
+const LIST: &str = "/api/v1/explore/packages";
+
+// ── the field, on each of the three responses ────────────────────────────────
+
+#[actix_web::test]
+async fn list_detail_and_admin_list_carry_scan_status() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "lodash", "1.0.0").await;
+    lab.verdict(SEC, "lodash", "1.0.0", VerdictState::Warned)
+        .await;
+
+    let list = get(&app, LIST, Some(ADMIN_TOKEN)).await;
+    assert_eq!(list["scan_status_unavailable"], false);
+    let status = &row(&list, SEC)["scan_status"];
+    assert_eq!(status["state"], "scanned", "{list}");
+    assert_eq!(status["verdict"], "warned");
+    assert!(status["detail"]["last_scanned_at"].is_string());
+
+    let detail = get(
+        &app,
+        &format!("/api/v1/explore/packages/{SEC}/lodash?upstream=skip"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(detail["versions"][0]["scan_status"]["state"], "scanned");
+    assert_eq!(detail["selected"]["scan_status"]["verdict"], "warned");
+
+    let admin = get(&app, "/api/v1/admin/packages", Some(ADMIN_TOKEN)).await;
+    assert_eq!(admin["items"][0]["package_id"]["name"], "lodash");
+    assert_eq!(admin["items"][0]["scan_status"]["state"], "scanned");
+    assert_eq!(admin["scan_status_unavailable"], false);
+}
+
+#[actix_web::test]
+async fn an_open_job_reads_queued_and_no_verdict_reads_not_scanned() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "a", "1.0.0").await;
+    lab.seed(SEC2, "b", "1.0.0").await;
+    lab.queue
+        .enqueue(
+            &PackageId::new(SEC, "a", "1.0.0"),
+            None,
+            ScanTrigger::FirstSeen,
+        )
+        .await
+        .unwrap();
+    let list = get(&app, LIST, Some(USER_TOKEN)).await;
+    assert_eq!(row(&list, SEC)["scan_status"]["state"], "queued");
+    assert_eq!(row(&list, SEC2)["scan_status"]["state"], "not_scanned");
+}
+
+// ── who sees what ────────────────────────────────────────────────────────────
+
+/// T1: anonymous holds no `quarantine:read`, so a held version is not named.
+#[actix_web::test]
+async fn anonymous_list_has_no_scan_status_on_quarantined_registry() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "evil", "0.0.1").await;
+    lab.verdict(SEC, "evil", "0.0.1", VerdictState::Quarantined)
+        .await;
+    let list = get(&app, LIST, None).await;
+    assert!(row(&list, SEC).get("scan_status").is_none(), "{list}");
+}
+
+/// T1: an active shadow serves the per-version GET, never the list.
+#[actix_web::test]
+async fn anonymous_list_under_shadow_has_no_scan_status() {
+    let (app, lab) = app(true).await;
+    lab.seed(SEC, "evil", "0.0.1").await;
+    lab.verdict(SEC, "evil", "0.0.1", VerdictState::Quarantined)
+        .await;
+    let list = get(&app, LIST, None).await;
+    assert!(row(&list, SEC).get("scan_status").is_none(), "{list}");
+}
+
+/// T2: a hidden status and a registry without `[security]` are the same row.
+#[actix_web::test]
+async fn hidden_and_no_security_are_indistinguishable() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "same", "1.0.0").await;
+    lab.seed(PLAIN, "same", "1.0.0").await;
+    lab.verdict(SEC, "same", "1.0.0", VerdictState::Denied)
+        .await;
+    let list = get(&app, LIST, None).await;
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        let o = v.as_object_mut().unwrap();
+        o.remove("registry");
+        o.remove("last_accessed"); // two seeds, two instants
+        v.to_string()
+    };
+    assert_eq!(strip(row(&list, SEC)), strip(row(&list, PLAIN)));
+}
+
+/// T5: `quarantine:read` without `findings:read` gets the state, never the
+/// detail.
+#[actix_web::test]
+async fn scan_detail_withheld_without_findings_read() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "lodash", "1.0.0").await;
+    lab.verdict(SEC, "lodash", "1.0.0", VerdictState::Allowed)
+        .await;
+    let list = get(&app, LIST, Some(USER_TOKEN)).await;
+    let status = &row(&list, SEC)["scan_status"];
+    assert_eq!(status["verdict"], "allowed");
+    assert!(status.get("detail").is_none(), "{status}");
+}
+
+/// T5: the worker's error reaches the admin redacted, then cut to 200.
+#[actix_web::test]
+async fn last_error_with_query_token_is_redacted() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "huge", "1.0.0").await;
+    lab.verdict(SEC, "huge", "1.0.0", VerdictState::Allowed)
+        .await;
+    let coord = PackageId::new(SEC, "huge", "1.0.0");
+    lab.queue
+        .enqueue(&coord, None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    let job = lab.queue.open_jobs().await.remove(0);
+    let error = format!(
+        "exhausted: GET https://u:SENTINEL@up.test/t.tgz?token=SENTINEL failed {}",
+        "x".repeat(300)
+    );
+    lab.queue.complete_exhausted(job.id, &error).await.unwrap();
+
+    let list = get(&app, LIST, Some(ADMIN_TOKEN)).await;
+    let status = &row(&list, SEC)["scan_status"];
+    assert_eq!(status["state"], "failed", "rule 5 on an allowed version");
+    let shown = status["detail"]["last_error"].as_str().unwrap();
+    assert!(
+        shown.starts_with("GET https://up.test/t.tgz failed "),
+        "{shown}"
+    );
+    assert!(!shown.contains("SENTINEL"));
+    assert_eq!(shown.chars().count(), 200);
+}
+
+// ── what it costs, and what it never does ────────────────────────────────────
+
+/// T8b: anonymous on a default config resolves `Hidden` everywhere, so the
+/// batch is not run; a `user` runs it once per store, whatever the number of
+/// registries on the page.
+#[actix_web::test]
+async fn anonymous_list_runs_no_status_statement() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "a", "1.0.0").await;
+    lab.seed(SEC2, "b", "1.0.0").await;
+    lab.seed(PLAIN, "c", "1.0.0").await;
+
+    lab.reset();
+    get(&app, LIST, None).await;
+    assert_eq!(lab.counts.jobs_for.load(Ordering::SeqCst), 0);
+    assert_eq!(lab.counts.get_many.load(Ordering::SeqCst), 0);
+
+    lab.reset();
+    get(&app, LIST, Some(USER_TOKEN)).await;
+    assert_eq!(lab.counts.jobs_for.load(Ordering::SeqCst), 1);
+    assert_eq!(lab.counts.get_many.load(Ordering::SeqCst), 1);
+}
+
+/// T15: a page view enqueues no scan and writes no verdict.
+#[actix_web::test]
+async fn a_list_or_detail_view_enqueues_nothing_and_writes_nothing() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "fresh", "1.0.0").await;
+    lab.reset();
+    get(&app, LIST, Some(ADMIN_TOKEN)).await;
+    get(
+        &app,
+        &format!("/api/v1/explore/packages/{SEC}/fresh?upstream=skip"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    get(&app, "/api/v1/admin/packages", Some(ADMIN_TOKEN)).await;
+    assert_eq!(lab.counts.writes.load(Ordering::SeqCst), 0);
+    assert!(lab.queue.open_jobs().await.is_empty());
+}
+
+/// §10.2: a failing batch drops every status and still serves the list.
+#[actix_web::test]
+async fn a_failing_batch_sets_scan_status_unavailable_and_serves_the_list() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "a", "1.0.0").await;
+    lab.verdict(SEC, "a", "1.0.0", VerdictState::Allowed).await;
+    lab.counts.fail.store(true, Ordering::SeqCst);
+    let list = get(&app, LIST, Some(ADMIN_TOKEN)).await;
+    assert_eq!(list["scan_status_unavailable"], true);
+    assert!(row(&list, SEC).get("scan_status").is_none());
+    let detail = get(
+        &app,
+        &format!("/api/v1/explore/packages/{SEC}/a?upstream=skip"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(detail["scan_status_unavailable"], true);
+    assert!(detail["versions"][0].get("scan_status").is_none());
+}
+
+/// Decision 42: the verdict GET keeps its `404` with no verdict row, which
+/// `batlehub-cli wait` reads as "no verdict yet".
+#[actix_web::test]
+async fn the_verdict_get_still_answers_404_with_no_verdict_row() {
+    let (app, lab) = app(false).await;
+    lab.seed(SEC, "a", "1.0.0").await;
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/verdicts/{SEC}/a/1.0.0"))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}

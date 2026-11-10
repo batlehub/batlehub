@@ -150,6 +150,76 @@ async fn an_expired_lease_returns_to_the_queue_and_spent_attempts_are_reported()
         .all(|j| j.package != p));
 }
 
+/// RFC 0042 §5.1: the batch reads behind a list page's scan statuses, and
+/// decision 34's marker on an exhausted row.
+#[tokio::test]
+async fn jobs_for_and_get_many_answer_per_coordinate_in_order() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    let repo = PgVerdictRepository::new(pool.clone());
+    let a = PackageId::new(&reg, "pkg", "1.0.0");
+    let b = PackageId::new(&reg, "pkg", "2.0.0");
+    let none = PackageId::new(&reg, "pkg", "3.0.0");
+
+    // `a`: one failed-and-closed job, then a later successful one, then an
+    // open one. `b`: one exhausted job.
+    for _ in 0..2 {
+        q.enqueue(&a, None, ScanTrigger::FirstSeen).await.unwrap();
+        let j = q
+            .lease("w", std::slice::from_ref(&reg), 1, 60, 3)
+            .await
+            .unwrap();
+        q.complete(j[0].id, Some("w")).await.unwrap();
+    }
+    q.enqueue(&a, None, ScanTrigger::Rescan).await.unwrap();
+    q.enqueue(&b, None, ScanTrigger::Rescan).await.unwrap();
+    let jb = q
+        .lease("w", std::slice::from_ref(&reg), 2, 60, 3)
+        .await
+        .unwrap();
+    let jb = jb.iter().find(|j| j.package == b).unwrap();
+    assert_eq!(jb.leased_by.as_deref(), Some("w"));
+    q.complete_exhausted(jb.id, "exhausted: tar: unexpected EOF")
+        .await
+        .unwrap();
+
+    let got = q
+        .jobs_for(&[none.clone(), a.clone(), b.clone(), a.clone()])
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 4);
+    assert!(got[0].0.is_none() && got[0].1.is_none());
+    for (open, closed) in [&got[1], &got[3]] {
+        assert_eq!(open.as_ref().unwrap().package, a);
+        assert!(closed.as_ref().unwrap().last_error.is_none());
+    }
+    assert!(got[2].0.is_none());
+    assert_eq!(
+        got[2].1.as_ref().unwrap().last_error.as_deref(),
+        Some("exhausted: tar: unexpected EOF")
+    );
+
+    let v = Verdict {
+        package: b.clone(),
+        state: VerdictState::Allowed,
+        reason_codes: vec![],
+        findings: vec![],
+        policy_ref: format!("{reg}/default"),
+        available_at: None,
+        evaluated_at: Utc::now(),
+        last_scanned_at: Some(Utc::now()),
+        scanners_done: vec!["osv".into()],
+    };
+    repo.upsert(&v).await.unwrap();
+    let many = repo.get_many(&[a.clone(), b.clone()]).await.unwrap();
+    assert!(many[0].is_none());
+    assert_eq!(many[1].as_ref().unwrap().state, VerdictState::Allowed);
+}
+
 #[tokio::test]
 async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
     let Some(url) = db_url() else {

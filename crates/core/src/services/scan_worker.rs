@@ -896,7 +896,19 @@ impl ScanWorker {
                 tracing::warn!(package = %job.package, error = %e, "security worker: could not record SCANNER_ERROR");
             }
         }
-        if let Err(e) = self.queue.complete(job.id, None).await {
+        // The prefix is what tells a reader this row failed (RFC 0042
+        // decision 34): a `Rescan` or `Backfill` closing here writes no
+        // `SCANNER_ERROR`, and would otherwise read as a finished scan.
+        let last_error = format!(
+            "{}{}",
+            crate::entities::EXHAUSTED_PREFIX,
+            // A deferral's anchor is a date, not the error.
+            job.last_error
+                .as_deref()
+                .filter(|_| job.deferred_since.is_none())
+                .unwrap_or_default()
+        );
+        if let Err(e) = self.queue.complete_exhausted(job.id, &last_error).await {
             tracing::warn!(job = %job.id, error = %e, "security worker: could not close exhausted job");
         }
     }

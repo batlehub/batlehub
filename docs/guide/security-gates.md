@@ -545,6 +545,49 @@ The user-facing side, with what each package manager prints, is on
 
 ---
 
+## Reading scan status {#scan-status}
+
+On a `[security]` registry, the catalogue, the admin package list and each
+version of a package page carry a **scan status** next to the existing state
+badge. One server-side function derives it, first match wins:
+
+| Status | When |
+| --- | --- |
+| *(none)* | the registry has no `[registries.security]` |
+| `scanning` | an open job is leased by a worker whose lease has not run out |
+| `queued` | an open job nobody holds: never leased, lease expired, or deferred on an advisory database outage |
+| `not scanned` | no verdict has been recorded for the version |
+| `scan failed` | the latest closed job ran out of attempts, or the verdict carries `SCANNER_ERROR` |
+| `queued` | the verdict carries `SCAN_PENDING` |
+| `scanned · <verdict>` | otherwise, with `allowed`, `warned`, `quarantined` or `denied` |
+
+**Who sees it** follows the verbs that already decide who may learn a version
+is held:
+
+- without `quarantine:read`, nothing — the row reads exactly as it does on a
+  registry that does not scan, so an anonymous visitor cannot tell the two
+  apart or learn that a version is held;
+- with `quarantine:read` (the `user` and `admin` roles by default), the status
+  and the verdict;
+- with `findings:read` too (`admin` by default), the last scan time, the
+  attempts and the worker's last error, with any URL in it stripped of its
+  credentials and query, cut to 200 characters.
+
+A list decides this per registry from the configured grants and **ignores an
+active `dry_run` shadow**: during a dry run a list can show less than the
+per-version verdict endpoint, never more.
+
+**A list shows the verdict as last recorded.** `GET /api/v1/verdicts/…`
+re-judges against the current policy and clock; the lists read the stored row
+and never trigger a scan. The two can differ for the few minutes after a
+release-age window lifts or a policy changes.
+
+When the status could not be read within 500 ms, the list is served without it
+and carries `scan_status_unavailable: true`; the console then draws "—" in
+place of each badge.
+
+---
+
 ## Watching it {#observability}
 
 - **Every refusal** writes a `denied_download` audit row with the reason, the

@@ -1019,7 +1019,15 @@
     "upstreamUnreachable": "Nothing has been pulled through, and the upstream could not be reached.",
     "versionsShown": "{shown} of {total} shown",
     "vulnerabilityCount": "1 advisory | {n} advisories",
-    "why": "Why?"
+    "why": "Why?",
+    "tabs": {
+      "label": "Package sections",
+      "overview": "Overview",
+      "versions": "Versions",
+      "security": "Security",
+      "admin": "Administration"
+    },
+    "securitySummary": "Scan status and verdict"
   },
   "packageEventsTable": {
     "noEventsRecordedYet": "No events recorded yet.",
@@ -1260,7 +1268,14 @@
     "rescanAlreadyOpen": "A scan job for this version is already open.",
     "rescanFailed": "The rescan could not be queued.",
     "codeDocs": "What {code} means, in the documentation",
-    "judgedAs": "{stored}, judged as {judged} by unknown_severity"
+    "judgedAs": "{stored}, judged as {judged} by unknown_severity",
+    "scanning": "Updates automatically.",
+    "pollStopped": "Stopped updating after 10 minutes.",
+    "pollFailed": "Stopped updating: the server did not answer.",
+    "attempt": "attempt {attempt}",
+    "waitingSince": "waiting since {when}",
+    "deferredSince": "deferred since {when}",
+    "noScanning": "This registry does not scan packages. Versions are served as upstream publishes them."
   },
   "visibility": {
     "internal": "Internal — authenticated users only",
@@ -1278,5 +1293,26 @@
   "displaySettings": {
     "theme": "Theme",
     "title": "Display"
+  },
+  "scanBadge": {
+    "notScanned": "not scanned",
+    "queued": "queued",
+    "scanning": "scanning",
+    "failed": "scan failed",
+    "scanned": "scanned · {verdict}",
+    "verdict": {
+      "allowed": "allowed",
+      "warned": "warned",
+      "quarantined": "quarantined",
+      "denied": "denied"
+    },
+    "queuedHelp": "Waiting for a scan worker",
+    "scanningHelp": "Being scanned — attempt {attempt}",
+    "scanningHelpNoAttempt": "Being scanned",
+    "failedHelp": "{attempts} attempts; last error: {error}",
+    "failedNoError": "{attempts} attempts; no error recorded",
+    "notScannedHelp": "No scan has run for this version yet",
+    "asLastRecorded": "as last recorded",
+    "unavailable": "Scan status could not be read; the list is otherwise current."
   }
 }

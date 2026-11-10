@@ -94,6 +94,12 @@ impl InMemoryPackageRepository {
                 });
             entry.version_count += 1;
             entry.has_blocked |= summary.status.is_blocked();
+            // shortcut: the most recently *accessed* version stands in for the
+            // most recently cached one Postgres reports; this store keeps no
+            // cache time.
+            if summary.last_accessed > entry.last_accessed || entry.newest_version.is_none() {
+                entry.newest_version = Some(summary.package_id.version.clone());
+            }
             if summary.last_accessed > entry.last_accessed {
                 entry.last_accessed = summary.last_accessed;
             }

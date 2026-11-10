@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPEAT = 3
 ADMIN = "heavy-admin-token"
+USER = "heavy-user-token"
 
 
 # ── The upstream ─────────────────────────────────────────────────────────────
@@ -180,7 +181,7 @@ def mint_pat():
 
 
 def scenarios(run):
-    proxy, local = f"npm-proxy-{run}", f"npm-local-{run}"
+    proxy, local, sec = f"npm-proxy-{run}", f"npm-local-{run}", f"npm-sec-{run}"
     pat = mint_pat()
     counter = iter(range(1, 1000))
 
@@ -206,9 +207,17 @@ def scenarios(run):
         ("local-publish", publish, 200),
         ("local-packument", lambda: ("GET", f"/proxy/{local}/pkg-{run}", None, None), 200),
         ("local-tarball", lambda: ("GET", f"/proxy/{local}/pkg-{run}/1.0.1/tarball", None, None), 200),
+        # RFC 0042: a first download on the [security] registry, served past
+        # maturity, leaves an open job and a catalogue row for the lists below.
+        ("proxy-tarball-sec", lambda: ("GET", f"/proxy/{sec}/left-pad/1.0.0/tarball", ADMIN, None), 200),
         ("api-explore-list", lambda: ("GET", "/api/v1/explore/packages", ADMIN, None), 200),
+        # Anonymous holds no quarantine:read: the status batch must not run (T8b).
+        ("api-explore-list-anon", lambda: ("GET", "/api/v1/explore/packages", None, None), 200),
+        ("api-explore-list-user", lambda: ("GET", "/api/v1/explore/packages", USER, None), 200),
         ("api-explore-detail", lambda: ("GET", f"/api/v1/explore/packages/{local}/pkg-{run}", ADMIN, None), 200),
+        ("api-explore-detail-sec-user", lambda: ("GET", f"/api/v1/explore/packages/{sec}/left-pad", USER, None), 200),
         ("api-packages-admin", lambda: ("GET", "/api/v1/packages", ADMIN, None), 200),
+        ("api-admin-packages", lambda: ("GET", "/api/v1/admin/packages", ADMIN, None), 200),
         ("api-me", lambda: ("GET", "/api/v1/me", ADMIN, None), 200),
     ]
 
@@ -330,6 +339,13 @@ def run(base, log, budget_path, update):
         statements.update((q["sql"], q["raw"]) for r in rows for q in r["queries"])
         if bad:
             failures.append(f"{name}: answered {bad}, expected {expect} — the count measured an error path")
+        # RFC 0042 T8b: anonymous holds no quarantine:read anywhere here, so
+        # the scan-status batch is skipped, not merely cheap.
+        if name == "api-explore-list-anon":
+            status_reads = [q["sql"] for r in rows for q in r["queries"]
+                            if re.search(r"\b(scan_jobs|artifact_verdicts)\b", q["sql"])]
+            if status_reads:
+                failures.append(f"{name}: ran the scan-status batch for a caller who may not see it: {status_reads}")
         got = measured[name] = report(name, rows)
         want = budget.get(name)
         for phase in ("cold", "warm"):

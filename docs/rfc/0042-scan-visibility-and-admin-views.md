@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted                                                         |
+| Status      | Accepted — phase 1 built 2026-11-10 (§17.1); phases 2–5 to come |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1791,7 +1791,7 @@ None.
 
 | Phase | Content | Useful alone |
 | --- | --- | --- |
-| 1 | `scan_status` (core `derive`, ports' `jobs_for`/`get_many`, `scan_status_for` with per-registry visibility, the skip, the timeout and `scan_status_unavailable`, the field on the list, detail and admin-list responses) + `ScanBadge` in the catalog's State cell, `AdminPackages` and the header; package page tabs; `usePoll` with its backoff; the worker's `exhausted:` marker (decision 34) and the index migration (decision 33); `config.db-calls.toml` gains a security registry and the budgets are re-measured; the explore-list soak arm; T1/T2/T5/T8/T8b/T15 | yes: motivations 1 and 2 |
+| 1 ✅ (§17.1) | `scan_status` (core `derive`, ports' `jobs_for`/`get_many`, `scan_status_for` with per-registry visibility, the skip, the timeout and `scan_status_unavailable`, the field on the list, detail and admin-list responses) + `ScanBadge` in the catalog's State cell, `AdminPackages` and the header; package page tabs; `usePoll` with its backoff; the worker's `exhausted:` marker (decision 34) and the index migration (decision 33); `config.db-calls.toml` gains a security registry and the budgets are re-measured; the explore-list soak arm; T1/T2/T5/T8/T8b/T15 | yes: motivations 1 and 2 |
 | 2 | `GET /admin/scans` with its per-registry row filter, `AdminScans.vue` (queue, failures, verdicts by state), [Rescan] wired to existing endpoints; the route in `authz_matrix.rs` and `profile_routes.txt`; T7 for `/admin/scans`, T9, T16 | yes: motivation 4 |
 | 3 | `GET /admin/findings` built on `authorize_control` with the per-row seal check, `AdminFindings.vue`, [Exempt…] reusing the exemption dialog; the route in `authz_matrix.rs` and `profile_routes.txt`; T3/T3b/T3c/T7 for `/admin/findings`/T10 | yes: motivation 3 |
 | 4 | `next_rescan` on the verdict GET and in the Security tab | yes: motivation 5 |
@@ -1800,3 +1800,96 @@ None.
 Every phase regenerates `ui/openapi.json` and `ui/src/client/`, and adds its
 docs and both locales. The allow-list and its sentinel test (T4) land in the
 same phase as the endpoint that could leak, never after it.
+
+---
+
+## 17. Implementation notes
+
+### 17.1 Phase 1 — built 2026-11-10
+
+**Landed as designed:**
+
+- `services::scan_status::derive`, the §4.2 table in its order, with a unit
+  test per row and each edge case of §14 (rule 2 over rule 5, a deferred job,
+  a lease expired by one second, an exhausted `rescan` on an `allowed`
+  version, a failure followed by a success, `SCAN_PENDING` with no job).
+- `ScanJob.leased_by`/`last_error`, `EXHAUSTED_PREFIX`, `ScanQueue::jobs_for`
+  and `complete_exhausted`, `VerdictRepository::get_many`, in Postgres and in
+  memory. `close_exhausted` writes the prefix (decision 34); migration 067
+  holds decision 33's two indexes.
+- `ScanStatusDto` (private fields, private constructor, no `Deserialize`) and
+  `scan_status_for`, the single entry point: per-registry tier, the skip when
+  everything is `Hidden`, jobs before verdicts, the 500 ms timeout and
+  `scan_status_unavailable` on the explore list, the explore detail (each
+  version and `selected`) and the admin package list. `last_error` goes through
+  the new `http_client::redact_text_urls`, then is cut to 200 characters.
+- `crates/web/tests/scan_visibility.rs`: T1 (twice, with and without an active
+  shadow), T2, T5 (both), T8b, T15, the failing batch, the unchanged verdict
+  GET `404`. `pg_verdicts.rs` covers the Postgres batch reads.
+- The UI: `ScanBadge` in the catalog's State cell, `AdminPackages`, the sticky
+  header and each Versions row; the package page's tabs with `?tab=` and the
+  `q`/`page` fallback; the Security tab polling the explore detail through
+  `usePoll` (5 s, hidden, 10 min, three failures, ×2 to 60 s, `Retry-After`).
+- `docs/guide/security-gates.md` § *Reading scan status*, and its French twin.
+
+**The budget, measured** (`tests/heavy/db_calls.sh --update`, warm statements
+per request, with a `[security]` registry now in `config.db-calls.toml`):
+
+| Route | Before | After |
+| --- | --- | --- |
+| `api-explore-list-anon` (new) | — | 0 — the batch is skipped |
+| `api-explore-list` (admin) | 0 | 2 |
+| `api-explore-list-user` (new) | — | 2 |
+| `api-explore-detail-sec-user` (new) | — | 9 (7 + 2) |
+| `api-admin-packages` (new, `/api/v1/admin/packages`) | — | 4 (2 + 2) |
+
+`api-packages-admin` was measuring `/api/v1/packages`, not the admin list
+§10.3 named; the admin list now has its own row. The anonymous row also
+asserts that no statement touching `scan_jobs` or `artifact_verdicts` ran.
+
+**Where the build differs from the text:**
+
+1. **Visibility reads the config tiers only** (instance, registry, matching
+   namespaces), never the stored package and version tiers §4.2's fallback
+   named. A stored node only ever widens — it is never a seal — so leaving it
+   out can only answer *no* where the GET answers *yes*, and reading it is one
+   query per row. A registry with no hierarchy resolves to `Hidden`.
+   (`authz::config_tier_holds`.)
+2. **`ScanDetail` has no `max_attempts`.** §6.1 listed it, but the web process
+   does not know the worker's setting — decision 34's own reason — so the badge
+   reads "attempt 1", not "attempt 1 of 3".
+3. **The quarantined badge does not carry "Held until …".** `ScanStatusDto`
+   has no `available_at`; the Security tab's `VerdictPanel` still shows it.
+4. **The verdict GET does not carry `scan_status` yet.** §4.4 lists it; it
+   ships with `next_rescan` in phase 4. The Security tab reads the explore
+   detail, as decision 42 requires.
+5. **Overview and Versions stay inline** in `PackageDetailPage.vue` as
+   `TabsContent`, not in their own files: they share about forty of the page's
+   functions. Security and Administration are their own components. Every panel
+   stays mounted, so the SBOM and vulnerability blocks still load on mount.
+6. **"This registry does not scan packages" is shown to admins only.** For any
+   other reader an absent status is, by T2, indistinguishable from a withheld
+   one.
+7. **The poll pauses while the tab is hidden and resumes when it is shown**,
+   rather than stopping for good; the 10-minute and three-failure stops are as
+   written.
+8. **§6.P's step 10 is folded into steps 1 and 2** of `quarantine.sh`, because
+   10–13 were taken by RFC 0041. Observation 1 reads the list after npm's
+   refused install (`queued`/`scanning`, or `scanned` if the embedded worker
+   was faster, with no `detail` for `user`) and exactly `scanned · allowed`
+   after `wait`; observation 2 checks anonymous gets no key. The sqlx-log half
+   of observation 2 lives in `db_calls.sh` (above); the CDP `Network` half of
+   observation 1 is not automated yet.
+9. **The explore-list soak arm profiles the list, not the batch:**
+   `config.soak.toml` has no `[security]` registry, and adding one would hold
+   every other arm's downloads. The batch's cost is bound by the `db_calls`
+   budget instead.
+10. **`Tabs.vue` forwarded no `update:modelValue`**, so a controlled tab never
+    changed; fixed, with a regression test. No page used one before.
+11. The in-memory package repository now reports `newest_version` (the most
+    recently accessed version, as a stand-in for Postgres's most recently
+    cached one), which the explore tests need to carry a status.
+
+**Not run here:** `quarantine.sh` end to end (it needs `bwrap` for step 9,
+absent in this workspace; CI runs it) and the rendered design gate
+(`task docs:design:rendered`, which needs the browser sidecar and a backend).

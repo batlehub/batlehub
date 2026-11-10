@@ -26,6 +26,7 @@ import type {
   UpstreamPackageDto,
 } from "@/client/types.gen";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
+import ScanBadge from "@/components/package/ScanBadge.vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AsyncState } from "@/components/ui/async-state";
@@ -64,6 +65,8 @@ type SearchScope = "name" | "readme" | "both";
 const searchIn = ref<SearchScope>("name");
 /** `[search] readmes` on this instance, as the last response reported it. */
 const readmeSearchEnabled = ref(false);
+/** RFC 0042: the page's scan-status batch failed; rows draw "—". */
+const scanUnavailable = ref(false);
 /** The prose search hit its cap; there may be more than is shown. */
 const searchTruncated = ref(false);
 
@@ -362,6 +365,8 @@ interface PageResult {
       a truncated prose search followed by a cached name search left the
       "showing the first N matches" note under a list it was not about. */
   truncated: boolean;
+  /** RFC 0042 §10.2: the status batch failed for this answer. */
+  scanUnavailable: boolean;
 }
 const exploreCache = useExploreCache<PageResult>();
 const upstreamCache = useUpstreamCache<UpstreamPackageDto[]>();
@@ -438,6 +443,7 @@ async function fetchPackages() {
     total.value = cached.total;
     perPage.value = cached.perPage;
     readmeSearchEnabled.value = cached.readmeSearchEnabled;
+    scanUnavailable.value = cached.scanUnavailable;
     searchTruncated.value = cached.truncated;
     // Cleared here rather than left to the `finally`: this call already bumped
     // `packagesSeq`, so a request still in flight skips its own `finally` and
@@ -487,6 +493,7 @@ async function fetchPackages() {
         perPage: applied,
         readmeSearchEnabled: prose,
         truncated: cut,
+        scanUnavailable: body.scan_status_unavailable === true,
       },
       scope,
     );
@@ -496,6 +503,7 @@ async function fetchPackages() {
     perPage.value = applied;
     readmeSearchEnabled.value = prose;
     searchTruncated.value = cut;
+    scanUnavailable.value = body.scan_status_unavailable === true;
   } catch (e) {
     // A failed revalidation leaves the copy already on screen alone.
     if (seq === packagesSeq && !cached) error.value = extractMessage(e);
@@ -1108,6 +1116,15 @@ onMounted(() => {
               >
                 <TableCell class="pl-0 pr-3 py-3 align-baseline">
                   <Resolution :state="rowState(row)" :label="t(STATE_LABEL_KEYS[rowState(row)])" />
+                  <!-- RFC 0042: under the State badge, in the same cell, so the
+                       390px layout keeps its columns. -->
+                  <div v-if="row.kind === 'cached'" class="mt-1">
+                    <ScanBadge
+                      :status="row.scan_status"
+                      :unavailable="scanUnavailable && !!row.newest_version"
+                      in-list
+                    />
+                  </div>
                 </TableCell>
                 <!-- `aria-describedby` is what ties a denial to the package it is
                    about. Without it the note below is a paragraph a screen

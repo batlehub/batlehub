@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
+import { defineComponent, h } from "vue";
 import Tabs from "./Tabs.vue";
 import TabsList from "./TabsList.vue";
 import TabsTrigger from "./TabsTrigger.vue";
@@ -50,5 +50,20 @@ describe("Tabs", () => {
   it("renders the TabsList with base classes", () => {
     const wrapper = mount(TestTabs);
     expect(wrapper.find('[role="tablist"]').classes()).toContain("inline-flex");
+  });
+
+  it("emits update:modelValue for a controlled v-model", async () => {
+    const wrapper = mount(Tabs, {
+      props: { modelValue: "a" },
+      slots: {
+        default: () =>
+          h(TabsList, () => [
+            h(TabsTrigger, { value: "a" }, () => "A"),
+            h(TabsTrigger, { value: "b" }, () => "B"),
+          ]),
+      },
+    });
+    await wrapper.findAll('[role="tab"]')[1].trigger("mousedown", { button: 0 });
+    expect(wrapper.emitted("update:modelValue")).toEqual([["b"]]);
   });
 });

@@ -3,28 +3,21 @@ import { useI18n } from "vue-i18n";
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ArrowLeft, Check, Copy, FileJson, FileCode, Download, Search } from "@lucide/vue";
-import {
-  explorePackageDetail,
-  exploreFetchVersion,
-  listRegistries,
-  packageDetail,
-} from "@/client/sdk.gen";
+import { explorePackageDetail, exploreFetchVersion, listRegistries } from "@/client/sdk.gen";
 import type {
   ExplorePackageDetailResponse,
   ExploreVersionDto,
   FirewallDto,
-  PackageDetailResponse,
   RegistryInfo,
 } from "@/client/types.gen";
 import { installCommandFor } from "@/config/registryTypes";
 import { useAuth } from "@/composables/useAuth";
-import PackageVersionsTable from "@/components/admin/PackageVersionsTable.vue";
-import PackageBetaChannel from "@/components/admin/PackageBetaChannel.vue";
-import PackageVisibility from "@/components/admin/PackageVisibility.vue";
-import PackageGrants from "@/components/admin/PackageGrants.vue";
-import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 import ReadmePanel from "@/components/package/ReadmePanel.vue";
-import VerdictPanel from "@/components/package/VerdictPanel.vue";
+import ScanBadge from "@/components/package/ScanBadge.vue";
+import SecurityTab from "@/components/package/tabs/SecurityTab.vue";
+import AdminTab from "@/components/package/tabs/AdminTab.vue";
+import { usePoll } from "@/composables/usePoll";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
@@ -996,21 +989,67 @@ function upstreamBadgeKey(row: UpstreamRow): string {
   return UPSTREAM_BADGE_KEYS[row.state];
 }
 
-const {
-  data: adminData,
-  error: adminError,
-  reload: reloadAdmin,
-} = useApi<PackageDetailResponse>(
-  () =>
-    isAdmin.value
-      ? (packageDetail({
-          query: { registry: registry.value, name: name.value },
-        }) as Promise<{
-          data?: unknown;
-          error?: unknown;
-        }>)
-      : Promise.resolve({ data: undefined }),
-  [token, registry, name],
+// ── Tabs (RFC 0042 §4.2) ─────────────────────────────────────────────────────
+
+const TABS = ["overview", "versions", "security", "admin"] as const;
+type Tab = (typeof TABS)[number];
+/** The three anchors the page had before tabs, mapped to the tab holding them. */
+const ANCHOR_TABS: Record<string, Tab> = {
+  "#subject-heading": "overview",
+  "#versions-heading": "versions",
+  "#admin-heading": "admin",
+};
+
+/**
+ * `?tab=`, read back off the URL. An unknown or forbidden value is Overview,
+ * without an error; with no `tab`, a link into the versions index (`q`,
+ * `page`) or one of the old anchors keeps landing where it used to.
+ */
+const activeTab = computed<Tab>({
+  get() {
+    const one = (v: unknown) => (Array.isArray(v) ? v[0] : v);
+    const asked = one(route.query.tab);
+    const allowed = (tab: Tab | undefined) => !!tab && (tab !== "admin" || isAdmin.value);
+    if (asked !== undefined) {
+      return allowed(asked as Tab) && TABS.includes(asked as Tab) ? (asked as Tab) : "overview";
+    }
+    if (one(route.query.q) !== undefined || one(route.query.page) !== undefined) return "versions";
+    const anchored = ANCHOR_TABS[route.hash ?? ""];
+    return allowed(anchored) ? anchored! : "overview";
+  },
+  set(tab) {
+    // `replace`: tabs are not destinations, and must not stack in history.
+    void router.replace({ path: route.path, query: { ...route.query, tab } });
+  },
+});
+
+// ── The bounded poll (RFC 0042 §4.2) ─────────────────────────────────────────
+
+/**
+ * One silent re-read of the explore detail, which always answers — never the
+ * verdict GET, whose `404` means "no verdict yet" to `batlehub-cli wait`. A
+ * failure throws, with the response, so the poll can back off on it.
+ */
+async function pollDetail() {
+  const seq = ++versionSeq;
+  const {
+    data: res,
+    error: apiErr,
+    response,
+  } = await explorePackageDetail({
+    path: { registry: registry.value, name: name.value },
+    query: versionQuery(),
+  });
+  if (apiErr || !res) throw Object.assign(new Error(), { response });
+  if (seq === versionSeq) data.value = res as ExplorePackageDetailResponse;
+}
+
+const scanTransient = computed(() =>
+  ["queued", "scanning"].includes(selectedRow.value?.scan_status?.state ?? ""),
+);
+const { stopped: pollStopped, restart: restartPoll } = usePoll(
+  pollDetail,
+  computed(() => activeTab.value === "security" && scanTransient.value),
 );
 </script>
 
@@ -1100,6 +1139,12 @@ const {
           <li class="font-mono text-foreground">{{ selectedRow.version }}</li>
           <li>
             <Resolution :state="rowState(selectedRow)" :label="stateLabel(selectedRow)" />
+          </li>
+          <li>
+            <ScanBadge
+              :status="selectedRow.scan_status"
+              :unavailable="data?.scan_status_unavailable === true"
+            />
           </li>
         </template>
       </ol>
@@ -1256,7 +1301,21 @@ const {
         </Button>
       </div>
 
-      <!-- ── The subject: one version ──────────────────────────────────────
+      <!-- RFC 0042: four tabs, linkable with `?tab=`. Every panel stays
+           mounted (`force-mount`), so the README, SBOM and vulnerability
+           blocks still load on mount and a tab switch costs no request. -->
+      <Tabs v-model="activeTab">
+        <TabsList :aria-label="t('packageDetailPage.tabs.label')" class="flex-wrap h-auto">
+          <TabsTrigger value="overview">{{ t("packageDetailPage.tabs.overview") }}</TabsTrigger>
+          <TabsTrigger value="versions">{{ t("packageDetailPage.tabs.versions") }}</TabsTrigger>
+          <TabsTrigger value="security">{{ t("packageDetailPage.tabs.security") }}</TabsTrigger>
+          <TabsTrigger v-if="isAdmin" value="admin">{{
+            t("packageDetailPage.tabs.admin")
+          }}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" force-mount class="space-y-6">
+          <!-- ── The subject: one version ──────────────────────────────────────
            The page's centre of gravity, and the reason it is not a table with a
            README under it any more. Every question PRODUCT names — *why was this
            blocked*, *what do I paste* — is answered by exactly one version, and
@@ -1268,439 +1327,386 @@ const {
            A region separated by a full-width hairline, not a card. The world has
            no card, and three of them stacked here were the page's largest
            disagreement with its own design system. -->
-      <section
-        v-if="selectedRow"
-        class="border-t border-rule-soft pt-6"
-        aria-labelledby="subject-heading"
-      >
-        <div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-          <div class="min-w-0">
-            <!-- The version, in the reading face, at the section step. No label
+          <section
+            v-if="selectedRow"
+            class="border-t border-rule-soft pt-6"
+            aria-labelledby="subject-heading"
+          >
+            <div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+              <div class="min-w-0">
+                <!-- The version, in the reading face, at the section step. No label
                  above it: the package name is the h1 immediately above, so
                  "react / 18.3.1" reads as a coordinate without a word spent
                  announcing that a version is a version. -->
-            <h2
-              id="subject-heading"
-              class="font-mono text-xl text-foreground [overflow-wrap:anywhere]"
-            >
-              {{ selectedRow.version }}
-            </h2>
-            <p
-              class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground"
-            >
-              <span>
-                {{
-                  selectedRow.source === "local"
-                    ? t("packageDetailPage.local")
-                    : isUpstreamOnly(selectedRow.source)
-                      ? t("packageDetailPage.notHeldHere")
-                      : t("common.proxied")
-                }}
-              </span>
-              <span v-if="selectedRow.published_at">
-                {{ t("common.published") }}
-                <span class="text-foreground tabular-nums">{{
-                  formatDay(selectedRow.published_at)
-                }}</span>
-              </span>
-              <span>
-                {{ t("common.downloads") }}
-                <span class="text-foreground tabular-nums">{{
-                  selectedRow.download_count === null || selectedRow.download_count === undefined
-                    ? t("common.unknown")
-                    : formatCount(selectedRow.download_count)
-                }}</span>
-              </span>
-              <span>{{ selectedRow.license ?? t("packageDetailPage.licenseUnknown") }}</span>
-            </p>
-            <!-- Why it is unknown, as a sentence rather than as a `title=`.
+                <h2
+                  id="subject-heading"
+                  class="font-mono text-xl text-foreground [overflow-wrap:anywhere]"
+                >
+                  {{ selectedRow.version }}
+                </h2>
+                <p
+                  class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground"
+                >
+                  <span>
+                    {{
+                      selectedRow.source === "local"
+                        ? t("packageDetailPage.local")
+                        : isUpstreamOnly(selectedRow.source)
+                          ? t("packageDetailPage.notHeldHere")
+                          : t("common.proxied")
+                    }}
+                  </span>
+                  <span v-if="selectedRow.published_at">
+                    {{ t("common.published") }}
+                    <span class="text-foreground tabular-nums">{{
+                      formatDay(selectedRow.published_at)
+                    }}</span>
+                  </span>
+                  <span>
+                    {{ t("common.downloads") }}
+                    <span class="text-foreground tabular-nums">{{
+                      selectedRow.download_count === null ||
+                      selectedRow.download_count === undefined
+                        ? t("common.unknown")
+                        : formatCount(selectedRow.download_count)
+                    }}</span>
+                  </span>
+                  <span>{{ selectedRow.license ?? t("packageDetailPage.licenseUnknown") }}</span>
+                </p>
+                <!-- Why it is unknown, as a sentence rather than as a `title=`.
                  "no manifest parser for this registry type" and "declares no
                  licence" are different facts and the page must not render them
                  identically; the explanation was written for exactly that and
                  was reachable only by holding a mouse still over a `<span>`. -->
-            <p v-if="!selectedRow.license" class="mt-2 max-w-[64ch] text-xs text-muted-foreground">
-              {{ t("packageDetailPage.licenseUnknownHelp") }}
-            </p>
-          </div>
+                <p
+                  v-if="!selectedRow.license"
+                  class="mt-2 max-w-[64ch] text-xs text-muted-foreground"
+                >
+                  {{ t("packageDetailPage.licenseUnknownHelp") }}
+                </p>
+              </div>
 
-          <!-- The supply-chain badge, which is a picture *about this version*
+              <!-- The supply-chain badge, which is a picture *about this version*
                and was drawn once per row — twenty-five requests to a third-party
                host on one page view, at 71×16px each. -->
-          <a
-            v-if="selectedRow.socket_badge_url"
-            :href="selectedRow.socket_badge_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="order-last shrink-0 py-1"
-            :title="t('packageDetailPage.supplyChainReportOn')"
-          >
-            <img :src="selectedRow.socket_badge_url" alt="socket.dev" class="h-5" />
-          </a>
+              <a
+                v-if="selectedRow.socket_badge_url"
+                :href="selectedRow.socket_badge_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="order-last shrink-0 py-1"
+                :title="t('packageDetailPage.supplyChainReportOn')"
+              >
+                <img :src="selectedRow.socket_badge_url" alt="socket.dev" class="h-5" />
+              </a>
 
-          <!-- RFC 0014: the upstream audit's word on this version, for an
+              <!-- RFC 0014: the upstream audit's word on this version, for an
                admin — *missing* is a miss not yet believed, *disappeared* a
                confirmed one, and under "block" the block it wrote. -->
-          <Badge
-            v-if="upstreamRowFor(selectedRow.version)"
-            :variant="
-              upstreamRowFor(selectedRow.version)!.state === 'disappeared'
-                ? 'destructive'
-                : 'copper'
-            "
-            class="shrink-0"
-            :title="t('packageDetailPage.upstreamBadgeHelp')"
-            data-testid="upstream-badge"
-          >
-            {{ t(upstreamBadgeKey(upstreamRowFor(selectedRow.version)!)) }}
-          </Badge>
+              <Badge
+                v-if="upstreamRowFor(selectedRow.version)"
+                :variant="
+                  upstreamRowFor(selectedRow.version)!.state === 'disappeared'
+                    ? 'destructive'
+                    : 'copper'
+                "
+                class="shrink-0"
+                :title="t('packageDetailPage.upstreamBadgeHelp')"
+                data-testid="upstream-badge"
+              >
+                {{ t(upstreamBadgeKey(upstreamRowFor(selectedRow.version)!)) }}
+              </Badge>
 
-          <!-- The signature device, on the row it was written for.
+              <!-- The signature device, on the row it was written for.
                `blocked` used to be the one state of six that never reached it:
                the table's `v-else` handed that row a crimson chip instead, so
                the world's organising idea was switched off on precisely the row
                a reader opens the page for. -->
-          <Resolution
-            :state="rowState(selectedRow)"
-            :label="stateLabel(selectedRow)"
-            class="shrink-0"
-          />
-        </div>
+              <Resolution
+                :state="rowState(selectedRow)"
+                :label="stateLabel(selectedRow)"
+                class="shrink-0"
+              />
+            </div>
 
-        <!-- The rule, beside the thing it refused, in text.
+            <!-- The rule, beside the thing it refused, in text.
              It was a `hidden group-hover:block` span: no focus trigger, no
              `aria-describedby`, no dismiss — WCAG 2.2 1.4.13 failed on all three
              counts, unreadable to a screen reader and unreachable on a phone.
              It is the answer the page exists to give, so it is simply on the
              page. The tie bar is the denial note's own, ported from the catalog
              rather than invented here. -->
-        <p
-          v-if="blockedInfo(selectedRow.firewall)"
-          class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
-        >
-          <span class="w-px flex-none bg-border" aria-hidden="true" />
-          <span class="min-w-0 [overflow-wrap:anywhere]">
-            <span class="text-primary">{{ t("common.reasonLabel") }}</span>
-            {{ blockedInfo(selectedRow.firewall)!.reason }}
-            <span class="px-2" aria-hidden="true">·</span>
-            {{
-              t("packageDetailPage.blockedByOn", {
-                who: blockedInfo(selectedRow.firewall)!.blocked_by,
-                when: formatDay(blockedInfo(selectedRow.firewall)!.blocked_at),
-              })
-            }}
-            <RouterLink
-              class="text-primary underline underline-offset-[3px]"
-              :to="{
-                path: '/tools/access-check',
-                query: { registry, name, version: selectedRow.version },
-              }"
-              >{{ t("packageDetailPage.why") }}</RouterLink
+            <p
+              v-if="blockedInfo(selectedRow.firewall)"
+              class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
             >
-          </span>
-        </p>
+              <span class="w-px flex-none bg-border" aria-hidden="true" />
+              <span class="min-w-0 [overflow-wrap:anywhere]">
+                <span class="text-primary">{{ t("common.reasonLabel") }}</span>
+                {{ blockedInfo(selectedRow.firewall)!.reason }}
+                <span class="px-2" aria-hidden="true">·</span>
+                {{
+                  t("packageDetailPage.blockedByOn", {
+                    who: blockedInfo(selectedRow.firewall)!.blocked_by,
+                    when: formatDay(blockedInfo(selectedRow.firewall)!.blocked_at),
+                  })
+                }}
+                <RouterLink
+                  class="text-primary underline underline-offset-[3px]"
+                  :to="{
+                    path: '/tools/access-check',
+                    query: { registry, name, version: selectedRow.version },
+                  }"
+                  >{{ t("packageDetailPage.why") }}</RouterLink
+                >
+              </span>
+            </p>
 
-        <!-- The deprecation message, which was a `title=` on a chip in the
+            <!-- The deprecation message, which was a `title=` on a chip in the
              table — the upstream's own sentence about why not to use this
              version, available only to a mouse held still. -->
-        <p
-          v-if="selectedRow.deprecated"
-          class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
-        >
-          <span class="w-px flex-none bg-border" aria-hidden="true" />
-          <span class="min-w-0 [overflow-wrap:anywhere]">
-            <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
-            {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
-          </span>
-        </p>
+            <p
+              v-if="selectedRow.deprecated"
+              class="mt-4 flex items-stretch gap-3 text-sm text-muted-foreground"
+            >
+              <span class="w-px flex-none bg-border" aria-hidden="true" />
+              <span class="min-w-0 [overflow-wrap:anywhere]">
+                <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
+                {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
+              </span>
+            </p>
 
-        <!-- Vulnerabilities as text, for the same reason. A severity chip whose
-             identifier and summary appear only under a stationary mouse is a
-             supply-chain fact this page is not really reporting. -->
-        <ul v-if="selectedRow.vulnerabilities.length" class="mt-4 space-y-2">
-          <li
-            v-for="vuln in selectedRow.vulnerabilities"
-            :key="vuln.osv_id"
-            class="flex items-stretch gap-3 text-sm text-muted-foreground"
-          >
-            <span class="w-px flex-none bg-border" aria-hidden="true" />
-            <span class="min-w-0 [overflow-wrap:anywhere]">
-              <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
-                vuln.severity
-              }}</Badge>
-              <span class="font-mono text-foreground">{{ vuln.osv_id }}</span>
-              <span class="px-2" aria-hidden="true">·</span>
-              {{ vuln.summary }}
-              <template v-if="vuln.fixed_version">
-                <span class="px-2" aria-hidden="true">·</span>
-                {{ t("packageDetailPage.fixedIn") }}
-                <span class="font-mono text-foreground">{{ vuln.fixed_version }}</span>
-              </template>
-            </span>
-          </li>
-        </ul>
-        <p
-          v-else-if="!selectedRow.vulnerabilities_scanned"
-          class="mt-4 text-sm text-muted-foreground"
-        >
-          {{ t("packageDetailPage.notScannedHelp") }}
-        </p>
-
-        <!-- The end of the journey, which the page did not have: a reader who
+            <!-- The end of the journey, which the page did not have: a reader who
              found their version had nowhere to go and the page stopped on an em
              dash. The command is data (`installCommandFor`), not a switch in
              this component, and a type with no honest one-liner says so rather
              than printing a plausible wrong one. -->
-        <div v-if="installLine" class="mt-6">
-          <div class="flex items-stretch border border-border">
-            <pre
-              class="min-w-0 flex-1 overflow-x-auto bg-ground-sunk px-3 py-3 font-mono text-sm text-foreground"
-            ><code>{{ installLine.command }}</code></pre>
-            <button
-              type="button"
-              class="flex shrink-0 items-center gap-2 border-l border-border px-3 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground"
-              @click="copyInstall"
-            >
-              <component :is="copied ? Check : Copy" class="h-4 w-4" aria-hidden="true" />
-              {{ copied ? t("common.copied") : t("common.copy") }}
-            </button>
-          </div>
-          <p class="mt-2 text-xs text-muted-foreground">
-            {{ t("packageDetailPage.installAssumesSetup") }}
-            <RouterLink class="text-primary underline underline-offset-[3px]" to="/setup">{{
-              t("packageDetailPage.setupGuide")
-            }}</RouterLink>
-          </p>
-        </div>
+            <div v-if="installLine" class="mt-6">
+              <div class="flex items-stretch border border-border">
+                <pre
+                  class="min-w-0 flex-1 overflow-x-auto bg-ground-sunk px-3 py-3 font-mono text-sm text-foreground"
+                ><code>{{ installLine.command }}</code></pre>
+                <button
+                  type="button"
+                  class="flex shrink-0 items-center gap-2 border-l border-border px-3 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground"
+                  @click="copyInstall"
+                >
+                  <component :is="copied ? Check : Copy" class="h-4 w-4" aria-hidden="true" />
+                  {{ copied ? t("common.copied") : t("common.copy") }}
+                </button>
+              </div>
+              <p class="mt-2 text-xs text-muted-foreground">
+                {{ t("packageDetailPage.installAssumesSetup") }}
+                <RouterLink class="text-primary underline underline-offset-[3px]" to="/setup">{{
+                  t("packageDetailPage.setupGuide")
+                }}</RouterLink>
+              </p>
+            </div>
 
-        <!-- The artifact itself and its bill of materials, for the version in
+            <!-- The artifact itself and its bill of materials, for the version in
              hand. These were three chips repeated on every row of a nine-column
              table — where the Download one rendered a bare em dash for thirteen
              of the twenty-one registry types, under a column headed "Download",
              stating nothing about why. Here they are absent when there is
              nothing to offer, which is the same answer without the furniture. -->
-        <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-          <a
-            v-if="downloadUrl(selectedRow.version)"
-            :href="downloadUrl(selectedRow.version)!"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px]"
-          >
-            <Download class="h-4 w-4" aria-hidden="true" />
-            {{ t("packageDetailPage.downloadViaProxy", { version: selectedRow.version }) }}
-          </a>
-          <template v-if="token && sbomState === 'available'">
-            <button
-              v-if="sbomFormats.includes('spdx')"
-              type="button"
-              class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
-              :disabled="sbomLoading === `${registry}/${name}/${selectedRow.version}:spdx`"
-              @click="downloadSbom(selectedRow!.version, 'spdx')"
-            >
-              <FileJson class="h-4 w-4" aria-hidden="true" />
-              {{ t("packageDetailPage.downloadSpdx23") }}
-            </button>
-            <button
-              v-if="sbomFormats.includes('cyclonedx')"
-              type="button"
-              class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
-              :disabled="sbomLoading === `${registry}/${name}/${selectedRow.version}:cyclonedx`"
-              @click="downloadSbom(selectedRow!.version, 'cyclonedx')"
-            >
-              <FileCode class="h-4 w-4" aria-hidden="true" />
-              {{ t("packageDetailPage.downloadCyclonedx14") }}
-            </button>
-          </template>
-          <span v-else-if="token && sbomState === 'none'" class="text-muted-foreground">{{
-            t("packageDetailPage.noSbom")
-          }}</span>
-          <span v-else-if="token" class="text-muted-foreground">{{
-            t("packageDetailPage.sbomPending")
-          }}</span>
-        </div>
-        <output
-          v-if="sbomError[artifactKey(selectedRow.version)]"
-          class="mt-2 block text-sm text-destructive"
-        >
-          {{
-            t("packageDetailPage.sbomFailed", {
-              reason: sbomError[artifactKey(selectedRow.version)],
-            })
-          }}
-        </output>
+            <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+              <a
+                v-if="downloadUrl(selectedRow.version)"
+                :href="downloadUrl(selectedRow.version)!"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px]"
+              >
+                <Download class="h-4 w-4" aria-hidden="true" />
+                {{ t("packageDetailPage.downloadViaProxy", { version: selectedRow.version }) }}
+              </a>
+            </div>
 
-        <!-- The one filled action on the reader's half of the page, and the only
+            <!-- The one filled action on the reader's half of the page, and the only
              act here that spends this instance's bandwidth and writes an audit
              row. It was a 24px outline chip in the second column of a table. -->
-        <div v-if="isUpstreamOnly(selectedRow.source)" class="mt-6">
-          <p class="mb-3 max-w-[64ch] text-sm text-muted-foreground">
-            {{ t("packageDetailPage.notHeldHereHelp") }}
-          </p>
-          <Button
-            v-if="data.fetch.offered"
-            :disabled="fetching !== null"
-            @click="onFetchVersion(selectedRow!.version)"
-          >
-            {{
-              fetching === selectedRow.version
-                ? t("packageDetailPage.fetching")
-                : t("packageDetailPage.fetchVersion")
-            }}
-          </Button>
-          <p v-else-if="data.fetch.reason" class="text-sm text-muted-foreground">
-            {{ t("packageDetailPage.fetchUnavailable", { reason: data.fetch.reason }) }}
-          </p>
-          <RouterLink
-            v-else-if="!isAuthenticated"
-            :to="{ path: '/login', query: { redirect: route.fullPath } }"
-            class="text-sm text-primary underline underline-offset-[3px]"
-            >{{ t("packageDetailPage.fetchNeedsSession") }}</RouterLink
-          >
-          <p v-if="fetchResult[selectedRow.version]" class="mt-2 text-sm text-muted-foreground">
-            {{ fetchResult[selectedRow.version] }}
-          </p>
-          <p class="mt-2 max-w-[64ch] text-xs text-muted-foreground">
-            {{ t("packageDetailPage.fetchWhatItDoes") }}
-          </p>
-        </div>
-      </section>
+            <div v-if="isUpstreamOnly(selectedRow.source)" class="mt-6">
+              <p class="mb-3 max-w-[64ch] text-sm text-muted-foreground">
+                {{ t("packageDetailPage.notHeldHereHelp") }}
+              </p>
+              <Button
+                v-if="data.fetch.offered"
+                :disabled="fetching !== null"
+                @click="onFetchVersion(selectedRow!.version)"
+              >
+                {{
+                  fetching === selectedRow.version
+                    ? t("packageDetailPage.fetching")
+                    : t("packageDetailPage.fetchVersion")
+                }}
+              </Button>
+              <p v-else-if="data.fetch.reason" class="text-sm text-muted-foreground">
+                {{ t("packageDetailPage.fetchUnavailable", { reason: data.fetch.reason }) }}
+              </p>
+              <RouterLink
+                v-else-if="!isAuthenticated"
+                :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                class="text-sm text-primary underline underline-offset-[3px]"
+                >{{ t("packageDetailPage.fetchNeedsSession") }}</RouterLink
+              >
+              <p v-if="fetchResult[selectedRow.version]" class="mt-2 text-sm text-muted-foreground">
+                {{ fetchResult[selectedRow.version] }}
+              </p>
+              <p class="mt-2 max-w-[64ch] text-xs text-muted-foreground">
+                {{ t("packageDetailPage.fetchWhatItDoes") }}
+              </p>
+            </div>
+          </section>
 
-      <!-- README, below the subject and above the index, bound to the selected
+          <!-- README, below the subject and above the index, bound to the selected
            version. Fetched separately from the detail response so the catalogue
            cache's TTL never holds a stale document and the detail payload does
            not grow by a megabyte per package (RFC 0007 §5.4). -->
-      <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
+          <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
 
-      <!-- The selected version's supply-chain verdict (RFC 0018), when the
+          <!-- The selected version's supply-chain verdict (RFC 0018), when the
            registry has one: what it is held or warned for, and the findings
            for a reader who may see them. Silent otherwise. -->
-      <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
-      <MovingRefsPanel :registry="registry" :name="name" />
-      <VerdictPanel
-        :registry="registry"
-        :name="name"
-        :version="selectedVersion"
-        :can-rescan="isAdmin"
-      />
+          <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
+          <MovingRefsPanel :registry="registry" :name="name" />
+          <!-- The verdict moved to Security; one line here says where. -->
+          <p
+            v-if="selectedRow?.scan_status || data.scan_status_unavailable"
+            class="flex flex-wrap items-center gap-2 text-sm"
+            data-testid="security-summary"
+          >
+            <ScanBadge
+              :status="selectedRow?.scan_status"
+              :unavailable="data.scan_status_unavailable === true"
+            />
+            <RouterLink
+              :to="{ path: route.path, query: { ...route.query, tab: 'security' } }"
+              replace
+              class="text-primary underline underline-offset-[3px]"
+              >{{ t("packageDetailPage.securitySummary") }}</RouterLink
+            >
+          </p>
+        </TabsContent>
 
-      <!-- ── The index ─────────────────────────────────────────────────────
+        <TabsContent value="versions" force-mount>
+          <!-- ── The index ─────────────────────────────────────────────────────
            What the table is now: the list you pick the subject from, not the
            page. Everything a reader compares *between* versions stays here;
            everything they read *about* one version moved up to the subject —
            which is what let this go from nine columns to six, three of which
            survive at 390px where five of the nine used to be behind a
            horizontal scroll with no affordance. -->
-      <section class="border-t border-rule-soft pt-6" aria-labelledby="versions-heading">
-        <div class="space-y-3">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <h2 id="versions-heading" class="font-mono text-base text-foreground">
-              {{ t("common.versions") }}
-            </h2>
-            <!-- The filter says what it is hiding. A control reading "Show
+          <section class="border-t border-rule-soft pt-6" aria-labelledby="versions-heading">
+            <div class="space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <h2 id="versions-heading" class="font-mono text-base text-foreground">
+                  {{ t("common.versions") }}
+                </h2>
+                <!-- The filter says what it is hiding. A control reading "Show
                  pre-releases" over a list that has none is a promise of
                  something to reveal, so it renders only when there is; and the
                  count is in the label rather than in a tooltip, because "8
                  hidden" is the fact that decides whether a reader clicks. -->
-            <!-- No `aria-pressed`. The label already inverts — "Hide 8
+                <!-- No `aria-pressed`. The label already inverts — "Hide 8
                  pre-releases" — so a pressed state on top of it announces as
                  "Hide 8 pre-releases, pressed", which is a double negative for
                  the one reader who cannot see the list change. One channel. -->
-            <Button
-              v-if="prereleaseCount > 0"
-              variant="outline"
-              size="sm"
-              class="px-2 text-xs"
-              @click="togglePrereleases()"
-            >
-              {{
-                showPrereleases
-                  ? t("packageDetailPage.hidePrereleases", prereleaseCount)
-                  : t("packageDetailPage.showPrereleases", hiddenPrereleaseCount)
-              }}
-            </Button>
-          </div>
-          <div v-if="data.upstream.attempted">
-            <UpstreamNotice
-              :upstream="data.upstream"
-              :upstream-version-count="upstreamVersionCount"
-            />
-          </div>
-          <!-- The filter sits with the list it filters rather than in the card
+                <Button
+                  v-if="prereleaseCount > 0"
+                  variant="outline"
+                  size="sm"
+                  class="px-2 text-xs"
+                  @click="togglePrereleases()"
+                >
+                  {{
+                    showPrereleases
+                      ? t("packageDetailPage.hidePrereleases", prereleaseCount)
+                      : t("packageDetailPage.showPrereleases", hiddenPrereleaseCount)
+                  }}
+                </Button>
+              </div>
+              <div v-if="data.upstream.attempted">
+                <UpstreamNotice
+                  :upstream="data.upstream"
+                  :upstream-version-count="upstreamVersionCount"
+                />
+              </div>
+              <!-- The filter sits with the list it filters rather than in the card
                header with the pre-release control: that one changes *what the
                list is*, this one searches inside it, and putting them together
                would read as two halves of one filter. -->
-          <div v-if="unfilteredTotal > 1" class="flex flex-wrap items-center gap-3">
-            <div class="relative min-w-48 flex-1">
-              <Search class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                class="pl-10"
-                :placeholder="t('packageDetailPage.filterVersions')"
-                :aria-label="t('packageDetailPage.filterVersions')"
-                :value="versionFilter"
-                @input="filterVersions(($event.target as HTMLInputElement).value)"
-              />
-            </div>
-            <!-- The live region that answers "did my filter do anything".
+              <div v-if="unfilteredTotal > 1" class="flex flex-wrap items-center gap-3">
+                <div class="relative min-w-48 flex-1">
+                  <Search class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    class="pl-10"
+                    :placeholder="t('packageDetailPage.filterVersions')"
+                    :aria-label="t('packageDetailPage.filterVersions')"
+                    :value="versionFilter"
+                    @input="filterVersions(($event.target as HTMLInputElement).value)"
+                  />
+                </div>
+                <!-- The live region that answers "did my filter do anything".
                  It is not the only one on the page — `Pagination` and
                  `UpstreamNotice` are shared components and carry their own, and
                  taking those away here would change every page that uses them —
                  so this comment states the position rather than a fix that was
                  never made: three announcements can still land on one page turn,
                  and consolidating them is a change to those components. -->
-            <output class="text-xs text-muted-foreground" aria-live="polite">
-              {{
-                filterPending
-                  ? t("packageDetailPage.filtering")
-                  : t("packageDetailPage.versionsShown", {
-                      shown: filteredTotal,
-                      total: unfilteredTotal,
-                    })
-              }}
-            </output>
-          </div>
-          <Table :label="t('packageDetailPage.tableLabel', { name })">
-            <!-- A visible caption stating the count and the order.
+                <output class="text-xs text-muted-foreground" aria-live="polite">
+                  {{
+                    filterPending
+                      ? t("packageDetailPage.filtering")
+                      : t("packageDetailPage.versionsShown", {
+                          shown: filteredTotal,
+                          total: unfilteredTotal,
+                        })
+                  }}
+                </output>
+              </div>
+              <Table :label="t('packageDetailPage.tableLabel', { name })">
+                <!-- A visible caption stating the count and the order.
                  The list had neither, so a reader on page 4 of 160 could not
                  know whether they were walking forward or backward through
                  time — and `Table` was called three times on an admin's view
                  with no `label`, which announced all three scroll regions with
                  the same generic name. -->
-            <caption class="caption-top pb-3 text-left text-xs text-muted-foreground">
-              {{
-                t("packageDetailPage.tableCaption", {
-                  shown: filteredTotal,
-                  total: unfilteredTotal,
-                })
-              }}
-            </caption>
-            <TableHeader>
-              <!-- One solid rule under the head, dashed between the rows: the
+                <caption class="caption-top pb-3 text-left text-xs text-muted-foreground">
+                  {{
+                    t("packageDetailPage.tableCaption", {
+                      shown: filteredTotal,
+                      total: unfilteredTotal,
+                    })
+                  }}
+                </caption>
+                <TableHeader>
+                  <!-- One solid rule under the head, dashed between the rows: the
                    proof's grammar, ported from the catalog rather than restated.
                    Cells are flush left and padded right, so the first column
                    lines up with the caption and the specimen above it. -->
-              <TableRow class="border-b border-solid border-border hover:bg-transparent">
-                <TableHead class="pl-0 pr-3 lg:w-[9.5rem]">{{ t("common.state") }}</TableHead>
-                <TableHead class="pl-0 pr-3">{{ t("common.version") }}</TableHead>
-                <TableHead class="pl-0 pr-3 lg:w-[8rem]">{{ t("common.source") }}</TableHead>
-                <!-- Dropped below `lg`, whole, rather than squeezed: at 390px
+                  <TableRow class="border-b border-solid border-border hover:bg-transparent">
+                    <TableHead class="pl-0 pr-3 lg:w-[9.5rem]">{{ t("common.state") }}</TableHead>
+                    <TableHead class="pl-0 pr-3">{{ t("common.version") }}</TableHead>
+                    <TableHead class="pl-0 pr-3 lg:w-[8rem]">{{ t("common.source") }}</TableHead>
+                    <!-- Dropped below `lg`, whole, rather than squeezed: at 390px
                      the nine columns this table used to draw claimed 895px of a
                      356px box, so five of them sat behind a scroll with no
                      affordance. Every fact they carry is on the subject above
                      for the version a reader has selected — which is what makes
                      dropping them honest rather than hiding them. -->
-                <TableHead class="hidden pl-0 pr-3 text-right lg:table-cell lg:w-28">{{
-                  t("common.downloads")
-                }}</TableHead>
-                <TableHead class="hidden pl-0 pr-3 text-right lg:table-cell lg:w-32">{{
-                  t("common.published")
-                }}</TableHead>
-                <TableHead class="hidden px-0 lg:table-cell lg:w-32">{{
-                  t("common.security")
-                }}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <!-- Selection rides on ink and a lit edge, never on fill.
+                    <TableHead class="hidden pl-0 pr-3 text-right lg:table-cell lg:w-28">{{
+                      t("common.downloads")
+                    }}</TableHead>
+                    <TableHead class="hidden pl-0 pr-3 text-right lg:table-cell lg:w-32">{{
+                      t("common.published")
+                    }}</TableHead>
+                    <TableHead class="hidden px-0 lg:table-cell lg:w-32">{{
+                      t("common.security")
+                    }}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <!-- Selection rides on ink and a lit edge, never on fill.
 
                    It was `bg-muted/40`, and DESIGN.md's Undependable Fill Rule
                    is about exactly this: on this ground the raised fill computes
@@ -1717,32 +1723,39 @@ const {
 
                    `aria-current="true"` carries it to a screen reader, which
                    cannot see either the rule or the weight. -->
-              <TableRow
-                v-for="ver in pagedVersions"
-                :key="`${ver.version}-${ver.source}`"
-                :class="[
-                  'border-l border-rule-soft align-baseline hover:border-solid hover:border-border',
-                  /* The dashed/solid pair is per-row, not per-side: `border-l-solid`
+                  <TableRow
+                    v-for="ver in pagedVersions"
+                    :key="`${ver.version}-${ver.source}`"
+                    :class="[
+                      'border-l border-rule-soft align-baseline hover:border-solid hover:border-border',
+                      /* The dashed/solid pair is per-row, not per-side: `border-l-solid`
                      is not a Tailwind utility and is defined nowhere in this repo,
                      so writing it left the whole row dashed — including the crimson
                      selection edge, which is the one edge the world says must read
                      as engaged. A selected row is solid on every side; the rest stay
                      dashed at rest and go solid under the pointer. */
-                  selectedVersion === ver.version
-                    ? 'border-solid border-l-primary font-semibold text-foreground'
-                    : 'border-dashed border-l-transparent',
-                  ver.is_prerelease && selectedVersion !== ver.version
-                    ? 'text-muted-foreground italic'
-                    : '',
-                  ver.is_prerelease && selectedVersion === ver.version ? 'italic' : '',
-                ]"
-                :aria-current="selectedVersion === ver.version ? 'true' : undefined"
-              >
-                <TableCell class="pl-0 pr-3 py-3 align-baseline">
-                  <Resolution :state="rowState(ver)" :label="stateLabel(ver)" />
-                </TableCell>
-                <TableCell class="pl-0 pr-3 py-3 align-baseline font-mono text-sm">
-                  <!-- A link, not a click handler on the `<tr>`.
+                      selectedVersion === ver.version
+                        ? 'border-solid border-l-primary font-semibold text-foreground'
+                        : 'border-dashed border-l-transparent',
+                      ver.is_prerelease && selectedVersion !== ver.version
+                        ? 'text-muted-foreground italic'
+                        : '',
+                      ver.is_prerelease && selectedVersion === ver.version ? 'italic' : '',
+                    ]"
+                    :aria-current="selectedVersion === ver.version ? 'true' : undefined"
+                  >
+                    <TableCell class="pl-0 pr-3 py-3 align-baseline">
+                      <Resolution :state="rowState(ver)" :label="stateLabel(ver)" />
+                      <div class="mt-1">
+                        <ScanBadge
+                          :status="ver.scan_status"
+                          :unavailable="data.scan_status_unavailable === true"
+                          in-list
+                        />
+                      </div>
+                    </TableCell>
+                    <TableCell class="pl-0 pr-3 py-3 align-baseline font-mono text-sm">
+                      <!-- A link, not a click handler on the `<tr>`.
                        The row was `@click` with `cursor-pointer`, no `tabindex`,
                        no `role` and no key handler, so selecting a version — the
                        page's central interaction, which drives both the subject
@@ -1758,7 +1771,7 @@ const {
                        because the fill this used to use computes to 1.06:1 and
                        the 2px coloured stripe it used to draw is a thing the
                        world refuses by name. -->
-                  <!-- `replace`, never `push` — the rule stated at the top of
+                      <!-- `replace`, never `push` — the rule stated at the top of
                        this file and not applied here when the click handler
                        became a link. Reading down a version list is not ten
                        destinations: without it, five clicks were five Back
@@ -1768,35 +1781,39 @@ const {
                        catalog with its search, scope, sort, page and scroll
                        offset gone — the exact loss the comment at `goBack` says
                        it prevents. One attribute restores both. -->
-                  <RouterLink
-                    replace
-                    :to="versionLink(ver.version)"
-                    class="inline-block py-1 [overflow-wrap:anywhere] hover:underline underline-offset-[3px]"
-                    :class="selectedVersion === ver.version ? 'text-primary' : ''"
-                  >
-                    {{ ver.version }}
-                  </RouterLink>
-                  <!-- RFC 0019 §6.5: the commit this ref resolved to. -->
-                  <span
-                    v-if="shortSha(ver.version)"
-                    class="ml-2 text-xs text-muted-foreground"
-                    :title="refShas[ver.version]"
-                    data-testid="ref-sha"
-                    >{{ shortSha(ver.version) }}</span
-                  >
-                  <Badge v-if="ver.is_prerelease" variant="outline" class="ml-2 text-xs">
-                    {{ t("packageDetailPage.prerelease") }}
-                  </Badge>
-                  <!-- Copper, not crimson: the subject region already sets this
+                      <RouterLink
+                        replace
+                        :to="versionLink(ver.version)"
+                        class="inline-block py-1 [overflow-wrap:anywhere] hover:underline underline-offset-[3px]"
+                        :class="selectedVersion === ver.version ? 'text-primary' : ''"
+                      >
+                        {{ ver.version }}
+                      </RouterLink>
+                      <!-- RFC 0019 §6.5: the commit this ref resolved to. -->
+                      <span
+                        v-if="shortSha(ver.version)"
+                        class="ml-2 text-xs text-muted-foreground"
+                        :title="refShas[ver.version]"
+                        data-testid="ref-sha"
+                        >{{ shortSha(ver.version) }}</span
+                      >
+                      <Badge v-if="ver.is_prerelease" variant="outline" class="ml-2 text-xs">
+                        {{ t("packageDetailPage.prerelease") }}
+                      </Badge>
+                      <!-- Copper, not crimson: the subject region already sets this
                        fact in copper, and crimson is spoken for. One page, one
                        fact, one hue. -->
-                  <Badge v-if="ver.deprecated" variant="outline" class="ml-2 text-xs text-copper">
-                    {{ t("packageDetailPage.deprecated") }}
-                  </Badge>
-                  <Badge v-if="ver.unlisted" variant="secondary" class="ml-2 text-xs">
-                    {{ t("packageDetailPage.unlisted") }}
-                  </Badge>
-                  <!-- Under the version rather than in a column of its own: the
+                      <Badge
+                        v-if="ver.deprecated"
+                        variant="outline"
+                        class="ml-2 text-xs text-copper"
+                      >
+                        {{ t("packageDetailPage.deprecated") }}
+                      </Badge>
+                      <Badge v-if="ver.unlisted" variant="secondary" class="ml-2 text-xs">
+                        {{ t("packageDetailPage.unlisted") }}
+                      </Badge>
+                      <!-- Under the version rather than in a column of its own: the
                        licence is an attribute of this version, and it is the
                        kind of fact a reader compares down a column at a glance.
 
@@ -1804,12 +1821,12 @@ const {
                        rendering nothing would make "no manifest parser for this
                        registry type" indistinguishable from "declares no
                        licence" (RFC 0004-bis §13.1). -->
-                  <p class="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                    {{ ver.license ?? t("packageDetailPage.licenseUnknown") }}
-                  </p>
-                </TableCell>
-                <TableCell class="pl-0 pr-3 py-3 align-baseline">
-                  <!-- Three values, not two. `upstream` means this instance
+                      <p class="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                        {{ ver.license ?? t("packageDetailPage.licenseUnknown") }}
+                      </p>
+                    </TableCell>
+                    <TableCell class="pl-0 pr-3 py-3 align-baseline">
+                      <!-- Three values, not two. `upstream` means this instance
                        holds no bytes for the version and knows about it only
                        because it asked — the badge says so rather than letting
                        it read as something we have.
@@ -1818,137 +1835,197 @@ const {
                        subject above: it is the one act on this page that spends
                        bandwidth and writes an audit row, and it was a 24px
                        outline chip repeated twenty-five times down a column. -->
-                  <Badge
-                    :variant="ver.source === 'local' ? 'secondary' : 'outline'"
-                    class="text-xs"
-                    :class="isUpstreamOnly(ver.source) ? 'border-dashed' : ''"
-                  >
-                    {{
-                      ver.source === "local"
-                        ? t("packageDetailPage.local")
-                        : isUpstreamOnly(ver.source)
-                          ? t("packageDetailPage.notHeldHere")
-                          : t("common.proxied")
-                    }}
-                  </Badge>
-                </TableCell>
-                <!-- `unknown`, never `0`: a definite-looking number for a
+                      <Badge
+                        :variant="ver.source === 'local' ? 'secondary' : 'outline'"
+                        class="text-xs"
+                        :class="isUpstreamOnly(ver.source) ? 'border-dashed' : ''"
+                      >
+                        {{
+                          ver.source === "local"
+                            ? t("packageDetailPage.local")
+                            : isUpstreamOnly(ver.source)
+                              ? t("packageDetailPage.notHeldHere")
+                              : t("common.proxied")
+                        }}
+                      </Badge>
+                    </TableCell>
+                    <!-- `unknown`, never `0`: a definite-looking number for a
                      version this instance has never held would be a claim we
                      cannot support (RFC 0007 §4.2). -->
-                <TableCell
-                  class="hidden pl-0 pr-3 py-3 text-right align-baseline text-muted-foreground tabular-nums lg:table-cell"
-                >
-                  {{
-                    ver.download_count === null || ver.download_count === undefined
-                      ? t("common.unknown")
-                      : formatCount(ver.download_count)
-                  }}
-                </TableCell>
-                <TableCell
-                  class="hidden whitespace-nowrap pl-0 pr-3 py-3 text-right align-baseline text-muted-foreground tabular-nums lg:table-cell"
-                >
-                  {{ formatDay(ver.published_at ?? null) }}
-                </TableCell>
-                <TableCell
-                  class="hidden px-0 py-3 align-baseline text-muted-foreground lg:table-cell"
-                >
-                  <!-- A count, not five hoverable chips. What each advisory
+                    <TableCell
+                      class="hidden pl-0 pr-3 py-3 text-right align-baseline text-muted-foreground tabular-nums lg:table-cell"
+                    >
+                      {{
+                        ver.download_count === null || ver.download_count === undefined
+                          ? t("common.unknown")
+                          : formatCount(ver.download_count)
+                      }}
+                    </TableCell>
+                    <TableCell
+                      class="hidden whitespace-nowrap pl-0 pr-3 py-3 text-right align-baseline text-muted-foreground tabular-nums lg:table-cell"
+                    >
+                      {{ formatDay(ver.published_at ?? null) }}
+                    </TableCell>
+                    <TableCell
+                      class="hidden px-0 py-3 align-baseline text-muted-foreground lg:table-cell"
+                    >
+                      <!-- A count, not five hoverable chips. What each advisory
                        *says* is on the subject above, in text, for the version
                        the reader selected — which is the only place it was ever
                        readable without a mouse. -->
-                  <span v-if="!ver.vulnerabilities_scanned" class="text-xs">
-                    {{ t("packageDetailPage.notScanned") }}
-                  </span>
-                  <span v-else-if="ver.vulnerabilities.length" class="text-xs text-destructive">
-                    {{ t("packageDetailPage.vulnerabilityCount", ver.vulnerabilities.length) }}
-                  </span>
-                  <span v-else class="text-xs">{{ t("packageDetailPage.noKnownVulns") }}</span>
-                </TableCell>
-              </TableRow>
-              <!-- A filter that matched nothing is not a package with no
+                      <span v-if="!ver.vulnerabilities_scanned" class="text-xs">
+                        {{ t("packageDetailPage.notScanned") }}
+                      </span>
+                      <span v-else-if="ver.vulnerabilities.length" class="text-xs text-destructive">
+                        {{ t("packageDetailPage.vulnerabilityCount", ver.vulnerabilities.length) }}
+                      </span>
+                      <span v-else class="text-xs">{{ t("packageDetailPage.noKnownVulns") }}</span>
+                    </TableCell>
+                  </TableRow>
+                  <!-- A filter that matched nothing is not a package with no
                    versions, and answering the first with the second's words
                    ("nothing has been pulled through") would describe the
                    instance to a reader who asked about their own typing. The
                    counter above already says `0 of 60 shown`; this says which
                    of the two absences the empty table is. -->
-              <TableRow v-if="pagedVersions.length === 0 && unfilteredTotal > 0">
-                <TableCell colspan="6" class="px-0 py-6 text-center text-muted-foreground">
-                  <!-- `filtered`, which its own doc calls required rather than
+                  <TableRow v-if="pagedVersions.length === 0 && unfilteredTotal > 0">
+                    <TableCell colspan="6" class="px-0 py-6 text-center text-muted-foreground">
+                      <!-- `filtered`, which its own doc calls required rather than
                        inferred, and which this call site omitted — so
                        `data-filtered="false"` was being written on precisely the
                        state the flag exists to mark. -->
-                  <EmptyState
-                    filtered
-                    :title="t('packageDetailPage.noVersionsMatch')"
-                    :description="t('packageDetailPage.noVersionsMatchHint')"
-                  />
-                </TableCell>
-              </TableRow>
-              <TableRow v-else-if="pagedVersions.length === 0">
-                <TableCell colspan="6" class="px-0 py-6 text-center text-muted-foreground">
-                  <!-- Two different absences, and the reader needs to know
+                      <EmptyState
+                        filtered
+                        :title="t('packageDetailPage.noVersionsMatch')"
+                        :description="t('packageDetailPage.noVersionsMatchHint')"
+                      />
+                    </TableCell>
+                  </TableRow>
+                  <TableRow v-else-if="pagedVersions.length === 0">
+                    <TableCell colspan="6" class="px-0 py-6 text-center text-muted-foreground">
+                      <!-- Two different absences, and the reader needs to know
                        which: "nothing has been pulled through, and the upstream
                        does not have it either" is an answer; "the upstream
                        could not be reached" is a gap. -->
-                  <EmptyState
-                    :title="t('packageDetailPage.noVersionsYet')"
-                    :description="
-                      data.upstream.error
-                        ? t('packageDetailPage.upstreamUnreachable')
-                        : data.upstream.attempted
-                          ? t('packageDetailPage.upstreamHasNoneEither')
-                          : t('packageDetailPage.nothingHasBeenPulledThrough')
+                      <EmptyState
+                        :title="t('packageDetailPage.noVersionsYet')"
+                        :description="
+                          data.upstream.error
+                            ? t('packageDetailPage.upstreamUnreachable')
+                            : data.upstream.attempted
+                              ? t('packageDetailPage.upstreamHasNoneEither')
+                              : t('packageDetailPage.nothingHasBeenPulledThrough')
+                        "
+                      />
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+              <div v-if="versionTotalPages > 1" class="border-t border-rule-soft pt-3">
+                <Pagination
+                  :page="versionPage"
+                  :total-pages="versionTotalPages"
+                  @update:page="turnToPage($event)"
+                />
+              </div>
+            </div>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="security" force-mount>
+          <SecurityTab
+            :registry="registry"
+            :name="name"
+            :version="selectedVersion"
+            :status="selectedRow?.scan_status"
+            :unavailable="data.scan_status_unavailable === true"
+            :is-admin="isAdmin"
+            :poll-stopped="pollStopped"
+            @refresh="restartPoll"
+          >
+            <section v-if="selectedRow" class="border-t border-rule-soft pt-6">
+              <!-- Vulnerabilities as text, for the same reason. A severity chip whose
+             identifier and summary appear only under a stationary mouse is a
+             supply-chain fact this page is not really reporting. -->
+              <ul v-if="selectedRow.vulnerabilities.length" class="space-y-2">
+                <li
+                  v-for="vuln in selectedRow.vulnerabilities"
+                  :key="vuln.osv_id"
+                  class="flex items-stretch gap-3 text-sm text-muted-foreground"
+                >
+                  <span class="w-px flex-none bg-border" aria-hidden="true" />
+                  <span class="min-w-0 [overflow-wrap:anywhere]">
+                    <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
+                      vuln.severity
+                    }}</Badge>
+                    <span class="font-mono text-foreground">{{ vuln.osv_id }}</span>
+                    <span class="px-2" aria-hidden="true">·</span>
+                    {{ vuln.summary }}
+                    <template v-if="vuln.fixed_version">
+                      <span class="px-2" aria-hidden="true">·</span>
+                      {{ t("packageDetailPage.fixedIn") }}
+                      <span class="font-mono text-foreground">{{ vuln.fixed_version }}</span>
+                    </template>
+                  </span>
+                </li>
+              </ul>
+              <p
+                v-else-if="!selectedRow.vulnerabilities_scanned"
+                class="mt-4 text-sm text-muted-foreground"
+              >
+                {{ t("packageDetailPage.notScannedHelp") }}
+              </p>
+
+              <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+                <template v-if="token && sbomState === 'available'">
+                  <button
+                    v-if="sbomFormats.includes('spdx')"
+                    type="button"
+                    class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
+                    :disabled="sbomLoading === `${registry}/${name}/${selectedRow.version}:spdx`"
+                    @click="downloadSbom(selectedRow!.version, 'spdx')"
+                  >
+                    <FileJson class="h-4 w-4" aria-hidden="true" />
+                    {{ t("packageDetailPage.downloadSpdx23") }}
+                  </button>
+                  <button
+                    v-if="sbomFormats.includes('cyclonedx')"
+                    type="button"
+                    class="inline-flex items-center gap-2 py-1 text-primary underline underline-offset-[3px] disabled:no-underline disabled:opacity-50"
+                    :disabled="
+                      sbomLoading === `${registry}/${name}/${selectedRow.version}:cyclonedx`
                     "
-                  />
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-          <div v-if="versionTotalPages > 1" class="border-t border-rule-soft pt-3">
-            <Pagination
-              :page="versionPage"
-              :total-pages="versionTotalPages"
-              @update:page="turnToPage($event)"
-            />
-          </div>
-        </div>
-      </section>
+                    @click="downloadSbom(selectedRow!.version, 'cyclonedx')"
+                  >
+                    <FileCode class="h-4 w-4" aria-hidden="true" />
+                    {{ t("packageDetailPage.downloadCyclonedx14") }}
+                  </button>
+                </template>
+                <span v-else-if="token && sbomState === 'none'" class="text-muted-foreground">{{
+                  t("packageDetailPage.noSbom")
+                }}</span>
+                <span v-else-if="token" class="text-muted-foreground">{{
+                  t("packageDetailPage.sbomPending")
+                }}</span>
+              </div>
+              <output
+                v-if="sbomError[artifactKey(selectedRow.version)]"
+                class="mt-2 block text-sm text-destructive"
+              >
+                {{
+                  t("packageDetailPage.sbomFailed", {
+                    reason: sbomError[artifactKey(selectedRow.version)],
+                  })
+                }}
+              </output>
+            </section>
+          </SecurityTab>
+        </TabsContent>
+
+        <TabsContent v-if="isAdmin" value="admin" force-mount>
+          <AdminTab :registry="registry" :name="name" />
+        </TabsContent>
+      </Tabs>
     </template>
   </div>
-
-  <!-- ── Administration ──────────────────────────────────────────────────
-         Everything AdminPackageDetail used to be, in place. -->
-  <template v-if="isAdmin">
-    <!-- A full-width hairline, which is how this world separates two regions —
-         `Separator` with a 24px margin either side is the same line drawn by a
-         component that also carries a `my-6`; the region's own `pt-6` is the
-         rhythm, on the scale. -->
-    <section class="mt-6 space-y-4 border-t border-rule-soft pt-6" aria-labelledby="admin-heading">
-      <!-- Not copper. Copper means *waiting or held* in this world — a stale
-           entry, a quota approaching its limit — and it was painting a section
-           label, which is neither. Dim ink is what every other label on the page
-           is set in. -->
-      <h2
-        id="admin-heading"
-        class="font-mono text-sm font-semibold uppercase tracking-wider text-muted-foreground"
-      >
-        {{ t("common.administration") }}
-      </h2>
-
-      <p v-if="adminError" class="text-sm text-destructive">{{ adminError }}</p>
-
-      <template v-else-if="adminData">
-        <PackageVersionsTable
-          :registry="registry"
-          :name="name"
-          :versions="adminData.versions"
-          @reload="reloadAdmin"
-        />
-        <PackageBetaChannel :registry="registry" />
-        <PackageVisibility :registry="registry" :name="name" />
-        <PackageGrants :registry="registry" :name="name" />
-        <PackageEventsTable :events="adminData.recent_events" />
-      </template>
-    </section>
-  </template>
 </template>

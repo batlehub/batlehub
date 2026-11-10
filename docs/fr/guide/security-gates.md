@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: f1ccd9e4feb980f2
+sourceHash: e0b05929df327c6b
 ---
 
 # Contrôles de sécurité
@@ -572,6 +572,51 @@ Préférez les champs du profil lui-même.
 
 Le côté utilisateur, avec ce qu'affiche chaque gestionnaire de paquets, est sur
 [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads).
+
+---
+
+## Lire le statut d'analyse {#scan-status}
+
+Sur un registre `[security]`, le catalogue, la liste d'administration des
+paquets et chaque version d'une page de paquet portent un **statut d'analyse**
+à côté du badge d'état existant. Une seule fonction, côté serveur, le dérive ;
+la première ligne qui s'applique l'emporte :
+
+| Statut | Quand |
+| --- | --- |
+| *(aucun)* | le registre n'a pas de `[registries.security]` |
+| `analyse en cours` | une tâche ouverte est tenue par un worker dont le bail court encore |
+| `en file` | une tâche ouverte que personne ne tient : jamais louée, bail expiré, ou différée pendant une panne de la base d'avis |
+| `non analysé` | aucun verdict n'a été enregistré pour la version |
+| `analyse échouée` | la dernière tâche close a épuisé ses tentatives, ou le verdict porte `SCANNER_ERROR` |
+| `en file` | le verdict porte `SCAN_PENDING` |
+| `analysé · <verdict>` | sinon, avec `autorisé`, `averti`, `en quarantaine` ou `refusé` |
+
+**Qui le voit** suit les verbes qui décident déjà qui peut apprendre qu'une
+version est retenue :
+
+- sans `quarantine:read`, rien : la ligne se lit exactement comme sur un
+  registre qui n'analyse pas, si bien qu'un visiteur anonyme ne peut ni
+  distinguer les deux ni apprendre qu'une version est retenue ;
+- avec `quarantine:read` (les rôles `user` et `admin` par défaut), le statut et
+  le verdict ;
+- avec `findings:read` en plus (`admin` par défaut), l'heure de la dernière
+  analyse, les tentatives et la dernière erreur du worker, dont toute URL est
+  privée de ses identifiants et de sa requête, coupée à 200 caractères.
+
+Une liste en décide par registre, d'après les permissions configurées, et
+**ignore un `dry_run` actif** : pendant un essai à blanc, une liste peut en
+montrer moins que le point d'accès du verdict d'une version, jamais plus.
+
+**Une liste montre le verdict tel qu'il a été enregistré.**
+`GET /api/v1/verdicts/…` le rejuge selon la politique et l'horloge du moment ;
+les listes lisent la ligne stockée et ne déclenchent jamais d'analyse. Les deux
+peuvent différer pendant les quelques minutes qui suivent la levée d'une
+fenêtre d'âge ou un changement de politique.
+
+Quand le statut n'a pas pu être lu en 500 ms, la liste est servie sans lui et
+porte `scan_status_unavailable: true` ; la console affiche alors « — » à la
+place de chaque badge.
 
 ---
 

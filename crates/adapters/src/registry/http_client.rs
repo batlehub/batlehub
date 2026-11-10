@@ -241,6 +241,34 @@ pub fn redacted(url: &reqwest::Url) -> reqwest::Url {
     url
 }
 
+/// Every `http(s)://` URL in free text through [`redacted`]: a worker's
+/// `last_error` can quote the URL it failed on, token and all, and reaches an
+/// administrator's page (RFC 0042 §7.3, T5). A URL that does not parse is
+/// replaced whole — it cannot be told safe. Call it **before** truncating, or
+/// a cut mid-URL leaves a remainder that no longer parses as one.
+pub fn redact_text_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| rest.find(p))
+        .min()
+    {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`'))
+            .unwrap_or(tail.len());
+        match reqwest::Url::parse(&tail[..end]) {
+            Ok(url) => out.push_str(redacted(&url).as_str()),
+            Err(_) => out.push_str("[url]"),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// GET an upstream *version-listing document* and return it as JSON.
 ///
 /// Shared by every adapter's `fetch_version_document`, because they all need
@@ -772,6 +800,22 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC 0042 T5: credentials in a quoted URL never survive, and the text
+    /// around it does.
+    #[test]
+    fn redact_text_urls_strips_userinfo_and_query_from_every_url() {
+        let text = format!(
+            "GET https://u:p@h.test/a?token=x failed; retry http://h2.test/b#frag {}",
+            "e".repeat(300)
+        );
+        let out = redact_text_urls(&text);
+        assert!(out.starts_with("GET https://h.test/a failed; retry http://h2.test/b "));
+        assert!(!out.contains(":p@") && !out.contains("token") && !out.contains("frag"));
+        assert!(out.ends_with(&"e".repeat(300)));
+        assert_eq!(redact_text_urls("no url here"), "no url here");
+        assert_eq!(redact_text_urls("bad http://[::1 tail"), "bad [url] tail");
+    }
 
     #[test]
     fn parse_http_date_valid() {

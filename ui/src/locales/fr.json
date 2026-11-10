@@ -1019,7 +1019,15 @@
     "upstreamUnreachable": "Rien n'est passé par le proxy, et l'amont est injoignable.",
     "versionsShown": "{shown} sur {total} affichées",
     "vulnerabilityCount": "1 avis | {n} avis",
-    "why": "Pourquoi ?"
+    "why": "Pourquoi ?",
+    "tabs": {
+      "label": "Sections du paquet",
+      "overview": "Aperçu",
+      "versions": "Versions",
+      "security": "Sécurité",
+      "admin": "Administration"
+    },
+    "securitySummary": "État d'analyse et verdict"
   },
   "packageEventsTable": {
     "noEventsRecordedYet": "Aucun événement enregistré.",
@@ -1260,7 +1268,14 @@
     "rescanAlreadyOpen": "Un scan est déjà en attente pour cette version.",
     "rescanFailed": "Le scan n'a pas pu être relancé.",
     "codeDocs": "Ce que signifie {code}, dans la documentation",
-    "judgedAs": "{stored}, jugée {judged} par unknown_severity"
+    "judgedAs": "{stored}, jugée {judged} par unknown_severity",
+    "scanning": "Mise à jour automatique.",
+    "pollStopped": "Mise à jour interrompue après 10 minutes.",
+    "pollFailed": "Mise à jour interrompue : le serveur n'a pas répondu.",
+    "attempt": "tentative {attempt}",
+    "waitingSince": "en attente depuis {when}",
+    "deferredSince": "différée depuis {when}",
+    "noScanning": "Ce registre n'analyse pas les paquets. Les versions sont servies telles que l'amont les publie."
   },
   "visibility": {
     "internal": "Interne — utilisateurs authentifiés uniquement",
@@ -1278,5 +1293,26 @@
   "displaySettings": {
     "theme": "Thème",
     "title": "Affichage"
+  },
+  "scanBadge": {
+    "notScanned": "non analysé",
+    "queued": "en file",
+    "scanning": "analyse en cours",
+    "failed": "analyse échouée",
+    "scanned": "analysé · {verdict}",
+    "verdict": {
+      "allowed": "autorisé",
+      "warned": "averti",
+      "quarantined": "en quarantaine",
+      "denied": "refusé"
+    },
+    "queuedHelp": "En attente d'un worker d'analyse",
+    "scanningHelp": "Analyse en cours — tentative {attempt}",
+    "scanningHelpNoAttempt": "Analyse en cours",
+    "failedHelp": "{attempts} tentatives ; dernière erreur : {error}",
+    "failedNoError": "{attempts} tentatives ; aucune erreur enregistrée",
+    "notScannedHelp": "Aucune analyse n'a encore porté sur cette version",
+    "asLastRecorded": "tel que dernièrement enregistré",
+    "unavailable": "L'état d'analyse n'a pas pu être lu ; la liste est par ailleurs à jour."
   }
 }

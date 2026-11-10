@@ -734,6 +734,58 @@ pub struct ScanJob {
     /// surviving a worker restart.
     #[serde(default)]
     pub deferred_since: Option<DateTime<Utc>>,
+    /// The worker holding the lease. `None` on a job never leased, released
+    /// by a failure, or deferred — which is how a deferral is told from a
+    /// running scan whose `leased_until` is also in the future (RFC 0042 §4.2
+    /// rule 2).
+    #[serde(default)]
+    pub leased_by: Option<String>,
+    /// The column as stored: an attempt's error, the `deferred since ` anchor,
+    /// or, on a closed row, [`EXHAUSTED_PREFIX`] and the last error.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+/// What `close_exhausted` writes before the last error of a job whose
+/// attempts ran out (RFC 0042 decision 34). The web process reads it to tell a
+/// failed scan from a finished one: an exhausted `rescan` writes no
+/// `SCANNER_ERROR`, and `max_attempts` is a worker setting it may not share.
+pub const EXHAUSTED_PREFIX: &str = "exhausted: ";
+
+/// Where one version stands in scanning (RFC 0042 §4.2), derived by
+/// `services::scan_status::derive` and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanState {
+    NotScanned,
+    Queued,
+    Scanning,
+    Failed,
+    Scanned,
+}
+
+/// The `findings:read` tier of a scan status: when, how many attempts, and
+/// the error. Never the worker id, which is `system:read`'s (§9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ScanDetail {
+    pub last_scanned_at: Option<DateTime<Utc>>,
+    /// The open job's attempts, else the latest closed one's.
+    pub attempts: Option<u32>,
+    /// The open job's `created_at`.
+    pub queued_since: Option<DateTime<Utc>>,
+    pub deferred_since: Option<DateTime<Utc>>,
+    /// Raw as stored; the web layer redacts and truncates it before it leaves.
+    /// Never the `deferred since ` anchor, which `deferred_since` carries.
+    pub last_error: Option<String>,
+}
+
+/// One version's scan status before the visibility tier is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanStatus {
+    pub state: ScanState,
+    /// Set only when `state` is `Scanned`.
+    pub verdict: Option<VerdictState>,
+    pub detail: ScanDetail,
 }
 
 /// The package URL a coordinate is looked up under, per registry kind.
