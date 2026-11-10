@@ -6,11 +6,11 @@ import { useAuth } from "@/composables/useAuth";
 import { useCatalogQuery, type SortKey } from "@/composables/useCatalogQuery";
 import { formatBytes, formatCount, formatRelative } from "@/lib/format";
 import CatalogSpecimen from "@/components/catalog/CatalogSpecimen.vue";
+import CatalogToolbar from "@/components/catalog/CatalogToolbar.vue";
 import { Facet } from "@/components/ui/facet";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Pagination } from "@/components/ui/pagination";
-import { RefreshCw } from "@lucide/vue";
 import {
   STATE_LABEL_KEYS,
   detailPath,
@@ -24,11 +24,8 @@ import {
 } from "@/lib/catalogRow";
 import { Resolution } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
-import { SearchInput } from "@/components/ui/search-input";
 import { RuleNote } from "@/components/ui/rule-note";
 import { Announcer } from "@/components/ui/announcer";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { AsyncState } from "@/components/ui/async-state";
 import {
   Table,
@@ -191,68 +188,22 @@ function canFetch(row: ExploreRow): boolean {
            table's own scroll container never gets the chance to do its job. -->
       <div class="min-w-0 space-y-4 py-6 md:pl-6">
         <!-- Search + sort bar -->
-        <div class="flex gap-2 flex-wrap">
-          <SearchInput
-            :placeholder="t('packageCatalog.searchPackages')"
-            :aria-label="t('packageCatalog.searchPackages2')"
-            :value="search"
-            @input="onSearchInput(($event.target as HTMLInputElement).value)"
-          />
-          <!-- Where the search looks. Beside the box it modifies rather than in
-             a settings panel, because it changes what the *next keystroke*
-             means. Hidden entirely when the instance searches names only: a
-             control whose other options do nothing is worse than no control
-             (RFC 0007-bis §4.3). -->
-          <!-- The label is visually hidden but `for`-bound: the `Select`
-               trigger is a button, and an `aria-label` on the component lands
-               on radix's hidden native select instead of on it. -->
-          <template v-if="readmeSearchEnabled">
-            <Label for="catalog-search-in" class="sr-only">{{
-              t("packageCatalog.searchIn")
-            }}</Label>
-            <Select
-              id="catalog-search-in"
-              class="w-auto gap-2"
-              :model-value="searchIn"
-              :options="[
-                { value: 'name', label: t('packageCatalog.searchInName') },
-                { value: 'readme', label: t('packageCatalog.searchInReadme') },
-                { value: 'both', label: t('packageCatalog.searchInBoth') },
-              ]"
-              @update:model-value="onSearchInChange"
-            />
-          </template>
-          <!-- The page's one action, in the toolbar beside search — where
-             `design-proof/index.html` puts its own (RFC 0004-bis §14.9). It
-             used to sit in `PageHeader`, which the specimen replaced. -->
-          <Button
-            variant="outline"
-            size="sm"
-            @click="
-              () => {
-                exploreCache.invalidate(selectedRegistry ?? undefined);
-                void fetchPackages();
-                if (search.trim().length >= 2) void fetchUpstream();
-              }
-            "
-          >
-            <RefreshCw class="h-4 w-4 mr-1" />
-            {{ t("common.refresh") }}
-          </Button>
-          <Label for="catalog-sort" class="sr-only">{{ t("packageCatalog.sortPackages") }}</Label>
-          <Select
-            id="catalog-sort"
-            class="w-auto gap-2"
-            :model-value="sort"
-            :options="[
-              { value: 'fetched', label: t('packageCatalog.lastFetch') },
-              { value: 'downloads', label: t('packageCatalog.mostDownloaded') },
-              { value: 'name', label: t('packageCatalog.nameAZ') },
-              { value: 'recent', label: t('packageCatalog.recentlyAccessed') },
-            ]"
-            @update:model-value="onSortChange"
-          />
-        </div>
+        <CatalogToolbar
+          :search="search"
+          :search-in="searchIn"
+          :sort="sort"
+          :readme-search-enabled="readmeSearchEnabled"
+          @search="onSearchInput"
+          @search-in="onSearchInChange"
+          @sort="onSortChange"
+          @refresh="
+            () => {
+              exploreCache.invalidate(selectedRegistry ?? undefined);
+              void fetchPackages();
+              if (search.trim().length >= 2) void fetchUpstream();
+            }
+          "
+        />
 
         <!-- Error: what failed, the transport's reason, and a way forward. It
              replaces the caption and the empty state below rather than joining
