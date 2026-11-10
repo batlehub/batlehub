@@ -389,6 +389,15 @@ export const sidebar = {
       ],
     },
     {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0043 — mise versions host",
+          link: "/rfc/0043-mise-versions-host",
+        },
+      ],
+    },
+    {
       text: "Settled",
       items: [
         {
