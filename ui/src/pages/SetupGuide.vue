@@ -29,7 +29,6 @@ import { AsyncState } from "@/components/ui/async-state";
 const { t, locale } = useI18n();
 
 const base = computed(() => API_BASE_URL || globalThis.location.origin);
-const copied = ref<string | null>(null);
 
 const { token, identity, isAuthenticated, can, expiresAt } = useAuth();
 
@@ -186,14 +185,6 @@ function selectorOptions(def: RegistryTypeDef) {
 function showSelector(def: RegistryTypeDef): boolean {
   return selectorOptions(def).length > 1;
 }
-
-async function copy(key: string, text: string) {
-  await navigator.clipboard.writeText(text);
-  copied.value = key;
-  setTimeout(() => {
-    copied.value = null;
-  }, 1500);
-}
 </script>
 
 <template>
@@ -345,16 +336,11 @@ async function copy(key: string, text: string) {
                 <p v-if="snippet.label" class="text-xs text-muted-foreground mb-2">
                   {{ snippet.label }}
                 </p>
-                <CodeBlock :code="snippet.template(ctxFor(def))" :lang="snippet.lang">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    class="absolute top-2 right-2 h-7 px-2 text-xs"
-                    @click="copy(snippet.key, snippet.template(ctxFor(def, true)))"
-                  >
-                    {{ copied === snippet.key ? t("common.copied") : t("common.copy") }}
-                  </Button>
-                </CodeBlock>
+                <CodeBlock
+                  :code="snippet.template(ctxFor(def))"
+                  :lang="snippet.lang"
+                  :copy="snippet.template(ctxFor(def, true))"
+                />
                 <p v-if="snippet.note" class="text-xs text-muted-foreground mt-2">
                   <RichText
                     :markup="
@@ -391,16 +377,7 @@ async function copy(key: string, text: string) {
             </div>
           </CardHeader>
           <CardContent class="space-y-3">
-            <CodeBlock :code="netrcSnippetFor(false)" lang="ini">
-              <Button
-                size="sm"
-                variant="ghost"
-                class="absolute top-2 right-2 h-7 px-2 text-xs"
-                @click="copy('netrc', netrcSnippetFor(true))"
-              >
-                {{ copied === "netrc" ? t("common.copied") : t("common.copy") }}
-              </Button>
-            </CodeBlock>
+            <CodeBlock :code="netrcSnippetFor(false)" lang="ini" :copy="netrcSnippetFor(true)" />
             <p v-if="isOidc" class="text-xs text-muted-foreground">
               <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
                 <template #link

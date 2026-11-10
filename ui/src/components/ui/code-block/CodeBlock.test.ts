@@ -63,4 +63,12 @@ describe("CodeBlock", () => {
     expect(wrapper.find("button").exists()).toBe(true);
     expect(wrapper.text()).toContain("Copy");
   });
+
+  it("renders a copy button only when given the text to copy", () => {
+    highlight.mockReturnValue("");
+    const plain = mount(CodeBlock, { props: { code: "a", lang: "bash" } });
+    expect(plain.find("button").exists()).toBe(false);
+    const copyable = mount(CodeBlock, { props: { code: "a ***", lang: "bash", copy: "a secret" } });
+    expect(copyable.find("button").exists()).toBe(true);
+  });
 });

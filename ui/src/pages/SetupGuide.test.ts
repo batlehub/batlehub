@@ -22,7 +22,7 @@ type Registry = { name: string; type: string; mode?: string; public_url?: string
 const stubs = {
   CodeBlock: {
     name: "CodeBlock",
-    props: ["code", "lang"],
+    props: ["code", "lang", "copy"],
     template: "<div><pre>{{ code }}</pre><slot/></div>",
   },
   RouterLink: { props: ["to"], template: "<a :href='to'><slot/></a>" },
@@ -111,21 +111,18 @@ describe("SetupGuide", () => {
    * while Copy still takes the real one, so the snippet stays ready to paste.
    */
   it("masks the token on screen, reveals it on request, and copies the real one", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     const w = await mountPage([]);
     expect(snippets(w).join("\n")).not.toContain("tok-123");
 
-    const copyButton = w.findAll("button").find((b) => b.text().trim() === "Copy")!;
-    await copyButton.trigger("click");
-    expect(writeText.mock.calls[0][0]).toContain("password tok-123");
+    // What the copy button copies is the real token (CodeBlock's `copy`).
+    const copies = w.findAllComponents({ name: "CodeBlock" }).map((c) => c.props("copy") as string);
+    expect(copies.join("\n")).toContain("password tok-123");
 
     await w
       .findAll("button")
       .find((b) => b.text().trim() === "Show token")!
       .trigger("click");
     expect(snippets(w).find((s) => s.startsWith("machine"))).toContain("password tok-123");
-    vi.unstubAllGlobals();
   });
 
   it("adds a stanza per host-routed registry", async () => {
