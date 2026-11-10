@@ -2341,7 +2341,12 @@ phase_mise-versions() {
     || { cat "$out.run" >&2; heavy_fail "mise-versions: the installed jq did not run"; }
   grep -q "jq-$MV_PREV" "$out.run" \
     || { cat "$out.run" >&2; heavy_fail "mise-versions: the installed jq is not $MV_PREV"; }
-  heavy_wire_re_after mv-install "GET /proxy/$GITHUB_REG/jqlang/jq/releases/download/jq-$MV_PREV/[^ ]* -> 200" \
+  # aqua reads the release by tag, then fetches the asset through the API
+  # (`releases/assets/{id}`), not through `releases/download/` — measured on
+  # mise 2026.9.5.
+  heavy_wire_re_after mv-install "GET /proxy/$GITHUB_REG/jqlang/jq/releases/tags/jq-$MV_PREV -> 200" \
+    "mise-versions: the jq $MV_PREV release was not resolved through the github registry"
+  heavy_wire_re_after mv-install "GET /proxy/$GITHUB_REG/jqlang/jq/releases/(assets/[0-9]+|download/jq-$MV_PREV/[^ ]*) -> 200" \
     "mise-versions: the jq asset did not come through the github registry"
   heavy_wire_seen_after mv-install "jq-$MV_NEWEST" \
     && heavy_fail "mise-versions: a request named the blocked jq-$MV_NEWEST"
