@@ -127,8 +127,9 @@ impl ProxyService {
                 .get(registry_name)
                 .ok_or_else(|| CoreError::UnknownRegistry(registry_name.to_owned()))?
                 .clone();
-            crate::services::reject_hash_in_version(
+            crate::services::reject_url_delimiters(
                 client.registry_type(),
+                &req.package_id.name,
                 &req.package_id.version,
                 req.package_id.artifact.as_deref(),
             )?;

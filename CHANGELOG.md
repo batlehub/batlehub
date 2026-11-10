@@ -18,13 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   JetBrains and generic clients interpolated them raw: the upstream was asked
   about `pkg@1.0.0` for a request the rules judged as `pkg@1.0.0?`, so **a
   block on a version was bypassed by appending `%3F` to it**. A `400` now
-  refuses `?` in every coordinate, and `#` in every name and in the versions
-  and file names of every kind but the forges: a git tag may hold `#` (never
-  `?`), and the GitHub, Forgejo and GitLab clients encode it, so such a
-  release is still fetched. Every upstream client sits behind a guard that
-  applies the same rule again for the paths that do not go through the
-  service's edge (warming, the scan worker, the upstream audit), and a test
-  aims each kind's real client at a recorder to keep it so
+  refuses both in a coordinate bound for an upstream, except where a kind
+  puts one there itself: a forge's tag may hold `#` (the GitHub, Forgejo and
+  GitLab clients encode it, so such a release is still served), SDKMAN names
+  its rendered `versions/list` with the query this proxy rebuilt, and Galaxy
+  addresses a role as `role#<id>`. Every upstream client sits behind a guard
+  that applies the same rule for the paths that skip the service's edge
+  (warming, the scan worker, the upstream audit), and a test aims each kind's
+  real client at a recorder to keep it so
   (`server/src/name_injection_probe.rs`).
 - **Forge API reads could ask the forge about another repository than the
   one authorization checked** (inkdex VULN-SSRF, CWE-918; reported and fixed

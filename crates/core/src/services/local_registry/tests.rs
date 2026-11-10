@@ -4591,52 +4591,51 @@ mod storage_key_collisions {
 }
 
 /// `?` and `#` reach a handler decoded from `%3F` / `%23` and pass
-/// `validate_path_safe`; in a coordinate they are refused, so the name the
-/// rules judge is the name the upstream is asked about.
+/// `validate_path_safe`; bound for an upstream they are refused, except where
+/// a kind puts one there on purpose.
 #[test]
-fn a_url_delimiter_in_any_coordinate_part_is_refused() {
-    use crate::services::{validate_coordinate, validate_package_name};
-    for (name, version, artifact) in [
-        ("left-pad?x=1", "1.0.0", None),
-        ("left-pad#x", "1.0.0", None),
-        ("left-pad", "1.0.0?x", None),
-        ("left-pad", "1.0.0", Some("a?b.tgz")),
-    ] {
-        assert!(
-            matches!(
-                validate_coordinate(name, version, artifact),
-                Err(CoreError::InvalidInput(_))
-            ),
-            "{name} {version} {artifact:?}"
-        );
+fn url_delimiters_are_refused_except_where_a_kind_means_them() {
+    use crate::services::reject_url_delimiters as r;
+    for kind in ["npm", "pypi", "maven", "cargo", "generic"] {
+        for (name, version, artifact) in [
+            ("left-pad?x=1", "1.0.0", None),
+            ("left-pad#x", "1.0.0", None),
+            ("left-pad", "1.0.0?x", None),
+            ("left-pad", "1.0.0#x", None),
+            ("left-pad", "1.0.0", Some("a?b.tgz")),
+            ("left-pad", "1.0.0", Some("a#b.tgz")),
+        ] {
+            assert!(
+                matches!(
+                    r(kind, name, version, artifact),
+                    Err(CoreError::InvalidInput(_))
+                ),
+                "{kind} {name} {version} {artifact:?}"
+            );
+        }
+        r(
+            kind,
+            "@scope/left-pad",
+            "1.0.0+build.1",
+            Some("left-pad-1.0.0.tgz"),
+        )
+        .unwrap();
     }
-    assert!(validate_package_name("org/secret?").is_err());
-    // What ecosystems do use stays valid.
-    validate_coordinate(
-        "@scope/left-pad",
-        "1.0.0+build.1",
-        Some("left-pad-1.0.0.tgz"),
+    // A git tag may hold `#`, never `?`; a repository name holds neither.
+    for forge in ["github", "forgejo", "gitlab"] {
+        r(forge, "o/r", "release#2", Some("tarball/release#2")).unwrap();
+        assert!(r(forge, "o/r", "release?2", None).is_err());
+        assert!(r(forge, "o/r#x", "v1", None).is_err());
+    }
+    // What SDKMAN and Galaxy compose themselves.
+    r(
+        "sdkman",
+        "java/linuxx64?current=&installed=",
+        "versions-list",
+        None,
     )
     .unwrap();
-    validate_coordinate("org.example:lib", "1.0-SNAPSHOT", Some("lib-1.0.jar")).unwrap();
-}
-
-/// `#` in a version is a git ref on a forge and a fragment anywhere else.
-#[test]
-fn a_hash_in_a_version_is_a_tag_on_a_forge_only() {
-    use crate::services::{reject_hash_in_version, validate_coordinate};
-    validate_coordinate("o/r", "release#2", None).unwrap();
-    for forge in ["github", "forgejo", "gitlab"] {
-        reject_hash_in_version(forge, "release#2", Some("tarball/release#2")).unwrap();
-    }
-    for kind in ["npm", "pypi", "maven", "generic"] {
-        assert!(
-            reject_hash_in_version(kind, "1.0.0#x", None).is_err(),
-            "{kind}"
-        );
-        assert!(
-            reject_hash_in_version(kind, "1.0.0", Some("a#b.tgz")).is_err(),
-            "{kind}"
-        );
-    }
+    assert!(r("sdkman", "java", "1.0#x", None).is_err());
+    r("galaxy", "role#10923", "latest", None).unwrap();
+    assert!(r("galaxy", "ns.coll?x", "1.0.0", None).is_err());
 }

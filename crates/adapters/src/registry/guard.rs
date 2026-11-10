@@ -23,7 +23,7 @@ use batlehub_core::{
         DocumentEncoding, DocumentKind, DocumentProbe, FetchedArtifact, ForgeRegistry,
         ForgeReleaseSource, RegistryClient, StreamedDocument, UpstreamPackage, VersionDocument,
     },
-    services::{reject_hash_in_version, reject_url_delimiters},
+    services::reject_url_delimiters,
 };
 
 pub struct CoordinateGuard {
@@ -37,26 +37,18 @@ impl CoordinateGuard {
 }
 
 impl CoordinateGuard {
-    /// `?` nowhere; `#` in no name, and in a version or file name only where
-    /// versions are git refs (the forges encode every segment).
+    /// The rule of [`reject_url_delimiters`], for this client's kind.
     fn check(&self, pkg: &PackageId) -> Result<(), CoreError> {
-        reject_url_delimiters("package name", &pkg.name)?;
-        for (kind, v) in [
-            ("version", Some(pkg.version.as_str())),
-            ("artifact", pkg.artifact.as_deref()),
-        ] {
-            if v.is_some_and(|v| v.contains('?')) {
-                return Err(CoreError::InvalidInput(format!(
-                    "{kind} '{}' must not contain '?'",
-                    v.unwrap_or_default()
-                )));
-            }
-        }
-        reject_hash_in_version(
+        reject_url_delimiters(
             self.inner.registry_type(),
+            &pkg.name,
             &pkg.version,
             pkg.artifact.as_deref(),
         )
+    }
+
+    fn check_name(&self, package: &str) -> Result<(), CoreError> {
+        reject_url_delimiters(self.inner.registry_type(), package, "", None)
     }
 }
 
@@ -100,7 +92,7 @@ impl RegistryClient for CoordinateGuard {
     }
 
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
-        reject_url_delimiters("package name", package)?;
+        self.check_name(package)?;
         self.inner.list_versions(package).await
     }
 
@@ -109,7 +101,7 @@ impl RegistryClient for CoordinateGuard {
         package: &str,
         kind: DocumentKind,
     ) -> Result<VersionDocument, CoreError> {
-        reject_url_delimiters("package name", package)?;
+        self.check_name(package)?;
         self.inner.fetch_version_document(package, kind).await
     }
 
@@ -133,7 +125,7 @@ impl RegistryClient for CoordinateGuard {
         kind: DocumentKind,
         accept: &[DocumentEncoding],
     ) -> Result<Option<StreamedDocument>, CoreError> {
-        reject_url_delimiters("package name", package)?;
+        self.check_name(package)?;
         self.inner
             .fetch_version_document_stream(package, kind, accept)
             .await
@@ -145,7 +137,7 @@ impl RegistryClient for CoordinateGuard {
         kind: DocumentKind,
         accept: &[DocumentEncoding],
     ) -> Result<Option<DocumentProbe>, CoreError> {
-        reject_url_delimiters("package name", package)?;
+        self.check_name(package)?;
         self.inner
             .probe_version_document(package, kind, accept)
             .await

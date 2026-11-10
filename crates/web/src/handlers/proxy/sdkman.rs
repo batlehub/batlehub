@@ -63,7 +63,7 @@ fn relayed(registry: &str, path: String) -> PackageId {
 /// A candidate name, refused when it could not be a storage-key segment.
 fn candidate(name: &str) -> Result<&str, AppError> {
     validate_package_name(name).map_err(AppError::from)?;
-    if name.contains('/') || name.contains('?') {
+    if name.contains(['/', '?', '#']) {
         return Err(AppError::bad_request(format!(
             "'{name}' is not an SDKMAN candidate name"
         )));
@@ -74,6 +74,14 @@ fn candidate(name: &str) -> Result<&str, AppError> {
 /// A version identifier, refused when it is not a single safe segment.
 fn version(v: &str) -> Result<&str, AppError> {
     validate_path_safe("version", v).map_err(AppError::from)?;
+    // The relayed document is named by its path, and `?` is let through in an
+    // SDKMAN name (`reject_url_delimiters`) for the one query this proxy
+    // composes: a version must not bring its own.
+    if v.contains(['?', '#']) {
+        return Err(AppError::bad_request(format!(
+            "'{v}' is not an SDKMAN version"
+        )));
+    }
     Ok(v)
 }
 

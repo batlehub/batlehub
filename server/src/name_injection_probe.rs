@@ -165,6 +165,12 @@ async fn probe() -> Vec<(String, String)> {
             }
         };
         for whole in PROBES[0].1 {
+            // SDKMAN's names carry the one query its handler composes from
+            // validated values (`reject_url_delimiters`), so a `?` there is
+            // the protocol; the handler refuses one in a candidate.
+            if *kind == RegistryKind::Sdkman && whole.contains('?') {
+                continue;
+            }
             for name in shapes(whole) {
                 exercise(&*client, PackageId::new("reg", &name, "1.0.0")).await;
             }

@@ -295,66 +295,55 @@ pub fn validate_publish_coordinate(name: &str, version: &str) -> Result<(), Core
 /// Validate a package name is safe to use as a storage-key component.
 /// Reusable by registry adapters that accept a package name from the request.
 pub fn validate_package_name(name: &str) -> Result<(), CoreError> {
-    validate_path_safe("package name", name)?;
-    reject_url_delimiters("package name", name)
+    validate_path_safe("package name", name)
 }
 
-/// `?` and `#` in a coordinate.
+/// `?` and `#` in a coordinate bound for `registry_type`'s upstream.
 ///
 /// actix decodes `%3F` and `%23` in a path parameter, and `validate_path_safe`
-/// lets both through (it is also the check for git branch names, which may
-/// hold `#`). Interpolated into an upstream URL, `?` starts a query and `#` a
-/// fragment the client never sends, so the upstream answers about another
-/// coordinate than the one authorization and the rules judged: a block on
-/// `left-pad` did not match `left-pad?`, and pypi.org served `left-pad` for it
-/// (`server/src/name_injection_probe.rs` found it in 22 of 29 kinds). No
-/// ecosystem's package name holds either; see [`reject_hash_in_version`] for
-/// versions and file names.
-pub fn reject_url_delimiters(kind: &str, value: &str) -> Result<(), CoreError> {
-    match value.find(['?', '#']) {
-        Some(_) => Err(CoreError::InvalidInput(format!(
-            "{kind} '{value}' must not contain '?' or '#'"
-        ))),
-        None => Ok(()),
-    }
-}
-
-/// Whether `registry_type`'s versions are git refs. Git allows `#` in a tag or
-/// branch name (never `?`), and the forge clients percent-encode every URL
-/// segment they build (PR #304), so a `#` there is a ref, not a fragment.
-pub fn versions_are_git_refs(registry_type: &str) -> bool {
-    matches!(registry_type, "github" | "forgejo" | "gitlab")
-}
-
-/// `#` in a version or file name, on a kind whose versions are not git refs:
-/// see [`reject_url_delimiters`]. `?` is refused on every kind by
-/// `validate_coordinate`.
-pub fn reject_hash_in_version(
+/// lets both through. Interpolated into an upstream URL, `?` starts a query and
+/// `#` a fragment the client never sends, so the upstream answered about
+/// another coordinate than the one the rules judged: a block on `pkg@1.0.0` did
+/// not stop `pkg@1.0.0%3F` (`server/src/name_injection_probe.rs` found it in 22
+/// of 29 kinds). No ecosystem's names, versions or file names hold either,
+/// except where a kind puts one there on purpose:
+///
+/// - a forge's version or file name is a git ref, which may hold `#` (never
+///   `?`); the forge clients encode every segment (PR #304);
+/// - SDKMAN's rendered `versions/list` document is named with the query this
+///   proxy rebuilt from validated values; its handler refuses `?` and `#` in a
+///   candidate and a version;
+/// - Galaxy names a role by its numeric id as `role#<id>` (`role_alias`), the
+///   id validated alphanumeric.
+pub fn reject_url_delimiters(
     registry_type: &str,
+    name: &str,
     version: &str,
     artifact: Option<&str>,
 ) -> Result<(), CoreError> {
-    if versions_are_git_refs(registry_type) {
-        return Ok(());
-    }
-    for (kind, value) in [("version", Some(version)), ("artifact", artifact)] {
-        if let Some(v) = value.filter(|v| v.contains('#')) {
+    let (in_name, in_version): (&[char], &[char]) = match registry_type {
+        "github" | "forgejo" | "gitlab" => (&[], &['#']),
+        "sdkman" => (&['?'], &[]),
+        "galaxy" => (&['#'], &[]),
+        _ => (&[], &[]),
+    };
+    let parts = [
+        ("package name", Some(name), in_name),
+        ("version", Some(version), in_version),
+        ("artifact", artifact, in_version),
+    ];
+    for (part, value, allowed) in parts {
+        let Some(value) = value else { continue };
+        if let Some(c) = value
+            .chars()
+            .find(|c| matches!(c, '?' | '#') && !allowed.contains(c))
+        {
             return Err(CoreError::InvalidInput(format!(
-                "{kind} '{v}' must not contain '#'"
+                "{part} '{value}' must not contain '{c}'"
             )));
         }
     }
     Ok(())
-}
-
-/// `?` alone: what every kind refuses in a version or file name.
-fn reject_query_delimiter(kind: &str, value: &str) -> Result<(), CoreError> {
-    match value.contains('?') {
-        true => Err(CoreError::InvalidInput(format!(
-            "{kind} '{value}' must not contain '?'"
-        ))),
-        false => Ok(()),
-    }
 }
 
 /// Validate every user-controlled component of a package coordinate (`name`,
@@ -371,12 +360,10 @@ pub fn validate_coordinate(
     version: &str,
     artifact: Option<&str>,
 ) -> Result<(), CoreError> {
-    validate_package_name(name)?;
+    validate_path_safe("package name", name)?;
     validate_path_safe("version", version)?;
-    reject_query_delimiter("version", version)?;
     if let Some(artifact) = artifact {
         validate_path_safe("artifact", artifact)?;
-        reject_query_delimiter("artifact", artifact)?;
     }
     Ok(())
 }
