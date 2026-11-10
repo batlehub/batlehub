@@ -260,7 +260,7 @@ const trendText = computed(() => {
         <h2 class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
           {{ t("adminDashboard.perRegistry") }}
         </h2>
-        <Table>
+        <Table :label="t('adminDashboard.perRegistry')">
           <!-- On a phone the three raw counts leave the table whole rather than
                pushing State off-screen: State is the answer, the counts are detail. -->
           <TableHeader>

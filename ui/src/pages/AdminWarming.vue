@@ -196,7 +196,7 @@ onMounted(() => void loadStatus());
       -->
       <Card>
         <CardContent class="p-0">
-          <Table>
+          <Table :label="t('adminWarming.cacheWarming')">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t("common.registry") }}</TableHead>

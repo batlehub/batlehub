@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AsyncState } from "@/components/ui/async-state";
 import { computed, ref, watch, toRef } from "vue";
 import { myNamespacePackages, setPackageVisibility } from "@/client/sdk.gen";
 import type { Visibility, TeamNamespaceDto, NamespacePackageDto } from "@/client/types.gen";
@@ -34,6 +35,7 @@ const {
   data: pkgsData,
   error,
   loading,
+  reload,
 } = useApi<NamespacePackageDto[]>(
   () =>
     myNamespacePackages({
@@ -111,16 +113,13 @@ function formatDate(iso: string) {
 </script>
 
 <template>
-  <p v-if="loading" class="text-sm text-muted-foreground">
-    {{ t("namespacePackagesTable.loading") }}
-  </p>
-  <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
-  <EmptyState
-    v-else-if="!pkgsData?.length"
-    :title="t('namespace.noPackagesTitle')"
-    :description="t('namespace.noPackagesBody')"
-  />
-  <template v-else>
+  <AsyncState :loading="loading" :error="error" :empty="!pkgsData?.length" :on-retry="reload">
+    <template #empty>
+      <EmptyState
+        :title="t('namespace.noPackagesTitle')"
+        :description="t('namespace.noPackagesBody')"
+      />
+    </template>
     <Table>
       <TableHeader>
         <TableRow>
@@ -206,5 +205,5 @@ function formatDate(iso: string) {
       :has-next="(pkgsData?.length ?? 0) >= PAGE_SIZE"
       @update:page="page = $event"
     />
-  </template>
+  </AsyncState>
 </template>

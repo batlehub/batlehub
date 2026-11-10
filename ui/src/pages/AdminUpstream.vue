@@ -17,6 +17,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { OPERATIONS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
+import { Select } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -239,29 +240,32 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
 
         <!-- Filters -->
         <div class="flex flex-wrap items-end gap-3">
-          <label class="flex flex-col gap-1 text-xs">
-            <span>{{ t("adminUpstream.filterRegistry") }}</span>
-            <select
+          <div class="flex flex-col gap-1 text-xs">
+            <label for="upstream-registry-filter">{{ t("adminUpstream.filterRegistry") }}</label>
+            <Select
+              id="upstream-registry-filter"
               v-model="registryFilter"
-              class="h-9 rounded-md border bg-background px-2 text-sm"
-              data-testid="upstream-registry-filter"
-            >
-              <option value="">{{ t("adminUpstream.allRegistries") }}</option>
-              <option v-for="r in data.registries" :key="r" :value="r">{{ r }}</option>
-            </select>
-          </label>
-          <label class="flex flex-col gap-1 text-xs">
-            <span>{{ t("adminUpstream.filterState") }}</span>
-            <select
-              v-model="stateFilter"
-              class="h-9 rounded-md border bg-background px-2 text-sm"
-              data-testid="upstream-state-filter"
-            >
-              <option value="">{{ t("adminUpstream.allStates") }}</option>
-              <option value="missing">{{ t("adminUpstream.state.missing") }}</option>
-              <option value="disappeared">{{ t("adminUpstream.state.disappeared") }}</option>
-            </select>
-          </label>
+              :options="[
+                { value: '', label: t('adminUpstream.allRegistries') },
+                ...data.registries.map((r) => ({ value: r, label: r })),
+              ]"
+            />
+          </div>
+          <div class="flex flex-col gap-1 text-xs">
+            <label for="upstream-state-filter">{{ t("adminUpstream.filterState") }}</label>
+            <Select
+              id="upstream-state-filter"
+              :model-value="stateFilter"
+              :options="[
+                { value: '', label: t('adminUpstream.allStates') },
+                { value: 'missing', label: t('adminUpstream.state.missing') },
+                { value: 'disappeared', label: t('adminUpstream.state.disappeared') },
+              ]"
+              @update:model-value="
+                (v: string) => (stateFilter = v as '' | 'missing' | 'disappeared')
+              "
+            />
+          </div>
         </div>
 
         <!-- The first sweep after enabling finds nothing, by design: every
@@ -275,16 +279,18 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
 
         <Card v-else>
           <CardContent class="overflow-x-auto p-0">
-            <Table>
+            <Table :label="t('adminUpstream.title')">
               <TableHeader>
                 <TableRow>
                   <TableHead>{{ t("adminUpstream.col.package") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.state") }}</TableHead>
-                  <TableHead>{{ t("adminUpstream.col.misses") }}</TableHead>
+                  <TableHead class="text-right">{{ t("adminUpstream.col.misses") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.firstMissed") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.lastChecked") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.confirmed") }}</TableHead>
-                  <TableHead />
+                  <TableHead
+                    ><span class="sr-only">{{ t("common.actions") }}</span></TableHead
+                  >
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -308,7 +314,9 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
                       {{ t(STATE_KEYS[row.state]) }}
                     </Badge>
                   </TableCell>
-                  <TableCell class="tabular-nums">{{ row.consecutive_misses }}</TableCell>
+                  <TableCell class="text-right tabular-nums">{{
+                    row.consecutive_misses
+                  }}</TableCell>
                   <TableCell class="text-xs">{{ fmt(row.first_missed_at) }}</TableCell>
                   <TableCell class="text-xs">{{ fmt(row.last_checked_at) }}</TableCell>
                   <TableCell class="text-xs">{{ fmt(row.confirmed_at) }}</TableCell>

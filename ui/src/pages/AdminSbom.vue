@@ -147,14 +147,15 @@ async function exportSbom() {
           <!-- Format -->
           <div class="space-y-1.5">
             <Label for="sbom-format">{{ t("common.format") }}</Label>
-            <select
+            <Select
               id="sbom-format"
-              v-model="format"
-              class="w-full border border-border rounded-sm px-2 py-2 font-mono text-sm bg-background"
-            >
-              <option value="spdx">{{ t("adminSbom.spdx23") }}</option>
-              <option value="cyclonedx">{{ t("adminSbom.cyclonedx14") }}</option>
-            </select>
+              :model-value="format"
+              :options="[
+                { value: 'spdx', label: t('adminSbom.spdx23') },
+                { value: 'cyclonedx', label: t('adminSbom.cyclonedx14') },
+              ]"
+              @update:model-value="(v: string) => (format = v as 'spdx' | 'cyclonedx')"
+            />
           </div>
 
           <!-- From date -->

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AsyncState } from "@/components/ui/async-state";
 import { ref, computed } from "vue";
 import { listRegistries, myNamespaces as myNamespacesApi } from "@/client/sdk.gen";
 import type { RegistryInfo, TeamNamespaceDto } from "@/client/types.gen";
@@ -36,6 +37,7 @@ const {
   data: myNamespaces,
   error: namespacesError,
   loading: namespacesLoading,
+  reload: reloadNamespaces,
 } = useApi<TeamNamespaceDto[]>(() => {
   if (!token.value) return Promise.resolve({ data: [] });
   return myNamespacesApi() as Promise<{ data?: unknown; error?: unknown }>;
@@ -85,25 +87,28 @@ function selectNamespace(ns: TeamNamespaceDto) {
           <CardDescription>{{ t("myNamespace.chooseANamespaceTo") }}</CardDescription>
         </CardHeader>
         <CardContent>
-          <p v-if="namespacesLoading" class="text-sm text-muted-foreground">
-            {{ t("myNamespace.loading") }}
-          </p>
-          <p v-else-if="namespacesError" class="text-sm text-destructive">{{ namespacesError }}</p>
-          <EmptyState
-            v-else-if="!myNamespaces?.length"
-            :title="t('namespace.noClaimsTitle')"
-            :description="t('namespace.noClaimsBody')"
-          />
-          <Table v-else>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{{ t("common.registry") }}</TableHead>
-                <TableHead>{{ t("common.prefix") }}</TableHead>
-                <TableHead>{{ t("common.group") }}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <!-- The control is the prefix, not the row.
+          <AsyncState
+            :loading="namespacesLoading"
+            :error="namespacesError"
+            :empty="!myNamespaces?.length"
+            :on-retry="reloadNamespaces"
+          >
+            <template #empty>
+              <EmptyState
+                :title="t('namespace.noClaimsTitle')"
+                :description="t('namespace.noClaimsBody')"
+              />
+            </template>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{{ t("common.registry") }}</TableHead>
+                  <TableHead>{{ t("common.prefix") }}</TableHead>
+                  <TableHead>{{ t("common.group") }}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <!-- The control is the prefix, not the row.
                    `@click` on `<TableRow>` with no `tabindex`, no `role` and no
                    key handler gave a mouse the whole row and a keyboard nothing
                    — and this list is the only way into the packages table
@@ -115,37 +120,38 @@ function selectNamespace(ns: TeamNamespaceDto) {
                    three cells out of the table with it. This is a selection and
                    not a navigation — there is no URL for a chosen namespace —
                    so it is a button carrying `aria-pressed`, not a link. -->
-              <TableRow
-                v-for="ns in myNamespaces"
-                :key="`${ns.registry}:${ns.prefix}`"
-                :class="
-                  selectedNs?.registry === ns.registry && selectedNs?.prefix === ns.prefix
-                    ? 'bg-muted/60'
-                    : 'hover:bg-muted/40'
-                "
-              >
-                <TableCell class="font-mono text-xs">{{ ns.registry }}</TableCell>
-                <TableCell class="font-mono text-xs">
-                  <button
-                    type="button"
-                    class="hover:underline underline-offset-[3px]"
-                    :aria-pressed="
-                      selectedNs?.registry === ns.registry && selectedNs?.prefix === ns.prefix
-                    "
-                    :aria-label="
-                      t('myNamespace.browseNamespace', { ns: `${ns.registry}/${ns.prefix}` })
-                    "
-                    @click="selectNamespace(ns)"
-                  >
-                    {{ ns.prefix }}
-                  </button>
-                </TableCell>
-                <TableCell class="font-mono text-xs">{{
-                  ns.group_id.replaceAll(" ", "")
-                }}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
+                <TableRow
+                  v-for="ns in myNamespaces"
+                  :key="`${ns.registry}:${ns.prefix}`"
+                  :class="
+                    selectedNs?.registry === ns.registry && selectedNs?.prefix === ns.prefix
+                      ? 'bg-muted/60'
+                      : 'hover:bg-muted/40'
+                  "
+                >
+                  <TableCell class="font-mono text-xs">{{ ns.registry }}</TableCell>
+                  <TableCell class="font-mono text-xs">
+                    <button
+                      type="button"
+                      class="hover:underline underline-offset-[3px]"
+                      :aria-pressed="
+                        selectedNs?.registry === ns.registry && selectedNs?.prefix === ns.prefix
+                      "
+                      :aria-label="
+                        t('myNamespace.browseNamespace', { ns: `${ns.registry}/${ns.prefix}` })
+                      "
+                      @click="selectNamespace(ns)"
+                    >
+                      {{ ns.prefix }}
+                    </button>
+                  </TableCell>
+                  <TableCell class="font-mono text-xs">{{
+                    ns.group_id.replaceAll(" ", "")
+                  }}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </AsyncState>
         </CardContent>
       </Card>
 

@@ -22,9 +22,8 @@ import type { MyQuotaDto } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatBytes, formatCount } from "@/lib/format";
-import { Alert } from "@/components/ui/alert";
 import { Meter, type MeterState } from "@/components/ui/meter";
-import { Skeleton } from "@/components/ui/skeleton";
+import HomeSection from "./HomeSection.vue";
 
 const { t } = useI18n();
 const { token } = useAuth();
@@ -81,63 +80,63 @@ const packagesText = (row: MyQuotaDto) =>
     used: formatCount(row.packages_used),
     limit: formatCount(row.packages_limit ?? 0),
   });
+
+/** A row's limited dimensions, in display order — a dimension with no limit has no meter. */
+function dimensions(row: MyQuotaDto) {
+  return [
+    row.bytes_limit != null && {
+      key: "bytes",
+      label: t("quotaWidget.storage"),
+      used: row.bytes_used,
+      max: row.bytes_limit,
+      text: bytesText(row),
+      state: row.bytes_state,
+    },
+    row.packages_limit != null && {
+      key: "packages",
+      label: t("quotaWidget.versions"),
+      used: row.packages_used,
+      max: row.packages_limit,
+      text: packagesText(row),
+      state: row.packages_state,
+    },
+  ].filter((d) => d !== false);
+}
 </script>
 
 <template>
   <!-- No quota anywhere the caller can reach: render nothing at all. -->
-  <section v-if="loading || error || rows.length" aria-labelledby="quota-widget-heading">
-    <h2
-      id="quota-widget-heading"
-      class="font-mono text-xs uppercase tracking-wider text-muted-foreground"
-    >
-      {{ t("quotaWidget.title") }}
-    </h2>
-
-    <Skeleton v-if="loading" class="mt-3" :lines="2" />
-    <Alert v-else-if="error" variant="destructive" class="mt-3">{{ error }}</Alert>
-
-    <ul v-else class="mt-3 space-y-4">
+  <HomeSection
+    v-if="loading || error || rows.length"
+    heading-id="quota-widget-heading"
+    :title="t('quotaWidget.title')"
+    :loading="loading"
+    :error="error"
+  >
+    <ul class="space-y-4">
       <li v-for="row in rows" :key="row.registry" class="border border-border p-4">
         <p class="font-mono text-sm font-semibold text-foreground">{{ row.registry }}</p>
 
         <div class="mt-3 space-y-3">
-          <div v-if="row.bytes_limit != null">
+          <div v-for="dim in dimensions(row)" :key="dim.key">
             <Meter
-              :value="row.bytes_used"
-              :max="row.bytes_limit"
-              :label="t('quotaWidget.storage')"
-              :value-text="bytesText(row)"
-              :state="meterState(row.bytes_state)"
+              :value="dim.used"
+              :max="dim.max"
+              :label="dim.label"
+              :value-text="dim.text"
+              :state="meterState(dim.state)"
             />
             <p
-              v-if="caption(row.bytes_state, row.warn_threshold_pct)"
+              v-if="caption(dim.state, row.warn_threshold_pct)"
               class="mt-1 text-xs"
-              :class="row.bytes_state === 'at_limit' ? 'text-destructive' : 'text-copper'"
+              :class="dim.state === 'at_limit' ? 'text-destructive' : 'text-copper'"
               data-testid="quota-caption"
             >
-              {{ caption(row.bytes_state, row.warn_threshold_pct) }}
-            </p>
-          </div>
-
-          <div v-if="row.packages_limit != null">
-            <Meter
-              :value="row.packages_used"
-              :max="row.packages_limit"
-              :label="t('quotaWidget.versions')"
-              :value-text="packagesText(row)"
-              :state="meterState(row.packages_state)"
-            />
-            <p
-              v-if="caption(row.packages_state, row.warn_threshold_pct)"
-              class="mt-1 text-xs"
-              :class="row.packages_state === 'at_limit' ? 'text-destructive' : 'text-copper'"
-              data-testid="quota-caption"
-            >
-              {{ caption(row.packages_state, row.warn_threshold_pct) }}
+              {{ caption(dim.state, row.warn_threshold_pct) }}
             </p>
           </div>
         </div>
       </li>
     </ul>
-  </section>
+  </HomeSection>
 </template>

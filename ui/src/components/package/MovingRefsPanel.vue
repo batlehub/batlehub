@@ -5,6 +5,7 @@ import { GitBranch } from "@lucide/vue";
 
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
+import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
@@ -50,7 +51,9 @@ const loading = ref(false);
 
 async function load() {
   refs.value = [];
-  isForge.value = false;
+  // `isForge` is kept until the answer: a refetch on a forge shows its loading
+  // state inside the card. shortcut: the first load still renders nothing, since
+  // only the endpoint's 404 says whether this registry is a forge at all.
   loading.value = true;
   try {
     const resp = await authFetch(
@@ -58,7 +61,10 @@ async function load() {
         props.name,
       )}/refs`,
     );
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      isForge.value = false;
+      return;
+    }
     const data = await resp.json();
     isForge.value = true;
     refs.value = data.refs ?? [];
@@ -80,7 +86,7 @@ watch(() => [props.registry, props.name], load);
 </script>
 
 <template>
-  <Card v-if="isForge && !loading" data-testid="moving-refs-panel">
+  <Card v-if="isForge" data-testid="moving-refs-panel">
     <CardHeader>
       <CardTitle class="flex items-center gap-2">
         <GitBranch class="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -90,43 +96,45 @@ watch(() => [props.registry, props.name], load);
     <CardContent class="space-y-3">
       <p class="text-sm text-muted-foreground">{{ t("movingRefs.intro") }}</p>
 
-      <p v-if="!remembered" class="text-sm text-muted-foreground" data-testid="moving-refs-none">
-        {{ t("movingRefs.notRemembered") }}
-      </p>
-      <Table v-else-if="refs.length" data-testid="moving-refs-rows">
-        <TableHeader>
-          <TableRow>
-            <TableHead>{{ t("movingRefs.ref") }}</TableHead>
-            <TableHead>{{ t("movingRefs.kind") }}</TableHead>
-            <TableHead>{{ t("movingRefs.commit") }}</TableHead>
-            <TableHead>{{ t("movingRefs.resolved") }}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <TableRow v-for="r in refs" :key="r.git_ref">
-            <TableCell class="font-mono text-sm">{{ r.git_ref }}</TableCell>
-            <TableCell>
-              <Badge :variant="r.ref_kind === 'branch' ? 'copper' : 'secondary'" class="text-xs">
-                {{ r.ref_kind }}
-              </Badge>
-            </TableCell>
-            <TableCell class="font-mono text-xs">
-              {{ short(r.sha) }}
-              <!-- A ref that resolves elsewhere than it did is the whole
+      <AsyncState :loading="loading">
+        <p v-if="!remembered" class="text-sm text-muted-foreground" data-testid="moving-refs-none">
+          {{ t("movingRefs.notRemembered") }}
+        </p>
+        <Table v-else-if="refs.length" data-testid="moving-refs-rows">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t("movingRefs.ref") }}</TableHead>
+              <TableHead>{{ t("movingRefs.kind") }}</TableHead>
+              <TableHead>{{ t("movingRefs.commit") }}</TableHead>
+              <TableHead>{{ t("movingRefs.resolved") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="r in refs" :key="r.git_ref">
+              <TableCell class="font-mono text-sm">{{ r.git_ref }}</TableCell>
+              <TableCell>
+                <Badge :variant="r.ref_kind === 'branch' ? 'copper' : 'secondary'" class="text-xs">
+                  {{ r.ref_kind }}
+                </Badge>
+              </TableCell>
+              <TableCell class="font-mono text-xs">
+                {{ short(r.sha) }}
+                <!-- A ref that resolves elsewhere than it did is the whole
                    point of the table: say what it was, not just what it is. -->
-              <span v-if="r.previous_sha" class="text-muted-foreground">
-                {{ t("movingRefs.wasAt", { sha: short(r.previous_sha) }) }}
-              </span>
-            </TableCell>
-            <TableCell class="whitespace-nowrap text-xs tabular-nums">
-              {{ formatDate(r.resolved_at) }}
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-      <p v-else class="text-sm text-muted-foreground" data-testid="moving-refs-empty">
-        {{ t("movingRefs.empty") }}
-      </p>
+                <span v-if="r.previous_sha" class="text-muted-foreground">
+                  {{ t("movingRefs.wasAt", { sha: short(r.previous_sha) }) }}
+                </span>
+              </TableCell>
+              <TableCell class="whitespace-nowrap text-xs tabular-nums">
+                {{ formatDate(r.resolved_at) }}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+        <p v-else class="text-sm text-muted-foreground" data-testid="moving-refs-empty">
+          {{ t("movingRefs.empty") }}
+        </p>
+      </AsyncState>
     </CardContent>
   </Card>
 </template>

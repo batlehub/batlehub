@@ -110,28 +110,27 @@ watch(pastedUrl, parseUrl);
 
     <!-- Universal paste input -->
     <Card>
-      <CardContent class="pt-5">
-        <Label for="paste-url" class="text-xs text-muted-foreground">{{
-          t("pathMapper.pasteAnUpstreamUrl")
-        }}</Label>
+      <CardContent class="space-y-2 pt-5">
+        <Label for="paste-url">{{ t("pathMapper.pasteAnUpstreamUrl") }}</Label>
         <Input
           id="paste-url"
           v-model="pastedUrl"
           :placeholder="t('pathMapper.httpsPypiOrgProject')"
-          class="mt-1.5 font-mono text-sm"
+          class="font-mono text-sm"
         />
       </CardContent>
     </Card>
 
     <!-- Registry selector -->
-    <div class="space-y-1">
-      <Label for="registry-select" class="text-xs uppercase tracking-wide text-muted-foreground">{{
-        t("pathMapper.registryType")
-      }}</Label>
+    <div class="space-y-2">
+      <Label for="registry-select">{{ t("pathMapper.registryType") }}</Label>
+      <!-- Native on purpose: `Select` has no optgroup, and the grouping is how
+           this list of every registry type stays scannable. Its classes are the
+           `Select` trigger's, so the two read as one control. -->
       <select
         id="registry-select"
         v-model="registry"
-        class="w-full rounded-sm border border-border bg-background px-3 py-2 font-mono text-sm"
+        class="flex h-9 w-full items-center justify-between border border-border bg-ground-sunk px-3 py-2 font-mono text-sm focus-visible:border-primary"
       >
         <optgroup v-for="group in groupedTypes" :key="group.name" :label="group.name">
           <option v-for="type in group.types" :key="type.id" :value="type.id">

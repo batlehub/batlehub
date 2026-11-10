@@ -2,7 +2,6 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
-import { Package } from "@lucide/vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
 import { PACKAGES_TABS } from "@/config/adminSections";
@@ -26,6 +25,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Announcer } from "@/components/ui/announcer";
 import {
@@ -587,20 +589,20 @@ async function runPending(): Promise<void> {
           />
           <!-- Both go to the server. `blocked_only` answers half this page's
                question and had no control at all. -->
-          <select
+          <Label for="ap-registry" class="sr-only">{{ t("common.registry") }}</Label>
+          <Select
+            id="ap-registry"
             v-model="registryFilter"
-            :aria-label="t('common.registry')"
-            class="h-8 rounded-sm border border-border bg-transparent px-2 text-sm"
-          >
-            <option value="">{{ t("adminPackages.allRegistries") }}</option>
-            <option v-for="r in registries ?? []" :key="r.name" :value="r.name">
-              {{ r.name }}
-            </option>
-          </select>
-          <label class="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <input v-model="blockedOnly" type="checkbox" class="h-3.5 w-3.5" />
-            {{ t("adminPackages.blockedOnly") }}
-          </label>
+            :options="[
+              { value: '', label: t('adminPackages.allRegistries') },
+              ...(registries ?? []).map((r) => ({ value: r.name, label: r.name })),
+            ]"
+            class="h-8 w-auto"
+          />
+          <div class="flex items-center gap-2 h-8">
+            <Switch id="ap-blocked" v-model="blockedOnly" />
+            <Label for="ap-blocked" class="text-sm">{{ t("adminPackages.blockedOnly") }}</Label>
+          </div>
         </div>
       </CardHeader>
       <CardContent class="p-0">
@@ -608,23 +610,19 @@ async function runPending(): Promise<void> {
           {{ actionError }}
         </p>
         <AsyncState :loading="loading" :error="error" :empty="!filteredPackages.length">
+          <!-- Every filter counts: a registry or "blocked only" that matched
+               nothing is not an empty catalogue. -->
           <template #empty>
-            <div class="py-12 text-center space-y-2">
-              <Package class="h-8 w-8 mx-auto text-muted-foreground/50" />
-              <p class="text-sm text-muted-foreground">
-                {{
-                  search
-                    ? t("adminPackages.noPackagesMatchYourFilter")
-                    : t("adminPackages.noPackagesYet")
-                }}
-              </p>
-              <p v-if="search" class="text-xs text-muted-foreground">
-                {{ t("adminPackages.tryClearingTheFilter") }}
-              </p>
-            </div>
+            <EmptyState
+              v-if="search || registryFilter || blockedOnly"
+              filtered
+              :title="t('adminPackages.noPackagesMatchYourFilter')"
+              :description="t('adminPackages.tryClearingTheFilter')"
+            />
+            <EmptyState v-else :title="t('adminPackages.noPackagesYet')" />
           </template>
 
-          <Table>
+          <Table :label="t('common.packages')">
             <TableHeader>
               <TableRow>
                 <TableHead class="w-8">

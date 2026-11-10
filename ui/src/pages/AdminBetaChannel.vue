@@ -7,6 +7,7 @@ import { useAdminCrudList } from "@/composables/useAdminCrudList";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { NAMESPACES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
+import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -127,61 +128,54 @@ const principalTypeOptions = computed(() => [
         </div>
       </CardHeader>
       <CardContent class="p-0">
-        <p v-if="membersError" class="p-4 text-sm text-destructive">
-          {{ membersError }}
-        </p>
-        <Table v-else>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{{ t("common.type") }}</TableHead>
-              <TableHead>{{ t("adminBetaChannel.principalId") }}</TableHead>
-              <TableHead>{{ t("adminBetaChannel.grantedBy") }}</TableHead>
-              <TableHead class="text-right"> {{ t("common.actions") }} </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="m in members" :key="m.principal_type + ':' + m.principal_id">
-              <TableCell>
-                <Badge
-                  :variant="m.principal_type === 'user' ? 'default' : 'secondary'"
-                  class="text-xs capitalize"
-                >
-                  {{ m.principal_type }}
-                </Badge>
-              </TableCell>
-              <TableCell class="font-mono text-sm">
-                {{ m.principal_id }}
-              </TableCell>
-              <TableCell class="text-sm text-muted-foreground">
-                {{ m.granted_by ?? "—" }}
-              </TableCell>
-              <TableCell class="text-right">
-                <Button variant="outline" size="sm" @click="removeTarget = m">
-                  {{ t("common.remove") }}
-                </Button>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-        <p v-if="membersLoading" class="p-6 text-center text-sm text-muted-foreground">
-          {{ t("common.loading") }}
-        </p>
-        <!--
-          `&& !membersLoading`: the empty state rendered while the request was still
-          in flight, so an operator read "none for this registry", opened the
-          dialog and claimed something that already existed. Empty must mean
-          empty, not "we have not looked yet".
-        -->
-        <p
-          v-if="!membersError && !membersLoading && (!members || members.length === 0)"
-          class="p-6 text-sm text-muted-foreground text-center"
-        >
-          {{
+        <!-- Empty only once loaded: an empty state shown while the request was
+             in flight read as "none for this registry", and an operator added
+             something that already existed. -->
+        <AsyncState
+          :loading="membersLoading"
+          :error="membersError"
+          :empty="!members?.length"
+          :empty-message="
             selectedRegistry
-              ? t("adminBetaChannel.noBetaChannelMembersFor")
-              : t("adminBetaChannel.selectARegistryToView")
-          }}
-        </p>
+              ? t('adminBetaChannel.noBetaChannelMembersFor')
+              : t('adminBetaChannel.selectARegistryToView')
+          "
+          :on-retry="reloadMembers"
+        >
+          <Table :label="t('common.members')">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t("common.type") }}</TableHead>
+                <TableHead>{{ t("adminBetaChannel.principalId") }}</TableHead>
+                <TableHead>{{ t("adminBetaChannel.grantedBy") }}</TableHead>
+                <TableHead class="text-right">{{ t("common.actions") }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="m in members" :key="m.principal_type + ':' + m.principal_id">
+                <TableCell>
+                  <Badge
+                    :variant="m.principal_type === 'user' ? 'default' : 'secondary'"
+                    class="text-xs capitalize"
+                  >
+                    {{ m.principal_type }}
+                  </Badge>
+                </TableCell>
+                <TableCell class="font-mono text-sm">
+                  {{ m.principal_id }}
+                </TableCell>
+                <TableCell class="text-sm text-muted-foreground">
+                  {{ m.granted_by ?? "—" }}
+                </TableCell>
+                <TableCell class="text-right">
+                  <Button variant="outline" size="sm" @click="removeTarget = m">
+                    {{ t("common.remove") }}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </AsyncState>
       </CardContent>
     </Card>
   </div>

@@ -324,7 +324,7 @@ async function testSubscription(id: string) {
       <AsyncState :loading="subsLoading && !subscriptions" :error="subsError">
         <Card>
           <CardContent class="p-0">
-            <Table>
+            <Table :label="t('adminNav.subscriptions')">
               <TableHeader>
                 <TableRow>
                   <TableHead>{{ t("common.registry") }}</TableHead>

@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 
 const { t } = useI18n();
@@ -97,25 +98,26 @@ async function remove() {
       <div class="grid gap-4 sm:grid-cols-2">
         <div class="space-y-1.5">
           <Label for="del-registry">{{ t("common.registry") }}</Label>
-          <select
+          <Select
             id="del-registry"
             v-model="registry"
-            class="flex h-9 w-full rounded-sm border border-border bg-transparent px-3 text-sm"
-          >
-            <option value="">{{ t("adminHealth.chooseRegistry") }}</option>
-            <option v-for="r in props.registries" :key="r" :value="r">{{ r }}</option>
-          </select>
+            :options="[
+              { value: '', label: t('adminHealth.chooseRegistry') },
+              ...props.registries.map((r) => ({ value: r, label: r })),
+            ]"
+          />
         </div>
         <div class="space-y-1.5">
           <Label for="del-mode">{{ t("adminHealth.identifyBy") }}</Label>
-          <select
+          <Select
             id="del-mode"
-            v-model="mode"
-            class="flex h-9 w-full rounded-sm border border-border bg-transparent px-3 text-sm"
-          >
-            <option value="package">{{ t("adminWarming.packageMode") }}</option>
-            <option value="path">{{ t("adminWarming.pathMode") }}</option>
-          </select>
+            :model-value="mode"
+            :options="[
+              { value: 'package', label: t('adminWarming.packageMode') },
+              { value: 'path', label: t('adminWarming.pathMode') },
+            ]"
+            @update:model-value="(v: string) => (mode = v as Mode)"
+          />
         </div>
       </div>
 

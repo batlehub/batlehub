@@ -55,7 +55,9 @@ const titleText = computed(() => props.title ?? t("asyncState.couldNotLoad"));
   </template>
   <template v-else-if="empty">
     <slot name="empty">
-      <EmptyState :title="emptyText" />
+      <!-- A sentence ("No changes recorded yet."), so it is the panel's copy, not
+           its heading: set in the bitmap face it read as a line of caps. -->
+      <EmptyState :description="emptyText" />
     </slot>
   </template>
   <template v-else>

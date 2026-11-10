@@ -26,11 +26,11 @@ import type { MyDownloadDto } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatRelative } from "@/lib/format";
-import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Resolution } from "@/components/ui/resolution";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
+import { packagePath } from "@/config/navigation";
+import HomeSection from "./HomeSection.vue";
 
 /**
  * Enough to recognise the shape of what a machine is doing, not an audit log.
@@ -48,24 +48,15 @@ const { data, error, loading } = useApi<MyDownloadDto[]>(
 );
 
 const pulls = computed<MyDownloadDto[]>(() => data.value ?? []);
-
-/** The canonical package URL RFC 0003 settled on. */
-const packageHref = (row: MyDownloadDto) =>
-  `/packages/${encodeURIComponent(row.registry)}/${encodeURIComponent(row.name)}`;
 </script>
 
 <template>
-  <section aria-labelledby="recent-pulls-heading">
-    <h2
-      id="recent-pulls-heading"
-      class="font-mono text-xs uppercase tracking-wider text-muted-foreground"
-    >
-      {{ t("recentPullsWidget.title") }}
-    </h2>
-
-    <Skeleton v-if="loading" class="mt-3" :lines="2" />
-    <Alert v-else-if="error" variant="destructive" class="mt-3">{{ error }}</Alert>
-
+  <HomeSection
+    heading-id="recent-pulls-heading"
+    :title="t('recentPullsWidget.title')"
+    :loading="loading"
+    :error="error"
+  >
     <!--
       A real answer, not a blank. "Nothing yet" on this widget is genuinely
       informative for a developer who thinks their tooling is pointed here and
@@ -73,21 +64,20 @@ const packageHref = (row: MyDownloadDto) =>
       appears to be doing nothing.
     -->
     <EmptyState
-      v-else-if="!pulls.length"
-      class="mt-3"
+      v-if="!pulls.length"
       :title="t('recentPullsWidget.nothingYet')"
       :description="t('recentPullsWidget.nothingYetBody')"
       data-testid="recent-pulls-empty"
     />
 
-    <ul v-else class="mt-3 divide-y divide-border border border-border">
+    <ul v-else class="divide-y divide-border border border-border">
       <li
         v-for="pull in pulls"
         :key="`${pull.registry}/${pull.name}/${pull.version}/${pull.artifact ?? ''}/${pull.downloaded_at}`"
         class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-4 py-2"
       >
         <RouterLink
-          :to="packageHref(pull)"
+          :to="packagePath(pull.registry, pull.name)"
           class="min-w-0 font-mono text-sm text-primary hover:underline"
         >
           {{ pull.name }}<span class="text-muted-foreground">@{{ pull.version }}</span>
@@ -113,5 +103,5 @@ const packageHref = (row: MyDownloadDto) =>
         </div>
       </li>
     </ul>
-  </section>
+  </HomeSection>
 </template>

@@ -18,13 +18,15 @@ import { cn } from "@/lib/utils";
 
 const props = withDefaults(
   defineProps<{
-    title: string;
+    /** A short heading, set in the bitmap face. Leave it out when all there is
+        to say is one sentence: Silkscreen is for a label, never for prose. */
+    title?: string;
     description?: string;
     filtered?: boolean;
     variant?: "default" | "error";
     class?: HTMLAttributes["class"];
   }>(),
-  { description: "", filtered: false, variant: "default" },
+  { title: "", description: "", filtered: false, variant: "default" },
 );
 </script>
 
@@ -41,6 +43,7 @@ const props = withDefaults(
     :data-filtered="filtered ? 'true' : 'false'"
   >
     <p
+      v-if="title"
       :class="
         cn(
           'font-display text-sub tracking-[0.04em]',
@@ -52,7 +55,12 @@ const props = withDefaults(
     </p>
     <p
       v-if="description || $slots.description"
-      class="mx-auto mt-2 max-w-[64ch] text-sm text-muted-foreground [overflow-wrap:anywhere]"
+      :class="
+        cn(
+          'mx-auto max-w-[64ch] text-sm text-muted-foreground [overflow-wrap:anywhere]',
+          title && 'mt-2',
+        )
+      "
     >
       <slot name="description">{{ description }}</slot>
     </p>

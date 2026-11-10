@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { explorePackageReadme } from "@/client/sdk.gen";
 import type { ReadmeResponse } from "@/client/types.gen";
 import { Button } from "@/components/ui/button";
+import { AsyncState } from "@/components/ui/async-state";
 import { highlightInto, useShiki } from "@/composables/useShiki";
 
 /**
@@ -251,11 +252,12 @@ const absenceMessage = computed(() => {
       </Button>
     </div>
     <div>
-      <p v-if="loading" class="text-sm text-muted-foreground">
-        {{ t("common.loading") }}
-      </p>
-
-      <template v-else-if="readme">
+      <AsyncState :loading="loading" :empty="!readme">
+        <template #empty>
+          <p class="text-sm text-muted-foreground">
+            {{ absenceMessage ?? failure ?? t("readmePanel.noneStored") }}
+          </p>
+        </template>
         <p v-if="fallbackNotice" class="text-sm text-muted-foreground mb-3 max-w-[72ch]">
           {{ fallbackNotice }}
         </p>
@@ -283,7 +285,7 @@ const absenceMessage = computed(() => {
           v-if="view === 'rendered'"
           ref="bodyEl"
           class="readme-body"
-          v-html="readme.rendered_html ?? ''"
+          v-html="readme?.rendered_html ?? ''"
         ></div>
         <!-- eslint-enable vue/no-v-html -->
         <!-- The source as **text**, through interpolation. It is the same bytes
@@ -291,17 +293,11 @@ const absenceMessage = computed(() => {
              this is to see them exactly — so this is the one place they must not
              be parsed. Shiki paints over it afterwards without changing a
              character. -->
-        <pre v-else ref="sourceEl" class="readme-source">{{ readme.source_text }}</pre>
+        <pre v-else ref="sourceEl" class="readme-source">{{ readme?.source_text }}</pre>
         <p v-if="truncationNotice" class="text-xs text-muted-foreground mt-3 max-w-[72ch]">
           {{ truncationNotice }}
         </p>
-      </template>
-
-      <template v-else>
-        <p class="text-sm text-muted-foreground">
-          {{ absenceMessage ?? failure ?? t("readmePanel.noneStored") }}
-        </p>
-      </template>
+      </AsyncState>
     </div>
   </section>
 </template>

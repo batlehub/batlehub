@@ -396,7 +396,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         </div>
       </CardHeader>
       <CardContent class="p-0">
-        <Table>
+        <Table :label="t('adminBulk.previewRows')">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>
@@ -469,7 +469,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         </CardTitle>
       </CardHeader>
       <CardContent v-if="result.failures.length > 0" class="p-0">
-        <Table>
+        <Table :label="t('adminBulk.failures')">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>

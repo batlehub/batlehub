@@ -54,6 +54,11 @@ export function accountTabs(viewer: { isOidc: boolean }): NavLink[] {
   ];
 }
 
+/** The canonical package URL RFC 0003 settled on. */
+export function packagePath(registry: string, name: string): string {
+  return `/packages/${encodeURIComponent(registry)}/${encodeURIComponent(name)}`;
+}
+
 /** The diagnostics hub's tabs. */
 export const TOOLS_TABS: NavLink[] = [
   { to: "/tools/access-check", label: "tools.accessCheck" },

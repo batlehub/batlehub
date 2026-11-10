@@ -19,6 +19,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Announcer } from "@/components/ui/announcer";
 
 const { t } = useI18n();
@@ -114,15 +115,16 @@ async function clearBannerAction() {
           </div>
           <div class="space-y-1">
             <Label for="banner-level">{{ t("common.level") }}</Label>
-            <select
+            <Select
               id="banner-level"
-              v-model="bannerLevel"
-              class="h-9 border border-border px-2 font-mono text-sm bg-background"
-            >
-              <option value="info">{{ t("common.info") }}</option>
-              <option value="warning">{{ t("common.warning") }}</option>
-              <option value="error">{{ t("common.error") }}</option>
-            </select>
+              :model-value="bannerLevel"
+              :options="[
+                { value: 'info', label: t('common.info') },
+                { value: 'warning', label: t('common.warning') },
+                { value: 'error', label: t('common.error') },
+              ]"
+              @update:model-value="(v: string) => (bannerLevel = v as 'info' | 'warning' | 'error')"
+            />
           </div>
           <Button :disabled="loadingSet || !bannerMessage.trim()" @click="setBannerAction">
             {{ loadingSet ? t("adminConfigReload.setting") : t("adminConfigReload.setBanner") }}

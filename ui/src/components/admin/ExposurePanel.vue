@@ -12,6 +12,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { AsyncState } from "@/components/ui/async-state";
 import {
   Table,
   TableHeader,
@@ -41,6 +42,8 @@ const next = ref<string | null>(null);
 const coverage = ref<ExposureCoverage | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+/** Kept apart from `error`: a failed export says nothing about the rows on screen. */
+const exportError = ref<string | null>(null);
 
 const effectOptions = computed(() => [
   { value: "", label: t("exposurePanel.anyEffect") },
@@ -96,12 +99,13 @@ async function load(append = false) {
 }
 
 async function exportCsv() {
+  exportError.value = null;
   const params = new URLSearchParams({ format: "csv", when: when.value });
   if (source.value.trim()) params.set("source", source.value.trim());
   if (minEffect.value) params.set("min_effect", minEffect.value);
   const resp = await authFetch(`${API_BASE_URL}/api/v1/admin/exposure/export?${params}`);
   if (!resp.ok) {
-    error.value = t("exposurePanel.exportFailed");
+    exportError.value = t("exposurePanel.exportFailed");
     return;
   }
   const blob = await resp.blob();
@@ -182,49 +186,56 @@ onMounted(() => load());
         </Button>
       </div>
 
-      <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
-
-      <Table v-if="rows.length" data-testid="exposure-rows">
-        <TableHeader>
-          <TableRow>
-            <TableHead>{{ t("exposurePanel.consumer") }}</TableHead>
-            <TableHead>{{ t("common.package") }}</TableHead>
-            <TableHead>{{ t("exposurePanel.flag") }}</TableHead>
-            <TableHead>{{ t("exposurePanel.pulls") }}</TableHead>
-            <TableHead>{{ t("exposurePanel.beforeFlag") }}</TableHead>
-            <TableHead>{{ t("exposurePanel.lastPull") }}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <TableRow
-            v-for="r in rows"
-            :key="`${r.consumer}|${r.registry}|${r.package_name}|${r.version}|${r.flag_id}`"
-          >
-            <TableCell class="font-mono text-sm">{{ r.consumer }}</TableCell>
-            <TableCell class="font-mono text-sm">
-              {{ r.registry }}/{{ r.package_name }}@{{ r.version }}
-            </TableCell>
-            <TableCell class="text-sm">
-              <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">{{ r.effect }}</Badge>
-              <span class="font-mono text-xs text-muted-foreground">
-                {{ r.source }}:{{ r.external_id }}
-              </span>
-            </TableCell>
-            <TableCell class="tabular-nums">{{ r.pulls }}</TableCell>
-            <TableCell class="tabular-nums">{{ r.pulls_before_flag }}</TableCell>
-            <TableCell class="whitespace-nowrap text-xs tabular-nums">
-              {{ formatDate(r.last_pull) }}
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-      <p
-        v-else-if="!loading && !error"
-        class="text-sm text-muted-foreground"
-        data-testid="exposure-empty"
-      >
-        {{ t("exposurePanel.empty") }}
+      <!-- A failed export, or a failed "load more" under rows that still
+           stand, is an action error beside the table, not a failed load. -->
+      <p v-if="exportError || (error && rows.length)" class="text-sm text-destructive">
+        {{ exportError ?? error }}
       </p>
+
+      <AsyncState
+        :loading="loading && !rows.length"
+        :error="rows.length ? null : error"
+        :empty="!rows.length"
+        :empty-message="t('exposurePanel.empty')"
+        :on-retry="() => load()"
+      >
+        <Table :label="t('exposurePanel.title')" data-testid="exposure-rows">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t("exposurePanel.consumer") }}</TableHead>
+              <TableHead>{{ t("common.package") }}</TableHead>
+              <TableHead>{{ t("exposurePanel.flag") }}</TableHead>
+              <TableHead>{{ t("exposurePanel.pulls") }}</TableHead>
+              <TableHead>{{ t("exposurePanel.beforeFlag") }}</TableHead>
+              <TableHead>{{ t("exposurePanel.lastPull") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow
+              v-for="r in rows"
+              :key="`${r.consumer}|${r.registry}|${r.package_name}|${r.version}|${r.flag_id}`"
+            >
+              <TableCell class="font-mono text-sm">{{ r.consumer }}</TableCell>
+              <TableCell class="font-mono text-sm">
+                {{ r.registry }}/{{ r.package_name }}@{{ r.version }}
+              </TableCell>
+              <TableCell class="text-sm">
+                <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">{{
+                  r.effect
+                }}</Badge>
+                <span class="font-mono text-xs text-muted-foreground">
+                  {{ r.source }}:{{ r.external_id }}
+                </span>
+              </TableCell>
+              <TableCell class="tabular-nums">{{ r.pulls }}</TableCell>
+              <TableCell class="tabular-nums">{{ r.pulls_before_flag }}</TableCell>
+              <TableCell class="whitespace-nowrap text-xs tabular-nums">
+                {{ formatDate(r.last_pull) }}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </AsyncState>
 
       <Button
         v-if="next"

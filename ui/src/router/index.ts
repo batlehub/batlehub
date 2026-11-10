@@ -6,7 +6,7 @@ import {
   type RouteLocationRaw,
 } from "vue-router";
 import { useAuth, storeTokens } from "@/composables/useAuth";
-import { LEGACY_REDIRECTS, SECTION_INDEXES } from "@/config/navigation";
+import { LEGACY_REDIRECTS, packagePath, SECTION_INDEXES } from "@/config/navigation";
 
 const OIDC_STATE_KEY = "oidc_state";
 
@@ -187,7 +187,7 @@ function handleCatalogPath(to: RouteLocationNormalized): RouteLocationRaw | null
     if (!registry || !name) return { path: "/packages" };
     const { registry: _r, name: _n, ...rest } = to.query;
     return {
-      path: `/packages/${encodeURIComponent(registry)}/${encodeURIComponent(name)}`,
+      path: packagePath(registry, name),
       query: rest,
       hash: to.hash,
     };

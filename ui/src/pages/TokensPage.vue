@@ -288,16 +288,12 @@ const lifetimePresets = [7, 30, 90];
         <CardDescription>{{ t("tokensPage.tokensThatHaveNot") }}</CardDescription>
       </CardHeader>
       <CardContent>
-        <AsyncState :loading="loading" :error="error" :empty="!tokens?.length">
-          <template #empty>
-            <div class="py-12 text-center space-y-2">
-              <Key class="h-8 w-8 mx-auto text-muted-foreground/50" />
-              <p class="text-sm text-muted-foreground">
-                {{ t("tokensPage.noActiveTokensCreate") }}
-              </p>
-            </div>
-          </template>
-
+        <AsyncState
+          :loading="loading"
+          :error="error"
+          :empty="!tokens?.length"
+          :empty-message="t('tokensPage.noActiveTokensCreate')"
+        >
           <Table>
             <TableHeader>
               <TableRow>

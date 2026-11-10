@@ -56,10 +56,19 @@ const listing = (items: unknown[]) => ({
   data: { items, total: items.length, page: 0, per_page: 1000 },
 });
 
+/** radix `Select`, stubbed native so the registry filter can be picked with `setValue`. */
+const SelectStub = {
+  props: ["modelValue", "options", "id"],
+  emits: ["update:modelValue"],
+  template: `<select :id="id" :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+    <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
+  </select>`,
+};
+
 async function mountPage() {
   const wrapper = mount(AdminPackages, {
     attachTo: document.body,
-    global: { stubs: { SectionTabs: true } },
+    global: { stubs: { SectionTabs: true, Select: SelectStub } },
   });
   await flushPromises();
   return wrapper;
@@ -254,9 +263,9 @@ describe("AdminPackages", () => {
   it("asks the server for the filtered set instead of capping a page", async () => {
     const wrapper = await mountPage();
 
-    await wrapper.find("select").setValue("npm");
+    await wrapper.find("#ap-registry").setValue("npm");
     await flushPromises();
-    await wrapper.find('input[type="checkbox"][class*="h-3.5"]').setValue(true);
+    await wrapper.find("#ap-blocked").trigger("click");
     await flushPromises();
 
     expect(mocks.listPackages).toHaveBeenLastCalledWith({

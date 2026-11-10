@@ -168,7 +168,7 @@ onMounted(() => void loadImports());
 
       <Card>
         <CardContent class="p-0">
-          <Table>
+          <Table :label="t('adminImports.releaseImports')">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t("adminImports.registry") }}</TableHead>

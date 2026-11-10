@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { packagePath } from "@/config/navigation";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
@@ -61,7 +62,7 @@ function viewArtifact(v: PackageVersionDetail) {
   /* One canonical package URL; the version and artifact stay as query, since
      they select *within* a package rather than name a different one. */
   router.push({
-    path: `/packages/${encodeURIComponent(props.registry)}/${encodeURIComponent(props.name)}`,
+    path: packagePath(props.registry, props.name),
     query: {
       version: v.version,
       ...(v.artifact ? { artifact: v.artifact } : {}),

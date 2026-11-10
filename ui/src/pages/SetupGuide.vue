@@ -204,16 +204,11 @@ async function copy(key: string, text: string) {
       variant="poster"
     />
 
-    <!-- Loading state -->
-    <output v-if="loading" class="block text-sm text-muted-foreground">
-      {{ t("setupGuide.loadingRegistries") }}
-    </output>
-
     <!-- A failed list said nothing at all: the page fell through to its
          tabs with no registry in them and left a lone `.netrc` tab. -->
     <AsyncState
-      v-else-if="error"
-      :loading="false"
+      v-if="loading || error"
+      :loading="loading"
       :error="error"
       :title="t('setupGuide.registriesCouldNotLoad')"
       :on-retry="reload"

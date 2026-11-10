@@ -169,7 +169,9 @@ const displayFits = computed(() => greeting.value.length <= 24);
            no quota and no pull history attached to nobody, and rendering an
            empty one would invite them to read it as "you have none"
            (RFC 0004 §4.2). -->
-      <template v-if="isAuthenticated">
+      <!-- Not after the registry list failed: that is the API itself not
+           answering, and three more panels saying so added nothing but noise. -->
+      <template v-if="isAuthenticated && !error">
         <QuotaWidget />
         <!-- Before advisories: "what did I pull" is the ordinary question and
              is always answerable, where "is any of it known-bad" is silent

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { computed } from "vue";
-import { Users, User, Shield, KeyRound } from "@lucide/vue";
+import { Users, User, KeyRound } from "@lucide/vue";
 import { useAuth } from "@/composables/useAuth";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
 import { roleLabel } from "@/lib/roles";
@@ -90,11 +91,11 @@ function roleVariant(role: string) {
 
       <CardContent>
         <!-- No groups -->
-        <div v-if="!parsedGroups.length" class="py-8 text-center space-y-2">
-          <Shield class="h-8 w-8 mx-auto text-muted-foreground/50" />
-          <p class="text-sm text-muted-foreground">{{ t("myProfile.noGroupsAssignedTo") }}</p>
-          <p class="text-xs text-muted-foreground">{{ t("myProfile.groupsArePopulatedWhen") }}</p>
-        </div>
+        <EmptyState
+          v-if="!parsedGroups.length"
+          :title="t('myProfile.noGroupsAssignedTo')"
+          :description="t('myProfile.groupsArePopulatedWhen')"
+        />
 
         <!-- Group list -->
         <ul v-else class="space-y-2">

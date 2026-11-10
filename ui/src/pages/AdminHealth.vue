@@ -343,7 +343,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                 v-if="expandedErrors.has(reg.registry) && reg.recent_errors.length > 0"
                 class="mt-2 rounded-sm border overflow-x-auto"
               >
-                <Table>
+                <Table :label="t('adminHealth.errorsIn24h', reg.recent_errors.length)">
                   <TableHeader>
                     <TableRow>
                       <TableHead class="text-xs"> {{ t("common.when") }} </TableHead>

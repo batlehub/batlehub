@@ -65,7 +65,21 @@ function serve(listing: unknown, recheck?: unknown, status = 200) {
 }
 
 async function mountPage() {
-  const wrapper = mount(AdminUpstream, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AdminUpstream, {
+    global: {
+      stubs: {
+        SectionTabs: true,
+        // radix `Select`, stubbed native so a filter can be picked with `setValue`.
+        Select: {
+          props: ["modelValue", "options", "id"],
+          emits: ["update:modelValue"],
+          template: `<select :id="id" :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+            <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>`,
+        },
+      },
+    },
+  });
   await flushPromises();
   return wrapper;
 }
@@ -127,7 +141,7 @@ describe("AdminUpstream", () => {
 
   it("filters are sent to the API", async () => {
     const w = await mountPage();
-    await w.find('[data-testid="upstream-state-filter"]').setValue("disappeared");
+    await w.find("#upstream-state-filter").setValue("disappeared");
     await flushPromises();
     const urls = authFetchMock.mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("state=disappeared"))).toBe(true);

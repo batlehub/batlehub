@@ -20,6 +20,12 @@ const props = defineProps<{
   options: { value: string; label: string }[];
   class?: string;
   id?: string;
+  /**
+   * Declared so it reaches the trigger. As a fallthrough attribute it landed on
+   * radix's hidden native `<select>` (`aria-hidden`), and the combobox a reader
+   * actually focuses had no name at all.
+   */
+  ariaLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -57,6 +63,7 @@ function onUpdate(value: string) {
   <SelectRoot :model-value="selected" @update:model-value="onUpdate($event as string)">
     <SelectTrigger
       :id="id"
+      :aria-label="ariaLabel"
       :class="
         cn(
           'flex h-9 w-full items-center justify-between border border-border bg-ground-sunk px-3 py-2 font-mono text-sm placeholder:text-muted-foreground data-[state=open]:border-primary disabled:cursor-not-allowed disabled:opacity-50',

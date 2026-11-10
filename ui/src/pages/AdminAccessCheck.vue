@@ -9,6 +9,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { SECURITY_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Select } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import {
@@ -156,9 +157,6 @@ async function simulate() {
       <div class="grid grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-registry" class="text-sm font-medium">{{ t("common.registry") }}</label>
-          <!-- Was a bare `<input>` with hand-rolled border classes rather than
-               the `Input` primitive, so it inherited nothing the system does
-               next. It is a closed set either way. -->
           <Select
             id="aac-registry"
             v-model="registry"
@@ -196,13 +194,11 @@ async function simulate() {
           <label for="aac-resource-type" class="text-sm font-medium">{{
             t("adminAccessCheck.resourceType")
           }}</label>
-          <select
+          <Select
             id="aac-resource-type"
             v-model="resourceType"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          >
-            <option v-for="rt in RESOURCE_TYPES" :key="rt" :value="rt">{{ rt }}</option>
-          </select>
+            :options="RESOURCE_TYPES.map((rt) => ({ value: rt, label: rt }))"
+          />
         </div>
       </div>
 
@@ -215,15 +211,11 @@ async function simulate() {
       <div class="grid grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-role" class="text-sm font-medium">{{ t("common.role") }}</label>
-          <select
+          <Select
             id="aac-role"
             v-model="role"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          >
-            <option value="anonymous">anonymous</option>
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
+            :options="['anonymous', 'user', 'admin'].map((r) => ({ value: r, label: r }))"
+          />
         </div>
         <div class="space-y-1">
           <label for="aac-user-id" class="text-sm font-medium"
@@ -248,11 +240,10 @@ async function simulate() {
               t("adminAccessCheck.commaSeparated")
             }}</span></label
           >
-          <input
+          <Input
             id="aac-groups"
             v-model="groups"
             :placeholder="t('adminAccessCheck.oidc1TeamATeam')"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
           />
         </div>
         <!--
@@ -266,12 +257,7 @@ async function simulate() {
             >{{ t("adminAccessCheck.clientIp") }}
             <span class="text-muted-foreground">{{ t("adminAccessCheck.optional") }}</span></label
           >
-          <input
-            id="aac-client-ip"
-            v-model="clientIp"
-            placeholder="10.0.0.7"
-            class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-          />
+          <Input id="aac-client-ip" v-model="clientIp" placeholder="10.0.0.7" />
           <p class="text-xs text-muted-foreground">
             {{ t("adminAccessCheck.clientIpHelp") }}
           </p>
