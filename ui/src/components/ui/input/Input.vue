@@ -69,7 +69,7 @@ const fallbackLabel = computed(() => {
     :value="modelValue"
     :class="
       cn(
-        'flex h-9 w-full rounded-sm border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 file:border-0 file:bg-transparent file:text-sm file:font-medium',
+        'flex h-9 w-full border border-border bg-ground-sunk px-3 py-2 font-mono text-sm focus-visible:border-primary placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 file:border-0 file:bg-transparent file:text-sm file:font-medium',
         props.class,
       )
     "

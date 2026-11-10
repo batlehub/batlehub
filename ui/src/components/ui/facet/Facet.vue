@@ -45,7 +45,7 @@ const formatCount = (count: number): string => new Intl.NumberFormat().format(co
  * in the row — because in a horizontal strip a left border reads as a divider
  * between neighbours rather than as a mark on the chosen one. What does *not*
  * change is that selection rides on ink and a 1px edge: at this palette's
- * lightness a fill step measures ~1.06:1 against the ground, so `bg-secondary`
+ * lightness a fill step measures ~1.06:1 against the ground, so `bg-ground-raised`
  * stays a secondary cue in both orientations (The Undependable Fill Rule).
  *
  * Held as one string rather than repeated on both buttons: the "all" option and
@@ -53,11 +53,11 @@ const formatCount = (count: number): string => new Intl.NumberFormat().format(co
  * notices until one of them stops looking selected.
  */
 const CELL =
-  "flex w-auto shrink-0 items-baseline gap-2 whitespace-nowrap border-b-2 px-3 py-1.5 text-left text-sm transition-colors md:w-full md:shrink md:whitespace-normal md:border-b-0 md:border-l";
+  "flex w-auto shrink-0 items-baseline gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-left text-sm transition-colors md:w-full md:shrink md:whitespace-normal md:border-b-0 md:border-l";
 
 function cellState(active: boolean): string {
   return active
-    ? "border-b-primary bg-secondary font-semibold text-foreground md:border-l-primary"
+    ? "border-b-primary bg-ground-raised font-semibold text-foreground md:border-l-primary"
     : "border-b-transparent text-muted-foreground hover:text-foreground md:border-l-transparent";
 }
 </script>

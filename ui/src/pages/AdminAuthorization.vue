@@ -36,6 +36,18 @@ import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/useSuggestions";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { AsyncState } from "@/components/ui/async-state";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -224,113 +236,106 @@ onMounted(async () => {
          First, and the only panel that can be *currently wrong*: a shadowed
          node serves what the model refuses. -->
     <section class="space-y-3" data-testid="panel-shadow">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.shadowTitle") }}
       </h2>
-      <p v-if="shadowError" class="text-sm text-destructive">{{ shadowError }}</p>
-      <p
-        v-else-if="shadowReport?.no_shadow_configured"
-        class="rounded-sm border border-border bg-muted/30 p-3 text-sm"
+      <!-- "No shadow" and "a quiet shadow" share the empty panel and not its
+           words: they mean opposite things. -->
+      <AsyncState
+        :loading="false"
+        :error="shadowError"
+        :empty="!shadowReport?.by_node?.length"
+        :empty-message="
+          shadowReport?.no_shadow_configured
+            ? t('adminAuthorization.shadowNoneConfigured')
+            : t('adminAuthorization.shadowQuiet')
+        "
+        :on-retry="loadShadow"
       >
-        {{ t("adminAuthorization.shadowNoneConfigured") }}
-      </p>
-      <p
-        v-else-if="!shadowReport?.by_node?.length"
-        class="rounded-sm border border-border bg-muted/30 p-3 text-sm"
-      >
-        {{ t("adminAuthorization.shadowQuiet") }}
-      </p>
-      <div v-else class="space-y-2">
-        <p class="rounded-sm border border-destructive/40 bg-destructive/10 p-3 text-sm">
-          {{ t("adminAuthorization.shadowWarning") }}
-        </p>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead class="text-left text-xs uppercase text-muted-foreground">
-              <tr>
-                <th class="py-1 pr-4">{{ t("adminAuthorization.node") }}</th>
-                <th class="py-1 pr-4">{{ t("adminAuthorization.until") }}</th>
-                <th class="py-1 pr-4">{{ t("adminAuthorization.served") }}</th>
-                <th class="py-1 pr-4">{{ t("adminAuthorization.missingVerbs") }}</th>
-                <th class="py-1">{{ t("adminAuthorization.subjects") }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in shadowReport.by_node"
-                :key="row.node"
-                class="border-t border-border"
-              >
-                <td class="py-1 pr-4 font-mono text-xs">{{ row.node }}</td>
-                <td class="py-1 pr-4">{{ row.shadow_until }}</td>
-                <td class="py-1 pr-4 tabular-nums">{{ row.count }}</td>
-                <td class="py-1 pr-4 font-mono text-xs">{{ row.actions.join(", ") }}</td>
-                <td class="py-1 font-mono text-xs">{{ row.subjects.join(", ") }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="space-y-2">
+          <Alert variant="destructive">{{ t("adminAuthorization.shadowWarning") }}</Alert>
+          <Table :label="t('adminAuthorization.shadowTitle')">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t("adminAuthorization.node") }}</TableHead>
+                <TableHead>{{ t("adminAuthorization.until") }}</TableHead>
+                <TableHead class="text-right">{{ t("adminAuthorization.served") }}</TableHead>
+                <TableHead>{{ t("adminAuthorization.missingVerbs") }}</TableHead>
+                <TableHead>{{ t("adminAuthorization.subjects") }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="row in shadowReport?.by_node" :key="row.node">
+                <TableCell class="font-mono text-xs">{{ row.node }}</TableCell>
+                <TableCell>{{ row.shadow_until }}</TableCell>
+                <TableCell class="text-right tabular-nums">{{ row.count }}</TableCell>
+                <TableCell class="font-mono text-xs">{{ row.actions.join(", ") }}</TableCell>
+                <TableCell class="font-mono text-xs">{{ row.subjects.join(", ") }}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
         </div>
-      </div>
+      </AsyncState>
     </section>
 
     <!-- ── Exemptions ───────────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-exemptions">
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
           {{ t("adminAuthorization.exemptionsTitle") }}
         </h2>
-        <label class="flex items-center gap-2 text-sm">
-          <input v-model="selfApprovedOnly" type="checkbox" />
-          {{ t("adminAuthorization.selfApprovedOnly") }}
-        </label>
+        <div class="flex items-center gap-2">
+          <Switch id="az-self-approved" v-model="selfApprovedOnly" />
+          <Label for="az-self-approved">{{ t("adminAuthorization.selfApprovedOnly") }}</Label>
+        </div>
       </div>
-      <p v-if="exemptionsError" class="text-sm text-destructive">{{ exemptionsError }}</p>
-      <p v-else-if="!registry" class="text-sm text-muted-foreground">
-        {{ t("adminAuthorization.exemptionsNeedRegistry") }}
-      </p>
-      <p
-        v-else-if="!shownExemptions.length"
-        class="rounded-sm border border-border bg-muted/30 p-3 text-sm"
+      <AsyncState
+        :loading="false"
+        :error="exemptionsError"
+        :empty="!registry || !shownExemptions.length"
+        :empty-message="
+          registry
+            ? t('adminAuthorization.exemptionsNone')
+            : t('adminAuthorization.exemptionsNeedRegistry')
+        "
+        :on-retry="loadExemptions"
       >
-        {{ t("adminAuthorization.exemptionsNone") }}
-      </p>
-      <div v-else class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="text-left text-xs uppercase text-muted-foreground">
-            <tr>
-              <th class="py-1 pr-4">{{ t("common.package") }}</th>
-              <th class="py-1 pr-4">{{ t("common.version") }}</th>
-              <th class="py-1 pr-4">{{ t("adminAuthorization.gate") }}</th>
-              <th class="py-1 pr-4">{{ t("adminAuthorization.until") }}</th>
-              <th class="py-1">{{ t("adminAuthorization.reason") }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(e, i) in shownExemptions" :key="i" class="border-t border-border">
-              <td class="py-1 pr-4 font-mono text-xs">{{ e.package }}</td>
-              <td class="py-1 pr-4 font-mono text-xs">{{ e.version }}</td>
-              <td class="py-1 pr-4 font-mono text-xs">{{ e.gate }}</td>
-              <td class="py-1 pr-4">
+        <Table :label="t('adminAuthorization.exemptionsTitle')">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t("common.package") }}</TableHead>
+              <TableHead>{{ t("common.version") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.gate") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.until") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.reason") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="(e, i) in shownExemptions" :key="i">
+              <TableCell class="font-mono text-xs">{{ e.package }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ e.version }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ e.gate }}</TableCell>
+              <TableCell>
                 {{ e.exempt_until }}
                 <span v-if="e.expired" class="ml-1 text-xs text-muted-foreground">{{
                   t("adminAuthorization.expired")
                 }}</span>
-              </td>
-              <td class="py-1">
+              </TableCell>
+              <TableCell>
                 {{ e.reason }}
                 <span v-if="e.self_approved" class="ml-2 text-xs text-copper">{{
                   t("adminAuthorization.selfApproved")
                 }}</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </AsyncState>
     </section>
 
     <!-- ── Explain ──────────────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-explain">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.explainTitle") }}
       </h2>
 
@@ -350,13 +355,11 @@ onMounted(async () => {
             <label for="az-action" class="text-sm font-medium">{{
               t("adminAuthorization.verb")
             }}</label>
-            <select
+            <Select
               id="az-action"
               v-model="action"
-              class="w-full rounded-sm border border-border bg-background px-3 py-1.5 text-sm"
-            >
-              <option v-for="a in ACTIONS" :key="a" :value="a">{{ a }}</option>
-            </select>
+              :options="ACTIONS.map((a) => ({ value: a, label: a }))"
+            />
           </div>
           <div class="space-y-1">
             <label for="az-subject" class="text-sm font-medium">{{
@@ -418,40 +421,34 @@ onMounted(async () => {
         <!-- §4.7, and the thing an operator must not miss: under shadow-mode the
              grants refuse and the server serves anyway. A `DENY` read without
              this is the opposite of what happens. -->
-        <p
-          v-if="explained.shadowed_by"
-          class="rounded-sm border border-destructive/40 bg-destructive/10 p-3 text-sm"
-          data-testid="explain-shadow-note"
-        >
+        <Alert v-if="explained.shadowed_by" variant="destructive" data-testid="explain-shadow-note">
           {{
             t("adminAuthorization.explainShadowed", {
               node: explained.shadowed_by.node,
               until: explained.shadowed_by.until,
             })
           }}
-        </p>
+        </Alert>
 
-        <div v-if="explained.resolved.length" class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead class="text-left text-xs uppercase text-muted-foreground">
-              <tr>
-                <!-- `Granted by` is the point: a resolved set without provenance
-                     says what a subject holds; the tier says which line to
-                     edit. -->
-                <th class="py-1 pr-4">{{ t("adminAuthorization.verb") }}</th>
-                <th class="py-1 pr-4">{{ t("adminAuthorization.grantedBy") }}</th>
-                <th class="py-1">{{ t("adminAuthorization.matchedSubject") }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(v, i) in explained.resolved" :key="i" class="border-t border-border">
-                <td class="py-1 pr-4 font-mono text-xs">{{ v.action }}</td>
-                <td class="py-1 pr-4 font-mono text-xs">{{ v.granted_by }}</td>
-                <td class="py-1 font-mono text-xs">{{ v.subject }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <Table v-if="explained.resolved.length" :label="t('adminAuthorization.explainTitle')">
+          <TableHeader>
+            <TableRow>
+              <!-- `Granted by` is the point: a resolved set without provenance
+                   says what a subject holds; the tier says which line to
+                   edit. -->
+              <TableHead>{{ t("adminAuthorization.verb") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.grantedBy") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.matchedSubject") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="(v, i) in explained.resolved" :key="i">
+              <TableCell class="font-mono text-xs">{{ v.action }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ v.granted_by }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ v.subject }}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
         <p v-else class="text-sm text-muted-foreground">
           {{ t("adminAuthorization.noVerbsResolved") }}
         </p>
@@ -498,7 +495,7 @@ onMounted(async () => {
              this" and "nothing I looked at denies this". -->
         <details class="text-xs text-muted-foreground">
           <summary class="cursor-pointer">{{ t("adminAuthorization.notCovered") }}</summary>
-          <ul class="mt-1 list-disc pl-5">
+          <ul class="mt-1 list-disc pl-6">
             <li v-for="(layer, i) in explained.not_covered" :key="i">{{ layer }}</li>
           </ul>
         </details>
@@ -507,36 +504,35 @@ onMounted(async () => {
 
     <!-- ── Recent denials ───────────────────────────────────────────────── -->
     <section class="space-y-3" data-testid="panel-denials">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.denialsTitle") }}
       </h2>
-      <p v-if="denialsError" class="text-sm text-destructive">{{ denialsError }}</p>
-      <p
-        v-else-if="!denials.length"
-        class="rounded-sm border border-border bg-muted/30 p-3 text-sm"
+      <AsyncState
+        :loading="false"
+        :error="denialsError"
+        :empty="!denials.length"
+        :empty-message="t('adminAuthorization.denialsNone')"
+        :on-retry="loadDenials"
       >
-        {{ t("adminAuthorization.denialsNone") }}
-      </p>
-      <div v-else class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="text-left text-xs uppercase text-muted-foreground">
-            <tr>
-              <th class="py-1 pr-4">{{ t("adminAuthorization.when") }}</th>
-              <th class="py-1 pr-4">{{ t("adminAuthorization.subject") }}</th>
-              <th class="py-1 pr-4">{{ t("adminAuthorization.coordinate") }}</th>
-              <th class="py-1">{{ t("adminAuthorization.reason") }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(d, i) in denials" :key="i" class="border-t border-border">
-              <td class="py-1 pr-4 text-xs">{{ d.timestamp }}</td>
-              <td class="py-1 pr-4 font-mono text-xs">{{ d.user_id ?? "-" }}</td>
-              <td class="py-1 pr-4 font-mono text-xs">{{ d.package_id ?? "-" }}</td>
-              <td class="py-1 text-xs">{{ d.reason ?? "-" }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+        <Table :label="t('adminAuthorization.denialsTitle')">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t("adminAuthorization.when") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.subject") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.coordinate") }}</TableHead>
+              <TableHead>{{ t("adminAuthorization.reason") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="(d, i) in denials" :key="i">
+              <TableCell class="text-xs">{{ d.timestamp }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ d.user_id ?? "-" }}</TableCell>
+              <TableCell class="font-mono text-xs">{{ d.package_id ?? "-" }}</TableCell>
+              <TableCell class="text-xs">{{ d.reason ?? "-" }}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </AsyncState>
     </section>
 
     <!-- ── Retention ────────────────────────────────────────────────────────
@@ -546,7 +542,7 @@ onMounted(async () => {
          page is that the destructive direction is not out of sight, which the
          pointer serves. -->
     <section class="space-y-2" data-testid="panel-retention">
-      <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {{ t("adminAuthorization.retentionTitle") }}
       </h2>
       <p class="text-sm text-muted-foreground">

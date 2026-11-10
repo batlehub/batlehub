@@ -74,7 +74,7 @@ const {
           <TableRow v-for="m in members" :key="m.principal_type + ':' + m.principal_id">
             <TableCell>
               <Badge
-                :variant="m.principal_type === 'user' ? 'default' : 'secondary'"
+                :variant="m.principal_type === 'user' ? 'known' : 'secondary'"
                 class="text-xs capitalize"
               >
                 {{ m.principal_type }}

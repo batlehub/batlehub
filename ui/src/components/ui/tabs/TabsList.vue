@@ -11,7 +11,10 @@ const props = defineProps<TabsListProps & { class?: HTMLAttributes["class"] }>()
     v-bind="props"
     :class="
       cn(
-        'inline-flex h-9 items-center justify-center rounded-sm bg-secondary p-0.5 text-muted-foreground border border-border/50',
+        // One frame, 1px dividers, no gap (DESIGN.md's choice-set grammar). The
+        // frame is split between list (left/top) and cells (right/bottom) so it
+        // stays 1px everywhere when the cells wrap onto a second line.
+        'inline-flex flex-wrap items-stretch border-l border-t border-border text-muted-foreground',
         props.class,
       )
     "

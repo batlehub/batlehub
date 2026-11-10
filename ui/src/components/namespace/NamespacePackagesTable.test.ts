@@ -85,9 +85,13 @@ describe("NamespacePackagesTable", () => {
     const rows = wrapper.findAll("tbody tr");
     expect(rows).toHaveLength(4);
     expect(rows[1].text()).toContain("(yanked)");
-    expect(rows[1].classes()).toContain("opacity-50");
-    expect(rows[0].classes()).not.toContain("opacity-50");
-    expect(rows[2].html()).toContain("border-primary");
+    // The yank is a state (matrix + word), not a half-opacity row.
+    expect(rows[1].find('[data-state="yanked"]').exists()).toBe(true);
+    expect(rows[0].find('[data-state="yanked"]').exists()).toBe(false);
+    expect(rows[1].classes()).not.toContain("opacity-50");
+    // A visibility is a neutral fact: crimson is for refusals, not for "team".
+    expect(rows[2].text()).toContain("team");
+    expect(rows[2].html()).not.toContain("border-primary");
     expect(listMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { registry: "npm", prefix: "@acme" },

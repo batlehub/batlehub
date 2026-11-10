@@ -37,11 +37,11 @@ function isActive(to: string) {
    segment and the mobile stack cannot drift into two different typographies. */
 const CELL = "text-xs uppercase tracking-[0.1em] transition-colors";
 
-function cellInk(to: string, active: boolean) {
+function cellInk(_to: string, active: boolean) {
   if (active) return "bg-foreground text-background font-bold";
-  return to === "/admin"
-    ? "text-copper hover:text-foreground"
-    : "text-muted-foreground hover:text-foreground";
+  // Admin was copper, which means *waiting or held*; its place in the bar
+  // already marks it out.
+  return "text-muted-foreground hover:text-foreground";
 }
 </script>
 
@@ -78,7 +78,7 @@ function cellInk(to: string, active: boolean) {
       :key="link.to"
       :to="link.to"
       :aria-current="isActive(link.to) ? 'page' : undefined"
-      :class="[CELL, 'block px-3 py-2.5', cellInk(link.to, isActive(link.to))]"
+      :class="[CELL, 'block px-3 py-2', cellInk(link.to, isActive(link.to))]"
       @click="emit('navigate')"
     >
       {{ t(link.label) }}

@@ -6,6 +6,7 @@ import { useAdminCrudList } from "@/composables/useAdminCrudList";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { NAMESPACES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
+import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -97,7 +98,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     </PageHeader>
 
     <!-- Registry selector -->
-    <div class="space-y-1.5 max-w-xs">
+    <div class="space-y-2 max-w-xs">
       <Label for="team-ns-registry">{{ t("common.registry") }}</Label>
       <Select
         id="team-ns-registry"
@@ -111,7 +112,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     <Card>
       <CardHeader>
         <div class="flex items-center justify-between">
-          <CardTitle class="text-base">
+          <CardTitle>
             {{ t("adminTeamNamespaces.namespaceClaims") }}
             <span v-if="selectedRegistry" class="font-mono text-muted-foreground text-sm ml-1"
               >({{ selectedRegistry }})</span
@@ -128,72 +129,65 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
         </div>
       </CardHeader>
       <CardContent class="p-0">
-        <p v-if="namespacesError" class="p-4 text-sm text-destructive">
-          {{ namespacesError }}
-        </p>
-        <Table v-else>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{{ t("common.prefix") }}</TableHead>
-              <TableHead>{{ t("common.group") }}</TableHead>
-              <TableHead>{{ t("adminTeamNamespaces.claimedBy") }}</TableHead>
-              <!-- RFC 0004-bis A6. `count_packages_in_namespace` had been on
-                   the port since it was written, with the delete confirmation
-                   as its only caller — so this list showed a row per claim with
-                   no way to tell a namespace holding four hundred packages from
-                   an abandoned one, which is the question an operator opens
-                   this page with. -->
-              <TableHead class="text-right">{{ t("common.packages") }}</TableHead>
-              <TableHead class="text-right"> {{ t("common.actions") }} </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="ns in namespaces" :key="ns.registry + ':' + ns.prefix">
-              <TableCell class="font-mono text-sm">
-                {{ ns.prefix }}
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary" class="text-xs font-mono">
-                  {{ ns.group_id }}
-                </Badge>
-              </TableCell>
-              <TableCell class="text-sm text-muted-foreground">
-                {{ ns.claimed_by ?? "—" }}
-              </TableCell>
-              <TableCell class="text-right font-mono text-sm tabular-nums">
-                <!-- Zero is the answer that matters here, so it is rendered
-                     rather than blanked. -->
-                <span :class="ns.package_count === 0 ? 'text-muted-foreground' : ''">{{
-                  ns.package_count
-                }}</span>
-              </TableCell>
-              <TableCell class="text-right">
-                <Button variant="outline" size="sm" @click="releaseTarget = ns">
-                  {{ t("common.release") }}
-                </Button>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-        <p v-if="namespacesLoading" class="p-6 text-center text-sm text-muted-foreground">
-          {{ t("common.loading") }}
-        </p>
-        <!--
-          `&& !namespacesLoading`: the empty state rendered while the request was still
-          in flight, so an operator read "none for this registry", opened the
-          dialog and claimed something that already existed. Empty must mean
-          empty, not "we have not looked yet".
-        -->
-        <p
-          v-if="!namespacesError && !namespacesLoading && (!namespaces || namespaces.length === 0)"
-          class="p-6 text-sm text-muted-foreground text-center"
-        >
-          {{
+        <!-- Empty only once loaded: an empty state shown while the request was
+             in flight read as "none for this registry", and an operator added
+             something that already existed. -->
+        <AsyncState
+          :loading="namespacesLoading"
+          :error="namespacesError"
+          :empty="!namespaces?.length"
+          :empty-message="
             selectedRegistry
-              ? t("adminTeamNamespaces.noNamespaceClaimsForThis")
-              : t("adminTeamNamespaces.selectARegistryToView")
-          }}
-        </p>
+              ? t('adminTeamNamespaces.noNamespaceClaimsForThis')
+              : t('adminTeamNamespaces.selectARegistryToView')
+          "
+          :on-retry="reloadNamespaces"
+        >
+          <Table :label="t('adminTeamNamespaces.namespaceClaims')">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t("common.prefix") }}</TableHead>
+                <TableHead>{{ t("common.group") }}</TableHead>
+                <TableHead>{{ t("adminTeamNamespaces.claimedBy") }}</TableHead>
+                <!-- RFC 0004-bis A6. `count_packages_in_namespace` had been on
+                     the port since it was written, with the delete confirmation
+                     as its only caller — so this list showed a row per claim with
+                     no way to tell a namespace holding four hundred packages from
+                     an abandoned one, which is the question an operator opens
+                     this page with. -->
+                <TableHead class="text-right">{{ t("common.packages") }}</TableHead>
+                <TableHead class="text-right">{{ t("common.actions") }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="ns in namespaces" :key="ns.registry + ':' + ns.prefix">
+                <TableCell class="font-mono text-sm">
+                  {{ ns.prefix }}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary" class="text-xs font-mono">
+                    {{ ns.group_id }}
+                  </Badge>
+                </TableCell>
+                <TableCell class="text-sm text-muted-foreground">
+                  {{ ns.claimed_by ?? "—" }}
+                </TableCell>
+                <TableCell class="text-right font-mono text-sm tabular-nums">
+                  <!-- Zero is the answer that matters here, so it is rendered
+                       rather than blanked. -->
+                  <span :class="ns.package_count === 0 ? 'text-muted-foreground' : ''">{{
+                    ns.package_count
+                  }}</span>
+                </TableCell>
+                <TableCell class="text-right">
+                  <Button variant="outline" size="sm" @click="releaseTarget = ns">
+                    {{ t("common.release") }}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </AsyncState>
       </CardContent>
     </Card>
   </div>
@@ -220,7 +214,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
     </template>
     <div class="space-y-4">
       <div class="space-y-3">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-prefix">
             {{ t("adminTeamNamespaces.prefix") }} <span class="text-destructive">*</span>
           </Label>
@@ -236,7 +230,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
             </i18n-t>
           </p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-group-id">
             {{ t("adminTeamNamespaces.groupId") }} <span class="text-destructive">*</span>
           </Label>
@@ -250,7 +244,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
             {{ t("adminTeamNamespaces.mustMatchTheGroup") }}
           </p>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="team-ns-claimed-by">{{ t("adminTeamNamespaces.claimedBy") }}</Label>
           <!-- A8: identities this instance has actually seen. Typing a subject
                it has not seen is still allowed — a namespace can be claimed for

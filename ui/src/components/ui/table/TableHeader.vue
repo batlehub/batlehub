@@ -6,7 +6,14 @@ const props = defineProps<{ class?: HTMLAttributes["class"] }>();
 </script>
 
 <template>
-  <thead :class="cn('[&_tr]:border-b', props.class)">
+  <thead
+    :class="
+      cn(
+        '[&_tr]:border-b [&_tr]:border-solid [&_tr]:border-border [&_tr:hover]:bg-transparent',
+        props.class,
+      )
+    "
+  >
     <slot />
   </thead>
 </template>

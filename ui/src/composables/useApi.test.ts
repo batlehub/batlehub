@@ -17,6 +17,18 @@ describe("extractMessage", () => {
     expect(extractMessage(new Error("oops"))).toBe("oops");
   });
 
+  it("names an unreachable API instead of echoing the browser's network error", () => {
+    for (const raw of [
+      "Failed to fetch",
+      "NetworkError when attempting to fetch resource.",
+      "Load failed",
+    ]) {
+      expect(extractMessage(new TypeError(raw))).toMatch(/^The API is not answering/);
+    }
+    // A TypeError from our own code is not a network failure.
+    expect(extractMessage(new TypeError("x is undefined"))).toBe("x is undefined");
+  });
+
   it("extracts .message from a plain object", () => {
     expect(extractMessage({ message: "bad request" })).toBe("bad request");
   });

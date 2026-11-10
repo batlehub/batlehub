@@ -228,7 +228,7 @@ function onKeydown(event: KeyboardEvent) {
       :aria-describedby="disabled && disabledReason ? `${listId}-reason` : undefined"
       :class="
         cn(
-          'flex h-9 w-full rounded-sm border border-input bg-background px-3 py-1 text-sm transition-colors placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-9 w-full border border-border bg-ground-sunk px-3 py-1 font-mono text-sm transition-colors focus-visible:border-primary placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
           props.class,
         )
       "
@@ -264,7 +264,7 @@ function onKeydown(event: KeyboardEvent) {
       ref="listEl"
       role="listbox"
       :aria-label="placeholder || undefined"
-      class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto border border-border bg-background"
+      class="absolute z-50 mt-2 max-h-60 w-full overflow-y-auto border border-border bg-ground-sunk"
     >
       <p v-if="loading" class="px-3 py-2 text-xs text-muted-foreground">
         {{ t("combobox.searching") }}
@@ -287,8 +287,10 @@ function onKeydown(event: KeyboardEvent) {
           :key="opt.value"
           role="option"
           :aria-selected="i === activeIndex"
-          class="cursor-pointer px-3 py-1.5 text-sm"
-          :class="i === activeIndex ? 'bg-accent text-accent-foreground' : ''"
+          class="cursor-pointer px-3 py-2 text-sm"
+          :class="
+            i === activeIndex ? 'bg-accent text-foreground underline underline-offset-[3px]' : ''
+          "
           @mousedown.prevent="choose(i)"
           @mousemove="activeIndex = i"
         >
@@ -298,7 +300,7 @@ function onKeydown(event: KeyboardEvent) {
       </template>
 
       <!-- Where an opt-in upstream search goes. Never triggered by typing. -->
-      <div v-if="$slots.footer" class="border-t border-border px-3 py-1.5" @mousedown.prevent>
+      <div v-if="$slots.footer" class="border-t border-border px-3 py-2" @mousedown.prevent>
         <slot name="footer" />
       </div>
     </div>

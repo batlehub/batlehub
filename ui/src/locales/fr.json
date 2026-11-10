@@ -170,6 +170,7 @@
     "csvNotes": "La ligne d'en-tête est facultative. {artifact} peut rester vide pour les blocages au niveau version. {reason} n'est utilisé que pour les actions de blocage.",
     "defaultReason": "Motif par défaut",
     "doneSummary": "Terminé — {succeeded} réussis, {failed} échoués",
+    "failures": "Échecs",
     "nameRequired": "name est obligatoire",
     "noDataRows": "Aucune ligne de données trouvée.",
     "orPasteAbove": "ou collez ci-dessus",
@@ -220,7 +221,6 @@
     "hideDiff": "Masquer le diff",
     "hotReloadDisabled": "Le rechargement à chaud est désactivé sur cette instance ({flag}). Toute modification de configuration nécessite un redémarrage du serveur.",
     "limitsChanged": "limites modifiées",
-    "loading": "Chargement…",
     "maintenanceInProgress": "Maintenance en cours…",
     "noBannerCurrentlySet": "Aucun bandeau défini actuellement.",
     "noChangesRecordedYet": "Aucune modification enregistrée.",
@@ -243,6 +243,8 @@
     "setting": "Définition…",
     "showDiff": "Afficher le diff",
     "sourceLabel": "Source :",
+    "statusApplied": "Appliqué",
+    "statusRejected": "Rejeté",
     "thisInstance": "cette instance",
     "validWithWarnings": "Cette configuration est valide mais soulève {count} avertissement(s) :",
     "validate": "Valider",
@@ -377,8 +379,7 @@
     "unknownChannel": "Aucun canal nommé {name} n'est configuré. L'abonnement sera enregistré, mais rien ne sera envoyé tant qu'il n'existe pas.",
     "unknownEventTypes": "Cet abonnement porte des types d'événements que cette console ne connaît pas. Ils sont conservés tels quels sauf si vous les retirez.",
     "unsigned": "Non signé",
-    "update": "Mettre à jour",
-    "webhooksNotifications": "Webhooks et notifications"
+    "update": "Mettre à jour"
   },
   "adminPackages": {
     "allRegistries": "Tous les registres",
@@ -556,9 +557,6 @@
     "version": "BatleHub v{version}"
   },
   "appHeader": {
-    "myNamespace": "Mon namespace",
-    "myProfile": "Mon profil",
-    "myTokens": "Mes tokens",
     "signOut": "Se déconnecter"
   },
   "asyncState": {
@@ -577,7 +575,6 @@
     "exportFormat": "Format d'export",
     "filterByRegistry": "Registre…",
     "filterByUser": "Filtrer par utilisateur…",
-    "loading": "Chargement…",
     "noEventsMatchTheCurrent": "Aucun événement ne correspond aux filtres actuels.",
     "noEventsRecorded": "Aucun événement enregistré.",
     "purge": "Purger",
@@ -626,6 +623,7 @@
     "administration": "Administration",
     "apiError": "Erreur d'API",
     "apiNotJson": "L'API a renvoyé une réponse qui n'est pas du JSON. Vérifiez VITE_API_BASE_URL et que /api est bien routé vers le backend.",
+    "apiUnreachable": "L'API ne répond pas. Vérifiez que le serveur tourne et qu'il est joignable depuis ce navigateur.",
     "artifact": "Artefact",
     "block": "Bloquer",
     "blocked": "Bloqué",
@@ -719,7 +717,6 @@
     "unblock": "Débloquer",
     "unknown": "inconnu",
     "unknownError": "Erreur inconnue",
-    "upstream": "Upstream",
     "user": "Utilisateur",
     "valid": "Valide",
     "version": "Version",
@@ -853,7 +850,6 @@
   "myNamespace": {
     "browseNamespace": "Parcourir les paquets de {ns}",
     "chooseANamespaceTo": "Choisissez un espace de noms pour parcourir ses paquets.",
-    "loading": "Chargement…",
     "myNamespaces": "Mes namespaces",
     "publishANewPackage": "Publier un nouveau paquet dans l'un de vos registres.",
     "publishedVersionsUnderTheSelected": "Versions publiées sous le namespace sélectionné.",
@@ -881,7 +877,6 @@
   },
   "namespacePackagesTable": {
     "editVisibility": "Modifier la visibilité",
-    "loading": "Chargement…",
     "packageVisibility": "Visibilité du paquet",
     "publishedBy": "Publié par",
     "yanked": "(yanked)"
@@ -1154,7 +1149,6 @@
     "filterTools": "Filtrer les outils",
     "filterTools2": "Filtrer les outils…",
     "hideToken": "Masquer le jeton",
-    "loadingRegistries": "Chargement des registres…",
     "netrcHelp": "Identifiants pour les outils utilisant l'authentification HTTP Basic (curl, wget, …). À placer dans {file} et à protéger avec {chmod}.",
     "noRegistriesAreConfiguredOn": "Aucun registre n'est configuré sur cette instance, ou aucun accessible à votre compte. Tant qu'il n'en existe pas, aucun outil n'a d'URL vers laquelle pointer.",
     "nothingToConnectTo": "Rien à connecter pour l'instant",

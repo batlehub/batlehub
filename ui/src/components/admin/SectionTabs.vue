@@ -54,7 +54,7 @@ function go(to: string) {
       :to="tab.to"
       :aria-current="isActive(tab.to) ? 'page' : undefined"
       :class="[
-        'px-3 py-1.5 font-mono text-sm whitespace-nowrap border-b -mb-px',
+        'px-3 py-2 font-mono text-sm whitespace-nowrap border-b -mb-px',
         isActive(tab.to)
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground',

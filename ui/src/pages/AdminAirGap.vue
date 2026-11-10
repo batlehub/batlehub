@@ -8,6 +8,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { OPERATIONS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
+import { AsyncState } from "@/components/ui/async-state";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -135,132 +136,128 @@ onMounted(load);
     <SectionTabs :tabs="OPERATIONS_TABS" />
     <PageHeader :title="t('airGap.title')" variant="display" />
 
-    <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
-
-    <!-- The state of the instance, in one sentence: it decides how to read
+    <!-- Every panel below reads the one load: a failed load says so in place of
+         all of them, rather than above a page of empty tables. -->
+    <AsyncState :loading="loading" :error="error" :on-retry="load">
+      <div class="space-y-6">
+        <!-- The state of the instance, in one sentence: it decides how to read
          everything below. -->
-    <p class="text-sm text-muted-foreground" data-testid="air-gap-state">
-      {{ airGapped ? t("airGap.enabled") : t("airGap.disabled") }}
-    </p>
+        <p class="text-sm text-muted-foreground" data-testid="air-gap-state">
+          {{ airGapped ? t("airGap.enabled") : t("airGap.disabled") }}
+        </p>
 
-    <!-- A registry with nothing in it refuses every request. That is worth
+        <!-- A registry with nothing in it refuses every request. That is worth
          saying next to the state, not leaving to be inferred from a miss log
          that is empty for the opposite reason. -->
-    <p
-      v-if="emptyRegistries.length"
-      class="text-sm text-destructive"
-      data-testid="air-gap-empty-registries"
-    >
-      {{ t("airGap.emptyRegistries", { registries: emptyRegistries.join(", ") }) }}
-    </p>
-
-    <Card>
-      <CardHeader>
-        <CardTitle>{{ t("airGap.bundles") }}</CardTitle>
-      </CardHeader>
-      <CardContent class="space-y-3">
-        <p class="text-sm text-muted-foreground">{{ t("airGap.bundlesIntro") }}</p>
-        <Table v-if="bundles.length" data-testid="air-gap-bundles">
-          <TableHeader>
-            <TableRow>
-              <TableHead>{{ t("airGap.bundle") }}</TableHead>
-              <TableHead>{{ t("airGap.signer") }}</TableHead>
-              <TableHead>{{ t("airGap.imported") }}</TableHead>
-              <TableHead>{{ t("airGap.blobs") }}</TableHead>
-              <TableHead>{{ t("airGap.rejected") }}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="b in bundles" :key="b.bundle_id">
-              <TableCell class="font-mono text-xs">{{ b.bundle_id }}</TableCell>
-              <TableCell class="font-mono text-xs">{{ shortKey(b.signer_key) }}</TableCell>
-              <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                {{ formatDate(b.imported_at) }}
-                <span v-if="b.imported_by" class="text-muted-foreground">
-                  — {{ b.imported_by }}
-                </span>
-              </TableCell>
-              <TableCell class="tabular-nums">{{ b.blobs }} / {{ b.entries }}</TableCell>
-              <TableCell class="tabular-nums">
-                <span v-if="!b.rejected">—</span>
-                <span v-else class="text-destructive" :title="b.rejected_sample ?? undefined">
-                  {{ b.rejected }}
-                </span>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
         <p
-          v-else-if="!loading"
-          class="text-sm text-muted-foreground"
-          data-testid="air-gap-no-bundles"
+          v-if="emptyRegistries.length"
+          class="text-sm text-destructive"
+          data-testid="air-gap-empty-registries"
         >
-          {{ t("airGap.noBundles") }}
-        </p>
-      </CardContent>
-    </Card>
-
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          {{ t("airGap.missing") }}
-          <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-            >({{ total }})</span
-          >
-        </CardTitle>
-      </CardHeader>
-      <CardContent class="space-y-3">
-        <p class="text-sm text-muted-foreground">{{ t("airGap.missingIntro") }}</p>
-        <Table v-if="misses.length" data-testid="air-gap-missing">
-          <TableHeader>
-            <TableRow>
-              <TableHead>{{ t("common.registry") }}</TableHead>
-              <TableHead>{{ t("airGap.kind") }}</TableHead>
-              <TableHead>{{ t("airGap.key") }}</TableHead>
-              <TableHead>{{ t("airGap.requested") }}</TableHead>
-              <TableHead>{{ t("airGap.held") }}</TableHead>
-              <TableHead>{{ t("airGap.asked") }}</TableHead>
-              <TableHead>{{ t("airGap.lastSeen") }}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="m in misses" :key="`${m.registry}|${m.storage_key}`">
-              <TableCell class="font-mono text-sm">{{ m.registry }}</TableCell>
-              <TableCell>
-                <Badge :variant="kindVariant(m.kind)" class="text-xs">{{ m.kind }}</Badge>
-              </TableCell>
-              <TableCell class="font-mono text-xs">{{ m.storage_key }}</TableCell>
-              <TableCell class="font-mono text-xs" data-testid="air-gap-requested">
-                {{ m.requested_version ?? "—" }}
-              </TableCell>
-              <TableCell class="font-mono text-xs" data-testid="air-gap-held">
-                {{ m.held_versions?.length ? m.held_versions.join(", ") : "—" }}
-              </TableCell>
-              <TableCell class="tabular-nums">{{ m.count }}</TableCell>
-              <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                {{ formatDate(m.last_seen) }}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-        <p
-          v-else-if="!loading"
-          class="text-sm text-muted-foreground"
-          data-testid="air-gap-no-misses"
-        >
-          {{ airGapped ? t("airGap.noMisses") : t("airGap.noMissesConnected") }}
+          {{ t("airGap.emptyRegistries", { registries: emptyRegistries.join(", ") }) }}
         </p>
 
-        <button
-          v-if="misses.length"
-          type="button"
-          class="text-sm underline text-muted-foreground hover:text-foreground"
-          data-testid="air-gap-copy"
-          @click="copyMisses"
-        >
-          {{ copied ? t("airGap.copied") : t("airGap.copy") }}
-        </button>
-      </CardContent>
-    </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{{ t("airGap.bundles") }}</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <p class="text-sm text-muted-foreground">{{ t("airGap.bundlesIntro") }}</p>
+            <Table v-if="bundles.length" :label="t('airGap.bundles')" data-testid="air-gap-bundles">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{{ t("airGap.bundle") }}</TableHead>
+                  <TableHead>{{ t("airGap.signer") }}</TableHead>
+                  <TableHead>{{ t("airGap.imported") }}</TableHead>
+                  <TableHead>{{ t("airGap.blobs") }}</TableHead>
+                  <TableHead>{{ t("airGap.rejected") }}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="b in bundles" :key="b.bundle_id">
+                  <TableCell class="font-mono text-xs">{{ b.bundle_id }}</TableCell>
+                  <TableCell class="font-mono text-xs">{{ shortKey(b.signer_key) }}</TableCell>
+                  <TableCell class="whitespace-nowrap text-xs tabular-nums">
+                    {{ formatDate(b.imported_at) }}
+                    <span v-if="b.imported_by" class="text-muted-foreground">
+                      — {{ b.imported_by }}
+                    </span>
+                  </TableCell>
+                  <TableCell class="tabular-nums">{{ b.blobs }} / {{ b.entries }}</TableCell>
+                  <TableCell class="tabular-nums">
+                    <span v-if="!b.rejected">—</span>
+                    <span v-else class="text-destructive" :title="b.rejected_sample ?? undefined">
+                      {{ b.rejected }}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+            <p v-else class="text-sm text-muted-foreground" data-testid="air-gap-no-bundles">
+              {{ t("airGap.noBundles") }}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {{ t("airGap.missing") }}
+              <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
+                >({{ total }})</span
+              >
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <p class="text-sm text-muted-foreground">{{ t("airGap.missingIntro") }}</p>
+            <Table v-if="misses.length" :label="t('airGap.missing')" data-testid="air-gap-missing">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{{ t("common.registry") }}</TableHead>
+                  <TableHead>{{ t("airGap.kind") }}</TableHead>
+                  <TableHead>{{ t("airGap.key") }}</TableHead>
+                  <TableHead>{{ t("airGap.requested") }}</TableHead>
+                  <TableHead>{{ t("airGap.held") }}</TableHead>
+                  <TableHead>{{ t("airGap.asked") }}</TableHead>
+                  <TableHead>{{ t("airGap.lastSeen") }}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="m in misses" :key="`${m.registry}|${m.storage_key}`">
+                  <TableCell class="font-mono text-sm">{{ m.registry }}</TableCell>
+                  <TableCell>
+                    <Badge :variant="kindVariant(m.kind)" class="text-xs">{{ m.kind }}</Badge>
+                  </TableCell>
+                  <TableCell class="font-mono text-xs">{{ m.storage_key }}</TableCell>
+                  <TableCell class="font-mono text-xs" data-testid="air-gap-requested">
+                    {{ m.requested_version ?? "—" }}
+                  </TableCell>
+                  <TableCell class="font-mono text-xs" data-testid="air-gap-held">
+                    {{ m.held_versions?.length ? m.held_versions.join(", ") : "—" }}
+                  </TableCell>
+                  <TableCell class="tabular-nums">{{ m.count }}</TableCell>
+                  <TableCell class="whitespace-nowrap text-xs tabular-nums">
+                    {{ formatDate(m.last_seen) }}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+            <p v-else class="text-sm text-muted-foreground" data-testid="air-gap-no-misses">
+              {{ airGapped ? t("airGap.noMisses") : t("airGap.noMissesConnected") }}
+            </p>
+
+            <button
+              v-if="misses.length"
+              type="button"
+              class="text-sm underline text-muted-foreground hover:text-foreground"
+              data-testid="air-gap-copy"
+              @click="copyMisses"
+            >
+              {{ copied ? t("airGap.copied") : t("airGap.copy") }}
+            </button>
+          </CardContent>
+        </Card>
+      </div>
+    </AsyncState>
   </div>
 </template>

@@ -54,7 +54,8 @@ describe("FlagsPanel", () => {
     });
     const w = mount(FlagsPanel);
     await flushPromises();
-    expect(w.find('[data-testid="flags-empty"]').exists()).toBe(true);
+    expect(w.find('[data-testid="empty-state"]').exists()).toBe(true);
+    expect(w.find('[data-testid="flags-rows"]').exists()).toBe(false);
     await w.find('[data-testid="flags-include-dead"]').trigger("click");
     await flushPromises();
     expect(listFlags).toHaveBeenLastCalledWith(
@@ -97,6 +98,6 @@ describe("FlagsPanel", () => {
     });
     const w = mount(FlagsPanel);
     await flushPromises();
-    expect(w.find('[data-testid="flags-error"]').text()).toContain("flags:read");
+    expect(w.find('[role="alert"]').text()).toContain("flags:read");
   });
 });

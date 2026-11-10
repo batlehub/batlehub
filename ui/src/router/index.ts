@@ -6,7 +6,7 @@ import {
   type RouteLocationRaw,
 } from "vue-router";
 import { useAuth, storeTokens } from "@/composables/useAuth";
-import { LEGACY_REDIRECTS, SECTION_INDEXES } from "@/config/navigation";
+import { LEGACY_REDIRECTS, packagePath, SECTION_INDEXES } from "@/config/navigation";
 
 const OIDC_STATE_KEY = "oidc_state";
 
@@ -134,14 +134,17 @@ function checkMetaGuards(
   to: RouteLocationNormalized,
   {
     isAuthenticated,
-    identity,
     isAdmin,
-  }: Pick<AuthState, "isAuthenticated" | "identity" | "isAdmin">,
+    isOidcSession,
+  }: Pick<AuthState, "isAuthenticated" | "isAdmin" | "isOidcSession">,
 ): RouteLocationRaw | undefined {
   if (to.meta.requiresAuth && !isAuthenticated.value) {
     return { path: "/login", query: { redirect: to.fullPath } };
   }
-  if (to.meta.requiresOidcAuth && !identity.value?.auth_provider) {
+  if (to.meta.requiresOidcAuth && !isOidcSession.value) {
+    // Signed in, just not through OIDC: sending them to "Sign in" reads as
+    // being logged out. Their account hub is where the session does work.
+    if (isAuthenticated.value) return { path: "/me/profile" };
     return { path: "/login", query: { redirect: to.fullPath } };
   }
   if (to.meta.requiresAdmin && !isAdmin.value) {
@@ -184,7 +187,7 @@ function handleCatalogPath(to: RouteLocationNormalized): RouteLocationRaw | null
     if (!registry || !name) return { path: "/packages" };
     const { registry: _r, name: _n, ...rest } = to.query;
     return {
-      path: `/packages/${encodeURIComponent(registry)}/${encodeURIComponent(name)}`,
+      path: packagePath(registry, name),
       query: rest,
       hash: to.hash,
     };

@@ -180,7 +180,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
       <!-- RFC 0014 §4.6: the upstream audit, when this process runs it. -->
       <Card v-if="upstream" data-testid="upstream-card">
         <CardHeader class="pb-2">
-          <CardTitle class="text-base">{{ t("adminHealth.upstreamTitle") }}</CardTitle>
+          <CardTitle>{{ t("adminHealth.upstreamTitle") }}</CardTitle>
         </CardHeader>
         <CardContent class="flex flex-wrap items-center gap-3 text-sm">
           <Badge :variant="upstream.policy === 'block' ? 'destructive' : 'secondary'">
@@ -215,7 +215,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
         <Card v-for="reg in data" :key="reg.registry" class="flex min-w-0 flex-col">
           <CardHeader class="pb-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle class="min-w-0 text-base font-mono">
+              <CardTitle class="min-w-0 font-mono">
                 {{ reg.registry }}
               </CardTitle>
               <div class="flex flex-wrap items-center gap-2">
@@ -257,7 +257,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
             <!-- Stats row -->
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <!-- Packages -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
+              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
                 <p class="text-xs text-muted-foreground">{{ t("common.packages") }}</p>
                 <p class="text-xl font-semibold tabular-nums">
                   {{ formatCount(reg.package_count) }}
@@ -266,7 +266,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
               </div>
 
               <!-- Cache size -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
+              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
                 <p class="text-xs text-muted-foreground">{{ t("adminHealth.cacheSize") }}</p>
                 <p class="text-xl font-semibold">
                   {{ fmtBytes(reg.total_size_bytes ?? null) }}
@@ -277,7 +277,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
               </div>
 
               <!-- Last pull -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
+              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
                 <p class="text-xs text-muted-foreground">{{ t("adminHealth.lastPull") }}</p>
                 <p class="text-base font-semibold">
                   {{ fmtRelative(reg.last_pull_at ?? null) }}
@@ -288,18 +288,18 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
               </div>
 
               <!-- Pulls / hour -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
+              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
                 <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsHour") }}</p>
                 <p
                   class="text-xl font-semibold tabular-nums"
-                  :class="reg.pulls_last_hour > 0 ? 'text-primary' : 'text-muted-foreground'"
+                  :class="reg.pulls_last_hour > 0 ? 'text-foreground' : 'text-muted-foreground'"
                 >
                   {{ formatCount(reg.pulls_last_hour) }}
                 </p>
               </div>
 
               <!-- Pulls / day -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
+              <div class="rounded-sm border bg-muted/30 p-3 space-y-1">
                 <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsDay") }}</p>
                 <p class="text-xl font-semibold tabular-nums">
                   {{ formatCount(reg.pulls_last_day) }}
@@ -321,12 +321,12 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                      transition. -->
                 <span
                   v-if="reg.recent_errors.length === 0"
-                  class="flex items-center gap-1.5 text-muted-foreground"
+                  class="flex items-center gap-2 text-muted-foreground"
                 >
                   <span class="inline-block h-2 w-2 rounded-sm bg-muted-foreground" />
                   {{ t("adminHealth.noErrors24h") }}
                 </span>
-                <span v-else class="flex items-center gap-1.5 text-destructive">
+                <span v-else class="flex items-center gap-2 text-destructive">
                   <span class="inline-block h-2 w-2 rounded-sm bg-destructive" />
                   {{ t("adminHealth.errorsIn24h", reg.recent_errors.length) }}
                   <span class="text-muted-foreground text-xs ml-auto">
@@ -343,7 +343,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                 v-if="expandedErrors.has(reg.registry) && reg.recent_errors.length > 0"
                 class="mt-2 rounded-sm border overflow-x-auto"
               >
-                <Table>
+                <Table :label="t('adminHealth.errorsIn24h', reg.recent_errors.length)">
                   <TableHeader>
                     <TableRow>
                       <TableHead class="text-xs"> {{ t("common.when") }} </TableHead>
@@ -394,11 +394,11 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
             </div>
 
             <!-- Who has access -->
-            <div class="space-y-1.5">
+            <div class="space-y-2">
               <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 {{ t("adminHealth.whoHasAccess") }}
               </p>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="flex flex-wrap gap-2">
                 <Badge
                   v-for="role in reg.access.roles"
                   :key="role"

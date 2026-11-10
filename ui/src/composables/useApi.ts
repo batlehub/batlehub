@@ -15,10 +15,18 @@ import { i18n } from "@/i18n";
  */
 const t = (key: string) => i18n.global.t(key);
 
+/**
+ * `fetch` rejects with a TypeError whose text is the browser's own — "Failed to
+ * fetch", "NetworkError when attempting to fetch resource.", "Load failed" —
+ * English in every locale and naming nothing the reader can act on.
+ */
+const isNetworkFailure = (err: Error) =>
+  err instanceof TypeError && /fetch|network|load failed/i.test(err.message);
+
 export function extractMessage(err: unknown): string {
   if (err == null) return t("common.unknownError");
   if (typeof err === "string") return err;
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) return isNetworkFailure(err) ? t("common.apiUnreachable") : err.message;
   if (typeof err === "object") {
     const e = err as Record<string, unknown>;
     if (typeof e["message"] === "string") return e["message"];

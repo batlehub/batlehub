@@ -170,6 +170,7 @@
     "csvNotes": "Header row is optional. {artifact} may be left blank for version-level blocks. {reason} is used only for block actions.",
     "defaultReason": "Default reason",
     "doneSummary": "Done — {succeeded} succeeded, {failed} failed",
+    "failures": "Failures",
     "nameRequired": "name is required",
     "noDataRows": "No data rows found.",
     "orPasteAbove": "or paste above",
@@ -220,7 +221,6 @@
     "hideDiff": "Hide the diff",
     "hotReloadDisabled": "Hot reload is disabled on this instance ({flag}). Config changes require a server restart.",
     "limitsChanged": "limits changed",
-    "loading": "Loading…",
     "maintenanceInProgress": "Maintenance in progress…",
     "noBannerCurrentlySet": "No banner currently set.",
     "noChangesRecordedYet": "No changes recorded yet.",
@@ -243,6 +243,8 @@
     "setting": "Setting…",
     "showDiff": "Show the diff",
     "sourceLabel": "Source:",
+    "statusApplied": "Applied",
+    "statusRejected": "Rejected",
     "thisInstance": "this running instance",
     "validWithWarnings": "This config is valid but raises {count} warning(s):",
     "validate": "Validate",
@@ -377,8 +379,7 @@
     "unknownChannel": "No channel named {name} is configured. The subscription will save, but nothing will be dispatched until it exists.",
     "unknownEventTypes": "This subscription carries event types this console does not know. They are kept as-is unless you remove them.",
     "unsigned": "Unsigned",
-    "update": "Update",
-    "webhooksNotifications": "Webhooks & Notifications"
+    "update": "Update"
   },
   "adminPackages": {
     "allRegistries": "All registries",
@@ -556,9 +557,6 @@
     "version": "BatleHub v{version}"
   },
   "appHeader": {
-    "myNamespace": "My Namespace",
-    "myProfile": "My Profile",
-    "myTokens": "My Tokens",
     "signOut": "Sign out"
   },
   "asyncState": {
@@ -577,7 +575,6 @@
     "exportFormat": "Export format",
     "filterByRegistry": "Registry…",
     "filterByUser": "Filter by user…",
-    "loading": "Loading…",
     "noEventsMatchTheCurrent": "No events match the current filters.",
     "noEventsRecorded": "No events recorded yet.",
     "purge": "Purge",
@@ -626,6 +623,7 @@
     "administration": "Administration",
     "apiError": "API error",
     "apiNotJson": "The API returned a non-JSON response. Check VITE_API_BASE_URL and that /api is routed to the backend.",
+    "apiUnreachable": "The API is not answering. Check that the server is running and reachable from this browser.",
     "artifact": "Artifact",
     "block": "Block",
     "blocked": "Blocked",
@@ -719,7 +717,6 @@
     "unblock": "Unblock",
     "unknown": "unknown",
     "unknownError": "Unknown error",
-    "upstream": "Upstream",
     "user": "User",
     "valid": "Valid",
     "version": "Version",
@@ -853,7 +850,6 @@
   "myNamespace": {
     "browseNamespace": "Browse the packages of {ns}",
     "chooseANamespaceTo": "Choose a namespace to browse its packages.",
-    "loading": "Loading…",
     "myNamespaces": "My namespaces",
     "publishANewPackage": "Publish a new package to one of your registries.",
     "publishedVersionsUnderTheSelected": "Published versions under the selected namespace.",
@@ -881,7 +877,6 @@
   },
   "namespacePackagesTable": {
     "editVisibility": "Edit visibility",
-    "loading": "Loading…",
     "packageVisibility": "Package visibility",
     "publishedBy": "Published by",
     "yanked": "(yanked)"
@@ -1154,7 +1149,6 @@
     "filterTools": "Filter tools",
     "filterTools2": "Filter tools…",
     "hideToken": "Hide token",
-    "loadingRegistries": "Loading registries…",
     "netrcHelp": "Credentials for tools that use HTTP Basic Auth (curl, wget, …). Place in {file} and restrict permissions with {chmod}.",
     "noRegistriesAreConfiguredOn": "No registries are configured on this instance, or none that your account can reach. Until one exists there is no URL for a tool to point at.",
     "nothingToConnectTo": "Nothing to connect to yet",

@@ -25,17 +25,18 @@ vi.mock("@/composables/useAuth", () => ({
   }),
 }));
 
-vi.mock("@/client/sdk.gen", () => ({
-  listRegistries: () => Promise.resolve({ data: [{ name: "npm", mode: "proxy" }] }),
-}));
+const listRegistries = vi.fn(() =>
+  Promise.resolve({ data: [{ name: "npm", mode: "proxy" }] } as unknown),
+);
+vi.mock("@/client/sdk.gen", () => ({ listRegistries: () => listRegistries() }));
 
 import HomePage from "./HomePage.vue";
 
 const stubs = {
   RouterLink: { template: "<a><slot /></a>" },
-  AdvisoriesWidget: true,
-  QuotaWidget: true,
-  RecentPullsWidget: true,
+  AdvisoriesWidget: { template: "<section data-testid='widget' />" },
+  QuotaWidget: { template: "<section data-testid='widget' />" },
+  RecentPullsWidget: { template: "<section data-testid='widget' />" },
 };
 
 async function mountHome(userId: string) {
@@ -57,5 +58,19 @@ describe("HomePage", () => {
     expect(h1.text()).toContain("6f1d8c3e-2b7a-4f90-9d51-0a7c2e5b8f43");
     expect(h1.classes()).not.toContain("text-display");
     expect(h1.classes()).toContain("text-2xl");
+  });
+
+  it("says once that the API is not answering, not once per section", async () => {
+    listRegistries.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const w = await mountHome("alice");
+    expect(w.findAll('[role="alert"]')).toHaveLength(1);
+    expect(w.text()).toContain("The API is not answering");
+    expect(w.text()).not.toContain("Failed to fetch");
+    expect(w.findAll('[data-testid="widget"]')).toHaveLength(0);
+  });
+
+  it("shows the personal sections once the registry list loads", async () => {
+    const w = await mountHome("alice");
+    expect(w.findAll('[data-testid="widget"]')).toHaveLength(3);
   });
 });

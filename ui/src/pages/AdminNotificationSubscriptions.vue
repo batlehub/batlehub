@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { ref, computed, toRef } from "vue";
 import {
@@ -309,14 +310,12 @@ async function testSubscription(id: string) {
 
 <template>
   <div class="space-y-6">
+    <SectionTabs :tabs="NOTIFICATIONS_TABS" />
     <PageHeader
       variant="display"
-      :title="t('adminNotifications.webhooksNotifications')"
+      :title="t('adminNav.subscriptions')"
       :description="t('adminNotifications.manageOutboundNotificationSubscriptionsAnd')"
-    />
-
-    <SectionTabs :tabs="NOTIFICATIONS_TABS" />
-    <PageHeader variant="display" :title="t('adminNav.subscriptions')">
+    >
       <template #actions>
         <Button size="sm" @click="openCreate">{{ t("adminNotifications.newSubscription") }}</Button>
       </template>
@@ -326,7 +325,7 @@ async function testSubscription(id: string) {
       <AsyncState :loading="subsLoading && !subscriptions" :error="subsError">
         <Card>
           <CardContent class="p-0">
-            <Table>
+            <Table :label="t('adminNav.subscriptions')">
               <TableHeader>
                 <TableRow>
                   <TableHead>{{ t("common.registry") }}</TableHead>
@@ -376,7 +375,7 @@ async function testSubscription(id: string) {
                       <Button variant="outline" size="sm" @click="openEdit(sub)">{{
                         t("common.edit")
                       }}</Button>
-                      <Button variant="destructive" size="sm" @click="deleteTarget = sub.id">{{
+                      <Button variant="outline" size="sm" @click="deleteTarget = sub.id">{{
                         t("common.delete")
                       }}</Button>
                     </div>
@@ -419,7 +418,7 @@ async function testSubscription(id: string) {
     }}</template>
     <div class="space-y-4">
       <div class="space-y-3">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="notif-registry"
             >{{ t("common.registry") }}
             <span class="text-muted-foreground text-xs">{{
@@ -438,7 +437,7 @@ async function testSubscription(id: string) {
             class="font-mono"
           />
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="notif-package-name"
             >{{ t("adminNotifications.packageName") }}
             <span class="text-muted-foreground text-xs">{{
@@ -454,7 +453,7 @@ async function testSubscription(id: string) {
             class="font-mono"
           />
         </div>
-        <fieldset class="space-y-1.5 border-0 p-0 m-0">
+        <fieldset class="space-y-2 border-0 p-0 m-0">
           <legend
             class="font-mono text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-none"
           >
@@ -480,20 +479,20 @@ async function testSubscription(id: string) {
           <p v-if="unknownEventTypes.length" class="text-xs text-copper">
             {{ t("adminNotifications.unknownEventTypes") }}
           </p>
-          <div v-if="unknownEventTypes.length" class="flex flex-wrap gap-1.5">
+          <div v-if="unknownEventTypes.length" class="flex flex-wrap gap-2">
             <button
               v-for="et in unknownEventTypes"
               :key="et"
               type="button"
-              class="rounded-sm border border-copper/50 px-2 py-1 font-mono text-xs text-copper"
+              class="inline-flex items-center gap-1 border border-copper px-2 py-1 font-mono text-xs text-copper"
               :aria-label="t('adminNotifications.dropEventType', { type: et })"
               @click="dropUnknownEventType(et)"
             >
-              {{ et }} ✕
+              {{ et }} <X class="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </div>
         </fieldset>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="notif-channel"
             >{{ t("common.channel") }} <span class="text-destructive">*</span></Label
           >
@@ -514,7 +513,7 @@ async function testSubscription(id: string) {
             the Channels tab rendered — one sentence and a row of badges, with
             no actions — moved to where its question is actually asked.
           -->
-          <div v-if="channels.length" class="flex flex-wrap items-center gap-1.5 pt-1">
+          <div v-if="channels.length" class="flex flex-wrap items-center gap-2 pt-1">
             <span class="text-xs text-muted-foreground">{{
               t("adminNotifications.configuredChannels")
             }}</span>
@@ -522,7 +521,7 @@ async function testSubscription(id: string) {
               v-for="ch in channels"
               :key="ch.name"
               type="button"
-              class="rounded-sm border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+              class="rounded-sm border border-border px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
               @click="form.channel_name = ch.name"
             >
               {{ ch.name }}

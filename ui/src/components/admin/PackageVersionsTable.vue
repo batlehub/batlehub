@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Resolution } from "@/components/ui/resolution";
+import { packagePath } from "@/config/navigation";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
@@ -61,7 +63,7 @@ function viewArtifact(v: PackageVersionDetail) {
   /* One canonical package URL; the version and artifact stay as query, since
      they select *within* a package rather than name a different one. */
   router.push({
-    path: `/packages/${encodeURIComponent(props.registry)}/${encodeURIComponent(props.name)}`,
+    path: packagePath(props.registry, props.name),
     query: {
       version: v.version,
       ...(v.artifact ? { artifact: v.artifact } : {}),
@@ -344,14 +346,14 @@ async function bulkUnblock() {
   <!-- Bulk action bar -->
   <div
     v-if="selectedIds.size > 0"
-    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-card px-4 py-2.5"
+    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-ground-raised px-4 py-2"
   >
     <span class="text-sm font-medium">{{
       t("packageVersionsTable.versionsSelected", selectedIds.size)
     }}</span>
     <Button
       size="sm"
-      variant="destructive"
+      variant="outline"
       :disabled="bulkLoading"
       @click="ask({ kind: 'bulk-block' })"
       >{{ t("packageVersionsTable.blockSelected") }}</Button
@@ -366,13 +368,15 @@ async function bulkUnblock() {
     <Button size="sm" variant="ghost" @click="selectedIds = new Set()">{{
       t("common.clearAction")
     }}</Button>
-    <span v-if="bulkMsg" class="text-xs text-muted-foreground ml-auto">{{ bulkMsg }}</span>
   </div>
+  <!-- Outside the selection-gated bar: a success clears the selection, which
+       destroyed the message in the same tick (same fix as AdminPackages). -->
+  <output v-if="bulkMsg" class="block text-sm text-muted-foreground">{{ bulkMsg }}</output>
 
   <!-- Versions table -->
   <Card>
     <CardHeader>
-      <CardTitle class="text-base">{{ t("packageVersionsTable.versionsArtifacts") }}</CardTitle>
+      <CardTitle>{{ t("packageVersionsTable.versionsArtifacts") }}</CardTitle>
     </CardHeader>
     <CardContent class="p-0">
       <Table :label="t('a11y.versionsTableLabel')">
@@ -440,14 +444,13 @@ async function bulkUnblock() {
               v.artifact ?? "—"
             }}</TableCell>
             <TableCell>
-              <div class="space-y-0.5">
-                <Badge :variant="v.status.status === 'blocked' ? 'destructive' : 'secondary'">
-                  {{
-                    v.status.status === "blocked"
-                      ? t("common.blocked")
-                      : t("packageVersionsTable.available")
-                  }}
-                </Badge>
+              <div class="space-y-1">
+                <Resolution
+                  v-if="v.status.status === 'blocked'"
+                  state="blocked"
+                  :label="t('common.blocked')"
+                />
+                <Badge v-else variant="secondary">{{ t("packageVersionsTable.available") }}</Badge>
                 <p
                   v-if="v.status.status === 'blocked'"
                   class="text-xs text-muted-foreground max-w-[180px] truncate"
@@ -485,13 +488,13 @@ async function bulkUnblock() {
               </div>
             </TableCell>
             <TableCell>
-              <Badge :variant="v.cached ? 'default' : 'outline'" class="text-xs">
+              <Badge :variant="v.cached ? 'known' : 'outline'" class="text-xs">
                 {{ v.cached ? t("common.cached") : t("packageVersionsTable.notCached") }}
               </Badge>
-              <p v-if="v.cached_at" class="text-xs text-muted-foreground mt-0.5">
+              <p v-if="v.cached_at" class="text-xs text-muted-foreground mt-1">
                 {{ fmtDate(v.cached_at) }}
               </p>
-              <p class="text-xs text-muted-foreground font-mono mt-0.5">{{ v.storage_key }}</p>
+              <p class="text-xs text-muted-foreground font-mono mt-1">{{ v.storage_key }}</p>
             </TableCell>
             <TableCell class="text-right tabular-nums">{{ v.access_count }}</TableCell>
             <TableCell>
@@ -529,7 +532,7 @@ async function bulkUnblock() {
                 >
                 <Button
                   v-else
-                  variant="destructive"
+                  variant="outline"
                   size="sm"
                   @click="ask({ kind: 'block-one', version: v })"
                   >{{ t("common.block") }}</Button

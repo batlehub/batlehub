@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { packagePath } from "@/config/navigation";
 import { useI18n } from "vue-i18n";
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
@@ -28,6 +29,8 @@ import type {
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { AsyncState } from "@/components/ui/async-state";
 import {
   Table,
@@ -656,7 +659,7 @@ function onSortChange(val: string) {
  * entry on the way in is exactly what would stop it being that.
  */
 function detailPath(row: ExploreRow): string {
-  return `/packages/${encodeURIComponent(row.registry)}/${encodeURIComponent(row.name)}`;
+  return packagePath(row.registry, row.name);
 }
 
 // ── Fetch, from the listing (RFC 0007-bis §11 q3) ────────────────────────────
@@ -934,9 +937,9 @@ onMounted(() => {
         <!-- Search + sort bar -->
         <div class="flex gap-2 flex-wrap">
           <div class="relative flex-1 min-w-48">
-            <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              class="pl-8"
+              class="pl-10"
               :placeholder="t('packageCatalog.searchPackages')"
               :aria-label="t('packageCatalog.searchPackages2')"
               :value="search"
@@ -948,17 +951,25 @@ onMounted(() => {
              means. Hidden entirely when the instance searches names only: a
              control whose other options do nothing is worse than no control
              (RFC 0007-bis §4.3). -->
-          <select
-            v-if="readmeSearchEnabled"
-            :aria-label="t('packageCatalog.searchIn')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
-            :value="searchIn"
-            @change="onSearchInChange(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="name">{{ t("packageCatalog.searchInName") }}</option>
-            <option value="readme">{{ t("packageCatalog.searchInReadme") }}</option>
-            <option value="both">{{ t("packageCatalog.searchInBoth") }}</option>
-          </select>
+          <!-- The label is visually hidden but `for`-bound: the `Select`
+               trigger is a button, and an `aria-label` on the component lands
+               on radix's hidden native select instead of on it. -->
+          <template v-if="readmeSearchEnabled">
+            <Label for="catalog-search-in" class="sr-only">{{
+              t("packageCatalog.searchIn")
+            }}</Label>
+            <Select
+              id="catalog-search-in"
+              class="w-auto gap-2"
+              :model-value="searchIn"
+              :options="[
+                { value: 'name', label: t('packageCatalog.searchInName') },
+                { value: 'readme', label: t('packageCatalog.searchInReadme') },
+                { value: 'both', label: t('packageCatalog.searchInBoth') },
+              ]"
+              @update:model-value="onSearchInChange"
+            />
+          </template>
           <!-- The page's one action, in the toolbar beside search — where
              `design-proof/index.html` puts its own (RFC 0004-bis §14.9). It
              used to sit in `PageHeader`, which the specimen replaced. -->
@@ -976,17 +987,19 @@ onMounted(() => {
             <RefreshCw class="h-4 w-4 mr-1" />
             {{ t("common.refresh") }}
           </Button>
-          <select
-            :aria-label="t('packageCatalog.sortPackages')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
-            :value="sort"
-            @change="onSortChange(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="fetched">{{ t("packageCatalog.lastFetch") }}</option>
-            <option value="downloads">{{ t("packageCatalog.mostDownloaded") }}</option>
-            <option value="name">{{ t("packageCatalog.nameAZ") }}</option>
-            <option value="recent">{{ t("packageCatalog.recentlyAccessed") }}</option>
-          </select>
+          <Label for="catalog-sort" class="sr-only">{{ t("packageCatalog.sortPackages") }}</Label>
+          <Select
+            id="catalog-sort"
+            class="w-auto gap-2"
+            :model-value="sort"
+            :options="[
+              { value: 'fetched', label: t('packageCatalog.lastFetch') },
+              { value: 'downloads', label: t('packageCatalog.mostDownloaded') },
+              { value: 'name', label: t('packageCatalog.nameAZ') },
+              { value: 'recent', label: t('packageCatalog.recentlyAccessed') },
+            ]"
+            @update:model-value="onSortChange"
+          />
         </div>
 
         <!-- Error: what failed, the transport's reason, and a way forward. It
@@ -1100,12 +1113,7 @@ onMounted(() => {
                    control, the name is. A whole-row handler is unreachable by
                    keyboard and invisible to assistive tech, and dressing it as
                    clickable promised a target that only a mouse could take. -->
-              <TableRow
-                :class="[
-                  'border-dashed border-rule-soft align-baseline hover:border-solid hover:border-border',
-                  noteKey(row) ? 'border-b-0' : '',
-                ]"
-              >
+              <TableRow :class="['align-baseline', noteKey(row) ? 'border-b-0' : '']">
                 <TableCell class="pl-0 pr-3 py-3 align-baseline">
                   <Resolution :state="rowState(row)" :label="t(STATE_LABEL_KEYS[rowState(row)])" />
                 </TableCell>

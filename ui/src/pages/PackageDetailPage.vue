@@ -2,7 +2,16 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Check, Copy, FileJson, FileCode, Download, Search } from "@lucide/vue";
+import {
+  ArrowLeft,
+  Check,
+  Copy,
+  FileJson,
+  FileCode,
+  Download,
+  RefreshCw,
+  Search,
+} from "@lucide/vue";
 import {
   explorePackageDetail,
   exploreFetchVersion,
@@ -1126,7 +1135,8 @@ const {
 
     <template v-else-if="error">
       <EmptyState
-        class="mx-auto max-w-[64ch] border-destructive"
+        class="mx-auto max-w-[64ch]"
+        variant="error"
         role="alert"
         :title="t('packageDetailPage.couldNotLoad', { registry, name })"
         :description="error"
@@ -1252,6 +1262,7 @@ const {
           </p>
         </div>
         <Button variant="outline" size="sm" @click="fetchDetail">
+          <RefreshCw class="mr-1 h-4 w-4" aria-hidden="true" />
           {{ t("common.refresh") }}
         </Button>
       </div>
@@ -1917,8 +1928,9 @@ const {
   </div>
 
   <!-- ── Administration ──────────────────────────────────────────────────
-         Everything AdminPackageDetail used to be, in place. -->
-  <template v-if="isAdmin">
+         Everything AdminPackageDetail used to be, in place. Same gate as the
+         public sheet above: it rendered under a loading or failed page too. -->
+  <template v-if="isAdmin && !loading && !error && data">
     <!-- A full-width hairline, which is how this world separates two regions —
          `Separator` with a 24px margin either side is the same line drawn by a
          component that also carries a `my-6`; the region's own `pt-6` is the
@@ -1930,7 +1942,7 @@ const {
            is set in. -->
       <h2
         id="admin-heading"
-        class="font-mono text-sm font-semibold uppercase tracking-wider text-muted-foreground"
+        class="font-mono font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground"
       >
         {{ t("common.administration") }}
       </h2>

@@ -53,7 +53,7 @@ const events = computed(() => inboundResp.value?.events ?? []);
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <SectionTabs :tabs="NOTIFICATIONS_TABS" />
     <PageHeader
       variant="display"
@@ -93,7 +93,7 @@ const events = computed(() => inboundResp.value?.events ?? []);
                 <TableCell class="text-xs">{{ fmtTs(ev.received_at) }}</TableCell>
                 <TableCell class="font-mono text-xs">{{ ev.source_ip ?? "—" }}</TableCell>
                 <TableCell>
-                  <Badge v-if="ev.signature_valid === true" variant="default" class="text-xs">{{
+                  <Badge v-if="ev.signature_valid === true" variant="known" class="text-xs">{{
                     t("common.valid")
                   }}</Badge>
                   <Badge

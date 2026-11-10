@@ -6,12 +6,11 @@ import { accountTabs } from "@/config/navigation";
 import HubLayout from "./HubLayout.vue";
 
 const { t } = useI18n();
-const { identity, isAuthenticated } = useAuth();
+const { isOidcSession } = useAuth();
 
 /* Tokens are OIDC-only. A static-token user never sees the tab rather than
    seeing it and bouncing off the guard. */
-const isOidc = computed(() => isAuthenticated.value && !!identity.value?.auth_provider);
-const tabs = computed(() => accountTabs({ isOidc: isOidc.value }));
+const tabs = computed(() => accountTabs({ isOidc: isOidcSession.value }));
 </script>
 
 <template>

@@ -147,7 +147,7 @@ function providerLabel(name: string): string {
               <span class="w-full border-t border-border/60" />
             </div>
             <div class="relative flex justify-center text-xs uppercase">
-              <span class="bg-card px-2 font-mono text-muted-foreground tracking-widest">{{
+              <span class="bg-ground-raised px-2 font-mono text-muted-foreground tracking-widest">{{
                 t("loginPage.orUseAToken")
               }}</span>
             </div>

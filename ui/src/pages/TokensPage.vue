@@ -221,9 +221,9 @@ const lifetimePresets = [7, 30, 90];
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display">
+    <PageHeader variant="display" as="h2">
       <template #title>
-        <Key class="h-5 w-5 text-primary" />
+        <Key class="h-5 w-5 text-foreground" aria-hidden="true" />
         {{ t("tokensPage.personalApiTokens") }}
       </template>
       <template #description>{{ t("tokensPage.createLongLivedTokens") }}</template>
@@ -248,7 +248,7 @@ const lifetimePresets = [7, 30, 90];
           </code>
           <CopyButton :text="newToken" variant="outline" size="icon" class="shrink-0 h-8 w-8">
             <template #default="{ copied }">
-              <Check v-if="copied" class="h-3.5 w-3.5 text-primary" />
+              <Check v-if="copied" class="h-3.5 w-3.5 text-foreground" />
               <Copy v-else class="h-3.5 w-3.5" />
             </template>
           </CopyButton>
@@ -284,20 +284,16 @@ const lifetimePresets = [7, 30, 90];
     <!-- Token table -->
     <Card>
       <CardHeader class="pb-3">
-        <CardTitle class="text-base">{{ t("tokensPage.activeTokens") }}</CardTitle>
+        <CardTitle>{{ t("tokensPage.activeTokens") }}</CardTitle>
         <CardDescription>{{ t("tokensPage.tokensThatHaveNot") }}</CardDescription>
       </CardHeader>
       <CardContent>
-        <AsyncState :loading="loading" :error="error" :empty="!tokens?.length">
-          <template #empty>
-            <div class="py-12 text-center space-y-2">
-              <Key class="h-8 w-8 mx-auto text-muted-foreground/50" />
-              <p class="text-sm text-muted-foreground">
-                {{ t("tokensPage.noActiveTokensCreate") }}
-              </p>
-            </div>
-          </template>
-
+        <AsyncState
+          :loading="loading"
+          :error="error"
+          :empty="!tokens?.length"
+          :empty-message="t('tokensPage.noActiveTokensCreate')"
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -315,7 +311,7 @@ const lifetimePresets = [7, 30, 90];
                   {{ tok.name }}
                 </TableCell>
                 <TableCell>
-                  <Badge :variant="tok.role === 'admin' ? 'default' : 'secondary'" class="text-xs">
+                  <Badge :variant="tok.role === 'admin' ? 'known' : 'secondary'" class="text-xs">
                     {{ roleLabel(t, tok.role) }}
                   </Badge>
                 </TableCell>
@@ -338,7 +334,7 @@ const lifetimePresets = [7, 30, 90];
                   <span
                     :class="
                       daysUntil(tok.expires_at) <= 7
-                        ? 'text-destructive font-medium'
+                        ? 'text-copper font-medium'
                         : 'text-muted-foreground'
                     "
                     class="text-sm flex items-center gap-1"
@@ -376,7 +372,7 @@ const lifetimePresets = [7, 30, 90];
       <template #title>{{ t("tokensPage.createApiToken") }}</template>
       <template #description>{{ t("tokensPage.chooseANameRole") }}</template>
       <div class="space-y-4">
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="token-name">{{ t("common.name") }}</Label>
           <Input
             id="token-name"
@@ -386,7 +382,7 @@ const lifetimePresets = [7, 30, 90];
           />
         </div>
 
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="token-role">{{ t("common.role") }}</Label>
           <Select
             id="token-role"
@@ -416,7 +412,7 @@ const lifetimePresets = [7, 30, 90];
             <Button
               v-for="g in myGroups"
               :key="g"
-              :variant="form.groups.includes(g) ? 'default' : 'outline'"
+              variant="outline"
               size="sm"
               :aria-pressed="form.groups.includes(g)"
               @click="toggleGroup(g)"
@@ -444,8 +440,9 @@ const lifetimePresets = [7, 30, 90];
             <Button
               v-for="days in lifetimePresets"
               :key="days"
-              :variant="form.expires_in_days === days ? 'default' : 'outline'"
+              variant="outline"
               size="sm"
+              :aria-pressed="form.expires_in_days === days"
               @click="form.expires_in_days = days"
             >
               {{ days }}d

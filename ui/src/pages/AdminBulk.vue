@@ -226,7 +226,7 @@ function reset() {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-4xl">
+  <div class="space-y-6">
     <!-- An outcome announced, not only rendered (RFC 0004-bis §2.6). Every bulk
          result, block, warm and cache invalidation in this console reached
          sighted users only — on the surface whose audience includes the one
@@ -290,13 +290,14 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
     <!-- Action + input -->
     <Card>
       <CardHeader class="pb-3">
-        <CardTitle class="text-base">{{ t("adminBulk.configureAction") }}</CardTitle>
+        <CardTitle>{{ t("adminBulk.configureAction") }}</CardTitle>
       </CardHeader>
       <CardContent class="space-y-4">
         <!-- Action selector -->
         <div class="flex gap-2">
           <Button
-            :variant="action === 'block' ? 'default' : 'outline'"
+            variant="outline"
+            :aria-pressed="action === 'block'"
             size="sm"
             @click="
               action = 'block';
@@ -307,7 +308,8 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
             {{ t("common.block") }}
           </Button>
           <Button
-            :variant="action === 'unblock' ? 'default' : 'outline'"
+            variant="outline"
+            :aria-pressed="action === 'unblock'"
             size="sm"
             @click="
               action = 'unblock';
@@ -348,14 +350,14 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
             v-model="csvText"
             rows="8"
             placeholder="registry,name,version,artifact,reason&#10;npm,lodash,4.17.21,,CVE-2021-23337"
-            class="flex w-full rounded-sm border border-input bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground resize-y"
+            class="flex w-full rounded-sm border border-border bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground resize-y"
           />
         </div>
 
         <!-- File upload -->
         <div class="flex items-center gap-3">
           <label
-            class="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-input text-sm cursor-pointer hover:bg-accent transition-colors"
+            class="flex items-center gap-2 px-3 py-2 rounded-sm border border-border text-sm cursor-pointer hover:bg-accent transition-colors"
           >
             <Upload class="h-3.5 w-3.5" />
             {{ t("adminBulk.uploadCsvFile") }}
@@ -379,7 +381,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
     <Card v-if="parsedRows.length > 0">
       <CardHeader class="pb-3">
         <div class="flex items-center justify-between">
-          <CardTitle class="text-base">
+          <CardTitle>
             {{ t("common.preview") }}
             <span class="font-normal text-muted-foreground ml-1 text-sm">
               <i18n-t keypath="adminBulk.validInvalid" tag="span">
@@ -394,7 +396,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         </div>
       </CardHeader>
       <CardContent class="p-0">
-        <Table>
+        <Table :label="t('adminBulk.previewRows')">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>
@@ -453,7 +455,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
     <!-- Results -->
     <Card v-if="result">
       <CardHeader class="pb-3">
-        <CardTitle class="text-base flex items-center gap-2">
+        <CardTitle class="flex items-center gap-2">
           <!-- Not unconditional: this rendered a crimson success check over
                "0 succeeded, 30 failed". The icon is the first thing read, and
                it was reporting the opposite of what happened. -->
@@ -467,7 +469,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         </CardTitle>
       </CardHeader>
       <CardContent v-if="result.failures.length > 0" class="p-0">
-        <Table>
+        <Table :label="t('adminBulk.failures')">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>

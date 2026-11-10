@@ -23,6 +23,14 @@ import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { AsyncState } from "@/components/ui/async-state";
 import { Announcer } from "@/components/ui/announcer";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { ChevronRight } from "@lucide/vue";
 
 const { t } = useI18n();
@@ -474,34 +482,29 @@ onUnmounted(() => {
       </CardHeader>
       <CardContent>
         <AsyncState
-          v-if="pendingError"
-          :loading="false"
+          :loading="loadingPending && !pendingReload"
           :error="pendingError"
+          :empty="!pendingReload"
+          :empty-message="t('adminConfigReload.noPendingReloadThe')"
           :title="t('adminConfigReload.pendingCouldNotLoad')"
           :on-retry="fetchPending"
-        />
-        <div v-else-if="loadingPending && !pendingReload" class="text-sm text-muted-foreground">
-          {{ t("adminConfigReload.loading") }}
-        </div>
-        <div v-else-if="!pendingReload" class="text-sm text-muted-foreground">
-          {{ t("adminConfigReload.noPendingReloadThe") }}
-        </div>
-        <div v-else class="space-y-3">
-          <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            <span
-              ><strong>{{ t("adminConfigReload.sourceLabel") }}</strong>
-              {{ pendingReload.source }}</span
-            >
-            <span
-              ><strong>{{ t("adminConfigReload.createdLabel") }}</strong>
-              {{ formatDate(pendingReload.created_at) }}</span
-            >
-            <span
-              ><strong>{{ t("adminConfigReload.expiresIn") }}</strong> {{ expiresIn }}</span
-            >
-          </div>
+        >
+          <div v-if="pendingReload" class="space-y-3">
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              <span
+                ><strong>{{ t("adminConfigReload.sourceLabel") }}</strong>
+                {{ pendingReload.source }}</span
+              >
+              <span
+                ><strong>{{ t("adminConfigReload.createdLabel") }}</strong>
+                {{ formatDate(pendingReload.created_at) }}</span
+              >
+              <span
+                ><strong>{{ t("adminConfigReload.expiresIn") }}</strong> {{ expiresIn }}</span
+              >
+            </div>
 
-          <!--
+            <!--
             What the *candidate* would warn about (RFC 0004-bis A4).
 
             `PendingReload` has held these since it was written — `apply()`
@@ -513,84 +516,96 @@ onUnmounted(() => {
             anyone reloads the page or arrives from a file-watcher reload they
             did not stage themselves.
           -->
-          <div v-if="pendingReload.warnings?.length" class="space-y-1">
-            <p class="text-xs font-medium text-copper">
-              {{
-                t("adminConfigReload.candidateWarnsAbout", {
-                  count: pendingReload.warnings.length,
-                })
-              }}
-            </p>
-            <div
-              v-for="w in pendingReload.warnings"
-              :key="`pending-${w.code}@${w.path}`"
-              class="border border-copper px-3 py-1.5 text-xs text-copper"
-            >
-              <code class="font-mono break-all">{{ w.path }}</code>
-              — {{ w.message }}
+            <div v-if="pendingReload.warnings?.length" class="space-y-1">
+              <p class="text-xs font-medium text-copper">
+                {{
+                  t("adminConfigReload.candidateWarnsAbout", {
+                    count: pendingReload.warnings.length,
+                  })
+                }}
+              </p>
+              <div
+                v-for="w in pendingReload.warnings"
+                :key="`pending-${w.code}@${w.path}`"
+                class="border border-copper px-3 py-2 text-xs text-copper"
+              >
+                <code class="font-mono break-all">{{ w.path }}</code>
+                — {{ w.message }}
+              </div>
             </div>
-          </div>
-          <div class="flex gap-2 flex-wrap">
-            <Badge v-for="r in pendingReload.diff.added_registries" :key="r" variant="copper"
-              >+{{ r }}</Badge
-            >
-            <Badge v-for="r in pendingReload.diff.removed_registries" :key="r" variant="copper"
-              >-{{ r }}</Badge
-            >
-            <!--
+            <div class="flex gap-2 flex-wrap">
+              <Badge v-for="r in pendingReload.diff.added_registries" :key="r" variant="copper"
+                >+{{ r }}</Badge
+              >
+              <Badge v-for="r in pendingReload.diff.removed_registries" :key="r" variant="copper"
+                >-{{ r }}</Badge
+              >
+              <!--
               `fields` and `access_config_changed` are on the wire and were both
               discarded: a changed registry rendered as a bare `~npm`, and a
               change to RBAC alone rendered *nothing at all* — an empty badge
               row that invites a blind apply. This is the operator's decision
               surface; it has to say what it is asking them to accept.
             -->
-            <Badge v-for="r in pendingReload.diff.changed_registries" :key="r.name" variant="copper"
-              >~{{ r.name }}<span v-if="r.fields?.length"> ({{ r.fields.join(", ") }})</span></Badge
-            >
-            <Badge v-if="pendingReload.diff.access_config_changed" variant="copper">{{
-              t("adminConfigReload.accessConfigChanged")
-            }}</Badge>
-            <Badge v-if="pendingReload.diff.limits_changed" variant="copper">{{
-              t("adminConfigReload.limitsChanged")
-            }}</Badge>
-          </div>
-          <!--
+              <Badge
+                v-for="r in pendingReload.diff.changed_registries"
+                :key="r.name"
+                variant="copper"
+                >~{{ r.name
+                }}<span v-if="r.fields?.length"> ({{ r.fields.join(", ") }})</span></Badge
+              >
+              <Badge v-if="pendingReload.diff.access_config_changed" variant="copper">{{
+                t("adminConfigReload.accessConfigChanged")
+              }}</Badge>
+              <Badge v-if="pendingReload.diff.limits_changed" variant="copper">{{
+                t("adminConfigReload.limitsChanged")
+              }}</Badge>
+            </div>
+            <!--
             Which keys this reload actually applies (RFC 0037 §6.5). Before
             these lists, a change to `database.url` staged, applied, and showed
             an empty diff: the one change that does nothing until a restart was
             the one the page could not show.
           -->
-          <dl class="space-y-1 text-xs">
-            <template v-for="row in reloadLists" :key="row.key">
-              <div v-if="row.paths.length">
-                <dt :class="row.restart ? 'font-medium text-copper' : 'font-medium'">
-                  {{ t(row.key) }}
-                </dt>
-                <dd class="flex flex-wrap gap-1">
-                  <code v-for="p in row.paths" :key="p" class="font-mono break-all">{{ p }}</code>
-                  <span v-if="row.restart && pendingReload.diff.restart_reason">
-                    — {{ pendingReload.diff.restart_reason }}</span
-                  >
-                </dd>
-              </div>
-            </template>
-          </dl>
-          <!-- The view's one filled action: Apply. -->
-          <div class="flex gap-2">
-            <Button
-              size="sm"
-              :disabled="loadingApply || pendingExpired"
-              @click="confirmApply = true"
-            >
-              {{ loadingApply ? t("adminConfigReload.applying") : t("adminConfigReload.apply") }}
-            </Button>
-            <Button size="sm" variant="outline" :disabled="loadingDiscard" @click="discardPending">
-              {{
-                loadingDiscard ? t("adminConfigReload.discarding") : t("adminConfigReload.discard")
-              }}
-            </Button>
+            <dl class="space-y-1 text-xs">
+              <template v-for="row in reloadLists" :key="row.key">
+                <div v-if="row.paths.length">
+                  <dt :class="row.restart ? 'font-medium text-copper' : 'font-medium'">
+                    {{ t(row.key) }}
+                  </dt>
+                  <dd class="flex flex-wrap gap-1">
+                    <code v-for="p in row.paths" :key="p" class="font-mono break-all">{{ p }}</code>
+                    <span v-if="row.restart && pendingReload.diff.restart_reason">
+                      — {{ pendingReload.diff.restart_reason }}</span
+                    >
+                  </dd>
+                </div>
+              </template>
+            </dl>
+            <!-- The view's one filled action: Apply. -->
+            <div class="flex gap-2">
+              <Button
+                size="sm"
+                :disabled="loadingApply || pendingExpired"
+                @click="confirmApply = true"
+              >
+                {{ loadingApply ? t("adminConfigReload.applying") : t("adminConfigReload.apply") }}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                :disabled="loadingDiscard"
+                @click="discardPending"
+              >
+                {{
+                  loadingDiscard
+                    ? t("adminConfigReload.discarding")
+                    : t("adminConfigReload.discard")
+                }}
+              </Button>
+            </div>
           </div>
-        </div>
+        </AsyncState>
       </CardContent>
     </Card>
 
@@ -621,7 +636,7 @@ onUnmounted(() => {
           <textarea
             v-model="configContent"
             rows="18"
-            class="w-full border border-input bg-background font-mono text-xs p-3 resize-y"
+            class="w-full border border-border bg-background font-mono text-xs p-3 resize-y"
             spellcheck="false"
             :aria-label="t('adminConfigReload.configTomlContent')"
             @input="validatedContent = null"
@@ -757,23 +772,21 @@ onUnmounted(() => {
         <CardTitle>{{ t("adminConfigReload.changeHistory") }}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div v-if="loadingHistory" class="text-sm text-muted-foreground">
-          {{ t("adminConfigReload.loading") }}
-        </div>
-        <div v-else-if="changeHistory.length === 0" class="text-sm text-muted-foreground">
-          {{ t("adminConfigReload.noChangesRecordedYet") }}
-        </div>
-        <div v-else class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-left border-b border-rule-strong">
-                <th class="pb-2 pr-4">{{ t("common.date") }}</th>
-                <th class="pb-2 pr-4">{{ t("adminConfigReload.byColumn") }}</th>
-                <th class="pb-2 pr-4">{{ t("common.status") }}</th>
-                <th class="pb-2">{{ t("common.summary") }}</th>
-              </tr>
-            </thead>
-            <tbody>
+        <AsyncState
+          :loading="loadingHistory"
+          :empty="changeHistory.length === 0"
+          :empty-message="t('adminConfigReload.noChangesRecordedYet')"
+        >
+          <Table :label="t('adminConfigReload.changeHistory')">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{{ t("common.date") }}</TableHead>
+                <TableHead>{{ t("adminConfigReload.byColumn") }}</TableHead>
+                <TableHead>{{ t("common.status") }}</TableHead>
+                <TableHead>{{ t("common.summary") }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               <template v-for="row in changeHistory" :key="row.id">
                 <!-- The disclosure is a button in the first cell, not a `@click`
                      on the `<tr>`. A clickable row with `cursor-pointer`, no
@@ -784,11 +797,11 @@ onUnmounted(() => {
                      `aria-expanded` is what tells a reader whether the diff below
                      is open — the chevron alone says it only to someone who can
                      see it. -->
-                <tr class="border-b border-dashed border-rule-soft">
-                  <td class="py-2 pr-4">
+                <TableRow>
+                  <TableCell>
                     <button
                       type="button"
-                      class="inline-flex items-center gap-1.5 text-left hover:underline underline-offset-[3px]"
+                      class="inline-flex items-center gap-2 text-left hover:underline underline-offset-[3px]"
                       :aria-expanded="expandedRow === row.id"
                       :aria-controls="
                         expandedRow === row.id ? `config-change-${row.id}` : undefined
@@ -807,28 +820,34 @@ onUnmounted(() => {
                           : t("adminConfigReload.showDiff")
                       }}</span>
                     </button>
-                  </td>
-                  <td class="py-2 pr-4">{{ row.triggered_by }}</td>
-                  <td class="py-2 pr-4">
-                    <Badge
-                      :class="row.status === 'applied' ? 'text-foreground' : 'text-destructive'"
-                    >
-                      {{ row.status }}
+                  </TableCell>
+                  <TableCell>{{ row.triggered_by }}</TableCell>
+                  <TableCell>
+                    <!-- `applied` or `rejected` (reload/applier.rs); only a rejection
+                         is a refusal, so only it takes crimson. -->
+                    <Badge :variant="row.status === 'rejected' ? 'destructive' : 'known'">
+                      {{
+                        row.status === "applied"
+                          ? t("adminConfigReload.statusApplied")
+                          : row.status === "rejected"
+                            ? t("adminConfigReload.statusRejected")
+                            : row.status
+                      }}
                     </Badge>
-                  </td>
-                  <td class="py-2">{{ row.summary }}</td>
-                </tr>
-                <tr v-if="expandedRow === row.id" :id="`config-change-${row.id}`">
-                  <td colspan="4" class="pb-3">
+                  </TableCell>
+                  <TableCell>{{ row.summary }}</TableCell>
+                </TableRow>
+                <TableRow v-if="expandedRow === row.id" :id="`config-change-${row.id}`">
+                  <TableCell colspan="4">
                     <pre class="bg-muted text-xs p-2 overflow-x-auto">{{
                       JSON.stringify(row.diff, null, 2)
                     }}</pre>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               </template>
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </AsyncState>
       </CardContent>
     </Card>
   </div>

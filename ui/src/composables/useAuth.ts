@@ -195,6 +195,13 @@ function logout() {
 // ── Computed ───────────────────────────────────────────────────────────────────
 
 const isAdmin = computed(() => identity.value?.role === "admin");
+/**
+ * Signed in through the OIDC browser flow — the only session that may mint or
+ * list API tokens. Read from the provider the callback stored, not from
+ * `identity.auth_provider`: that is set for every provider, `"static-token"`
+ * included, so it offered the Tokens surface to sessions the server refuses.
+ */
+const isOidcSession = computed(() => !!token.value && !!oidcProvider.value);
 const isAuthenticated = computed(() => !!token.value && identity.value?.role !== "anonymous");
 
 export function useAuth() {
@@ -207,6 +214,7 @@ export function useAuth() {
     identityReady,
     isAdmin,
     isAuthenticated,
+    isOidcSession,
     logout,
     doRefresh,
   };
