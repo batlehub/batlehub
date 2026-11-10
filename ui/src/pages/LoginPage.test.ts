@@ -22,8 +22,20 @@ vi.mock("@/client/client.gen", () => ({ client: { setConfig: setConfigMock } }))
 import LoginPage from "./LoginPage.vue";
 import { useAuth } from "@/composables/useAuth";
 
-const ANON = { role: "anonymous" as const, groups: [], has_registry_access: true, verbs: [], registries: {} };
-const USER = { role: "user" as const, groups: [], has_registry_access: true, verbs: [], registries: {} };
+const ANON = {
+  role: "anonymous" as const,
+  groups: [],
+  has_registry_access: true,
+  verbs: [],
+  registries: {},
+};
+const USER = {
+  role: "user" as const,
+  groups: [],
+  has_registry_access: true,
+  verbs: [],
+  registries: {},
+};
 
 function makeRouter(): Router {
   const stub = { template: "<div />" };

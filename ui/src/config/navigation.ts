@@ -22,7 +22,8 @@ export interface NavLink {
 
 export interface NavViewer {
   isAuthenticated: boolean;
-  isAdmin: boolean;
+  /** Whether the viewer may open at least one admin page (RFC 0042 §4.3). */
+  hasAdminPage: boolean;
   /** An anonymous viewer on a locked instance can reach nothing but /login. */
   hasRegistryAccess: boolean;
 }
@@ -40,7 +41,7 @@ export function primaryNav(viewer: NavViewer): NavLink[] {
     { to: "/packages", label: "nav.packages" },
     { to: "/setup", label: "nav.setup" },
   ];
-  if (viewer.isAdmin) links.push({ to: "/admin", label: "nav.admin" });
+  if (viewer.hasAdminPage) links.push({ to: "/admin", label: "nav.admin" });
   return links;
 }
 

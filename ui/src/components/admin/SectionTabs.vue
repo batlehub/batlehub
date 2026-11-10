@@ -2,6 +2,8 @@
 import { useI18n } from "vue-i18n";
 import { computed } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useAuth } from "@/composables/useAuth";
+import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
 
 /** `label` is an i18n key, resolved here — see `config/adminSections.ts`. */
 
@@ -18,7 +20,16 @@ function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
 
-const current = computed(() => props.tabs.find((tab) => isActive(tab.to))?.to ?? "");
+const { can } = useAuth();
+/** Only the tabs whose verb the viewer holds (RFC 0042 §4.3). */
+const tabs = computed(() =>
+  props.tabs.filter((tab) => {
+    const verb = ADMIN_PAGE_VERBS[tab.to];
+    return verb === undefined || can(verb);
+  }),
+);
+
+const current = computed(() => tabs.value.find((tab) => isActive(tab.to))?.to ?? "");
 
 function go(to: string) {
   if (to && to !== current.value) void router.push(to);

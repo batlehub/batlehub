@@ -58,7 +58,11 @@ import {
 
 const { t } = useI18n();
 
-const { token, isAdmin, isAuthenticated } = useAuth();
+const { token, can, isAuthenticated } = useAuth();
+// RFC 0042 §4.3: each surface on the verb its endpoint asks for, not the role.
+const canAdminister = computed(() => can("packages:read"));
+const canReadUpstream = computed(() => can("system:read", registry.value));
+const canRescan = computed(() => can("gates:exempt", registry.value));
 const { authFetch } = useAuthFetch();
 const route = useRoute();
 const router = useRouter();
@@ -947,7 +951,7 @@ interface UpstreamPackageStatus {
 const upstreamStatus = ref<UpstreamPackageStatus | null>(null);
 async function loadUpstreamStatus() {
   upstreamStatus.value = null;
-  if (!isAdmin.value || !registry.value || !name.value) return;
+  if (!canReadUpstream.value || !registry.value || !name.value) return;
   try {
     const resp = await authFetch(
       `${API_BASE_URL}/api/v1/admin/upstream/status/${encodeURIComponent(registry.value)}/${encodeURIComponent(name.value)}`,
@@ -958,7 +962,7 @@ async function loadUpstreamStatus() {
     upstreamStatus.value = null;
   }
 }
-watch([registry, name, isAdmin], loadUpstreamStatus, { immediate: true });
+watch([registry, name, canReadUpstream], loadUpstreamStatus, { immediate: true });
 
 /**
  * RFC 0019 §6.5: on a forge a "version" is a ref, and the commit it resolved
@@ -1011,7 +1015,7 @@ const {
   reload: reloadAdmin,
 } = useApi<PackageDetailResponse>(
   () =>
-    isAdmin.value
+    canAdminister.value
       ? (packageDetail({
           query: { registry: registry.value, name: name.value },
         }) as Promise<{
@@ -1591,7 +1595,7 @@ const {
         :registry="registry"
         :name="name"
         :version="selectedVersion"
-        :can-rescan="isAdmin"
+        :can-rescan="canRescan"
       />
 
       <!-- ── The index ─────────────────────────────────────────────────────
@@ -1930,7 +1934,7 @@ const {
   <!-- ── Administration ──────────────────────────────────────────────────
          Everything AdminPackageDetail used to be, in place. Same gate as the
          public sheet above: it rendered under a loading or failed page too. -->
-  <template v-if="isAdmin && !loading && !error && data">
+  <template v-if="canAdminister && !loading && !error && data">
     <!-- A full-width hairline, which is how this world separates two regions —
          `Separator` with a 24px margin either side is the same line drawn by a
          component that also carries a `my-6`; the region's own `pt-6` is the

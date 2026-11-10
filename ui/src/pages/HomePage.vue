@@ -15,6 +15,7 @@ import { useI18n } from "vue-i18n";
  * first-run guidance explains and links; it does not gain a privileged endpoint.
  */
 import { computed } from "vue";
+import { firstAdminPage } from "@/config/adminSections";
 import { RouterLink } from "vue-router";
 import { listRegistries } from "@/client/sdk.gen";
 import type { RegistryInfo } from "@/client/types.gen";
@@ -32,7 +33,9 @@ import RecentPullsWidget from "@/components/home/RecentPullsWidget.vue";
 
 const { t } = useI18n();
 
-const { identity, isAdmin, isAuthenticated, token } = useAuth();
+const { identity, can, isAuthenticated, token } = useAuth();
+// Told how to fix a fresh instance only if they can open the config.
+const canConfigure = computed(() => can("config:read"));
 
 const { data, error, loading, reload } = useApi<RegistryInfo[]>(
   () => listRegistries() as Promise<{ data?: unknown; error?: unknown }>,
@@ -114,10 +117,12 @@ const displayFits = computed(() => greeting.value.length <= 24);
          only they are told how; everyone else is told what it means for them. -->
     <EmptyState
       v-else-if="isFresh"
-      :title="isAdmin ? t('adminDashboard.noRegistriesConfiguredYet') : t('home.freshTitleOther')"
-      :description="isAdmin ? t('home.freshBodyAdmin') : t('home.freshBodyOther')"
+      :title="
+        canConfigure ? t('adminDashboard.noRegistriesConfiguredYet') : t('home.freshTitleOther')
+      "
+      :description="canConfigure ? t('home.freshBodyAdmin') : t('home.freshBodyOther')"
     >
-      <template v-if="isAdmin" #action>
+      <template v-if="canConfigure" #action>
         <Button as-child size="sm">
           <RouterLink to="/admin/operations/config-reload">{{
             t("homePage.openConfig")
@@ -160,8 +165,8 @@ const displayFits = computed(() => greeting.value.length <= 24);
         <Button v-if="isAuthenticated" as-child size="sm" variant="outline">
           <RouterLink to="/me/namespace">{{ t("homePage.myNamespace") }}</RouterLink>
         </Button>
-        <Button v-if="isAdmin" as-child size="sm" variant="outline">
-          <RouterLink to="/admin/dashboard">{{ t("common.admin") }}</RouterLink>
+        <Button v-if="firstAdminPage(can)" as-child size="sm" variant="outline">
+          <RouterLink to="/admin">{{ t("common.admin") }}</RouterLink>
         </Button>
       </div>
 

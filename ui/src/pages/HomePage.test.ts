@@ -20,6 +20,7 @@ vi.mock("@/composables/useAuth", () => ({
   useAuth: () => ({
     identity,
     isAdmin: { value: false },
+    can: () => false,
     isAuthenticated: { value: true },
     token: { value: "t" },
   }),
