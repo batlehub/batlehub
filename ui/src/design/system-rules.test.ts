@@ -187,7 +187,7 @@ describe("the Undependable Fill Rule", () => {
        because every child overrides it — so it was a trap rather than a
        defect: the next plain word added to that paragraph would have rendered
        under the floor with nothing to catch it. */
-    const catalog = SOURCES["src/pages/PackageCatalog.vue"];
+    const catalog = SOURCES["src/components/catalog/CatalogSpecimen.vue"];
     const specimen = catalog.slice(
       catalog.indexOf('<div class="plate"'),
       catalog.indexOf("</section>", catalog.indexOf('<div class="plate"')),
