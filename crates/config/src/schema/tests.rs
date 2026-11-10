@@ -2921,6 +2921,39 @@ fn nodedist_is_proxy_only_and_needs_no_explicit_upstream() {
     assert!(err.contains("not supported for nodedist"), "{err}");
 }
 
+// ── RFC 0043: mise-versions ──────────────────────────────────────────────────
+
+/// A version list with no artifact: proxy-only, defaulting to jdx.dev, and an
+/// age gate loads without `deny_missing_timestamp` because every entry carries
+/// `created_at`.
+#[test]
+fn mise_versions_is_proxy_only_and_takes_an_age_gate() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "mise-versions"
+        name = "mise-versions"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 604800
+        "#,
+    )
+    .validate()
+    .expect("a bare mise-versions registry with an age gate loads");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "mise-versions"
+        name = "mise-versions"
+        mode = "hybrid"
+        "#,
+        "nobody publishes to a version list, so hybrid mode must be refused",
+    );
+    assert!(err.contains("not supported for mise-versions"), "{err}");
+}
+
 // ── RFC 0010 phase 6: sdkman ─────────────────────────────────────────────────
 
 /// On `sdkman` the field *is* the rule: no artifact ever carries a date.

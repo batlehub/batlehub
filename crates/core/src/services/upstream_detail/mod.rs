@@ -35,6 +35,7 @@ mod galaxy;
 mod goproxy;
 mod helm;
 mod maven;
+mod mise_versions;
 mod nodedist;
 mod npm;
 mod nuget;
@@ -129,6 +130,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Galaxy => galaxy::read(doc),
         RegistryKind::Devfile => devfile::read(doc),
         RegistryKind::Helm => helm::read(doc),
+        RegistryKind::MiseVersions => mise_versions::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -191,7 +193,9 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         // A devfile has no README (RFC 0035 §6.1).
         | RegistryKind::Devfile
         // `description` is one line; the README is in the archive.
-        | RegistryKind::Helm => false,
+        | RegistryKind::Helm
+        // A version list and nothing else (RFC 0043).
+        | RegistryKind::MiseVersions => false,
     }
 }
 
@@ -256,7 +260,9 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Devfile
         // `home` and `sources` are in the entry, but the page's links are read
         // from the version's resolve, which carries the same entry.
-        | RegistryKind::Helm => false,
+        | RegistryKind::Helm
+        // `release_url` is a release page per version, not the project's.
+        | RegistryKind::MiseVersions => false,
     }
 }
 

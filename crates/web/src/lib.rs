@@ -531,6 +531,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/nuget",      description = "NuGet registry — service index, flat container, registration metadata, .nupkg download, and private package publishing"),
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
+        (name = "proxy/mise-versions", description = "mise's versions host (mise-versions.jdx.dev) — tool version lists filtered by the block list and the age gate, the install beacon absorbed on site, the GitHub mirror refused so mise asks the rerouted GitHub API (RFC 0043)"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
         (name = "proxy/devfile",    description = "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"),
@@ -766,6 +767,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
+            mise_versions::{
+                mise_versions_beacon, mise_versions_beacon_tools, mise_versions_beacon_track,
+                mise_versions_data, mise_versions_github_api, mise_versions_github_data,
+                mise_versions_tools,
+            },
             nix::{
                 nix_build_log, nix_cache_info, nix_ls, nix_nar, nix_nar_upstream_shape,
                 nix_narinfo, nix_public_key, nix_put_nar, nix_put_narinfo, nix_realisation,
@@ -866,6 +872,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     kind_scope(cfg, &[K::Jetbrains], &[jetbrains_routes]);
     kind_scope(cfg, &[K::Generic], &[generic_routes]);
     kind_scope(cfg, &[K::Nodedist], &[nodedist_routes]);
+    kind_scope(cfg, &[K::MiseVersions], &[mise_versions_routes]);
     kind_scope(cfg, &[K::Nix], &[nix_routes]);
     kind_scope(cfg, &[K::Galaxy], &[galaxy_routes]);
     kind_scope(cfg, &[K::Rustup], &[rustup_routes]);
@@ -1189,6 +1196,18 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     }
     fn generic_routes(cfg: &mut UtoipaServiceConfig) {
         cfg.service(generic_get); // GET …/generic/{path}   (proxy-only cache)
+    }
+    fn mise_versions_routes(cfg: &mut UtoipaServiceConfig) {
+        // mise's versions host (RFC 0043). The `data/github/…` mirror before
+        // `data/{file}`; `{file}` cannot match a slash, but the order says
+        // which one owns the prefix. Anything else is the scope's 404.
+        cfg.service(mise_versions_github_data); // GET  …/mise-versions/data/github/{tail}  (503)
+        cfg.service(mise_versions_data); // GET  …/mise-versions/data/{file}  (filtered list | python index)
+        cfg.service(mise_versions_tools); // GET  …/mise-versions/tools/{file}  (filtered list, mise < 2026.6.6)
+        cfg.service(mise_versions_beacon); // GET  …/mise-versions/t  (204)
+        cfg.service(mise_versions_beacon_tools); // POST …/mise-versions/api/tools/{tool}  (204)
+        cfg.service(mise_versions_beacon_track); // POST …/mise-versions/api/track  (204)
+        cfg.service(mise_versions_github_api); // GET  …/mise-versions/api/github/{tail}  (503)
     }
     fn nodedist_routes(cfg: &mut UtoipaServiceConfig) {
         // Node dist tree (RFC 0010): the two listing documents before the

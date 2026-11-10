@@ -76,8 +76,8 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin dnf pacman
-        ansible devfile)
+        mise-versions nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
+        dnf pacman ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
 for want in "${WANTED[@]}"; do
@@ -189,6 +189,24 @@ RPM_REG="rpm-$HEAVY_RUN"
 PACMAN_REG="pacman-$HEAVY_RUN"
 GALAXY_REG="galaxy-$HEAVY_RUN"
 DEVFILE_REG="devfile-$HEAVY_RUN"
+MV_REG="mise-versions-$HEAVY_RUN"
+MV_GATED_REG="mise-versions-gated-$HEAVY_RUN"
+
+# The two newest stable jq versions on mise's versions host, and an age gate
+# one day older than the newest — read here, before the server starts, because
+# the gate is part of `config.closed-world.toml` (RFC 0043 §6.8, case 7). The
+# host is asked by this script, which is outside the closed world.
+read -r MV_NEWEST MV_PREV HEAVY_MV_MIN_AGE < <(
+  curl -fsS --max-time 20 https://mise-versions.jdx.dev/data/jq.toml | python3 -c '
+import sys, tomllib, datetime
+v = [(k, e["created_at"]) for k, e in tomllib.loads(sys.stdin.read())["versions"].items()
+     if not e.get("prerelease") and k.replace(".", "").isdigit()]
+(prev, _), (newest, at) = v[-2], v[-1]
+age = datetime.datetime.now(datetime.timezone.utc) - at
+print(newest, prev, int(age.total_seconds()) + 86400)
+') || true
+: "${MV_NEWEST:=1.8.2}" "${MV_PREV:=1.8.1}" "${HEAVY_MV_MIN_AGE:=86400}"
+export HEAVY_MV_MIN_AGE
 
 heavy_forge_auth_config tests/heavy/config.closed-world.toml
 heavy_start_server "$HEAVY_CONFIG"
@@ -2238,6 +2256,129 @@ phase_devfile() {
   heavy_wire_re_after devfile-local '^HEAD /v2/devfile-catalog/acme-go/manifests/1[.]0[.]0 -> 200' \
     "devfile: the published manifest was not resolved through the instance"
   heavy_log "CLOSED-WORLD-DEVFILE-LOCAL-OK (a published stack pulled with egress denied)"
+}
+
+# ── §25. mise versions host ──────────────────────────────────────────────────
+#
+# RFC 0043 §6.8. `mise-versions`: the version list mise reads before any
+# backend's own, for a tool whose backend is the registry default — `jq`
+# (`aqua:jqlang/jq`), never a `github:` coordinate, which is why §10 never
+# produced a single request to this host. Egress denied, so every listing the
+# client sees came through this instance; the bytes come through the github
+# registry's rules, placed *after* this kind's because mise applies the first
+# matching rule only.
+#
+# The newest and the previous stable version are read from jq's own list at
+# start-up (`MV_NEWEST`, `MV_PREV`, below the server config), so no case names
+# a version that a future jq release turns into the wrong one.
+
+phase_mise-versions() {
+  heavy_runner_for mise "mise@latest"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-versions"
+  out="$(cw_out mise-versions)"
+  local conf="$base/config"
+  mkdir -p "$conf"
+  local gh="$HEAVY_TAP_BASE/proxy/$GITHUB_REG"
+
+  # mv_config <registry> [with-github] — this kind's rule first, then the
+  # github rules unless told otherwise. Attestations and aqua's signature
+  # checks are off: they reach Sigstore, which a closed world cannot.
+  mv_config() {
+    local mv="$HEAVY_TAP_BASE/proxy/$1/mise-versions"
+    {
+      printf '[settings]\ngithub_attestations = false\n'
+      printf '[settings.aqua]\ncosign = false\nslsa = false\nminisign = false\ngithub_attestations = false\n'
+      printf '[settings.url_replacements]\n'
+      printf '"regex:^https://mise-versions\\\\.jdx\\\\.dev/(.+)" = "%s/$1"\n' "$mv"
+      if [[ "${2:-with-github}" == with-github ]]; then
+        printf '"regex:^https://api\\\\.github\\\\.com/repos/(.+)" = "%s/$1"\n' "$gh"
+        printf '"regex:^https://github\\\\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)" = "%s/$1/$2/releases/download/$3/$4"\n' "$gh"
+      fi
+    } >"$conf/config.toml"
+  }
+  # mv_fresh — a client with nothing cached: mise remembers remote versions.
+  mv_fresh() {
+    rm -rf "$base/data" "$base/cache" "$base/state"
+    mkdir -p "$base/data" "$base/cache" "$base/state"
+  }
+  local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+
+  # 1. The list, through this instance.
+  heavy_log "mise-versions §1: mise ls-remote jq, egress denied"
+  mv_config "$MV_REG"; mv_fresh
+  heavy_mark mv-list
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" ls-remote jq \
+    || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote failed inside the closed world"; }
+  grep -qx "$MV_NEWEST" "$out" && grep -qx "$MV_PREV" "$out" \
+    || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote did not list $MV_PREV and $MV_NEWEST"; }
+  heavy_wire_re_after mv-list "GET /proxy/$MV_REG/mise-versions/(data|tools)/jq[.]toml -> 200" \
+    "mise-versions: the version list did not come through this instance"
+  heavy_wire_seen_after mv-list "/proxy/$GITHUB_REG/jqlang/jq/releases?" \
+    && heavy_fail "mise-versions: mise listed from the backend, so the versions host answer was not used"
+
+  # 2. A block, seen by `latest`.
+  heavy_log "mise-versions §2: $MV_NEWEST blocked, mise latest jq"
+  heavy_block "$MV_REG" jq "$MV_NEWEST"
+  mv_fresh
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" latest jq \
+    || { cat "$out" >&2; heavy_fail "mise-versions: mise latest failed"; }
+  [[ "$(tail -1 "$out" | tr -d '[:space:]')" == "$MV_PREV" ]] \
+    || { cat "$out" >&2; heavy_fail "mise-versions: latest is not $MV_PREV with $MV_NEWEST blocked"; }
+  mv_fresh
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" ls-remote jq || true
+  grep -qx "$MV_NEWEST" "$out" \
+    && { cat "$out" >&2; heavy_fail "mise-versions: ls-remote still lists the blocked $MV_NEWEST"; }
+
+  # 3 and 4. The install picks the allowed version; the beacon stays here.
+  heavy_log "mise-versions §3: mise install jq@latest"
+  mv_fresh
+  heavy_mark mv-install
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install jq@latest \
+    || { cat "$out" >&2; heavy_fail "mise-versions: install jq@latest failed inside the closed world"; }
+  cw_step "$out.run" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" exec jq@latest -- jq --version \
+    || { cat "$out.run" >&2; heavy_fail "mise-versions: the installed jq did not run"; }
+  grep -q "jq-$MV_PREV" "$out.run" \
+    || { cat "$out.run" >&2; heavy_fail "mise-versions: the installed jq is not $MV_PREV"; }
+  heavy_wire_re_after mv-install "GET /proxy/$GITHUB_REG/jqlang/jq/releases/download/jq-$MV_PREV/[^ ]* -> 200" \
+    "mise-versions: the jq asset did not come through the github registry"
+  heavy_wire_seen_after mv-install "jq-$MV_NEWEST" \
+    && heavy_fail "mise-versions: a request named the blocked jq-$MV_NEWEST"
+  if heavy_wire_wait heavy_wire_re_seen_after mv-install "/proxy/$MV_REG/mise-versions/(t[?]|api/tools/|api/track)"; then
+    heavy_wire_re_after mv-install "/proxy/$MV_REG/mise-versions/(t[?]|api/tools/|api/track)[^ ]* -> 204" \
+      "mise-versions: the install beacon was not answered 204"
+  else
+    heavy_log "mise-versions: no beacon on the wire — mise exited before its fire-and-forget request"
+  fi
+  # The beacon is answered in its handler, which holds no upstream client, so
+  # the 204 above is the whole proof on the wire; `mise_versions.rs` asserts
+  # the mock upstream saw nothing. Case 5 of the RFC (a cache-hit counter) has
+  # no counter to read: version documents are not metered (RFC 0043 §13).
+  heavy_unblock "$MV_REG" jq "$MV_NEWEST"
+
+  # 6. The GitHub mirror, refused with the status mise retries elsewhere.
+  heavy_log "mise-versions §6: no github rules — the mirror is a 503 and mise asks api.github.com"
+  mv_config "$MV_REG" without-github; mv_fresh
+  heavy_mark mv-mirror
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "jq@$MV_PREV" || true
+  heavy_wire_re_after mv-mirror "GET /proxy/$MV_REG/mise-versions/api/github/[^ ]* -> 503" \
+    "mise-versions: mise did not ask the mirror, or the mirror did not answer 503"
+  heavy_log "mise-versions: with the mirror refused, mise said:"
+  heavy_client_said "$out" 'api.github.com|error' 3
+
+  # 7. The age gate, on a registry whose gate sits one day past $MV_NEWEST.
+  heavy_log "mise-versions §7: the age gate hides $MV_NEWEST"
+  mv_config "$MV_GATED_REG"; mv_fresh
+  heavy_mark mv-gate
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" ls-remote jq \
+    || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote through the gated registry failed"; }
+  grep -qx "$MV_PREV" "$out" && ! grep -qx "$MV_NEWEST" "$out" \
+    || { cat "$out" >&2; heavy_fail "mise-versions: the gate did not hide $MV_NEWEST and keep $MV_PREV"; }
+  heavy_wire_seen_after mv-gate "jq-$MV_NEWEST" \
+    && heavy_fail "mise-versions: a request named jq-$MV_NEWEST through the gated registry"
+
+  heavy_log "CLOSED-WORLD-MISE-VERSIONS-OK (latest is $MV_PREV with $MV_NEWEST blocked or too young)"
 }
 
 for phase in "${WANTED[@]}"; do

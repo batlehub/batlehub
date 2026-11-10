@@ -57,6 +57,7 @@ import {
   JETBRAINS_REGISTRY,
   LOCAL_NPM_REGISTRY,
   MAVEN_REGISTRY,
+  MISE_VERSIONS_REGISTRY,
   NIX_REGISTRY,
   NODE_REGISTRY,
   NPM_REGISTRY,
@@ -725,6 +726,28 @@ export const ARMS = [
     doc: "a release tarball",
     request: () => ({
       url: p(`/proxy/${NODE_REGISTRY}/nodedist/v22.11.0/node-v22.11.0-linux-x64.tar.gz`),
+    }),
+  },
+
+  // ── mise's versions host (RFC 0043) ───────────────────────────────────────
+  {
+    op: "mise_versions_list",
+    kind: "mise-versions",
+    registry: MISE_VERSIONS_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "data/<tool>.toml: the version list mise reads before any backend, filtered",
+    request: () => ({ url: p(`/proxy/${MISE_VERSIONS_REGISTRY}/mise-versions/data/jq.toml`) }),
+  },
+  {
+    op: "mise_versions_beacon",
+    kind: "mise-versions",
+    registry: MISE_VERSIONS_REGISTRY,
+    weight: 1,
+    expect: [204],
+    doc: "the install beacon, absorbed on site",
+    request: () => ({
+      url: p(`/proxy/${MISE_VERSIONS_REGISTRY}/mise-versions/t?tool=jq&version=1.8.1&os=linux&arch=x64`),
     }),
   },
 

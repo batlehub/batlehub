@@ -264,6 +264,7 @@ bouton désactivé — voir
 | nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 | devfile | a devfile has no readme; its description is a field of the stack index | — | versions only | yes |
 | helm | a file inside the artifact | yes | versions only | yes |
+| mise-versions | a version list carries no prose about a tool, and the tool's own documents are served by the registry that serves its bytes | — | versions only | no |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

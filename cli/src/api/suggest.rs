@@ -99,6 +99,8 @@ struct GenericPreset {
 const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     // (host, registry type, suggested name)
     ("api.github.com", "github", "github"),
+    // mise's versions host (RFC 0043): every registry tool is listed through it.
+    ("mise-versions.jdx.dev", "mise-versions", "mise-versions"),
     ("github.com", "github", "github"),
     ("codeload.github.com", "github", "github"),
     ("raw.githubusercontent.com", "github", "github"),
@@ -1299,6 +1301,12 @@ pub(crate) fn typed_url_replacements(
                 "{proxy}/$1/$2/releases/download/$3/$4",
             ),
         ],
+        // mise's versions host (RFC 0043): its whole surface under one rule —
+        // the lists, the install beacon and the GitHub mirror the kind refuses.
+        "mise-versions" => &[(
+            r"^https://mise-versions\.jdx\.dev/(.+)",
+            "{proxy}/mise-versions/$1",
+        )],
         "npm" => &[(r"^https://registry\.npmjs\.org/(.+)", "{proxy}/$1")],
         "cargo" => &[(
             r"^https://static\.crates\.io/crates/([^/]+)/([^/]+)/.+\.crate",

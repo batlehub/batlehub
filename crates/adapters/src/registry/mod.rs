@@ -144,6 +144,11 @@ pub mod conda;
 #[cfg(feature = "registry-conda")]
 pub use conda::CondaRegistryClient;
 
+#[cfg(feature = "registry-mise-versions")]
+pub mod mise_versions;
+#[cfg(feature = "registry-mise-versions")]
+pub use mise_versions::MiseVersionsRegistryClient;
+
 #[cfg(feature = "registry-nodedist")]
 pub mod nodedist;
 #[cfg(feature = "registry-nodedist")]

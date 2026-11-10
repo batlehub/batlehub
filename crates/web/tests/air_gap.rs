@@ -3112,3 +3112,21 @@ async fn why_finds_a_held_version_under_the_downloads_key() {
     let body = body_of(resp).await;
     assert_eq!(body["headline"], "pullable", "{body}");
 }
+
+/// mise's versions host (RFC 0043 §5.3): an air-gapped listing is a `404` —
+/// mise's cue to list from the tool's own registry, which composes from what it
+/// holds — and is **not** a recorded miss, because no bundle could carry it.
+/// Synthesis on, so the `404` is this kind's decision and not synthesis being
+/// off.
+#[actix_web::test]
+async fn a_mise_versions_listing_is_a_404_and_not_a_recorded_miss() {
+    let (app, lab) = holding_lab("mise-versions", true, &[]).await;
+    for path in ["data/jq.toml", "tools/jq.toml"] {
+        let resp = get(&app, &format!("/proxy/{REG}/mise-versions/{path}")).await;
+        assert_eq!(resp.status(), 404, "{path}");
+    }
+    assert!(
+        document_misses(&lab).await.is_empty(),
+        "a listing no bundle can carry must not fill the record the next export reads"
+    );
+}

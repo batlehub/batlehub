@@ -1185,6 +1185,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/v2index/sample", Coverage::Row),
     ("/proxy/{registry}/v2index/stack", Coverage::Row),
     ("/proxy/{registry}/v2/", Coverage::NoPackage("the OCI API version check; answers `{}` to everyone and names no repository")),
+    ("/proxy/{registry}/mise-versions/data/{file}", Coverage::NoRow("a version list with no local package to read and no artifact (RFC 0043): `mise_versions.rs` asserts the refusal on a closed registry and the filtered positive, and `tests/heavy/authz.sh` `live:mise-versions` drives it with a real client")),
+    ("/proxy/{registry}/mise-versions/tools/{file}", Coverage::NoRow("a version list with no local package to read and no artifact (RFC 0043): `mise_versions.rs` asserts the refusal on a closed registry and the filtered positive, and `tests/heavy/authz.sh` `live:mise-versions` drives it with a real client")),
+    ("/proxy/{registry}/mise-versions/t", Coverage::NoRow("the install beacon: reads nothing, discloses nothing, answers 204 (RFC 0043 §7); `mise_versions.rs` asserts the refusal on a closed registry")),
+    ("/proxy/{registry}/mise-versions/api/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
+    ("/proxy/{registry}/mise-versions/data/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -2452,6 +2457,8 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     // `local_nix_registry.rs` drives the pair and covers the publisher scoping
     // (`a_narinfo_cannot_claim_another_publishers_upload`), the verification
     // refusal that leaves nothing behind, and the forged-signature drop.
+    ("POST", "/proxy/{registry}/mise-versions/api/tools/{tool}", WriteCoverage::NoRow("write-shaped, writes nothing: mise's install beacon, answered 204 and forwarded nowhere (RFC 0043 §7). `mise_versions.rs` asserts the 204 and the anonymous refusal on a closed registry")),
+    ("POST", "/proxy/{registry}/mise-versions/api/track", WriteCoverage::NoRow("write-shaped, writes nothing: the 2026.1–2026.4 shape of the same beacon (RFC 0043 decision 4)")),
     ("PUT", "/proxy/{registry}/nix/nar/{file}", WriteCoverage::NoRow("half of a two-request publish: the NAR is parked with no coordinate yet, so `require_local_mode` and `releases:write` are the whole gate and there is no package to disclose. Covered by `local_nix_registry.rs`, which drives both halves — a single-request row would assert 'nothing written' about the step that exists to write")),
     ("PUT", "/proxy/{registry}/nix/{hash}.narinfo", WriteCoverage::NoRow("the claiming half: it applies the coordinate gate, but only to a NAR this same publisher already parked, so it cannot be exercised alone. Covered by `local_nix_registry.rs`")),
     // ── npm ──────────────────────────────────────────────────────────────────
