@@ -261,13 +261,19 @@ const trendText = computed(() => {
           {{ t("adminDashboard.perRegistry") }}
         </h2>
         <Table>
+          <!-- On a phone the three raw counts leave the table whole rather than
+               pushing State off-screen: State is the answer, the counts are detail. -->
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>
               <TableHead class="text-right">{{ t("adminDashboard.hitRate") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.hits") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.misses") }}</TableHead>
-              <TableHead class="text-right">{{ t("common.cached") }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{ t("common.hits") }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{
+                t("common.misses")
+              }}</TableHead>
+              <TableHead class="hidden text-right sm:table-cell">{{
+                t("common.cached")
+              }}</TableHead>
               <TableHead>{{ t("common.state") }}</TableHead>
             </TableRow>
           </TableHeader>
@@ -277,13 +283,19 @@ const trendText = computed(() => {
               <TableCell class="text-right font-mono text-sm">
                 {{ fmtPct(r.hit_rate ?? null) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ formatCount(r.artifact_hits) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ formatCount(r.artifact_misses) }}
               </TableCell>
-              <TableCell class="text-right font-mono text-sm text-muted-foreground">
+              <TableCell
+                class="hidden text-right font-mono text-sm text-muted-foreground sm:table-cell"
+              >
                 {{ fmtBytes(r.cached_bytes) }}
               </TableCell>
               <!-- State as the system draws it — pattern, word, hue — on the

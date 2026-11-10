@@ -643,6 +643,9 @@ describe("AdminPackages", () => {
     await confirmDialog(wrapper);
 
     expect(wrapper.text()).toContain("network unreachable");
+    // Shown as the failure it is, not in the result line beside "Deleted N".
+    expect(wrapper.find("p.text-destructive").text()).toContain("network unreachable");
+    expect(wrapper.find("output").exists()).toBe(false);
   });
 
   it("carries the artifact through the row's links and its identity", async () => {

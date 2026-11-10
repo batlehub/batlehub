@@ -200,8 +200,10 @@ async function deletePkg(pkg: AdminPackageSummary) {
       }),
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${res.status}`);
+      // `ErrorBody` puts the kind in `error` ("Forbidden") and the reason in
+      // `message`; the reason is the part the operator can act on.
+      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
     }
     reload();
   } catch (e: unknown) {
@@ -355,18 +357,20 @@ async function bulkDelete() {
       succeeded_count?: number;
       failed_count?: number;
       message?: string;
+      error?: string;
     };
     if (!res.ok) {
       // The same defect the comment in `bulkBlock` describes, on the one sibling
       // that went through raw `authFetch` instead of the generated client: with
       // no status check a 500 with an empty body parsed to `{}` and announced
       // "Deleted 0 packages." — a failed bulk delete reported as a success.
-      actionError.value = json.message ?? `HTTP ${res.status}`;
+      actionError.value = json.message ?? json.error ?? `HTTP ${res.status}`;
       return;
     }
     bulkResultMsg.value = bulkOutcome("deleted", json.succeeded_count ?? 0, json.failed_count ?? 0);
   } catch (e) {
-    bulkResultMsg.value = extractMessage(e);
+    // An error, not a result: written to `bulkResultMsg` it read as an outcome.
+    actionError.value = extractMessage(e);
   } finally {
     bulkLoading.value = false;
     selected.value = new Set();

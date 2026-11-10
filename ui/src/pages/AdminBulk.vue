@@ -296,7 +296,8 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         <!-- Action selector -->
         <div class="flex gap-2">
           <Button
-            :variant="action === 'block' ? 'default' : 'outline'"
+            variant="outline"
+            :aria-pressed="action === 'block'"
             size="sm"
             @click="
               action = 'block';
@@ -307,7 +308,8 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
             {{ t("common.block") }}
           </Button>
           <Button
-            :variant="action === 'unblock' ? 'default' : 'outline'"
+            variant="outline"
+            :aria-pressed="action === 'unblock'"
             size="sm"
             @click="
               action = 'unblock';

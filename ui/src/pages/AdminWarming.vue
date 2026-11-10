@@ -293,7 +293,12 @@ onMounted(() => void loadStatus());
                   </div>
                 </TableCell>
                 <TableCell class="text-right">
-                  <Button size="sm" :disabled="warming[reg.name]" @click="triggerWarm(reg.name)">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="warming[reg.name]"
+                    @click="triggerWarm(reg.name)"
+                  >
                     {{ warming[reg.name] ? t("adminWarming.warming") : t("adminWarming.warmNow") }}
                   </Button>
                 </TableCell>

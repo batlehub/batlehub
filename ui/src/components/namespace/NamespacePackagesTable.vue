@@ -115,12 +115,11 @@ function formatDate(iso: string) {
     {{ t("namespacePackagesTable.loading") }}
   </p>
   <p v-else-if="error" class="text-sm text-destructive">{{ error }}</p>
-  <p v-else-if="!pkgsData?.length" class="text-sm text-muted-foreground">
-    <EmptyState
-      :title="t('namespace.noPackagesTitle')"
-      :description="t('namespace.noPackagesBody')"
-    />
-  </p>
+  <EmptyState
+    v-else-if="!pkgsData?.length"
+    :title="t('namespace.noPackagesTitle')"
+    :description="t('namespace.noPackagesBody')"
+  />
   <template v-else>
     <Table>
       <TableHeader>

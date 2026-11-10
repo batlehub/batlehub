@@ -232,6 +232,7 @@ onMounted(() => void loadImports());
                       class="w-40"
                     />
                     <Button
+                      variant="outline"
                       size="sm"
                       :disabled="running[key(row.registry, row.repo)]"
                       @click="triggerImport(row.registry, row.repo)"

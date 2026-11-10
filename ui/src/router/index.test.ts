@@ -44,8 +44,14 @@ const ADMIN: MeResponse = { role: "admin", groups: ["admins"], has_registry_acce
  * `useAuth`), so we point `me()` at the same identity and wait for it to settle,
  * then re-assert — leaving no pending refetch to clobber the state mid-navigation.
  */
-async function setAuth(identity: MeResponse | null, token: string): Promise<void> {
+async function setAuth(
+  identity: MeResponse | null,
+  token: string,
+  oidcProvider = "",
+): Promise<void> {
   const auth = useAuth();
+  // What the OIDC callback stores; a pasted token leaves it empty.
+  auth.oidcProvider.value = oidcProvider;
   meMock.mockResolvedValue({ data: identity });
   auth.token.value = token;
   await nextTick();
@@ -121,13 +127,20 @@ describe("router navigation guards (integration)", () => {
 
   // ── requiresOidcAuth ────────────────────────────────────────────────────────
 
-  it("redirects a token-only (non-OIDC) user away from a requiresOidcAuth route", async () => {
+  it("sends a signed-in, non-OIDC user to their profile, not to sign-in", async () => {
     await setAuth(USER, "tok"); // authenticated but no auth_provider
-    expect(await go("/me/tokens")).toBe("/login");
+    expect(await go("/me/tokens")).toBe("/me/profile");
+  });
+
+  it("redirects a static-token user, whose identity still names a provider", async () => {
+    // `/me` answers `auth_provider: "static-token"` for a pasted static token:
+    // a non-empty provider is not an OIDC session.
+    await setAuth({ ...USER, auth_provider: "static-token" }, "tok");
+    expect(await go("/me/tokens")).toBe("/me/profile");
   });
 
   it("lets an OIDC-authenticated user reach a requiresOidcAuth route", async () => {
-    await setAuth(USER_OIDC, "tok");
+    await setAuth(USER_OIDC, "tok", "keycloak");
     expect(await go("/me/tokens")).toBe("/me/tokens");
   });
 
@@ -289,7 +302,7 @@ describe("router navigation guards (integration)", () => {
 
   it("resolves every registered route for an OIDC admin", async () => {
     const ADMIN_OIDC: MeResponse = { ...ADMIN, auth_provider: "keycloak" };
-    await setAuth(ADMIN_OIDC, "tok");
+    await setAuth(ADMIN_OIDC, "tok", "keycloak");
 
     const paths = [
       "/packages",
@@ -445,11 +458,11 @@ describe("information architecture", () => {
 
     it("keeps /me/tokens OIDC-only after the move", async () => {
       await setAuth(USER, "tok"); // authenticated, but no auth_provider
-      expect(await go("/me/tokens")).toBe("/login");
+      expect(await go("/me/tokens")).toBe("/me/profile");
     });
 
     it("lets an OIDC user reach /me/tokens", async () => {
-      await setAuth(USER_OIDC, "tok");
+      await setAuth(USER_OIDC, "tok", "keycloak");
       expect(await go("/me/tokens")).toBe("/me/tokens");
     });
 

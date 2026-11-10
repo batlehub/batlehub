@@ -221,7 +221,7 @@ const lifetimePresets = [7, 30, 90];
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display">
+    <PageHeader variant="display" as="h2">
       <template #title>
         <Key class="h-5 w-5 text-primary" />
         {{ t("tokensPage.personalApiTokens") }}
@@ -416,7 +416,7 @@ const lifetimePresets = [7, 30, 90];
             <Button
               v-for="g in myGroups"
               :key="g"
-              :variant="form.groups.includes(g) ? 'default' : 'outline'"
+              variant="outline"
               size="sm"
               :aria-pressed="form.groups.includes(g)"
               @click="toggleGroup(g)"
@@ -444,8 +444,9 @@ const lifetimePresets = [7, 30, 90];
             <Button
               v-for="days in lifetimePresets"
               :key="days"
-              :variant="form.expires_in_days === days ? 'default' : 'outline'"
+              variant="outline"
               size="sm"
+              :aria-pressed="form.expires_in_days === days"
               @click="form.expires_in_days = days"
             >
               {{ days }}d

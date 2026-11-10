@@ -42,6 +42,14 @@ describe("useAuth", () => {
     expect(setConfigMock).toHaveBeenCalledWith({ auth: "access1" });
   });
 
+  it("calls a session OIDC only when the OIDC callback named its provider", async () => {
+    const { isOidcSession } = useAuth();
+    storeTokens("static-tok"); // the login form's pasted token
+    expect(isOidcSession.value).toBe(false);
+    storeTokens("jwt", "refresh", 3600, "keycloak"); // the OIDC callback
+    expect(isOidcSession.value).toBe(true);
+  });
+
   it("fetches the identity and exposes isAuthenticated/isAdmin for an admin", async () => {
     meMock.mockResolvedValue({ data: ADMIN });
     const { identity, isAuthenticated, isAdmin } = useAuth();

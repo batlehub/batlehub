@@ -51,6 +51,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
 <template>
   <div class="space-y-6 max-w-4xl">
     <PageHeader
+      as="h2"
       :title="t('myNamespace.teamNamespace')"
       :description="t('myNamespace.viewAndManageThePackages')"
       variant="display"
@@ -88,12 +89,11 @@ function selectNamespace(ns: TeamNamespaceDto) {
             {{ t("myNamespace.loading") }}
           </p>
           <p v-else-if="namespacesError" class="text-sm text-destructive">{{ namespacesError }}</p>
-          <p v-else-if="!myNamespaces?.length" class="text-sm text-muted-foreground">
-            <EmptyState
-              :title="t('namespace.noClaimsTitle')"
-              :description="t('namespace.noClaimsBody')"
-            />
-          </p>
+          <EmptyState
+            v-else-if="!myNamespaces?.length"
+            :title="t('namespace.noClaimsTitle')"
+            :description="t('namespace.noClaimsBody')"
+          />
           <Table v-else>
             <TableHeader>
               <TableRow>

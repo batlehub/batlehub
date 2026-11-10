@@ -6,8 +6,10 @@ withDefaults(
     title?: string;
     description?: string;
     variant?: "default" | "display" | "poster";
+    /** `h2` for a page rendered inside a hub, whose layout already owns the `h1`. */
+    as?: "h1" | "h2";
   }>(),
-  { variant: "default" },
+  { variant: "default", as: "h1" },
 );
 </script>
 
@@ -24,7 +26,8 @@ withDefaults(
   -->
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div class="min-w-0">
-      <h1
+      <component
+        :is="as"
         :class="
           cn(
             'text-2xl font-semibold flex items-center gap-2',
@@ -42,7 +45,7 @@ withDefaults(
         "
       >
         <slot name="title">{{ title }}</slot>
-      </h1>
+      </component>
       <p
         v-if="description || $slots.description"
         :class="

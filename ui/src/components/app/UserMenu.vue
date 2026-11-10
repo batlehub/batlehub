@@ -17,10 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { roleLabel } from "@/lib/roles";
 const { t } = useI18n();
 
-const { identity, isAuthenticated, logout } = useAuth();
+const { identity, isAuthenticated, isOidcSession, logout } = useAuth();
 const router = useRouter();
-
-const isOidcUser = computed(() => isAuthenticated.value && !!identity.value?.auth_provider);
 
 const userInitials = computed(() => {
   const uid = identity.value?.user_id;
@@ -78,7 +76,7 @@ function handleLogout() {
             {{ t("userMenu.myProfile") }}
           </RouterLink>
         </DropdownMenuItem>
-        <DropdownMenuItem v-if="isOidcUser" as-child>
+        <DropdownMenuItem v-if="isOidcSession" as-child>
           <RouterLink
             to="/me/tokens"
             class="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm cursor-pointer hover:bg-accent hover:text-accent-foreground outline-none transition-colors"

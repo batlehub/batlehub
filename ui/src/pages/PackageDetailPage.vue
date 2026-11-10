@@ -1918,8 +1918,9 @@ const {
   </div>
 
   <!-- ── Administration ──────────────────────────────────────────────────
-         Everything AdminPackageDetail used to be, in place. -->
-  <template v-if="isAdmin">
+         Everything AdminPackageDetail used to be, in place. Same gate as the
+         public sheet above: it rendered under a loading or failed page too. -->
+  <template v-if="isAdmin && !loading && !error && data">
     <!-- A full-width hairline, which is how this world separates two regions —
          `Separator` with a 24px margin either side is the same line drawn by a
          component that also carries a `my-6`; the region's own `pt-6` is the

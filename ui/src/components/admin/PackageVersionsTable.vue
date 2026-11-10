@@ -351,7 +351,7 @@ async function bulkUnblock() {
     }}</span>
     <Button
       size="sm"
-      variant="destructive"
+      variant="outline"
       :disabled="bulkLoading"
       @click="ask({ kind: 'bulk-block' })"
       >{{ t("packageVersionsTable.blockSelected") }}</Button
@@ -366,8 +366,10 @@ async function bulkUnblock() {
     <Button size="sm" variant="ghost" @click="selectedIds = new Set()">{{
       t("common.clearAction")
     }}</Button>
-    <span v-if="bulkMsg" class="text-xs text-muted-foreground ml-auto">{{ bulkMsg }}</span>
   </div>
+  <!-- Outside the selection-gated bar: a success clears the selection, which
+       destroyed the message in the same tick (same fix as AdminPackages). -->
+  <output v-if="bulkMsg" class="block text-sm text-muted-foreground">{{ bulkMsg }}</output>
 
   <!-- Versions table -->
   <Card>
@@ -529,7 +531,7 @@ async function bulkUnblock() {
                 >
                 <Button
                   v-else
-                  variant="destructive"
+                  variant="outline"
                   size="sm"
                   @click="ask({ kind: 'block-one', version: v })"
                   >{{ t("common.block") }}</Button

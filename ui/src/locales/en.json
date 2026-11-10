@@ -377,8 +377,7 @@
     "unknownChannel": "No channel named {name} is configured. The subscription will save, but nothing will be dispatched until it exists.",
     "unknownEventTypes": "This subscription carries event types this console does not know. They are kept as-is unless you remove them.",
     "unsigned": "Unsigned",
-    "update": "Update",
-    "webhooksNotifications": "Webhooks & Notifications"
+    "update": "Update"
   },
   "adminPackages": {
     "allRegistries": "All registries",
@@ -556,9 +555,6 @@
     "version": "BatleHub v{version}"
   },
   "appHeader": {
-    "myNamespace": "My Namespace",
-    "myProfile": "My Profile",
-    "myTokens": "My Tokens",
     "signOut": "Sign out"
   },
   "asyncState": {

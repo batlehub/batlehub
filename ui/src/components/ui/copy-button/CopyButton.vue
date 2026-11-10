@@ -36,7 +36,13 @@ const emit = defineEmits<{ copied: [] }>();
 const copied = ref(false);
 
 async function copy() {
-  await navigator.clipboard.writeText(props.text);
+  try {
+    await navigator.clipboard.writeText(props.text);
+  } catch {
+    // Refused clipboard (no permission, plain-HTTP homelab): the text is on
+    // screen and selectable, so stay silent rather than reject unhandled.
+    return;
+  }
   copied.value = true;
   emit("copied");
   setTimeout(() => {

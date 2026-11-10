@@ -29,6 +29,7 @@ vi.mock("@/composables/useAuth", () => ({
     identity: { value: { user_id: "alice", role: "admin", auth_provider: "oidc" } },
     isAdmin: { value: true },
     isAuthenticated: { value: true },
+    isOidcSession: { value: true },
     logout,
   }),
 }));

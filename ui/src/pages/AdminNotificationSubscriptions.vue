@@ -309,14 +309,12 @@ async function testSubscription(id: string) {
 
 <template>
   <div class="space-y-6">
+    <SectionTabs :tabs="NOTIFICATIONS_TABS" />
     <PageHeader
       variant="display"
-      :title="t('adminNotifications.webhooksNotifications')"
+      :title="t('adminNav.subscriptions')"
       :description="t('adminNotifications.manageOutboundNotificationSubscriptionsAnd')"
-    />
-
-    <SectionTabs :tabs="NOTIFICATIONS_TABS" />
-    <PageHeader variant="display" :title="t('adminNav.subscriptions')">
+    >
       <template #actions>
         <Button size="sm" @click="openCreate">{{ t("adminNotifications.newSubscription") }}</Button>
       </template>
@@ -376,7 +374,7 @@ async function testSubscription(id: string) {
                       <Button variant="outline" size="sm" @click="openEdit(sub)">{{
                         t("common.edit")
                       }}</Button>
-                      <Button variant="destructive" size="sm" @click="deleteTarget = sub.id">{{
+                      <Button variant="outline" size="sm" @click="deleteTarget = sub.id">{{
                         t("common.delete")
                       }}</Button>
                     </div>

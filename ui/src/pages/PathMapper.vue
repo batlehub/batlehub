@@ -102,6 +102,7 @@ watch(pastedUrl, parseUrl);
 <template>
   <div class="max-w-2xl space-y-6">
     <PageHeader
+      as="h2"
       :title="t('pathMapper.urlMapper')"
       :description="t('pathMapper.pasteAnUpstreamUrlOr')"
       variant="display"
