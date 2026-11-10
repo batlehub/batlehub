@@ -117,7 +117,7 @@ async function clearBannerAction() {
             <select
               id="banner-level"
               v-model="bannerLevel"
-              class="h-9 border border-input px-2 font-mono text-sm bg-background"
+              class="h-9 border border-border px-2 font-mono text-sm bg-background"
             >
               <option value="info">{{ t("common.info") }}</option>
               <option value="warning">{{ t("common.warning") }}</option>

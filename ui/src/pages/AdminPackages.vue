@@ -586,7 +586,7 @@ async function runPending(): Promise<void> {
           <select
             v-model="registryFilter"
             :aria-label="t('common.registry')"
-            class="h-8 rounded-sm border border-input bg-transparent px-2 text-sm"
+            class="h-8 rounded-sm border border-border bg-transparent px-2 text-sm"
           >
             <option value="">{{ t("adminPackages.allRegistries") }}</option>
             <option v-for="r in registries ?? []" :key="r.name" :value="r.name">

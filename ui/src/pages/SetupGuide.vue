@@ -305,13 +305,11 @@ async function copy(key: string, text: string) {
         {{ t("setup.noToolMatch", { query: toolFilter }) }}
       </p>
 
-      <TabsList
-        class="flex flex-wrap h-auto gap-1 justify-start bg-transparent border-none p-0 mb-2"
-      >
-        <TabsTrigger v-for="def in visibleDefs" :key="def.id" :value="def.id" class="rounded-sm">
+      <TabsList class="mb-2">
+        <TabsTrigger v-for="def in visibleDefs" :key="def.id" :value="def.id">
           {{ def.label }}
         </TabsTrigger>
-        <TabsTrigger v-if="isAuthenticated" value="netrc" class="rounded-sm"> .netrc </TabsTrigger>
+        <TabsTrigger v-if="isAuthenticated" value="netrc"> .netrc </TabsTrigger>
       </TabsList>
 
       <!-- Dynamic registry tabs -->

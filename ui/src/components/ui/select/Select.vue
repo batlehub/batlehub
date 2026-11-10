@@ -8,9 +8,10 @@ import {
   SelectViewport,
   SelectItem,
   SelectItemText,
+  SelectItemIndicator,
 } from "radix-vue";
 import { computed } from "vue";
-import { ChevronDown } from "@lucide/vue";
+import { Check, ChevronDown } from "@lucide/vue";
 import { cn } from "@/lib/utils";
 
 const props = defineProps<{
@@ -58,27 +59,32 @@ function onUpdate(value: string) {
       :id="id"
       :class="
         cn(
-          'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between border border-border bg-ground-sunk px-3 py-2 font-mono text-sm placeholder:text-muted-foreground data-[state=open]:border-primary disabled:cursor-not-allowed disabled:opacity-50',
           $props.class,
         )
       "
     >
       <SelectValue :placeholder="placeholder" />
-      <ChevronDown class="h-4 w-4 opacity-50" />
+      <ChevronDown class="h-4 w-4 text-muted-foreground" aria-hidden="true" />
     </SelectTrigger>
     <SelectPortal>
       <SelectContent
-        class="relative z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+        class="relative z-50 min-w-[8rem] overflow-hidden border border-border bg-ground-sunk text-foreground"
         position="popper"
-        :side-offset="4"
+        :side-offset="8"
       >
         <SelectViewport class="p-1">
           <SelectItem
             v-for="opt in items"
             :key="opt.value"
             :value="opt.value"
-            class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+            class="relative flex w-full cursor-default select-none items-center py-2 pl-8 pr-2 font-mono text-sm text-muted-foreground outline-none data-[highlighted]:bg-accent data-[highlighted]:text-foreground data-[highlighted]:underline data-[highlighted]:underline-offset-[3px] data-[state=checked]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
           >
+            <!-- The highlight fill is 1.06:1, so ink and underline carry it, and
+                 the chosen option gets a mark of its own. -->
+            <SelectItemIndicator class="absolute left-2 inline-flex items-center">
+              <Check class="h-4 w-4" aria-hidden="true" />
+            </SelectItemIndicator>
             <SelectItemText>{{ opt.label }}</SelectItemText>
           </SelectItem>
         </SelectViewport>

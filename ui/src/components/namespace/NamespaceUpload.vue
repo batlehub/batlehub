@@ -330,7 +330,7 @@ const currentSnippet = computed(
             id="upload-file"
             type="file"
             :accept="acceptFor(registryType)"
-            class="block text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-sm file:border-0 file:text-xs file:font-medium file:bg-secondary file:text-secondary-foreground hover:file:bg-secondary/80 cursor-pointer"
+            class="block text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-sm file:border-0 file:text-xs file:font-medium file:bg-ground-raised file:text-foreground cursor-pointer"
             @change="onFileChange"
           />
         </div>

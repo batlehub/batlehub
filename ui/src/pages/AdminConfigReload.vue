@@ -621,7 +621,7 @@ onUnmounted(() => {
           <textarea
             v-model="configContent"
             rows="18"
-            class="w-full border border-input bg-background font-mono text-xs p-3 resize-y"
+            class="w-full border border-border bg-background font-mono text-xs p-3 resize-y"
             spellcheck="false"
             :aria-label="t('adminConfigReload.configTomlContent')"
             @input="validatedContent = null"

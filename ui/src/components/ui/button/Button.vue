@@ -66,9 +66,7 @@ const buttonVariants = cva(
            measurable: 3.68/3.41 to 5.62/7.24 on the boundary, 5.62/7.24 to
            16.88/16.64 on the label. */
         outline: `border border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground aria-pressed:text-foreground aria-pressed:border-copper ${DISABLED_DIM}`,
-        secondary: `bg-secondary text-secondary-foreground hover:bg-secondary/70 ${DISABLED_DIM}`,
         ghost: `hover:bg-accent hover:text-accent-foreground ${DISABLED_DIM}`,
-        link: `text-primary underline-offset-4 hover:underline ${DISABLED_DIM}`,
       },
       size: {
         // Vertical padding is declared even though the fixed height plus
@@ -77,8 +75,7 @@ const buttonVariants = cva(
         // it the label measures flush to the fill edge, which is what a rendered
         // scan reports and what would actually happen if the height were dropped.
         default: "h-9 px-4 py-2",
-        sm: "h-8 px-3 py-1.5 text-xs",
-        lg: "h-10 px-8 py-2",
+        sm: "h-8 px-3 py-1 text-xs",
         icon: "h-9 w-9",
       },
     },

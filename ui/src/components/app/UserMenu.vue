@@ -61,7 +61,7 @@ function handleLogout() {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        class="z-50 min-w-[11rem] rounded-sm border border-border bg-popover p-1"
+        class="z-50 min-w-[11rem] rounded-sm border border-border bg-ground-sunk p-1"
       >
         <DropdownMenuLabel
           class="px-2 py-1.5 text-xs text-muted-foreground font-mono font-normal truncate"

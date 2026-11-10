@@ -53,7 +53,7 @@ describe("Select", () => {
     expect(wrapper.text()).toContain("Choose…");
     const trigger = wrapper.find('[role="combobox"]');
     expect(trigger.classes()).toContain("flex");
-    expect(trigger.classes()).toContain("rounded-md");
+    expect(trigger.classes()).toContain("h-9");
   });
 
   it("passes the id prop to the trigger", () => {

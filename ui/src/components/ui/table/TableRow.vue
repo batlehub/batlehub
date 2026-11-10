@@ -9,7 +9,9 @@ const props = defineProps<{ class?: HTMLAttributes["class"] }>();
   <tr
     :class="
       cn(
-        'border-b border-border/60 transition-colors hover:bg-accent/50 data-[state=selected]:bg-accent',
+        // DESIGN.md: dashed at rest, solid when engaged. The hover fill alone is
+        // 1.06:1, so the divider weight is what carries the state.
+        'border-b border-dashed border-rule-soft hover:border-solid hover:border-border hover:bg-accent data-[state=selected]:bg-accent',
         props.class,
       )
     "

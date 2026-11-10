@@ -209,9 +209,7 @@ const usageSnippets = [
 
         <!-- Install tabs -->
         <Tabs default-value="download" class="mt-4">
-          <TabsList
-            class="flex flex-wrap h-auto gap-1 justify-start bg-transparent border-none p-0 mb-2"
-          >
+          <TabsList class="mb-2">
             <TabsTrigger
               v-for="(s, key) in installSnippets"
               :key="key"

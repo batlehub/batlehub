@@ -305,7 +305,7 @@ async function purge() {
             <select
               v-model="exportFormat"
               :aria-label="t('auditLog.exportFormat')"
-              class="h-8 rounded-sm border border-input bg-transparent px-2 text-sm text-foreground"
+              class="h-8 rounded-sm border border-border bg-transparent px-2 text-sm text-foreground"
             >
               <option value="csv">CSV</option>
               <option value="json">JSON</option>

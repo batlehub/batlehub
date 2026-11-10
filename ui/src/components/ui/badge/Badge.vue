@@ -22,7 +22,10 @@ const badgeVariants = cva(
            distinguishing a state. Opaque they measure 5.42/5.07 (accent) and
            7.57/5.16 (copper) on a card. */
         default: "border-primary text-primary",
-        secondary: "border-secondary bg-secondary text-secondary-foreground",
+        /* Was `border-secondary bg-secondary`: a --ground-raised border (1.06:1)
+           around a --ground-raised fill, so the fill was the only channel and
+           the boundary did not exist. Same ink, on a rule that can be seen. */
+        secondary: "border-border text-foreground",
         destructive: "border-destructive text-destructive",
         outline: "border-border text-muted-foreground",
         copper: "border-copper text-copper",

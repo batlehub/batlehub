@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const { t } = useI18n();
 
@@ -39,25 +39,23 @@ const titleText = computed(() => props.title ?? t("asyncState.couldNotLoad"));
 <template>
   <template v-if="loading">
     <slot name="loading">
-      <output class="block text-sm text-muted-foreground py-4">{{
-        t("asyncState.loading")
-      }}</output>
+      <EmptyState role="status" :title="t('asyncState.loading')" />
     </slot>
   </template>
   <template v-else-if="error">
     <slot name="error" :error="error">
-      <Alert variant="destructive" class="space-y-2">
-        <p class="font-medium">{{ titleText }}</p>
-        <p class="text-xs break-words">{{ error }}</p>
-        <Button v-if="onRetry" variant="outline" size="sm" @click="onRetry()">
-          {{ t("common.retry") }}
-        </Button>
-      </Alert>
+      <EmptyState role="alert" variant="error" :title="titleText" :description="error">
+        <template v-if="onRetry" #action>
+          <Button variant="outline" size="sm" @click="onRetry()">
+            {{ t("common.retry") }}
+          </Button>
+        </template>
+      </EmptyState>
     </slot>
   </template>
   <template v-else-if="empty">
     <slot name="empty">
-      <p class="text-sm text-muted-foreground text-center py-4">{{ emptyText }}</p>
+      <EmptyState :title="emptyText" />
     </slot>
   </template>
   <template v-else>

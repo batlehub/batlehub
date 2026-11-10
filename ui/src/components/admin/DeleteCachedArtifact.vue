@@ -100,7 +100,7 @@ async function remove() {
           <select
             id="del-registry"
             v-model="registry"
-            class="flex h-9 w-full rounded-sm border border-input bg-transparent px-3 text-sm"
+            class="flex h-9 w-full rounded-sm border border-border bg-transparent px-3 text-sm"
           >
             <option value="">{{ t("adminHealth.chooseRegistry") }}</option>
             <option v-for="r in props.registries" :key="r" :value="r">{{ r }}</option>
@@ -111,7 +111,7 @@ async function remove() {
           <select
             id="del-mode"
             v-model="mode"
-            class="flex h-9 w-full rounded-sm border border-input bg-transparent px-3 text-sm"
+            class="flex h-9 w-full rounded-sm border border-border bg-transparent px-3 text-sm"
           >
             <option value="package">{{ t("adminWarming.packageMode") }}</option>
             <option value="path">{{ t("adminWarming.pathMode") }}</option>

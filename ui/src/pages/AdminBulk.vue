@@ -348,14 +348,14 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
             v-model="csvText"
             rows="8"
             placeholder="registry,name,version,artifact,reason&#10;npm,lodash,4.17.21,,CVE-2021-23337"
-            class="flex w-full rounded-sm border border-input bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground resize-y"
+            class="flex w-full rounded-sm border border-border bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground resize-y"
           />
         </div>
 
         <!-- File upload -->
         <div class="flex items-center gap-3">
           <label
-            class="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-input text-sm cursor-pointer hover:bg-accent transition-colors"
+            class="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-border text-sm cursor-pointer hover:bg-accent transition-colors"
           >
             <Upload class="h-3.5 w-3.5" />
             {{ t("adminBulk.uploadCsvFile") }}

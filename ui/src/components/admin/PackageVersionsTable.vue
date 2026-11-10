@@ -344,7 +344,7 @@ async function bulkUnblock() {
   <!-- Bulk action bar -->
   <div
     v-if="selectedIds.size > 0"
-    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-card px-4 py-2.5"
+    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-ground-raised px-4 py-2.5"
   >
     <span class="text-sm font-medium">{{
       t("packageVersionsTable.versionsSelected", selectedIds.size)

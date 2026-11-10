@@ -1126,7 +1126,8 @@ const {
 
     <template v-else-if="error">
       <EmptyState
-        class="mx-auto max-w-[64ch] border-destructive"
+        class="mx-auto max-w-[64ch]"
+        variant="error"
         role="alert"
         :title="t('packageDetailPage.couldNotLoad', { registry, name })"
         :description="error"

@@ -8,6 +8,10 @@
  *
  * A user who is told "no packages" while a filter is silently applied concludes
  * the registry is broken. `filtered` is therefore required rather than inferred.
+ *
+ * It is also DESIGN.md's *panel*, the one bounded box for empty, loading and
+ * error states: a Pixel Small heading, copy capped at 64ch, and an `error`
+ * variant that turns the frame and the heading crimson and nothing else.
  */
 import { type HTMLAttributes } from "vue";
 import { cn } from "@/lib/utils";
@@ -17,22 +21,38 @@ const props = withDefaults(
     title: string;
     description?: string;
     filtered?: boolean;
+    variant?: "default" | "error";
     class?: HTMLAttributes["class"];
   }>(),
-  { description: "", filtered: false },
+  { description: "", filtered: false, variant: "default" },
 );
 </script>
 
 <template>
   <div
-    :class="cn('border border-border px-6 py-10 text-center', props.class)"
+    :class="
+      cn(
+        'border px-6 py-10 text-center',
+        variant === 'error' ? 'border-primary' : 'border-border',
+        props.class,
+      )
+    "
     data-testid="empty-state"
     :data-filtered="filtered ? 'true' : 'false'"
   >
-    <p class="font-mono text-sm font-semibold text-foreground">{{ title }}</p>
+    <p
+      :class="
+        cn(
+          'font-display text-sub tracking-[0.04em]',
+          variant === 'error' ? 'text-primary' : 'text-foreground',
+        )
+      "
+    >
+      {{ title }}
+    </p>
     <p
       v-if="description || $slots.description"
-      class="mx-auto mt-2 max-w-prose text-sm text-muted-foreground"
+      class="mx-auto mt-2 max-w-[64ch] text-sm text-muted-foreground [overflow-wrap:anywhere]"
     >
       <slot name="description">{{ description }}</slot>
     </p>

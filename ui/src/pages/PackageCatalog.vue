@@ -951,7 +951,7 @@ onMounted(() => {
           <select
             v-if="readmeSearchEnabled"
             :aria-label="t('packageCatalog.searchIn')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
+            class="h-9 rounded-sm border border-border bg-background px-3 font-mono text-sm text-foreground"
             :value="searchIn"
             @change="onSearchInChange(($event.target as HTMLSelectElement).value)"
           >
@@ -978,7 +978,7 @@ onMounted(() => {
           </Button>
           <select
             :aria-label="t('packageCatalog.sortPackages')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
+            class="h-9 rounded-sm border border-border bg-background px-3 font-mono text-sm text-foreground"
             :value="sort"
             @change="onSortChange(($event.target as HTMLSelectElement).value)"
           >
@@ -1100,12 +1100,7 @@ onMounted(() => {
                    control, the name is. A whole-row handler is unreachable by
                    keyboard and invisible to assistive tech, and dressing it as
                    clickable promised a target that only a mouse could take. -->
-              <TableRow
-                :class="[
-                  'border-dashed border-rule-soft align-baseline hover:border-solid hover:border-border',
-                  noteKey(row) ? 'border-b-0' : '',
-                ]"
-              >
+              <TableRow :class="['align-baseline', noteKey(row) ? 'border-b-0' : '']">
                 <TableCell class="pl-0 pr-3 py-3 align-baseline">
                   <Resolution :state="rowState(row)" :label="t(STATE_LABEL_KEYS[rowState(row)])" />
                 </TableCell>
