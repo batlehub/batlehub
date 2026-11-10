@@ -37,6 +37,7 @@ GET /api/v1/admin/config/warnings	skip: no arm yet
 POST /api/v1/admin/explore/invalidate	skip: no arm yet
 GET /api/v1/admin/exposure	skip: no arm yet
 GET /api/v1/admin/exposure/export	skip: no arm yet
+GET /api/v1/admin/findings	skip: no arm yet
 GET /api/v1/admin/flags	skip: no arm yet
 POST /api/v1/admin/gdpr/erase	skip: no arm yet
 GET /api/v1/admin/gdpr/export	skip: no arm yet

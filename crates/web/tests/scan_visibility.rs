@@ -148,6 +148,14 @@ impl VerdictRepository for Verdicts {
     ) -> Result<Vec<PackageId>, CoreError> {
         self.0.list_due_for_rescan(r, b, l).await
     }
+    async fn list_findings(
+        &self,
+        f: &batlehub_core::entities::FindingsFilter,
+        l: u64,
+        o: u64,
+    ) -> Result<(Vec<batlehub_core::entities::FindingRow>, u64), CoreError> {
+        self.0.list_findings(f, l, o).await
+    }
 }
 
 // ── the app ──────────────────────────────────────────────────────────────────
@@ -224,6 +232,38 @@ async fn app_with(
     >,
     Lab,
 ) {
+    app_opts(Opts {
+        shadow,
+        delegate,
+        ..Opts::default()
+    })
+    .await
+}
+
+#[derive(Default, Clone, Copy)]
+struct Opts {
+    shadow: bool,
+    delegate: bool,
+    /// `role:user` holds `quarantine:read` and `findings:read` on `SEC`'s
+    /// registry node, and `SEC` seals the namespace `@sealed` — the T3/T3c
+    /// registry-scoped findings reader.
+    sec_findings_reader: bool,
+}
+
+async fn app_opts(
+    Opts {
+        shadow,
+        delegate,
+        sec_findings_reader,
+    }: Opts,
+) -> (
+    impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+    Lab,
+) {
     let repo = InMemoryRepo::new();
     let repo_dyn: Arc<dyn PackageRepository> = repo.clone();
     let storage: Arc<dyn StorageBackend> = InMemoryStorageBackend::new();
@@ -260,9 +300,23 @@ async fn app_with(
             // `gates:exempt` goes to nobody by default (RFC 0015 §10): the
             // admin holds it on `SEC` only, so [Rescan] has both sides.
             if *n == SEC {
-                let node = g.registry.grants.take().unwrap_or_default();
-                g.registry.grants =
-                    Some(node.grant(SubjectMatcher::Role(Role::Admin), [Action::GatesExempt]));
+                let mut node = g.registry.grants.take().unwrap_or_default();
+                node = node.grant(SubjectMatcher::Role(Role::Admin), [Action::GatesExempt]);
+                if sec_findings_reader {
+                    node = node.grant(
+                        SubjectMatcher::Role(Role::User),
+                        [Action::QuarantineRead, Action::FindingsRead],
+                    );
+                    g.namespaces.push((
+                        "@sealed".to_owned(),
+                        batlehub_core::entities::Node::new(
+                            batlehub_core::entities::Tier::Namespace,
+                            "namespace:@sealed",
+                            Some(GrantMap::sealed()),
+                        ),
+                    ));
+                }
+                g.registry.grants = Some(node);
             }
             if delegate && *n == SEC2 {
                 g.registry.grants = Some(GrantMap::new().grant(
@@ -777,4 +831,289 @@ async fn bulk_rescan_without_system_write_is_403() {
         .set_json(serde_json::json!({ "registry": SEC }))
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 403);
+}
+
+// ── /admin/findings (RFC 0042 phase 3) ───────────────────────────────────────
+
+const FINDINGS: &str = "/api/v1/admin/findings";
+
+impl Lab {
+    /// One verdict carrying one `osv` finding.
+    async fn finding(
+        &self,
+        coord: (&str, &str, &str),
+        state: VerdictState,
+        severity: batlehub_core::entities::Severity,
+        reference: &str,
+    ) {
+        use batlehub_core::entities::{Finding, FindingKind, ReasonCode};
+        let (registry, name, version) = coord;
+        self.verdicts
+            .upsert(&Verdict {
+                package: PackageId::new(registry, name, version),
+                state,
+                reason_codes: vec![],
+                findings: vec![Finding {
+                    scanner: "osv".into(),
+                    kind: FindingKind::Vulnerability,
+                    code: ReasonCode::Vulnerability,
+                    severity,
+                    reference: Some(reference.into()),
+                    summary: format!("{reference} in {name}"),
+                    confidence: None,
+                    available_at: None,
+                    raw: serde_json::json!({ "secret": "RAW-SENTINEL" }),
+                    judged_as: None,
+                }],
+                policy_ref: format!("{registry}/default"),
+                available_at: None,
+                evaluated_at: Utc::now(),
+                last_scanned_at: Some(Utc::now()),
+                scanners_done: vec!["osv".into()],
+            })
+            .await
+            .unwrap();
+    }
+
+    /// The §4.5 mock's rows, across `SEC` and `SEC2`.
+    async fn seed_findings(&self) {
+        use batlehub_core::entities::Severity::*;
+        let f = |r, n, v| (r, n, v);
+        self.finding(
+            f(SEC, "lodash", "2.4.1"),
+            VerdictState::Denied,
+            High,
+            "GHSA-35jh-r3h4-6jhm",
+        )
+        .await;
+        self.finding(
+            f(SEC, "lodash", "2.4.0"),
+            VerdictState::Warned,
+            High,
+            "GHSA-35jh-r3h4-6jhm",
+        )
+        .await;
+        self.finding(
+            f(SEC2, "evil", "0.0.1"),
+            VerdictState::Denied,
+            Critical,
+            "MAL-2026-1234",
+        )
+        .await;
+        self.finding(
+            f(SEC, "tiny", "1.0.0"),
+            VerdictState::Allowed,
+            Low,
+            "GHSA-aaaa-bbbb-cccc",
+        )
+        .await;
+    }
+}
+
+fn coords(page: &Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            format!(
+                "{}/{}@{}",
+                r["registry"].as_str().unwrap(),
+                r["name"].as_str().unwrap(),
+                r["version"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[actix_web::test]
+async fn findings_list_filters_orders_and_groups() {
+    let (app, lab) = app(false).await;
+    lab.seed_findings().await;
+
+    let all = get(&app, FINDINGS, Some(ADMIN_TOKEN)).await;
+    assert_eq!(all["total"], 4);
+    assert_eq!(
+        coords(&all),
+        [
+            format!("{SEC2}/evil@0.0.1"),
+            format!("{SEC}/lodash@2.4.0"),
+            format!("{SEC}/lodash@2.4.1"),
+            format!("{SEC}/tiny@1.0.0"),
+        ],
+        "most severe first"
+    );
+    let first = &all["items"][0];
+    assert_eq!(first["severity"], "critical");
+    assert_eq!(first["verdict"], "denied");
+    assert_eq!(first["reference"], "MAL-2026-1234");
+    assert!(
+        !all.to_string().contains("RAW-SENTINEL"),
+        "raw never served"
+    );
+
+    // [Exempt…]: a held verdict where the admin holds gates:exempt (SEC only).
+    let exempt: Vec<bool> = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["can_exempt"].as_bool().unwrap())
+        .collect();
+    assert_eq!(exempt, [false, false, true, false]);
+
+    let q = |q: &str| format!("{FINDINGS}?{q}");
+    let high = get(&app, &q("severity=high"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(high["total"], 3, "at or above high");
+    let denied = get(&app, &q("verdict=denied"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(denied["total"], 2);
+    let prefix = get(&app, &q("reference=GHSA-35"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(prefix["total"], 2);
+    let none = get(&app, &q("scanner=guarddog"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(none["total"], 0);
+    let one = get(&app, &q(&format!("registry={SEC2}")), Some(ADMIN_TOKEN)).await;
+    assert_eq!(coords(&one), [format!("{SEC2}/evil@0.0.1")]);
+
+    let grouped = get(&app, &q("group=reference"), Some(ADMIN_TOKEN)).await;
+    let refs: Vec<&str> = grouped["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["reference"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            "GHSA-35jh-r3h4-6jhm",
+            "GHSA-35jh-r3h4-6jhm",
+            "GHSA-aaaa-bbbb-cccc",
+            "MAL-2026-1234"
+        ]
+    );
+
+    let p2 = get(&app, &q("per_page=3&page=2"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(p2["total"], 4);
+    assert_eq!(coords(&p2), [format!("{SEC}/tiny@1.0.0")]);
+}
+
+/// T3: the registries a caller reads findings on are a ceiling, and an
+/// explicit registry outside it is an empty page, not a `403`.
+#[actix_web::test]
+async fn findings_list_without_registry_is_scoped_to_granted_registries() {
+    let (app, lab) = app_opts(Opts {
+        sec_findings_reader: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.seed_findings().await;
+    let mine = get(&app, FINDINGS, Some(USER_TOKEN)).await;
+    assert!(
+        coords(&mine)
+            .iter()
+            .all(|c| c.starts_with(&format!("{SEC}/"))),
+        "{mine}"
+    );
+    assert_eq!(mine["total"], 3);
+    assert!(!mine.to_string().contains("MAL-2026-1234"));
+    assert_eq!(mine["items"][0]["can_exempt"], false, "no gates:exempt");
+}
+
+#[actix_web::test]
+async fn findings_list_for_ungranted_registry_is_empty_200() {
+    let (app, lab) = app_opts(Opts {
+        sec_findings_reader: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.seed_findings().await;
+    let other = get(
+        &app,
+        &format!("{FINDINGS}?registry={SEC2}"),
+        Some(USER_TOKEN),
+    )
+    .await;
+    assert_eq!(other["total"], 0);
+    assert_eq!(other["items"], serde_json::json!([]));
+}
+
+#[actix_web::test]
+async fn findings_list_held_nowhere_is_403() {
+    let (app, lab) = app(false).await;
+    lab.seed_findings().await;
+    assert_eq!(status_of(&app, FINDINGS, Some(USER_TOKEN)).await, 403);
+    assert_eq!(status_of(&app, FINDINGS, None).await, 403);
+}
+
+/// T3b: an active shadow on `SEC` makes `authorize_grants` answer `Ok`; the
+/// list is built on `authorize_control`, so it opens nothing.
+#[actix_web::test]
+async fn findings_list_ignores_active_shadow() {
+    let (app, lab) = app(true).await;
+    lab.seed_findings().await;
+    assert_eq!(status_of(&app, FINDINGS, Some(USER_TOKEN)).await, 403);
+}
+
+/// T3c: the registry grant reaches the list, and the namespace seal still
+/// cuts it, exactly as it cuts the per-version GET.
+#[actix_web::test]
+async fn findings_list_respects_namespace_seal() {
+    use batlehub_core::entities::Severity::Critical;
+    let (app, lab) = app_opts(Opts {
+        sec_findings_reader: true,
+        ..Opts::default()
+    })
+    .await;
+    lab.seed_findings().await;
+    lab.finding(
+        (SEC, "@sealed/core", "1.0.0"),
+        VerdictState::Denied,
+        Critical,
+        "GHSA-seal-seal-seal",
+    )
+    .await;
+    let mine = get(&app, FINDINGS, Some(USER_TOKEN)).await;
+    assert!(!mine.to_string().contains("@sealed"), "{mine}");
+    assert_eq!(
+        coords(&mine).len(),
+        3,
+        "the control: the rest of SEC is still listed"
+    );
+}
+
+/// T7 and §4.3: every malformed filter is a `400`, not an empty page.
+#[actix_web::test]
+async fn findings_list_rejects_malformed_filters() {
+    let (app, _lab) = app(false).await;
+    let long = "x".repeat(129);
+    for q in [
+        "per_page=201",
+        "per_page=0",
+        "severity=hgh",
+        "verdict=held",
+        "group=package",
+        &format!("reference={long}"),
+    ] {
+        assert_eq!(
+            status_of(&app, &format!("{FINDINGS}?{q}"), Some(ADMIN_TOKEN)).await,
+            400,
+            "{q}"
+        );
+    }
+    let ok = format!("{FINDINGS}?per_page=200&reference={}", "x".repeat(128));
+    assert_eq!(status_of(&app, &ok, Some(ADMIN_TOKEN)).await, 200);
+}
+
+/// T10: `%` and `_` in `reference` match themselves.
+#[actix_web::test]
+async fn findings_reference_filter_escapes_like_metacharacters() {
+    let (app, lab) = app(false).await;
+    lab.seed_findings().await;
+    for q in ["GHSA-%25", "GHSA-35jh_", "%25"] {
+        let page = get(
+            &app,
+            &format!("{FINDINGS}?reference={q}"),
+            Some(ADMIN_TOKEN),
+        )
+        .await;
+        assert_eq!(page["total"], 0, "{q}");
+    }
 }

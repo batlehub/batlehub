@@ -53,6 +53,8 @@ export const SECURITY_TABS = [
   // RFC 0042 phase 2: where scans are followed — the queue, the failures and
   // the verdicts by state.
   { to: "/admin/security/scans", label: "adminNav.scans" },
+  // RFC 0042 phase 3: findings across registries, by finding or by reference.
+  { to: "/admin/security/findings", label: "adminNav.findings" },
 ];
 
 export const NAMESPACES_TABS = [

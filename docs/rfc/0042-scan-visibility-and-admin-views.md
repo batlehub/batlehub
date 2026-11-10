@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 1–2 built 2026-11-10 (§17.1, §17.2); phases 3–5 to come |
+| Status      | Accepted — phases 1–3 built 2026-11-10 (§17.1–§17.3); phases 4–5 to come |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1793,7 +1793,7 @@ None.
 | --- | --- | --- |
 | 1 ✅ (§17.1) | `scan_status` (core `derive`, ports' `jobs_for`/`get_many`, `scan_status_for` with per-registry visibility, the skip, the timeout and `scan_status_unavailable`, the field on the list, detail and admin-list responses) + `ScanBadge` in the catalog's State cell, `AdminPackages` and the header; package page tabs; `usePoll` with its backoff; the worker's `exhausted:` marker (decision 34) and the index migration (decision 33); `config.db-calls.toml` gains a security registry and the budgets are re-measured; the explore-list soak arm; T1/T2/T5/T8/T8b/T15 | yes: motivations 1 and 2 |
 | 2 ✅ (§17.2) | `GET /admin/scans` with its per-registry row filter, `AdminScans.vue` (queue, failures, verdicts by state), [Rescan] wired to existing endpoints; the route in `authz_matrix.rs` and `profile_routes.txt`; T7 for `/admin/scans`, T9, T16 | yes: motivation 4 |
-| 3 | `GET /admin/findings` built on `authorize_control` with the per-row seal check, `AdminFindings.vue`, [Exempt…] reusing the exemption dialog; the route in `authz_matrix.rs` and `profile_routes.txt`; T3/T3b/T3c/T7 for `/admin/findings`/T10 | yes: motivation 3 |
+| 3 ✅ (§17.3) | `GET /admin/findings` built on `authorize_control` with the per-row seal check, `AdminFindings.vue`, [Exempt…] reusing the exemption dialog; the route in `authz_matrix.rs` and `profile_routes.txt`; T3/T3b/T3c/T7 for `/admin/findings`/T10 | yes: motivation 3 |
 | 4 | `next_rescan` on the verdict GET and in the Security tab | yes: motivation 5 |
 | 5 | `GET /admin/registries/{name}`, `registries::project` allow-list and `AuthPresence`, suggestions, `AdminRegistry.vue` (strip + tabs) + `AdminRegistries.vue`, the extracted `StatsTrendChart`, the Activity tab on `/admin/stats/history`, links from Dashboard/Health; `[stats] dashboard_url`/`registry_dashboard_url` with their validation, `monitoring_url` on both responses, the Grafana `registry` variable; URL fields through `redacted()` behind `upstreams:read`; `RegistryViews` via `PendingReload.new_registry_views`; the two `RELOAD_KEYS` rows and `hot-reload.md` regenerated (decision 32); T4/T4b/T6/T11/T12/T13/T14 in the same PR as the endpoint | yes: motivations 6 and 7 |
 
@@ -1956,4 +1956,72 @@ absent in this workspace; CI runs it) and the rendered design gate
    reads no table.
 7. **The Registry filter lists every registry the caller can see**, not only
    the `[security]` ones; picking one that does not scan shows an empty queue.
+
+### 17.3 Phase 3 — built 2026-11-10
+
+**Landed as designed:**
+
+- `VerdictRepository::list_findings(&FindingsFilter, limit, offset)`, in
+  Postgres and in memory, returning the page and the total in one statement.
+  `FindingsFilter` holds `registries`, `min_severity`, `scanner`,
+  `reference_prefix`, `verdict` and `by_reference`. Severity is ranked by a
+  `CASE` (critical → unknown; a value it does not know ranks as critical, as
+  `Severity::parse_stored` reads it); the prefix is escaped for
+  `LIKE … ESCAPE '\'`. `raw` is never loaded.
+- `GET /api/v1/admin/findings` (`handlers/security.rs` `list_findings`):
+  `findings:read` per **configured** registry through `authorize_control`,
+  `403` when held on none, the list bound into the query as a ceiling; an
+  explicit `registry` outside it answers an empty `200`. Each returned row is
+  re-checked with `config_tier_holds` (instance, registry and matching
+  namespace nodes, no shadow), so a namespace seal drops it (T3c). Each row
+  carries `can_exempt`: `gates:exempt` at the config tiers and a verdict that
+  holds the version. `400` on an unknown `severity`, `verdict` or `group`, a
+  `reference` over 128 characters, or `per_page` 0 or over 200 (T7).
+- `crates/web/tests/scan_visibility.rs`: filters, order, grouping and paging;
+  T3 (`findings_list_without_registry_is_scoped_to_granted_registries`,
+  `findings_list_for_ungranted_registry_is_empty_200`,
+  `findings_list_held_nowhere_is_403`), T3b
+  (`findings_list_ignores_active_shadow`), T3c
+  (`findings_list_respects_namespace_seal`), T7
+  (`findings_list_rejects_malformed_filters`) and T10
+  (`findings_reference_filter_escapes_like_metacharacters`). `pg_verdicts.rs`
+  covers the rank, the registry ceiling and T10 on Postgres.
+- `quarantine.sh` observation 4's phase-3 half: the `user` token gets `403`
+  on `/admin/findings`, and the admin finds the advisory, grouped by
+  reference, on the version it denied (`FINDINGS-PAGE-OK`).
+- `ui/src/pages/AdminFindings.vue` at `/admin/security/findings`, a tab of
+  *Security & Access*: the five filters and *by finding* / *by reference* on
+  the URL, the coordinate linking to the package page, verdict badges with
+  `VerdictPanel`'s mapping, the refusal text of §4.5 on `403`, the error with
+  [Retry], [Exempt…] only with `can_exempt`; both locales.
+  `AdminFindings.test.ts` covers each mock state.
+- `perf/profile_routes.txt`: `GET /api/v1/admin/findings`, `skip: no arm yet`.
+- `docs/guide/security-gates.md` § *The Findings page*, and its French twin.
+
+**Where the build differs from the text:**
+
+1. **The tests live in `scan_visibility.rs`**, not a new `admin_findings.rs`:
+   the T3c caller needed the same app, grants and stores the phase 2 tests
+   already build there.
+2. **No `authz_matrix.rs` entry**, for §17.2 deviation 1's reason.
+3. **`group=reference` is an order, not an aggregate.** The server orders by
+   reference, and the page draws consecutive rows of one advisory under one
+   header with "N versions on this page". An aggregate query would have to
+   repeat the per-row seal check inside each group and recount it; an order
+   keeps that check exact. A group that spans two pages shows on both.
+4. **No `next_offset`.** Paging is by `page`, so a page that a seal shortened
+   is followed by the next page of the query, and nothing is skipped. `total`
+   is counted before the seal check and is an upper bound; the field says so.
+5. **There was no exemption dialog to reuse.** `AdminAuthorization.vue` lists
+   exemptions and never creates one. The page has its own small dialog
+   (reason, expiry as the end of a UTC day), and it writes the gate
+   `security_verdict` — the verdict override of RFC 0018 §4.2, which is what
+   lifts a hold a finding caused — not `cve_gate`/`license_gate`, which are
+   rule gates.
+6. **`min_severity` reads the scanner's severity**, not RFC 0041's
+   `judged_as`, which is recomputed per evaluation and never stored. An
+   unrated finding is `unknown` here, whatever the registry judged it as.
+7. **§6.P observation 3 is not automated.** It needs a second token holding
+   `findings:read` on one registry only; T3 covers the rule in-process, and
+   the heavy suite covers the `403` and the admin read.
 

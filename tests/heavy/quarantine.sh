@@ -439,6 +439,22 @@ grep -q "denied" "$HEAVY_WORK/why.out" \
   || { cat "$HEAVY_WORK/why.out" >&2; heavy_fail "batlehub why does not say the verdict is denied"; }
 heavy_log "FINDING-OK ($ADVISORY on the wire, printed by npm, and in 'why')"
 
+# RFC 0042 §6.P observation 4 (phase 3): the Findings page is
+# `findings:read`'s, which the user role holds nowhere — `403` — and the
+# admin finds the advisory, by reference, on the version it denied.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/findings")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/findings, not 403"
+FINDINGS="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/findings?group=reference&reference=$ADVISORY")" \
+  || heavy_fail "/api/v1/admin/findings failed for the admin"
+python3 - "$FINDINGS" "$REG" "$PKG" "$VULN" <<'PY' || heavy_fail "the Findings page does not list $ADVISORY on $PKG@$VULN as denied: $FINDINGS"
+import json, sys
+page, reg, name, version = json.loads(sys.argv[1]), *sys.argv[2:]
+rows = [r for r in page["items"] if (r["registry"], r["name"], r["version"]) == (reg, name, version)]
+assert rows and rows[0]["verdict"] == "denied", page
+assert "raw" not in rows[0], rows[0]
+PY
+heavy_log "FINDINGS-PAGE-OK (user 403; admin sees $ADVISORY on $PKG@$VULN, denied)"
+
 # ── 3b. `download` explains a refusal (RFC 0040 heavy case 10) ───────────────
 #
 # Through the tap, so the CLI's own request is on the wire.

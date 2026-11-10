@@ -611,6 +611,28 @@ A job closed before this release carries no failure marker, so a failure older
 than the upgrade does not appear under Failures; its verdict still reads
 `SCANNER_ERROR` under *Verdicts by state*.
 
+### The Findings page {#findings-page}
+
+*Admin → Security & Access → Findings* lists what the scanners found, across
+registries (`GET /api/v1/admin/findings`). Each row names the version, the
+severity, the scanner, the advisory id and the state of the verdict the finding
+fed. The filters are the registry, a minimum severity, the scanner, the verdict
+state and an advisory-id prefix (matched literally, at most 128 characters).
+*By reference* puts each advisory's versions together, to answer "which
+versions does this CVE reach?". [Exempt…] lifts a held version's verdict: it
+asks for a reason and an expiry and writes a `security_verdict` exemption
+([Per-namespace gates and exemptions](#namespaces)).
+
+Findings name advisories that may be embargoed, so the list needs
+`findings:read`, checked per registry: you see the registries where you hold
+it, and a page where you hold it nowhere is refused. Naming another registry in
+the filter returns an empty page, not a refusal. A namespace that seals a
+package away from you removes its rows, as it does for that version's verdict.
+[Exempt…] appears where the configured grants give you `gates:exempt` and the
+verdict holds the version; the exemption endpoint checks it again. `per_page`
+is at most 200, and because of namespace seals a page can hold fewer rows than
+it asked for.
+
 ---
 
 ## Watching it {#observability}

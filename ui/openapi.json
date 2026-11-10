@@ -1504,6 +1504,116 @@
         ]
       }
     },
+    "/api/v1/admin/findings": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Findings across registries (RFC 0042 §5.2). `findings:read` per\nconfigured registry through `authorize_control`, never `authorize_grants`\n(which answers `Ok` under a shadow and for a registry with no hierarchy):\nthe registries it opens are bound into the query, and each row is then\nre-checked at its namespace, so a seal cuts the list as it cuts the\nper-version GET (T3, T3b, T3c).",
+        "operationId": "list_findings",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Only this registry. A filter, not a scope: one the caller may not\nread answers an empty page, not a `403`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "At or above this severity: `unknown`, `low`, `medium`, `high`, `critical`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scanner",
+            "in": "query",
+            "description": "Exactly this scanner (`osv`, `age`, …).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "description": "A prefix of the advisory id, matched literally; at most 128 characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "description": "Only findings of versions in this verdict state.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "description": "`finding` (default: most severe first) or `reference` (one advisory's\nversions together).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based; default 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Default 50, at most 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of findings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `severity`, `verdict` or `group`, a `reference` over 128 characters, or `per_page` over 200"
+          },
+          "403": {
+            "description": "`findings:read` is held on no registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/flags": {
       "get": {
         "tags": [
@@ -24891,6 +25001,97 @@
           "block_list",
           "ref"
         ]
+      },
+      "FindingListRow": {
+        "type": "object",
+        "description": "One finding on the Findings page.",
+        "required": [
+          "registry",
+          "name",
+          "version",
+          "scanner",
+          "kind",
+          "code",
+          "severity",
+          "summary",
+          "verdict",
+          "can_exempt"
+        ],
+        "properties": {
+          "can_exempt": {
+            "type": "boolean",
+            "description": "Whether the page draws [Exempt…]: the verdict holds the version and\nthe caller holds `gates:exempt` at the config tiers. Cosmetic: the\nexemption endpoint checks again."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ReasonCode"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registry": {
+            "type": "string"
+          },
+          "scanner": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/VerdictState",
+            "description": "The state of the verdict this finding fed."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "FindingsPage": {
+        "type": "object",
+        "description": "A page of `/admin/findings`.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingListRow"
+            },
+            "description": "At most `per_page`, fewer when a namespace seal withheld rows."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matching rows inside the caller's registries across every page,\ncounted before the namespace check: an upper bound.",
+            "minimum": 0
+          }
+        }
       },
       "FirewallDto": {
         "oneOf": [

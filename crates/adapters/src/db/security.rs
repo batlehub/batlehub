@@ -7,8 +7,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use batlehub_core::entities::{
-    Finding, FindingKind, PackageId, ReasonCode, ScanJob, ScanJobFilter, ScanTrigger, Severity,
-    Verdict, VerdictState, EXHAUSTED_PREFIX,
+    Finding, FindingKind, FindingRow, FindingsFilter, PackageId, ReasonCode, ScanJob,
+    ScanJobFilter, ScanTrigger, Severity, Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
@@ -71,6 +71,19 @@ fn unzip_coords(coords: &[PackageId]) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
 /// Registry, name and version — not the `artifact` a caller's id may carry.
 fn same_coordinate(a: &PackageId, b: &PackageId) -> bool {
     a.registry == b.registry && a.name == b.name && a.version == b.version
+}
+
+/// `prefix` as a `LIKE … ESCAPE '\'` pattern that matches it literally.
+fn like_prefix(prefix: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
 }
 
 /// `artifact_verdicts` + `artifact_findings` (migrations 049, 050).
@@ -329,6 +342,91 @@ impl VerdictRepository for PgVerdictRepository {
              FROM artifact_findings WHERE severity = 'unknown' GROUP BY registry",
         )
         .await
+    }
+
+    /// One statement: the page and, through `COUNT(*) OVER ()`, the total.
+    /// `severity` is `TEXT`, so it is ranked by a `CASE` that reads a value
+    /// it does not know as critical, as `Severity::parse_stored` does.
+    async fn list_findings(
+        &self,
+        filter: &FindingsFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<FindingRow>, u64), CoreError> {
+        if filter.registries.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let rows = sqlx::query(
+            r"WITH f AS (
+                SELECT f.registry, f.package_name, f.version, f.scanner, f.kind, f.code,
+                       f.severity, f.reference, f.summary, f.confidence, f.available_at,
+                       f.id, v.state,
+                       CASE lower(f.severity)
+                           WHEN 'unknown' THEN 0 WHEN 'low' THEN 1
+                           WHEN 'medium' THEN 2 WHEN 'moderate' THEN 2
+                           WHEN 'high' THEN 3 ELSE 4 END AS rank
+                FROM artifact_findings f
+                JOIN artifact_verdicts v
+                  ON v.registry = f.registry AND v.package_name = f.package_name
+                 AND v.version = f.version
+                WHERE f.registry = ANY($1)
+                  AND ($3::text IS NULL OR f.scanner = $3)
+                  AND ($4::text IS NULL OR f.reference LIKE $4 ESCAPE '\')
+                  AND ($5::text IS NULL OR v.state = $5)
+              )
+              SELECT *, COUNT(*) OVER () AS total FROM f
+              WHERE ($2::int IS NULL OR rank >= $2)
+              ORDER BY CASE WHEN $6::bool THEN reference END NULLS LAST, rank DESC,
+                       reference NULLS LAST, registry, package_name, version, scanner, id
+              LIMIT $7 OFFSET $8",
+        )
+        .bind(&filter.registries)
+        // `Severity` is declared unknown → critical, the ranks of the `CASE`.
+        .bind(filter.min_severity.map(|s| s as i32))
+        .bind(filter.scanner.as_deref())
+        .bind(filter.reference_prefix.as_deref().map(like_prefix))
+        .bind(filter.verdict.map(|v| v.as_str()))
+        .bind(filter.by_reference)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        let total = rows.first().map_or(0, |r| r.get::<i64, _>("total") as u64);
+        let items = rows
+            .iter()
+            .map(|r| {
+                let kind: String = r.get("kind");
+                let code: String = r.get("code");
+                let severity: String = r.get("severity");
+                let state: String = r.get("state");
+                Ok(FindingRow {
+                    package: PackageId::new(
+                        r.get::<String, _>("registry"),
+                        r.get::<String, _>("package_name"),
+                        r.get::<String, _>("version"),
+                    ),
+                    finding: Finding {
+                        scanner: r.get("scanner"),
+                        kind: kind
+                            .parse::<FindingKind>()
+                            .map_err(|e| parse_err("artifact_findings.kind", e))?,
+                        code: ReasonCode::parse_stored(&code),
+                        severity: Severity::parse_stored(&severity),
+                        reference: r.try_get("reference").ok(),
+                        summary: r.get("summary"),
+                        confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
+                        available_at: r.try_get("available_at").ok(),
+                        raw: serde_json::Value::Null,
+                        judged_as: None,
+                    },
+                    verdict: state
+                        .parse()
+                        .map_err(|e| parse_err("artifact_verdicts.state", e))?,
+                })
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
+        Ok((items, total))
     }
 
     async fn list_by_state(

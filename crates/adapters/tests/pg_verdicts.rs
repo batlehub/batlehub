@@ -626,3 +626,156 @@ async fn leadership_is_one_process_at_a_time_and_released_on_drop() {
     }
     panic!("the lock was not released after the holder was dropped");
 }
+
+/// RFC 0042 phase 3: `list_findings` ranks severity (not alphabetically),
+/// stays inside `registries`, and matches `reference` literally (T10).
+#[tokio::test]
+async fn list_findings_ranks_filters_and_escapes_the_prefix() {
+    use batlehub_core::entities::FindingsFilter;
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let (_, other) = fixture(&url).await;
+    let repo = PgVerdictRepository::new(pool.clone());
+    let put = |r: String, name: &'static str, state, sev, reference: &'static str| {
+        let repo = &repo;
+        async move {
+            repo.upsert(&Verdict {
+                package: PackageId::new(&r, name, "1"),
+                state,
+                reason_codes: vec![],
+                findings: vec![Finding::new(
+                    "osv",
+                    FindingKind::Vulnerability,
+                    ReasonCode::Vulnerability,
+                    sev,
+                    reference,
+                )
+                .with_reference(reference)],
+                policy_ref: format!("{r}/default"),
+                available_at: None,
+                evaluated_at: Utc::now(),
+                last_scanned_at: Some(Utc::now()),
+                scanners_done: vec!["osv".into()],
+            })
+            .await
+            .unwrap();
+        }
+    };
+    put(
+        reg.clone(),
+        "a",
+        VerdictState::Warned,
+        Severity::Low,
+        "GHSA-b",
+    )
+    .await;
+    put(
+        reg.clone(),
+        "b",
+        VerdictState::Denied,
+        Severity::Critical,
+        "GHSA-c",
+    )
+    .await;
+    put(
+        reg.clone(),
+        "c",
+        VerdictState::Warned,
+        Severity::Medium,
+        "GHSA-a",
+    )
+    .await;
+    put(
+        other.clone(),
+        "d",
+        VerdictState::Denied,
+        Severity::Critical,
+        "GHSA-a",
+    )
+    .await;
+
+    let filter = |f: FindingsFilter| FindingsFilter {
+        registries: vec![reg.clone()],
+        ..f
+    };
+    let names = |rows: &[batlehub_core::entities::FindingRow]| {
+        rows.iter()
+            .map(|r| r.package.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let (rows, total) = repo
+        .list_findings(&filter(FindingsFilter::default()), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 3, "the other registry is never read");
+    assert_eq!(names(&rows), ["b", "c", "a"], "critical, medium, low");
+    assert!(rows.iter().all(|r| r.finding.raw.is_null()));
+    assert_eq!(rows[0].verdict, VerdictState::Denied);
+
+    let (rows, total) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                by_reference: true,
+                ..Default::default()
+            }),
+            2,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!((names(&rows), total), (vec!["c".into(), "a".into()], 3));
+
+    let (rows, _) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                min_severity: Some(Severity::Medium),
+                verdict: Some(VerdictState::Warned),
+                ..Default::default()
+            }),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(names(&rows), ["c"]);
+
+    for prefix in ["GHSA-%", "GHSA_", "%"] {
+        let (rows, total) = repo
+            .list_findings(
+                &filter(FindingsFilter {
+                    reference_prefix: Some(prefix.into()),
+                    ..Default::default()
+                }),
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (rows.len(), total),
+            (0, 0),
+            "{prefix} matched as a wildcard"
+        );
+    }
+    let (_, total) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                reference_prefix: Some("GHSA-".into()),
+                ..Default::default()
+            }),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(total, 3);
+
+    let (rows, total) = repo
+        .list_findings(&FindingsFilter::default(), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), total), (0, 0), "no registry, no rows");
+}

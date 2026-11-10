@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: ceaad7723cecb8c6
+sourceHash: f5eb7c27f7d7bccd
 ---
 
 # Contrôles de sécurité
@@ -644,6 +644,29 @@ plus 200.
 Une tâche close avant cette version ne porte pas de marqueur d'échec : un échec
 antérieur à la mise à jour n'apparaît donc pas sous Échecs ; son verdict
 affiche toujours `SCANNER_ERROR` dans *Verdicts par état*.
+
+### La page Constats {#findings-page}
+
+*Admin → Sécurité et accès → Constats* liste ce que les scanners ont trouvé,
+tous registres confondus (`GET /api/v1/admin/findings`). Chaque ligne nomme la
+version, la sévérité, le scanner, l'identifiant de l'avis et l'état du verdict
+que le constat a produit. Les filtres portent sur le registre, une sévérité
+minimale, le scanner, l'état du verdict et un préfixe d'identifiant d'avis (pris
+littéralement, 128 caractères au plus). *Par référence* regroupe les versions
+de chaque avis, pour répondre à « quelles versions cette CVE touche-t-elle ? ».
+[Exempter…] lève le verdict d'une version retenue : il demande un motif et une
+échéance, et écrit une exemption `security_verdict`
+([Garde-fous par namespace et exemptions](#namespaces)).
+
+Les constats nomment des avis qui peuvent être sous embargo : la liste demande
+donc `findings:read`, vérifié registre par registre. Vous voyez les registres où
+vous le détenez, et la page est refusée si vous ne le détenez nulle part.
+Nommer un autre registre dans le filtre renvoie une page vide, pas un refus. Un
+namespace scellé qui vous exclut retire ses lignes, comme il le fait pour le
+verdict de la version. [Exempter…] apparaît là où les droits configurés vous
+donnent `gates:exempt` et où le verdict retient la version ; l'endpoint
+d'exemption le vérifie à nouveau. `per_page` vaut au plus 200 ; à cause des
+namespaces scellés, une page peut contenir moins de lignes que demandé.
 
 ---
 

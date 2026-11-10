@@ -761,6 +761,32 @@ pub enum ScanJobFilter {
     Failed,
 }
 
+/// What `/admin/findings` reads (RFC 0042 §6.1). `registries` is a ceiling
+/// the caller's grants computed: the store never reads outside it, and an
+/// empty one lists nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FindingsFilter {
+    pub registries: Vec<String>,
+    /// At or above this severity, by rank (critical → unknown), not by the
+    /// text of the column.
+    pub min_severity: Option<Severity>,
+    pub scanner: Option<String>,
+    /// A prefix of `reference`, matched literally (`%` and `_` are not
+    /// wildcards).
+    pub reference_prefix: Option<String>,
+    pub verdict: Option<VerdictState>,
+    /// Order by reference first, so one advisory's versions sit together.
+    pub by_reference: bool,
+}
+
+/// One finding with its coordinate and the verdict it fed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindingRow {
+    pub package: PackageId,
+    pub finding: Finding,
+    pub verdict: VerdictState,
+}
+
 /// What `close_exhausted` writes before the last error of a job whose
 /// attempts ran out (RFC 0042 decision 34). The web process reads it to tell a
 /// failed scan from a finished one: an exhausted `rescan` writes no

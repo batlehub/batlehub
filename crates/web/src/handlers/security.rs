@@ -1095,6 +1095,219 @@ pub async fn list_scans(
     }))
 }
 
+// ── the Findings page (RFC 0042 phase 3) ─────────────────────────────────────
+
+/// The longest `reference` prefix `/admin/findings` takes (§4.3).
+const REFERENCE_MAX_CHARS: usize = 128;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FindingsQuery {
+    /// Only this registry. A filter, not a scope: one the caller may not
+    /// read answers an empty page, not a `403`.
+    pub registry: Option<String>,
+    /// At or above this severity: `unknown`, `low`, `medium`, `high`, `critical`.
+    pub severity: Option<String>,
+    /// Exactly this scanner (`osv`, `age`, …).
+    pub scanner: Option<String>,
+    /// A prefix of the advisory id, matched literally; at most 128 characters.
+    pub reference: Option<String>,
+    /// Only findings of versions in this verdict state.
+    pub verdict: Option<String>,
+    /// `finding` (default: most severe first) or `reference` (one advisory's
+    /// versions together).
+    pub group: Option<String>,
+    /// 1-based; default 1.
+    pub page: Option<u64>,
+    /// Default 50, at most 200.
+    pub per_page: Option<u64>,
+}
+
+/// One finding on the Findings page.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FindingListRow {
+    pub registry: String,
+    pub name: String,
+    pub version: String,
+    pub scanner: String,
+    pub kind: batlehub_core::entities::FindingKind,
+    pub code: batlehub_core::entities::ReasonCode,
+    pub severity: batlehub_core::entities::Severity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    pub summary: String,
+    /// The state of the verdict this finding fed.
+    pub verdict: VerdictState,
+    /// Whether the page draws [Exempt…]: the verdict holds the version and
+    /// the caller holds `gates:exempt` at the config tiers. Cosmetic: the
+    /// exemption endpoint checks again.
+    pub can_exempt: bool,
+}
+
+/// A page of `/admin/findings`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FindingsPage {
+    /// At most `per_page`, fewer when a namespace seal withheld rows.
+    pub items: Vec<FindingListRow>,
+    /// Matching rows inside the caller's registries across every page,
+    /// counted before the namespace check: an upper bound.
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// Findings across registries (RFC 0042 §5.2). `findings:read` per
+/// configured registry through `authorize_control`, never `authorize_grants`
+/// (which answers `Ok` under a shadow and for a registry with no hierarchy):
+/// the registries it opens are bound into the query, and each row is then
+/// re-checked at its namespace, so a seal cuts the list as it cuts the
+/// per-version GET (T3, T3b, T3c).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/findings",
+    tag = "security",
+    params(FindingsQuery),
+    responses(
+        (status = 200, description = "One page of findings", body = FindingsPage),
+        (status = 400, description = "An unknown `severity`, `verdict` or `group`, a `reference` over 128 characters, or `per_page` over 200"),
+        (status = 403, description = "`findings:read` is held on no registry"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/findings")]
+pub async fn list_findings(
+    query: web::Query<FindingsQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    use batlehub_core::entities::{FindingsFilter, Severity};
+    let opt = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let min_severity = match opt(&query.severity) {
+        None => None,
+        Some(s) => Some(Severity::parse(&s).ok_or_else(|| {
+            AppError::bad_request(format!(
+                "severity '{s}' is not one of: unknown, low, medium, high, critical"
+            ))
+        })?),
+    };
+    let verdict = match opt(&query.verdict) {
+        None => None,
+        Some(s) => Some(s.parse::<VerdictState>().map_err(|_| {
+            AppError::bad_request(format!(
+                "verdict '{s}' is not one of: allowed, warned, quarantined, denied"
+            ))
+        })?),
+    };
+    let by_reference = match opt(&query.group).as_deref() {
+        None | Some("finding") => false,
+        Some("reference") => true,
+        Some(g) => {
+            return Err(AppError::bad_request(format!(
+                "group '{g}' is not one of: finding, reference"
+            )))
+        }
+    };
+    let reference_prefix = opt(&query.reference);
+    if reference_prefix
+        .as_ref()
+        .is_some_and(|r| r.chars().count() > REFERENCE_MAX_CHARS)
+    {
+        return Err(AppError::bad_request(format!(
+            "reference is at most {REFERENCE_MAX_CHARS} characters"
+        )));
+    }
+    let per_page = query.per_page.unwrap_or(50);
+    if per_page == 0 || per_page > SCANS_MAX_PER_PAGE {
+        return Err(AppError::bad_request(format!(
+            "per_page must be between 1 and {SCANS_MAX_PER_PAGE}"
+        )));
+    }
+    let page = query.page.unwrap_or(1).max(1);
+
+    let (configured, verdicts) = {
+        let hot = svc.hot.read().await;
+        let mut r: Vec<String> = hot.registries.keys().cloned().collect();
+        r.sort();
+        (r, hot.verdicts.clone())
+    };
+    let mut readable = Vec::new();
+    for r in configured {
+        if authz::authorize_control(&svc.hot, Some(&r), &identity.0, Action::FindingsRead)
+            .await
+            .is_ok()
+        {
+            readable.push(r);
+        }
+    }
+    if readable.is_empty() {
+        return Err(AppError::forbidden(
+            "findings:read is held on no registry: findings name advisories that may be embargoed",
+        ));
+    }
+    if let Some(only) = opt(&query.registry) {
+        readable.retain(|r| *r == only);
+    }
+    let empty = FindingsPage {
+        items: Vec::new(),
+        total: 0,
+        page,
+        per_page,
+    };
+    let Some(verdicts) = verdicts.filter(|_| !readable.is_empty()) else {
+        return Ok(HttpResponse::Ok().json(empty));
+    };
+    let filter = FindingsFilter {
+        registries: readable,
+        min_severity,
+        scanner: opt(&query.scanner),
+        reference_prefix,
+        verdict,
+        by_reference,
+    };
+    let offset = (page - 1).saturating_mul(per_page);
+    let (rows, total) = verdicts
+        .list_findings(&filter, per_page, offset)
+        .await
+        .map_err(AppError::from)?;
+    let coords: Vec<PackageId> = rows.iter().map(|r| r.package.clone()).collect();
+    let holds = authz::config_tier_holds(
+        &svc.hot,
+        &identity.0,
+        &coords,
+        &[Action::FindingsRead, Action::GatesExempt],
+    )
+    .await;
+    let items = rows
+        .into_iter()
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(r, h)| FindingListRow {
+            can_exempt: h.get(1).copied().unwrap_or(false) && !r.verdict.is_served(),
+            verdict: r.verdict,
+            scanner: r.finding.scanner,
+            kind: r.finding.kind,
+            code: r.finding.code,
+            severity: r.finding.severity,
+            reference: r.finding.reference,
+            summary: r.finding.summary,
+            registry: r.package.registry,
+            name: r.package.name,
+            version: r.package.version,
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(FindingsPage {
+        items,
+        total,
+        page,
+        per_page,
+    }))
+}
+
 /// A bulk rescan or a backfill.
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct BulkScanRequest {

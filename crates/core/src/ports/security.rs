@@ -3,7 +3,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::entities::{PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict, VerdictState};
+use crate::entities::{
+    FindingRow, FindingsFilter, PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict,
+    VerdictState,
+};
 use crate::error::CoreError;
 
 /// `artifact_verdicts` and `artifact_findings`.
@@ -52,6 +55,20 @@ pub trait VerdictRepository: Send + Sync {
         before: DateTime<Utc>,
         limit: u64,
     ) -> Result<Vec<PackageId>, CoreError>;
+
+    /// The findings list (RFC 0042 §6.2): one page of findings inside
+    /// `filter.registries`, most severe first, with the total before paging.
+    /// `raw` is not loaded. The default refuses, as `list_jobs` does.
+    async fn list_findings(
+        &self,
+        _filter: &FindingsFilter,
+        _limit: u64,
+        _offset: u64,
+    ) -> Result<(Vec<FindingRow>, u64), CoreError> {
+        Err(CoreError::Other(anyhow::anyhow!(
+            "this verdict store cannot list findings"
+        )))
+    }
 
     /// Per registry, how many versions hold a finding of severity
     /// `unknown` — release N's upgrade count (RFC 0041 §6.8). `None` when

@@ -10,7 +10,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use batlehub_core::entities::{
-    PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict, VerdictState, EXHAUSTED_PREFIX,
+    FindingRow, FindingsFilter, PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict,
+    VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
@@ -83,6 +84,72 @@ impl VerdictRepository for InMemoryVerdictRepository {
             }
         }
         Ok(Some(counts.into_iter().collect()))
+    }
+
+    /// Mirrors the Postgres order: by reference first when asked, then most
+    /// severe, reference, coordinate, scanner.
+    async fn list_findings(
+        &self,
+        filter: &FindingsFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<FindingRow>, u64), CoreError> {
+        let rows = self.rows.read().await;
+        let mut out: Vec<FindingRow> = rows
+            .values()
+            .filter(|v| filter.registries.contains(&v.package.registry))
+            .filter(|v| filter.verdict.is_none_or(|s| s == v.state))
+            .flat_map(|v| {
+                v.findings.iter().map(|f| FindingRow {
+                    package: v.package.clone(),
+                    finding: batlehub_core::entities::Finding {
+                        raw: serde_json::Value::Null,
+                        ..f.clone()
+                    },
+                    verdict: v.state,
+                })
+            })
+            .filter(|r| filter.min_severity.is_none_or(|m| r.finding.severity >= m))
+            .filter(|r| {
+                filter
+                    .scanner
+                    .as_ref()
+                    .is_none_or(|s| *s == r.finding.scanner)
+            })
+            .filter(|r| {
+                filter.reference_prefix.as_ref().is_none_or(|p| {
+                    r.finding
+                        .reference
+                        .as_ref()
+                        .is_some_and(|x| x.starts_with(p.as_str()))
+                })
+            })
+            .collect();
+        // `None` sorts last, as `NULLS LAST` does.
+        let reference =
+            |r: &FindingRow| (r.finding.reference.is_none(), r.finding.reference.clone());
+        out.sort_by(|a, b| {
+            let first = if filter.by_reference {
+                reference(a).cmp(&reference(b))
+            } else {
+                std::cmp::Ordering::Equal
+            };
+            first
+                .then(b.finding.severity.cmp(&a.finding.severity))
+                .then(reference(a).cmp(&reference(b)))
+                .then(a.package.registry.cmp(&b.package.registry))
+                .then(a.package.name.cmp(&b.package.name))
+                .then(a.package.version.cmp(&b.package.version))
+                .then(a.finding.scanner.cmp(&b.finding.scanner))
+        });
+        let total = out.len() as u64;
+        Ok((
+            out.into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect(),
+            total,
+        ))
     }
 
     async fn list_by_state(
