@@ -217,7 +217,7 @@ const principalTypeOptions = computed(() => [
           <Input
             id="beta-principal-id"
             v-model="addForm.principal_id"
-            placeholder="e.g. alice or team-frontend"
+            placeholder="alice"
             class="font-mono"
           />
         </div>

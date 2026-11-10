@@ -296,9 +296,9 @@ const usageSnippets = [
             <div class="px-3 pt-2 pb-1 text-xs text-muted-foreground font-mono">
               {{ te(s.label) ? t(s.label) : s.label }}
             </div>
-            <pre class="px-3 pb-3 pt-1 text-xs font-mono text-foreground/90 leading-relaxed">{{
-              s.code
-            }}</pre>
+            <pre
+              class="px-3 pb-3 pt-1 text-xs font-mono overflow-x-auto text-foreground/90 leading-relaxed"
+              >{{ s.code }}</pre>
             <CopyButton
               :text="s.code"
               size="sm"

@@ -6,6 +6,7 @@ import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -243,7 +244,7 @@ const currentSnippet = computed(
 
       <TabsContent v-if="isBinaryUpload" value="upload" class="space-y-4 pt-4">
         <template v-if="registryType === 'openvsx' || registryType === 'vscode-marketplace'">
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div class="space-y-2">
               <Label for="upload-ext-id"
                 >{{ t("namespaceUpload.extensionId") }}
@@ -270,7 +271,7 @@ const currentSnippet = computed(
           </div>
         </template>
         <template v-else-if="registryType === 'goproxy'">
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div class="space-y-2">
               <Label for="upload-module">{{ t("namespaceUpload.modulePath") }}</Label>
               <Input
@@ -292,7 +293,7 @@ const currentSnippet = computed(
           </div>
         </template>
         <template v-else-if="registryType === 'deb'">
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div class="space-y-2">
               <Label for="upload-distribution"
                 >{{ t("common.distribution") }}
@@ -335,6 +336,7 @@ const currentSnippet = computed(
           />
         </div>
 
+        <Announcer :message="success ? t('namespaceUpload.publishedSuccessfully') : ''" />
         <div class="flex items-center gap-3">
           <Button :disabled="!uploadFile || loading" @click="doUpload">
             {{ loading ? t("namespaceUpload.uploading") : t("namespaceUpload.upload") }}
@@ -345,7 +347,7 @@ const currentSnippet = computed(
           <span v-if="success" class="text-sm text-foreground">{{
             t("namespaceUpload.publishedSuccessfully")
           }}</span>
-          <span v-if="error" class="text-sm text-destructive">{{ error }}</span>
+          <span v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</span>
         </div>
       </TabsContent>
 

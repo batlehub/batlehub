@@ -533,7 +533,7 @@ async function runPending(): Promise<void> {
          the button beside the one you meant. -->
     <div
       v-if="selected.size > 0"
-      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2"
+      class="sticky top-[var(--masthead-h,4rem)] z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2"
     >
       <span class="text-sm font-medium">{{
         t("adminPackages.selectedCount", { count: selected.size }, selected.size)
@@ -571,9 +571,10 @@ async function runPending(): Promise<void> {
     <!-- Outside the selection-gated bar above: every bulk handler clears the
          selection in its `finally`, so a message rendered inside that bar was
          written into a node destroyed in the same tick and never seen. -->
-    <output v-if="bulkResultMsg" class="block text-sm text-muted-foreground">
+    <!-- A plain paragraph: the Announcer at the top already speaks it. -->
+    <p v-if="bulkResultMsg" class="text-sm text-muted-foreground">
       {{ bulkResultMsg }}
-    </output>
+    </p>
 
     <!-- Package list -->
     <Card>
@@ -794,11 +795,7 @@ async function runPending(): Promise<void> {
     <template v-if="pending?.kind === 'block-one' || pending?.kind === 'bulk-block'">
       <div class="space-y-1">
         <Label for="block-reason">{{ t("common.reason") }}</Label>
-        <Input
-          id="block-reason"
-          v-model="blockReason"
-          placeholder="CVE-2025-XXXX or policy violation"
-        />
+        <Input id="block-reason" v-model="blockReason" placeholder="CVE-2025-29927" />
       </div>
     </template>
   </DestructiveConfirm>

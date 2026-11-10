@@ -34,6 +34,27 @@ const current = computed(() => tabs.value.find((tab) => isActive(tab.to))?.to ??
 function go(to: string) {
   if (to && to !== current.value) void router.push(to);
 }
+
+/* WCAG 3.2.2: on a closed select, desktop browsers fire `change` on every
+   arrow key, so navigating on `change` turned each keystroke into a page load.
+   A keyboard choice waits for Enter; a pointer or the platform picker still
+   navigates at once. A choice left unconfirmed snaps back on blur. */
+let keyed = false;
+function onKeydown(event: KeyboardEvent) {
+  const select = event.target as HTMLSelectElement;
+  keyed = event.key !== "Enter";
+  if (event.key === "Enter") go(select.value);
+}
+function onPointerdown() {
+  keyed = false;
+}
+function onChange(event: Event) {
+  if (!keyed) go((event.target as HTMLSelectElement).value);
+}
+function onBlur(event: FocusEvent) {
+  keyed = false;
+  (event.target as HTMLSelectElement).value = current.value;
+}
 </script>
 
 <template>
@@ -50,7 +71,10 @@ function go(to: string) {
       id="section-tab-select"
       class="h-10 w-full border border-border bg-background px-3 font-mono text-sm"
       :value="current"
-      @change="go(($event.target as HTMLSelectElement).value)"
+      @pointerdown="onPointerdown"
+      @keydown="onKeydown"
+      @change="onChange"
+      @blur="onBlur"
     >
       <option v-for="tab in tabs" :key="tab.to" :value="tab.to">{{ t(tab.label) }}</option>
     </select>

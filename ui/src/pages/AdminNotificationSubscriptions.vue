@@ -24,6 +24,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -393,7 +394,8 @@ async function testSubscription(id: string) {
         </Card>
       </AsyncState>
 
-      <p v-if="toggleError" class="text-sm text-destructive">{{ toggleError }}</p>
+      <p v-if="toggleError" role="alert" class="text-sm text-destructive">{{ toggleError }}</p>
+      <Announcer :message="testMsg ?? ''" :assertive="testFailed" />
       <p
         v-if="testMsg"
         class="text-sm"
@@ -449,7 +451,7 @@ async function testSubscription(id: string) {
             v-model="form.package_name"
             :options="packageSuggestions.options.value"
             :loading="packageSuggestions.loading.value"
-            placeholder="e.g. serde"
+            placeholder="serde"
             class="font-mono"
           />
         </div>
@@ -464,6 +466,7 @@ async function testSubscription(id: string) {
               v-for="et in ALL_EVENT_TYPES"
               :key="et"
               type="button"
+              :aria-pressed="form.event_types.includes(et)"
               class="px-2 py-1 rounded-sm border text-xs font-mono transition-colors"
               :class="
                 form.event_types.includes(et)
@@ -503,7 +506,7 @@ async function testSubscription(id: string) {
             id="notif-channel"
             v-model="form.channel_name"
             :options="channelOptions"
-            placeholder="e.g. my-slack"
+            placeholder="ops-slack"
             class="font-mono"
           />
           <!--

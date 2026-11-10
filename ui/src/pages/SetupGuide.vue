@@ -254,7 +254,7 @@ async function copy(key: string, text: string) {
               :href="docsUrl('use/cli#setup-apply', locale)"
               target="_blank"
               rel="noopener noreferrer"
-              class="underline underline-offset-2 hover:text-foreground"
+              class="text-primary underline underline-offset-[3px]"
               >{{ t("setupGuide.setupApplyLink") }}</a
             ></template
           >
@@ -279,11 +279,9 @@ async function copy(key: string, text: string) {
       <p v-else-if="isOidc" class="mb-3 text-xs text-muted-foreground">
         <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
           <template #link
-            ><RouterLink
-              to="/me/tokens"
-              class="underline underline-offset-2 hover:text-foreground"
-              >{{ t("setupGuide.personalApiToken") }}</RouterLink
-            ></template
+            ><RouterLink to="/me/tokens" class="text-primary underline underline-offset-[3px]">{{
+              t("setupGuide.personalApiToken")
+            }}</RouterLink></template
           >
         </i18n-t>
       </p>
@@ -408,7 +406,7 @@ async function copy(key: string, text: string) {
                 <template #link
                   ><RouterLink
                     to="/me/tokens"
-                    class="underline underline-offset-2 hover:text-foreground transition-colors"
+                    class="text-primary underline underline-offset-[3px]"
                     >{{ t("setupGuide.personalApiToken") }}</RouterLink
                   ></template
                 >

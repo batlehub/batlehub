@@ -357,7 +357,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
         <!-- File upload -->
         <div class="flex items-center gap-3">
           <label
-            class="flex items-center gap-2 px-3 py-2 rounded-sm border border-border text-sm cursor-pointer hover:bg-accent transition-colors"
+            class="flex items-center gap-2 px-3 py-2 rounded-sm border border-border text-sm cursor-pointer hover:bg-accent transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--focus)]"
           >
             <Upload class="h-3.5 w-3.5" />
             {{ t("adminBulk.uploadCsvFile") }}

@@ -346,7 +346,7 @@ async function bulkUnblock() {
   <!-- Bulk action bar -->
   <div
     v-if="selectedIds.size > 0"
-    class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-ground-raised px-4 py-2"
+    class="sticky top-[var(--masthead-h,4rem)] z-30 flex items-center gap-3 rounded-sm border bg-ground-raised px-4 py-2"
   >
     <span class="text-sm font-medium">{{
       t("packageVersionsTable.versionsSelected", selectedIds.size)
@@ -422,7 +422,7 @@ async function bulkUnblock() {
                 v-if="isPreRelease(v.version)"
                 variant="outline"
                 class="ml-1 text-xs align-middle"
-                >pre-release</Badge
+                >{{ t("packageVersionsTable.preRelease") }}</Badge
               >
               <!-- In the version cell rather than a column of its own: RFC
                    0004-bis §6.1's verdict on this table is that it is already

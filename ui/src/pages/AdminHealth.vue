@@ -262,7 +262,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                 <p class="text-xl font-semibold tabular-nums">
                   {{ formatCount(reg.package_count) }}
                 </p>
-                <p class="text-xs text-muted-foreground">tracked</p>
+                <p class="text-xs text-muted-foreground">{{ t("adminHealth.tracked") }}</p>
               </div>
 
               <!-- Cache size -->
@@ -272,7 +272,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                   {{ fmtBytes(reg.total_size_bytes ?? null) }}
                 </p>
                 <p class="text-xs text-muted-foreground">
-                  {{ reg.cached_artifact_count }} artifacts
+                  {{ t("adminHealth.artifactCount", reg.cached_artifact_count) }}
                 </p>
               </div>
 
@@ -310,7 +310,12 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
             <!-- Recent errors -->
             <div>
               <button
+                type="button"
                 class="flex items-center gap-2 w-full text-left font-mono text-sm font-medium py-1 hover:text-accent-foreground transition-colors"
+                :aria-expanded="expandedErrors.has(reg.registry)"
+                :aria-controls="
+                  expandedErrors.has(reg.registry) ? `health-errors-${reg.registry}` : undefined
+                "
                 @click="toggleErrors(reg.registry)"
               >
                 <!-- Healthy mirrors the degraded branch below, in ink rather
@@ -341,6 +346,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 
               <div
                 v-if="expandedErrors.has(reg.registry) && reg.recent_errors.length > 0"
+                :id="`health-errors-${reg.registry}`"
                 class="mt-2 rounded-sm border overflow-x-auto"
               >
                 <Table :label="t('adminHealth.errorsIn24h', reg.recent_errors.length)">
@@ -363,7 +369,9 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                       </TableCell>
                       <TableCell class="text-xs">
                         <span v-if="err.user_id">{{ err.user_id }}</span>
-                        <span v-else class="text-muted-foreground italic">anonymous</span>
+                        <span v-else class="text-muted-foreground italic">{{
+                          t("adminHealth.anonymous")
+                        }}</span>
                       </TableCell>
                       <TableCell class="font-mono text-xs">
                         {{ err.package_name

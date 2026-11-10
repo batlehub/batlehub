@@ -12,6 +12,7 @@ const { banner } = useBanner();
        full-bleed rows of the shell share one margin. -->
   <div
     v-if="banner"
+    :role="banner.level === 'error' ? 'alert' : 'status'"
     :class="[
       'border-b px-4 md:px-6 py-2 flex items-center gap-2 text-sm font-medium',
       banner.level === 'error'

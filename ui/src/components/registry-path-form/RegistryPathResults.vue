@@ -25,11 +25,12 @@ function fullUrl(path: string): string {
       <div
         v-for="entry in paths"
         :key="entry.url"
-        class="flex items-center gap-3 px-4 py-3"
+        class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3"
         :class="entry.available ? '' : 'text-muted-foreground'"
       >
-        <span class="w-44 shrink-0 text-xs text-muted-foreground">{{ entry.label }}</span>
-        <code class="flex-1 text-xs font-mono truncate" :title="fullUrl(entry.url)">
+        <span class="w-full shrink-0 text-xs text-muted-foreground sm:w-44">{{ entry.label }}</span>
+        <!-- Wrapped, not truncated: on a phone the URL is the datum. -->
+        <code class="min-w-0 flex-1 text-xs font-mono [overflow-wrap:anywhere]">
           {{ fullUrl(entry.url) }}
         </code>
         <CopyButton

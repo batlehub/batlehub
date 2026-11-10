@@ -36,6 +36,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/useSuggestions";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { Alert } from "@/components/ui/alert";
 import { AsyncState } from "@/components/ui/async-state";
 import { Label } from "@/components/ui/label";
@@ -340,7 +341,7 @@ onMounted(async () => {
       </h2>
 
       <form class="space-y-4 max-w-2xl" @submit.prevent="explain">
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="space-y-1">
             <label for="az-registry" class="text-sm font-medium">{{ t("common.registry") }}</label>
             <Select
@@ -406,8 +407,15 @@ onMounted(async () => {
         </Button>
       </form>
 
-      <p v-if="explainError" class="text-sm text-destructive">{{ explainError }}</p>
+      <p v-if="explainError" role="alert" class="text-sm text-destructive">{{ explainError }}</p>
 
+      <Announcer
+        :message="
+          explained
+            ? [explained.decision.toUpperCase(), explained.reason].filter(Boolean).join('. ')
+            : ''
+        "
+      />
       <div v-if="explained" class="space-y-3" data-testid="explain-result">
         <p class="text-sm font-semibold">
           <span :class="explained.decision === 'allow' ? 'text-foreground' : 'text-destructive'">{{

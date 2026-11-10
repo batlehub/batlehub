@@ -28,6 +28,7 @@ import type {
 } from "@/client/types.gen";
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -1309,7 +1310,7 @@ onMounted(() => {
               </TableRow>
             </template>
 
-            <!-- Upstream loading indicator -->
+            <!-- Upstream loading indicator (announced by the Announcer after the table) -->
             <TableRow v-if="loadingUpstream" class="border-b-0 hover:bg-transparent">
               <TableCell colspan="5" class="px-0 py-2 text-center text-xs text-muted-foreground">{{
                 t("packageCatalog.searchingUpstreamRegistries")
@@ -1317,6 +1318,9 @@ onMounted(() => {
             </TableRow>
           </TableBody>
         </Table>
+        <Announcer
+          :message="loadingUpstream ? t('packageCatalog.searchingUpstreamRegistries') : ''"
+        />
         <!-- A cap that applied, said out loud. A silently shortened list reads
              as "that is all there is", which is a lie about the catalogue. -->
         <p v-if="searchTruncated" class="mt-2 text-xs text-muted-foreground">

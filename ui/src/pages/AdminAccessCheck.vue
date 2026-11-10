@@ -19,6 +19,7 @@ import {
 } from "@/composables/useSuggestions";
 
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 const { t } = useI18n();
 
 /** RFC 0004-bis §6.2: the registry set is closed, small and already fetched. */
@@ -48,6 +49,19 @@ const subjectSuggestions = useSubjectSuggestions(userId);
 const result = ref<AccessSimulationResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+// The verdict block is mounted by `v-if`, so it cannot be its own live region.
+const verdictAnnouncement = computed(() =>
+  result.value
+    ? [
+        result.value.decision === "allow"
+          ? t("adminAccessCheck.allow")
+          : t("adminAccessCheck.deny"),
+        result.value.reason,
+      ]
+        .filter(Boolean)
+        .join(". ")
+    : "",
+);
 
 /** The layers the answer did not account for, named so the gap is visible. */
 const uncovered = computed(() => {
@@ -154,7 +168,7 @@ async function simulate() {
     />
 
     <form class="space-y-4 max-w-lg" @submit.prevent="simulate">
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-registry" class="text-sm font-medium">{{ t("common.registry") }}</label>
           <Select
@@ -208,7 +222,7 @@ async function simulate() {
         {{ t("adminAccessCheck.simulatedIdentity") }}
       </p>
 
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div class="space-y-1">
           <label for="aac-role" class="text-sm font-medium">{{ t("common.role") }}</label>
           <Select
@@ -271,11 +285,13 @@ async function simulate() {
 
     <div
       v-if="error"
+      role="alert"
       class="rounded-sm border border-destructive/50 px-4 py-3 text-sm text-destructive"
     >
       {{ error }}
     </div>
 
+    <Announcer :message="verdictAnnouncement" />
     <div
       v-if="result"
       class="rounded-sm border px-4 py-3 space-y-1"
@@ -300,15 +316,19 @@ async function simulate() {
       -->
       <p v-if="result.blocked_by === 'account'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByAccount") }}
-        <RouterLink to="/admin/security/blocks" class="text-primary hover:underline">{{
-          t("adminAccessCheck.seeBlocks")
-        }}</RouterLink>
+        <RouterLink
+          to="/admin/security/blocks"
+          class="text-primary underline underline-offset-[3px]"
+          >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
+        >
       </p>
       <p v-else-if="result.blocked_by === 'ip'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByIp") }}
-        <RouterLink to="/admin/security/blocks" class="text-primary hover:underline">{{
-          t("adminAccessCheck.seeBlocks")
-        }}</RouterLink>
+        <RouterLink
+          to="/admin/security/blocks"
+          class="text-primary underline underline-offset-[3px]"
+          >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
+        >
       </p>
       <!--
         And what it did *not* look at. An `allow` over two unconsulted layers

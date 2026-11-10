@@ -221,7 +221,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
           <Input
             id="team-ns-prefix"
             v-model="claimForm.prefix"
-            placeholder="e.g. frontend or frontend/ui"
+            placeholder="frontend/ui"
             class="font-mono"
           />
           <p class="text-xs text-muted-foreground">
@@ -237,7 +237,7 @@ const claimedBySuggestions = useSubjectSuggestions(toRef(() => claimForm.value.c
           <Input
             id="team-ns-group-id"
             v-model="claimForm.group_id"
-            placeholder="e.g. oidc:frontend-team"
+            placeholder="oidc:frontend-team"
             class="font-mono"
           />
           <p class="text-xs text-muted-foreground">

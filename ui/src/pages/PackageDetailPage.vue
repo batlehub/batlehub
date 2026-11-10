@@ -1072,7 +1072,7 @@ const {
          catalog's search, scope, sort, page and scroll offset when the reader
          came from there. A modified click stays the browser's.
 
-         `top-16 z-30` is the offset the console's other two sticky bars already
+         `top-[var(--masthead-h)] z-30` (set by `AppHeader`) is the offset the console's other two sticky bars already
          use (`AdminPackages.vue`, `PackageVersionsTable.vue`). `top-0 z-10`
          pinned this at viewport y=0 — the same line `AppHeader`'s `sticky top-0
          z-40` opaque bar occupies — so the crumb, the version and the Resolution
@@ -1080,7 +1080,7 @@ const {
          the opposite of what the note above claims for it. -->
     <nav
       :aria-label="t('packageDetailPage.breadcrumb')"
-      class="sticky top-16 z-30 -mx-4 border-b border-rule-soft bg-background px-4 py-3 md:-mx-6 md:px-6"
+      class="sticky top-[var(--masthead-h,4rem)] z-30 -mx-4 border-b border-rule-soft bg-background px-4 py-3 md:-mx-6 md:px-6"
     >
       <ol class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         <li>

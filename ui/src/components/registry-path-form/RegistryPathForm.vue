@@ -23,7 +23,7 @@ const registryOptions = computed(() =>
 );
 const values = defineModel<Record<string, string>>("values", { required: true });
 
-const GRID_COLS: Record<number, string> = { 2: "grid-cols-2", 3: "grid-cols-3" };
+const GRID_COLS: Record<number, string> = { 2: "sm:grid-cols-2", 3: "sm:grid-cols-3" };
 
 const rows = computed<PathFieldDef[][]>(() => {
   const result: PathFieldDef[][] = [];
