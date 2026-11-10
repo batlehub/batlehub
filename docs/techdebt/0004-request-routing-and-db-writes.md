@@ -2,8 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Open |
+| **Status** | Paid |
 | **Found** | 2026-11-09, PR #297: `tests/heavy/db_calls.sh`, the `breaking-point` label ([run 42517429475](https://github.com/batlehub/batlehub/actions/runs/42517429475)) and the `profile` label ([run 42517263643](https://github.com/batlehub/batlehub/actions/runs/42517263643)) |
+| **Paid** | `42eb100` (§1), `995e301` (§2), `752c175` (§3), `2cbea74` (§4), 2026-11-10; the gains under load are not re-measured, see each section |
 | **Area** | `crates/web/src/lib.rs` (routing), access events, `[database]` defaults, `/healthz` |
 
 PR #297 took the per-download reads off the database (an in-process read
