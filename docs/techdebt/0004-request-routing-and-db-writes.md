@@ -49,6 +49,25 @@ re-measured.
 
 Every download inserts an `access_events` row (and the first-sight `package_statuses` row) in the request's own statement: ~69 M rows/day at 800 req/s, each holding a pool connection. Batch them (a channel drained every ~100 ms into one multi-row `INSERT` or `COPY`), keeping the "no event lost on a clean shutdown" property; then decide retention against the purge job's cost.
 
+**Paid** (`perf(db): write access events in batches`). `PgPackageRepository`
+hands each event to `AccessBatcher` (`crates/adapters/src/db/packages/access_batch.rs`),
+whose task writes what arrived in the last 100 ms (at most 1 000 rows) as one
+`UNNEST` statement carrying both inserts; `created_at` is the event's own
+timestamp, so a row still lands in its seal window (sealed one window late,
+RFC 0036 §5.3). No event is dropped on that path: a full queue (10 000) writes
+inline as before, a failed batch is retried row by row, and the server flushes
+the queue after actix has drained its requests on a clean shutdown. Batching is
+started by the server only; a repository built without it (every integration
+test) writes inline. `pg_hot_path.rs` checks the batched rows against the
+inline ones on a real Postgres, a coordinate repeated in one batch included.
+
+`tests/heavy/db_calls.sh` shows the write leaving the request: on
+`proxy-tarball-pat` the request itself runs no statement and the batch is
+counted as spawned. The harness sends one request at a time, so its batches
+hold one row; what it buys under load, one connection per 100 ms instead of one
+per download, has not been measured with `breaking-point`. Retention against
+the purge job's cost is left to [TD-0002](/techdebt/0002-feat-devfile-review-leftovers).
+
 ## 3. The pool size default of 10
 
 It is the measured ceiling (`s3-redis-pool50` serves 800 req/s clean where the 10-connection arms break). Raise the default to 20–30, document sizing per replica, and recommend PgBouncer (transaction mode) once there are several replicas; the read cache's `LISTEN` holds one connection of the pool.
