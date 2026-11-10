@@ -83,6 +83,18 @@ impl VerdictRepository for InMemoryVerdictRepository {
         Ok(Some(counts.into_iter().collect()))
     }
 
+    async fn count_by_registry_and_state(
+        &self,
+    ) -> Result<Vec<(String, VerdictState, u64)>, CoreError> {
+        let mut counts: HashMap<(String, VerdictState), u64> = HashMap::new();
+        for v in self.rows.read().await.values() {
+            *counts
+                .entry((v.package.registry.clone(), v.state))
+                .or_default() += 1;
+        }
+        Ok(counts.into_iter().map(|((r, s), n)| (r, s, n)).collect())
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,

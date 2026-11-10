@@ -5726,6 +5726,38 @@
         ]
       }
     },
+    "/api/v1/admin/verdicts/summary": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Verdict counts per state and recent holds, across every registry with a\n`[security]` profile. `quarantine:read` at the instance tier, as the\nlisting (RFC 0042 decision 8).",
+        "operationId": "verdict_summary",
+        "responses": {
+          "200": {
+            "description": "Counts and recent holds per registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictSummaryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          },
+          "404": {
+            "description": "No verdict store in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/warming": {
       "get": {
         "tags": [
@@ -25451,6 +25483,45 @@
           "refused"
         ]
       },
+      "HeldVersion": {
+        "type": "object",
+        "description": "A recently held version, as the summary names it: the coordinate, the\nstate and its reason codes — never the findings, which stay behind\n`findings:read` in the per-registry listing (RFC 0042 §4.3).",
+        "required": [
+          "name",
+          "version",
+          "state",
+          "reason_codes",
+          "evaluated_at"
+        ],
+        "properties": {
+          "available_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/VerdictState"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "HelmDeleted": {
         "type": "object",
         "description": "`DELETE api/charts/{name}/{version}`.",
@@ -28011,6 +28082,30 @@
           }
         }
       },
+      "RegistryVerdictSummary": {
+        "type": "object",
+        "description": "One registry with a `[security]` profile, summarised.",
+        "required": [
+          "registry",
+          "counts",
+          "recent"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/VerdictCounts"
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldVersion"
+            },
+            "description": "Denied and quarantined versions, newest evaluation first, at most 10."
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
       "ReloadDiff": {
         "type": "object",
         "required": [
@@ -29379,6 +29474,38 @@
           }
         }
       },
+      "VerdictCounts": {
+        "type": "object",
+        "description": "How many verdicts a registry holds in each state.",
+        "required": [
+          "allowed",
+          "warned",
+          "quarantined",
+          "denied"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "denied": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "quarantined": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "warned": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "VerdictListResponse": {
         "type": "object",
         "description": "The admin listing: the verdicts of one registry, newest evaluation\nfirst, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).",
@@ -29446,6 +29573,21 @@
           "quarantined",
           "denied"
         ]
+      },
+      "VerdictSummaryResponse": {
+        "type": "object",
+        "description": "The security console's summary (RFC 0042 §5.2).",
+        "required": [
+          "registries"
+        ],
+        "properties": {
+          "registries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryVerdictSummary"
+            }
+          }
+        }
       },
       "VerifyFailure": {
         "type": "object",

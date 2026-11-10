@@ -767,6 +767,124 @@ pub async fn list_verdicts(
     }))
 }
 
+/// How many verdicts a registry holds in each state.
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct VerdictCounts {
+    pub allowed: u64,
+    pub warned: u64,
+    pub quarantined: u64,
+    pub denied: u64,
+}
+
+/// A recently held version, as the summary names it: the coordinate, the
+/// state and its reason codes — never the findings, which stay behind
+/// `findings:read` in the per-registry listing (RFC 0042 §4.3).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HeldVersion {
+    pub name: String,
+    pub version: String,
+    pub state: VerdictState,
+    pub reason_codes: Vec<String>,
+    pub evaluated_at: chrono::DateTime<chrono::Utc>,
+    pub available_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// One registry with a `[security]` profile, summarised.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RegistryVerdictSummary {
+    pub registry: String,
+    pub counts: VerdictCounts,
+    /// Denied and quarantined versions, newest evaluation first, at most 10.
+    pub recent: Vec<HeldVersion>,
+}
+
+/// The security console's summary (RFC 0042 §5.2).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VerdictSummaryResponse {
+    pub registries: Vec<RegistryVerdictSummary>,
+}
+
+const RECENT_HOLDS: usize = 10;
+
+/// Verdict counts per state and recent holds, across every registry with a
+/// `[security]` profile. `quarantine:read` at the instance tier, as the
+/// listing (RFC 0042 decision 8).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/verdicts/summary",
+    tag = "security",
+    responses(
+        (status = 200, description = "Counts and recent holds per registry", body = VerdictSummaryResponse),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
+        (status = 404, description = "No verdict store in this process"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/verdicts/summary")]
+pub async fn verdict_summary(
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
+        .await?;
+    let (verdicts, mut names) = {
+        let hot = svc.hot.read().await;
+        let names: Vec<String> = hot.security.keys().cloned().collect();
+        (hot.verdicts.clone(), names)
+    };
+    let Some(verdicts) = verdicts else {
+        return Err(AppError::not_found("no verdict store in this process"));
+    };
+    names.sort();
+    let counted = verdicts
+        .count_by_registry_and_state()
+        .await
+        .map_err(AppError::from)?;
+    let mut registries = Vec::with_capacity(names.len());
+    for registry in names {
+        let mut counts = VerdictCounts::default();
+        for (_, state, n) in counted.iter().filter(|(r, _, _)| *r == registry) {
+            *match state {
+                VerdictState::Allowed => &mut counts.allowed,
+                VerdictState::Warned => &mut counts.warned,
+                VerdictState::Quarantined => &mut counts.quarantined,
+                VerdictState::Denied => &mut counts.denied,
+            } += n;
+        }
+        let mut recent = Vec::new();
+        for state in [VerdictState::Denied, VerdictState::Quarantined] {
+            recent.extend(
+                verdicts
+                    .list_by_state(&registry, state, RECENT_HOLDS as u64)
+                    .await
+                    .map_err(AppError::from)?,
+            );
+        }
+        recent.sort_by_key(|v| std::cmp::Reverse(v.evaluated_at));
+        recent.truncate(RECENT_HOLDS);
+        registries.push(RegistryVerdictSummary {
+            registry,
+            counts,
+            recent: recent
+                .into_iter()
+                .map(|v| HeldVersion {
+                    name: v.package.name,
+                    version: v.package.version,
+                    state: v.state,
+                    reason_codes: v
+                        .reason_codes
+                        .iter()
+                        .map(|c| c.as_str().to_owned())
+                        .collect(),
+                    evaluated_at: v.evaluated_at,
+                    available_at: v.available_at,
+                })
+                .collect(),
+        });
+    }
+    Ok(HttpResponse::Ok().json(VerdictSummaryResponse { registries }))
+}
+
 /// A bulk rescan or a backfill.
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct BulkScanRequest {
