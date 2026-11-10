@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 4d93888070c410b0
+sourceHash: 9edc5f4b302c095f
 ---
 
 # Contrôle d'accès
@@ -75,11 +75,11 @@ pas une permission accordée à personne.
 | `audit:read` | lire le journal d'audit |
 | `audit:purge` | supprimer les entrées d'audit antérieures à une coupure |
 | `gdpr:erase` | pseudonymiser une personne concernée dans la piste d'audit, ses jetons et ses blocages (RFC 0036) ; non impliqué par `audit:purge` |
-| `quarantine:read` | voir qu'une version est retenue ou refusée par la couche de chaîne d'approvisionnement, ses codes de motif et sa date de disponibilité ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
-| `findings:read` | voir les constats derrière ces codes — identifiants CVE, sortie de scanner, texte SOC |
+| `quarantine:read` | voir qu'une version est retenue ou refusée par la couche de chaîne d'approvisionnement, ses codes de motif et sa date de disponibilité ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) ; détenu au niveau instance, il ouvre aussi la liste des verdicts de chaque registre ([RFC 0042](/rfc/0042-security-console-by-verb)) |
+| `findings:read` | voir les constats derrière ces codes — identifiants CVE, sortie de scanner, texte SOC ; au niveau instance, aussi dans la liste des verdicts |
 | `flags:read` | lister les signalements de vulnérabilités poussés par `[[flag_sources]]` — quelle source a dit quoi sur quelle version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
 
-Quatorze autres autorisent les **surfaces de contrôle** — le serveur lui-même
+Dix-sept autres autorisent les **surfaces de contrôle** — le serveur lui-même
 plutôt que ce qui y est publié. Ils ne formaient qu'un seul contrôle
 `require_admin` avant d'être séparés : un administrateur les détient donc tous,
 et chacun est désormais délégable seul.
@@ -100,6 +100,7 @@ et chacun est désormais délégable seul.
 | `quota:read` | lire l'usage des quotas |
 | `quota:write` | remettre à zéro les compteurs de quota d'un utilisateur |
 | `retention:run` | lancer la rétention, et épingler une version contre elle |
+| `scans:run` | mettre en file un nouveau scan en masse ou un rattrapage des verdicts d'un registre |
 | `tombstones:read` | lire les pierres tombales, et compacter leur détail |
 | `packages:read` | la liste administrative des paquets |
 
@@ -304,6 +305,32 @@ Quatre choses à savoir avant d'en écrire une :
   `releases:read` : il voit les versions qui lui ont été accordées, et rien
   d'autre. Si toutes les versions sont filtrées, le document est un `404` plutôt
   qu'un index vide — masqué veut dire absent.
+
+### Déléguer la console de sécurité {#security-console}
+
+Une équipe de sécurité n'a pas besoin d'être administratrice. Accordez à son
+groupe les verbes de sécurité au niveau **instance**, et la console lui montre
+une entrée *Sécurité*, à côté d'*Admin* plutôt que dedans :
+
+```toml
+[grants]
+"group:oidc1:secops" = ["quarantine:read", "findings:read", "flags:read",
+                        "audit:read", "scans:run"]
+```
+
+Chaque section de `/security` n'apparaît que si son verbe est détenu : versions
+retenues (`quarantine:read`), signalements poussés (`flags:read`), exposition
+(`audit:read`). `findings:read` ajoute les constats à la liste des verdicts, et
+`scans:run` permet un nouveau scan en masse ou un rattrapage. Rien d'autre ne
+s'ouvre : la configuration et la santé répondent toujours `403` au groupe.
+
+Il faut le niveau instance. Chaque utilisateur détient `quarantine:read` sur
+chaque registre par défaut, ce qui lui montre pourquoi *une* version est
+retenue ; la console liste toutes les versions retenues d'un registre, paquets
+privés compris, donc elle demande l'autorisation un niveau plus haut
+([RFC 0042](/rfc/0042-security-console-by-verb)). Le préfixe `/api/v1/admin/…`
+de ces endpoints désigne le back-office, pas le rôle : un non-administrateur qui
+détient le verbe les atteint.
 
 ### Les autres politiques {#policies}
 

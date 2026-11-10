@@ -207,4 +207,36 @@ heavy_log "  anonymous: the upstream row listed, no Fetch button"
 heavy_log "  signed in: the button read '$FETCHED_LABEL', clicked by its accessible name"
 heavy_log "  after the click: $FETCHED_NAME $FETCHED_VERSION held, and downloadable through npm's own path"
 
+# ── RFC 0042 §6.6 case 7: the console follows the verbs, not the role ───────
+#
+# A security delegate sees *Security*, gets the panels its verbs open on
+# /security, and an admin page it holds no verb for sends it to the one admin
+# page it may open (the audit log) rather than to a sign-in it already has. A plain user gets neither link
+# and is turned away from /security. Presentation only — authz.sh's matrix
+# asserts the server refuses the same caller.
+heavy_mark "security-console"
+for who in secops user; do
+  token="heavy-$who-token"
+  if node tests/heavy/console_security.mjs --base "$CONSOLE" --token "$token" \
+    "${BROWSER_ARGS[@]}" >"$HEAVY_WORK/security-$who.jsonl" 2>"$HEAVY_WORK/security-$who.err"; then RC=0; else RC=$?; fi
+  [[ $RC -eq 0 ]] || { cat "$HEAVY_WORK/security-$who.jsonl" "$HEAVY_WORK/security-$who.err" >&2; heavy_fail "the security console driver failed for $who (exit $RC)"; }
+  cat "$HEAVY_WORK/security-$who.jsonl"
+done
+python3 - "$HEAVY_WORK/security-secops.jsonl" "$HEAVY_WORK/security-user.jsonl" <<'PY' || heavy_fail "the console did not follow the caller's verbs"
+import json, sys
+secops, user = (json.loads(open(p).read().splitlines()[-1]) for p in sys.argv[1:3])
+# `/admin` too, and only for its audit log: `audit:read` is the verb of that
+# one admin page (RFC 0042 §4.3, §13), and the guard sends every other admin
+# page there.
+assert "/security" in secops["links"] and "/admin" in secops["links"], secops
+assert secops["securityLanded"] == "/security", secops
+assert {"holds-panel", "flags-panel", "exposure-panel"} <= set(secops["panels"]), secops
+assert secops["adminLanded"] == "/admin/observability/audit-log", secops
+assert "/security" not in user["links"] and "/admin" not in user["links"], user
+assert user["securityLanded"] == "/", user
+assert user["adminLanded"] == "/", user
+print("secops:", secops["links"], secops["panels"], "| user:", user["links"])
+PY
+heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and Admin as its audit log only; a user sees neither)"
+
 heavy_done CONSOLE-FETCH-HEAVY-OK

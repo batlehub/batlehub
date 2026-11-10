@@ -3,7 +3,8 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterView, RouterLink, useRoute } from "vue-router";
 import { ChevronDown, ShieldCheck } from "@lucide/vue";
-import { ADMIN_SIDEBAR } from "@/config/adminSections";
+import { ADMIN_PAGE_VERBS, ADMIN_SIDEBAR, firstAdminPage } from "@/config/adminSections";
+import { useAuth } from "@/composables/useAuth";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -13,7 +14,16 @@ function isActive(to: string) {
 }
 
 /** The section the route is in, named on the mobile trigger. */
-const currentSection = computed(() => ADMIN_SIDEBAR.find((link) => isActive(link.to)));
+const { can } = useAuth();
+/** The sections holding at least one page the viewer may open (RFC 0042 §4.3). */
+const sidebar = computed(() =>
+  ADMIN_SIDEBAR.filter((link) => {
+    const verb = ADMIN_PAGE_VERBS[link.to];
+    return verb !== undefined ? can(verb) : firstAdminPage(can, link.to + "/") !== undefined;
+  }),
+);
+
+const currentSection = computed(() => sidebar.value.find((link) => isActive(link.to)));
 
 /** Mobile: the sections sit behind one trigger that says where you are. */
 const sectionsOpen = ref(false);
@@ -55,7 +65,7 @@ watch(
       </div>
       <nav class="flex flex-col" :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })">
         <RouterLink
-          v-for="link in ADMIN_SIDEBAR"
+          v-for="link in sidebar"
           :key="link.to"
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"
@@ -107,7 +117,7 @@ watch(
         :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })"
       >
         <RouterLink
-          v-for="link in ADMIN_SIDEBAR"
+          v-for="link in sidebar"
           :key="link.to"
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"

@@ -26,7 +26,12 @@ const auth = vi.hoisted(() => ({
   isOidcSession: { value: false },
 }));
 vi.mock("@/composables/useAuth", () => ({
-  useAuth: () => ({ ...auth, logout: vi.fn() }),
+  useAuth: () => ({
+    ...auth,
+    can: () => auth.isAdmin.value,
+    canAny: () => auth.isAdmin.value,
+    logout: vi.fn(),
+  }),
 }));
 
 const stubs = {

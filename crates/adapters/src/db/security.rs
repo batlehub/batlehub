@@ -280,6 +280,30 @@ impl VerdictRepository for PgVerdictRepository {
         .await
     }
 
+    async fn count_by_registry_and_state(
+        &self,
+    ) -> Result<Vec<(String, VerdictState, u64)>, CoreError> {
+        // `artifact_verdicts_state_idx` is `(registry, state)`: one index scan.
+        let rows = sqlx::query(
+            "SELECT registry, state, COUNT(*) AS n FROM artifact_verdicts GROUP BY 1, 2",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        rows.iter()
+            .map(|r| {
+                let state: String = r.get("state");
+                Ok((
+                    r.get("registry"),
+                    state
+                        .parse()
+                        .map_err(|e| parse_err("artifact_verdicts.state", e))?,
+                    r.get::<i64, _>("n") as u64,
+                ))
+            })
+            .collect()
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,

@@ -47,6 +47,18 @@ pub trait VerdictRepository: Send + Sync {
     async fn count_unrated_by_registry(&self) -> Result<Option<Vec<(String, u64)>>, CoreError> {
         Ok(Some(Vec::new()))
     }
+
+    /// How many verdicts each registry holds in each state — the security
+    /// console's summary (RFC 0042 §5.2). The default refuses rather than
+    /// answering empty: a backend that never counted must not read as
+    /// "nothing is held".
+    async fn count_by_registry_and_state(
+        &self,
+    ) -> Result<Vec<(String, VerdictState, u64)>, CoreError> {
+        Err(CoreError::NotSupported(
+            "this verdict store cannot count by state".to_owned(),
+        ))
+    }
 }
 
 /// The count of open jobs, per registry and trigger — the

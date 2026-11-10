@@ -4,7 +4,8 @@ import { computed } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Menu, X, BookOpen } from "@lucide/vue";
 import { useAuth } from "@/composables/useAuth";
-import { accountTabs, primaryNav, TOOLS_TABS } from "@/config/navigation";
+import { accountTabs, primaryNav, SECURITY_VERBS, TOOLS_TABS } from "@/config/navigation";
+import { firstAdminPage } from "@/config/adminSections";
 import { DOCS_URL } from "@/config";
 import { Button } from "@/components/ui/button";
 import DisplaySettings from "@/components/DisplaySettings.vue";
@@ -16,7 +17,7 @@ const { t } = useI18n();
 
 const mobileOpen = defineModel<boolean>("mobileOpen", { default: false });
 
-const { identity, isAdmin, isAuthenticated, isOidcSession, logout } = useAuth();
+const { identity, isAuthenticated, isOidcSession, can, canAny, logout } = useAuth();
 const route = useRoute();
 const router = useRouter();
 
@@ -42,7 +43,8 @@ const router = useRouter();
 const navLinks = computed(() =>
   primaryNav({
     isAuthenticated: isAuthenticated.value,
-    isAdmin: isAdmin.value,
+    hasAdminPage: firstAdminPage(can) !== undefined,
+    hasSecurity: canAny(SECURITY_VERBS),
     hasRegistryAccess: identity.value?.has_registry_access === true,
   }),
 );

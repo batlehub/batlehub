@@ -61,6 +61,27 @@ describe("useAuth", () => {
     expect(isAdmin.value).toBe(true);
   });
 
+  it("answers can() from /me's verbs, per registry when asked (RFC 0042)", async () => {
+    const DELEGATE = {
+      ...ADMIN,
+      role: "user" as const,
+      verbs: ["audit:read"],
+      registries: { npm1: ["audit:read", "gates:exempt"] },
+    };
+    meMock.mockResolvedValue({ data: DELEGATE });
+    const { identity, can, canAny } = useAuth();
+    storeTokens("access2", "refresh2", 3600);
+    await vi.waitFor(() => expect(identity.value).toEqual(DELEGATE));
+
+    expect(can("audit:read")).toBe(true);
+    expect(can("config:read")).toBe(false);
+    expect(can("gates:exempt")).toBe(false);
+    expect(can("gates:exempt", "npm1")).toBe(true);
+    // No hierarchy for the registry: the instance tier alone, as the server.
+    expect(can("audit:read", "elsewhere")).toBe(true);
+    expect(canAny(["config:read", "audit:read"])).toBe(true);
+  });
+
   it("treats an anonymous identity as not authenticated", async () => {
     meMock.mockResolvedValue({ data: ANON });
     const { identity, isAuthenticated, isAdmin } = useAuth();

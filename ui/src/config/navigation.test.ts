@@ -10,10 +10,30 @@ import { LEGACY_REDIRECTS, SECTION_INDEXES, accountTabs, primaryNav } from "./na
  * authorisation one — hiding a link stops nobody, and the router guards plus the
  * server's RBAC are what actually refuse. The router suite owns that half.
  */
-const ANON_OPEN = { isAuthenticated: false, isAdmin: false, hasRegistryAccess: true };
-const ANON_LOCKED = { isAuthenticated: false, isAdmin: false, hasRegistryAccess: false };
-const USER = { isAuthenticated: true, isAdmin: false, hasRegistryAccess: true };
-const ADMIN = { isAuthenticated: true, isAdmin: true, hasRegistryAccess: true };
+const ANON_OPEN = {
+  isAuthenticated: false,
+  hasAdminPage: false,
+  hasSecurity: false,
+  hasRegistryAccess: true,
+};
+const ANON_LOCKED = {
+  isAuthenticated: false,
+  hasAdminPage: false,
+  hasSecurity: false,
+  hasRegistryAccess: false,
+};
+const USER = {
+  isAuthenticated: true,
+  hasAdminPage: false,
+  hasSecurity: false,
+  hasRegistryAccess: true,
+};
+const ADMIN = {
+  isAuthenticated: true,
+  hasAdminPage: true,
+  hasSecurity: true,
+  hasRegistryAccess: true,
+};
 
 /* Labels are catalogue keys, not phrases — the component translates at render. */
 describe("primaryNav", () => {
@@ -27,6 +47,12 @@ describe("primaryNav", () => {
 
   it("does not show a signed-in user an admin entry they cannot use", () => {
     expect(primaryNav(USER).some((l) => l.to === "/admin")).toBe(false);
+  });
+
+  it("gives a security delegate the console and not the admin (RFC 0042)", () => {
+    const paths = primaryNav({ ...USER, hasSecurity: true }).map((l) => l.to);
+    expect(paths).toContain("/security");
+    expect(paths).not.toContain("/admin");
   });
 
   it("gives an admin the operator entry, last", () => {

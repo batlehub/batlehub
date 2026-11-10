@@ -11,6 +11,7 @@ const auth = {
   isAuthenticated: ref(true),
   isAdmin: ref(false),
   expiresAt: ref(0),
+  can: (_verb: string) => auth.isAdmin.value,
 };
 vi.mock("@/composables/useAuth", () => ({ useAuth: () => auth }));
 

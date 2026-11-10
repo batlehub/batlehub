@@ -6,7 +6,13 @@ import {
   type RouteLocationRaw,
 } from "vue-router";
 import { useAuth, storeTokens } from "@/composables/useAuth";
-import { LEGACY_REDIRECTS, packagePath, SECTION_INDEXES } from "@/config/navigation";
+import {
+  LEGACY_REDIRECTS,
+  packagePath,
+  SECTION_INDEXES,
+  SECURITY_VERBS,
+} from "@/config/navigation";
+import { ADMIN_PAGE_VERBS, firstAdminPage } from "@/config/adminSections";
 
 const OIDC_STATE_KEY = "oidc_state";
 
@@ -134,9 +140,10 @@ function checkMetaGuards(
   to: RouteLocationNormalized,
   {
     isAuthenticated,
-    isAdmin,
+    can,
+    canAny,
     isOidcSession,
-  }: Pick<AuthState, "isAuthenticated" | "isAdmin" | "isOidcSession">,
+  }: Pick<AuthState, "isAuthenticated" | "can" | "canAny" | "isOidcSession">,
 ): RouteLocationRaw | undefined {
   if (to.meta.requiresAuth && !isAuthenticated.value) {
     return { path: "/login", query: { redirect: to.fullPath } };
@@ -147,8 +154,22 @@ function checkMetaGuards(
     if (isAuthenticated.value) return { path: "/me/profile" };
     return { path: "/login", query: { redirect: to.fullPath } };
   }
-  if (to.meta.requiresAdmin && !isAdmin.value) {
-    return { path: "/login", query: { redirect: to.fullPath } };
+  // RFC 0042 §4.3: an admin page is gated on the verb its reads ask for, not
+  // on the role. A page missing from the table is refused (fail closed). A
+  // signed-in caller is not sent to sign in again: they land on the first page
+  // of the same section they may open, else of any section, else home.
+  if (to.meta.securityArea && !canAny(SECURITY_VERBS)) {
+    return isAuthenticated.value
+      ? { path: "/" }
+      : { path: "/login", query: { redirect: to.fullPath } };
+  }
+  if (to.meta.adminArea) {
+    const verb = ADMIN_PAGE_VERBS[to.path];
+    if (!verb || !can(verb)) {
+      if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
+      const section = to.path.split("/").slice(0, 3).join("/") + "/";
+      return { path: firstAdminPage(can, section) ?? firstAdminPage(can) ?? "/" };
+    }
   }
 }
 
@@ -269,9 +290,14 @@ export const router = createRouter({
     },
 
     {
+      path: "/security",
+      component: () => import("@/pages/SecurityDashboard.vue"),
+      meta: { securityArea: true },
+    },
+    {
       path: "/admin",
       component: () => import("@/layouts/AdminLayout.vue"),
-      meta: { requiresAdmin: true },
+      meta: { adminArea: true },
       children: [
         /**
          * Real redirect routes for the section roots, not just `SECTION_INDEXES`.

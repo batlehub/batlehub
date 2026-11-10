@@ -31,7 +31,7 @@ const { t, locale } = useI18n();
 const base = computed(() => API_BASE_URL || globalThis.location.origin);
 const copied = ref<string | null>(null);
 
-const { token, identity, isAuthenticated, isAdmin, expiresAt } = useAuth();
+const { token, identity, isAuthenticated, can, expiresAt } = useAuth();
 
 const netrcLogin = computed(() => identity.value?.user_id ?? "token");
 const isOidc = computed(() => expiresAt.value > 0);
@@ -221,7 +221,7 @@ async function copy(key: string, text: string) {
         :description="t('setupGuide.noRegistriesAreConfiguredOn')"
       >
         <template #action>
-          <Button v-if="isAdmin" as-child size="sm">
+          <Button v-if="can('config:read')" as-child size="sm">
             <RouterLink to="/admin/operations/config-reload">{{
               t("setupGuide.openConfig")
             }}</RouterLink>

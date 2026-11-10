@@ -204,6 +204,21 @@ const isAdmin = computed(() => identity.value?.role === "admin");
 const isOidcSession = computed(() => !!token.value && !!oidcProvider.value);
 const isAuthenticated = computed(() => !!token.value && identity.value?.role !== "anonymous");
 
+/**
+ * Whether the caller holds `verb`, as `/me` reports it (RFC 0042 §4.3) — what
+ * the console gates a surface on, never the role. With `registry`, the set the
+ * server checks for that registry; a registry with no grant hierarchy is
+ * checked against the instance tier alone, as `authorize_control` does.
+ * Presentation only: the server enforces every verb whatever this answers.
+ */
+function can(verb: string, registry?: string): boolean {
+  const id = identity.value;
+  if (!id) return false;
+  const held = (registry !== undefined && id.registries[registry]) || id.verbs;
+  return held.includes(verb);
+}
+const canAny = (verbs: readonly string[]) => verbs.some((verb) => can(verb));
+
 export function useAuth() {
   return {
     token,
@@ -215,6 +230,8 @@ export function useAuth() {
     isAdmin,
     isAuthenticated,
     isOidcSession,
+    can,
+    canAny,
     logout,
     doRefresh,
   };

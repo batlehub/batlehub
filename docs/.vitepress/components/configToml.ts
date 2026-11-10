@@ -893,6 +893,7 @@ export const CONTROL_VERBS: string[] = [
   "quota:read",
   "quota:write",
   "retention:run",
+  "scans:run",
   "tombstones:read",
   "packages:read",
 ];

@@ -164,6 +164,7 @@ T_AUDITOR="authz-auditor-token"
 T_GRANTS_READER="authz-grants-reader-token"
 T_SUPPORT="authz-support-token"
 T_GATE="authz-gatekeeper-token"
+T_SECOPS="authz-secops-token"
 # The literal used where a request must carry no credential at all. `-` rather
 # than an empty string so an accidentally-unset token variable cannot silently
 # turn an authenticated assertion into an anonymous one that still passes.
@@ -992,6 +993,70 @@ because an anonymous publish creates an owner-less package and \`can_publish\` a
   authz_allowed gdpr:erase "the administrator erases a data subject" \
     POST "$T_ADMIN" "/api/v1/admin/gdpr/erase" \
     -H "$HDR_JSON" --data "{\"user_id\":\"authz-nobody-$HEAVY_RUN\"}"
+
+  # ── 13-bis. The security console (RFC 0042 §6.6) ───────────────────────────
+  #
+  # A security team is a group with instance grants, not an administrator. The
+  # console decides what to show from `/me`'s verbs, so `/me` has to say what
+  # the server enforces — and the cross-package reads have to refuse the
+  # registry-tier `quarantine:read` every `role:user` holds by default
+  # (decision 8), or any developer could list every held coordinate.
+
+  heavy_mark "security-console"
+  heavy_log "RFC 0042 — the security console's verbs, delegated without admin"
+
+  # Case 1: `/me` names what the grant gave, and nothing it did not.
+  authz_body GET "$T_SECOPS" /api/v1/me | python3 -c '
+import json, sys
+verbs = set(json.load(sys.stdin)["verbs"])
+want = {"quarantine:read", "findings:read", "flags:read", "audit:read", "scans:run"}
+missing, extra = want - verbs, verbs & {"config:read", "system:read", "system:write"}
+if missing or extra:
+    sys.exit(f"/me for secops: missing {sorted(missing)}, unexpected {sorted(extra)}")
+' || heavy_fail "/me does not report secops's instance verbs as the server resolves them"
+  authz_body GET "$T_ADMIN" /api/v1/me | python3 -c '
+import json, sys
+verbs = set(json.load(sys.stdin)["verbs"])
+if not {"scans:run", "quarantine:read", "findings:read"} <= verbs or "gates:exempt" in verbs:
+    sys.exit(f"/me for the administrator: {sorted(verbs)}")
+' || heavy_fail "the administrator's floor is not what RFC 0042 §4.3 says it is"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
+
+  # Case 2: the listing, for the delegate and not for a developer, who holds
+  # `quarantine:read` on every registry and not at the instance tier (case 3).
+  # No `[security]` profile here, so the allowed arm is a `404` past the gate.
+  authz_allowed quarantine:read "secops lists a registry's verdicts" \
+    GET "$T_SECOPS" "/api/v1/admin/verdicts?registry=$NPM"
+  authz_denied quarantine:read "$WHO_DENIED, holding it at registry tier only" \
+    GET "$T_DENIED" "/api/v1/admin/verdicts?registry=$NPM"
+  authz_allowed quarantine:read "secops reads the summary" \
+    GET "$T_SECOPS" "/api/v1/admin/verdicts/summary"
+  authz_denied quarantine:read "$WHO_DENIED reads the summary" \
+    GET "$T_DENIED" "/api/v1/admin/verdicts/summary"
+  # `findings:read` empties the findings rather than refusing; the refusal half
+  # is the listing's own gate, so this arm proves only that holding it is not
+  # enough on its own to be turned away. The emptying is asserted in
+  # `security_registry.rs`, which has a verdict to empty.
+  authz_note_verb findings:read
+
+  # Case 4: bulk rescans moved off `system:write`.
+  authz_allowed scans:run "secops queues a bulk rescan" \
+    POST "$T_SECOPS" /api/v1/admin/verdicts/rescan \
+    -H "$HDR_JSON" --data "{\"registry\":\"$NPM\"}"
+  authz_denied scans:run "the SRE, holding system:read only" \
+    POST "$T_SRE" /api/v1/admin/verdicts/rescan \
+    -H "$HDR_JSON" --data "{\"registry\":\"$NPM\"}"
+  authz_body POST "$T_SRE" /api/v1/admin/verdicts/rescan \
+    -H "$HDR_JSON" --data "{\"registry\":\"$NPM\"}" | grep -q "scans:run" \
+    || heavy_fail "a refused bulk rescan does not name scans:run"
+
+  # Case 5: what the grant did not open stays shut.
+  authz_denied config:read "secops reads the configuration warnings" \
+    GET "$T_SECOPS" "/api/v1/admin/config/warnings"
+  authz_denied system:read "secops reads health" \
+    GET "$T_SECOPS" "/api/v1/admin/health"
+  authz_allowed flags:read "secops lists pushed flags" \
+    GET "$T_SECOPS" "/api/v1/admin/flags"
 
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
@@ -2621,7 +2686,7 @@ drifted from the file and this check is no longer checking anything"
       # `latest`, and storing them has no good answer when the tagged version is
       # withdrawn. There is nothing to drive, so there is nothing to assert.
       npm:dist-tags:write) continue ;;
-      # Visibility verbs, not refusal verbs (RFC 0018 §4.2). Neither ever
+      # Visibility verbs on the read path (RFC 0018 §4.2). There neither ever
       # produces a `403`: `quarantine:read` chooses between a held version's
       # refusal and a plain `404` — that is §4.4 rule 2, a held version must not
       # be enumerable — and `findings:read` chooses between a reason-only body
@@ -2637,7 +2702,10 @@ drifted from the file and this check is no longer checking anything"
       # tiers against the verdict endpoint. Both need a scanner verdict to
       # exist, which is why they are not here: this suite deliberately runs
       # without a security profile.
-      quarantine:read | findings:read) continue ;;
+      #
+      # RFC 0042 gave both a second, control-side meaning at the instance tier
+      # — the verdict listing and its summary — and §13-bis of the matrix
+      # exercises that half, so neither needs an exception any more.
       # A visibility verb too (RFC 0038): it decides whether the registry list
       # carries `upstream`/`upstreams`, never a `403`. Asserted against the
       # list in `crates/web/tests/registry_installable.rs`.

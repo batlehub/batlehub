@@ -22,7 +22,10 @@ export interface NavLink {
 
 export interface NavViewer {
   isAuthenticated: boolean;
-  isAdmin: boolean;
+  /** Whether the viewer may open at least one admin page (RFC 0042 §4.3). */
+  hasAdminPage: boolean;
+  /** Whether the viewer holds a security verb at the instance tier. */
+  hasSecurity: boolean;
   /** An anonymous viewer on a locked instance can reach nothing but /login. */
   hasRegistryAccess: boolean;
 }
@@ -40,9 +43,17 @@ export function primaryNav(viewer: NavViewer): NavLink[] {
     { to: "/packages", label: "nav.packages" },
     { to: "/setup", label: "nav.setup" },
   ];
-  if (viewer.isAdmin) links.push({ to: "/admin", label: "nav.admin" });
+  if (viewer.hasSecurity) links.push({ to: "/security", label: "nav.security" });
+  if (viewer.hasAdminPage) links.push({ to: "/admin", label: "nav.admin" });
   return links;
 }
+
+/**
+ * The verbs that open the security console (RFC 0042 §4.3), read at the
+ * instance tier: the registry-tier `quarantine:read` every user holds by
+ * default is their per-package view, not a console.
+ */
+export const SECURITY_VERBS = ["quarantine:read", "findings:read", "flags:read", "audit:read"];
 
 /** The account hub's tabs. `/me/tokens` is OIDC-only; the router enforces it. */
 export function accountTabs(viewer: { isOidc: boolean }): NavLink[] {

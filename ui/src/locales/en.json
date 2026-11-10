@@ -902,6 +902,7 @@
     "admin": "Admin",
     "aria": "Primary",
     "packages": "Packages",
+    "security": "Security",
     "setup": "Setup"
   },
   "packageBetaChannel": {
@@ -1272,5 +1273,23 @@
   "displaySettings": {
     "theme": "Theme",
     "title": "Display"
+  },
+  "securityDashboard": {
+    "title": "Security",
+    "description": "What the supply-chain layer holds, what the flag sources have said, and who pulled a flagged version — each section shown only to whoever holds its permission."
+  },
+  "holdsPanel": {
+    "title": "Held versions",
+    "intro": "Verdict counts per registry with a security profile, then the most recent denied and quarantined versions. Findings stay on the package page.",
+    "empty": "No registry has a security profile.",
+    "loadFailed": "Could not load the verdict summary.",
+    "denied": "Denied",
+    "quarantined": "Quarantined",
+    "warned": "Warned",
+    "allowed": "Allowed",
+    "recent": "Recent holds",
+    "state": "State",
+    "reasons": "Reasons",
+    "evaluated": "Evaluated"
   }
 }

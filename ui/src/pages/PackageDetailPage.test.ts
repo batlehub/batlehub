@@ -112,6 +112,9 @@ vi.mock("@/composables/useAuth", async () => {
       token: ref(authState.token),
       isAdmin: ref(authState.isAdmin),
       isAuthenticated: ref(authState.isAuthenticated),
+      // An administrator holds every verb these surfaces ask for but
+      // `gates:exempt`, which no translation grants (RFC 0042 motivation 5).
+      can: (verb: string) => authState.isAdmin && verb !== "gates:exempt",
     }),
   };
 });

@@ -214,6 +214,25 @@ async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
         .unwrap();
     assert_eq!(listed.len(), 1);
 
+    // RFC 0042 §5.2: the summary's one `GROUP BY`, as the state column spells it.
+    let mut held = v.clone();
+    held.package = PackageId::new(&reg, "left-pad", "1.3.2");
+    held.state = VerdictState::Quarantined;
+    repo.upsert(&held).await.unwrap();
+    let mut mine: Vec<(VerdictState, u64)> = repo
+        .count_by_registry_and_state()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(r, _, _)| *r == reg)
+        .map(|(_, s, n)| (s, n))
+        .collect();
+    mine.sort_by_key(|(s, _)| s.as_str());
+    assert_eq!(
+        mine,
+        vec![(VerdictState::Allowed, 1), (VerdictState::Quarantined, 1)]
+    );
+
     let workers = PgWorkerRegistry::new(pool);
     let id = format!("w-{reg}");
     workers

@@ -21,22 +21,51 @@ vi.mock("@/client/client.gen", () => ({
 
 import { router, generateOidcState } from "./index";
 import { initAuth, useAuth } from "@/composables/useAuth";
+import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
 
 // `useAuth` no longer initializes itself at import time (see `initAuth`'s doc
 // comment) — call it once here, mirroring what `clientInit.ts` does in the app,
 // so the singleton's initial identity fetch actually runs against the mocks above.
 initAuth();
 
-const ANON: MeResponse = { role: "anonymous", groups: [], has_registry_access: true };
-const ANON_NO_ACCESS: MeResponse = { role: "anonymous", groups: [], has_registry_access: false };
-const USER: MeResponse = { role: "user", groups: [], has_registry_access: true };
+const ANON: MeResponse = {
+  role: "anonymous",
+  groups: [],
+  has_registry_access: true,
+  verbs: [],
+  registries: {},
+};
+const ANON_NO_ACCESS: MeResponse = {
+  role: "anonymous",
+  groups: [],
+  has_registry_access: false,
+  verbs: [],
+  registries: {},
+};
+const USER: MeResponse = {
+  role: "user",
+  groups: [],
+  has_registry_access: true,
+  verbs: [],
+  registries: {},
+};
 const USER_OIDC: MeResponse = {
   role: "user",
   groups: [],
   has_registry_access: true,
   auth_provider: "keycloak",
+  verbs: [],
+  registries: {},
 };
-const ADMIN: MeResponse = { role: "admin", groups: ["admins"], has_registry_access: true };
+const ADMIN: MeResponse = {
+  role: "admin",
+  groups: ["admins"],
+  has_registry_access: true,
+  verbs: [...new Set(Object.values(ADMIN_PAGE_VERBS))],
+  registries: {},
+};
+/** RFC 0042: a non-admin delegated the audit trail and nothing else. */
+const AUDITOR: MeResponse = { ...USER, verbs: ["audit:read"] };
 
 /**
  * Drive the singleton `useAuth` state to a deterministic identity. Setting the
@@ -144,11 +173,33 @@ describe("router navigation guards (integration)", () => {
     expect(await go("/me/tokens")).toBe("/me/tokens");
   });
 
-  // ── requiresAdmin ─────────────────────────────────────────────────────────
+  // ── admin pages, by verb (RFC 0042 §4.3) ──────────────────────────────────
 
-  it("redirects a non-admin away from an admin route", async () => {
+  it("sends a signed-in caller holding no admin verb home, not to sign in again", async () => {
     await setAuth(USER, "tok");
+    expect(await go("/admin/observability/health")).toBe("/");
+  });
+
+  it("sends an anonymous caller to sign in", async () => {
+    await setAuth(ANON, "");
     expect(await go("/admin/observability/health")).toBe("/login");
+  });
+
+  it("opens the security console to a security verb, and to nobody else", async () => {
+    await setAuth(AUDITOR, "tok");
+    expect(await go("/security")).toBe("/security");
+    await go("/setup"); // leave it first: a push to the current route is not a navigation
+    await setAuth(USER, "tok");
+    expect(await go("/security")).toBe("/");
+  });
+
+  it("lets a delegate reach the page of their verb, and only that page", async () => {
+    await setAuth(AUDITOR, "tok");
+    expect(await go("/admin/observability/audit-log")).toBe("/admin/observability/audit-log");
+    // Same section first, so the health tab falls back to the audit log.
+    expect(await go("/admin/observability/health")).toBe("/admin/observability/audit-log");
+    expect(await go("/admin/operations/config-reload")).toBe("/admin/observability/audit-log");
+    expect(await go("/admin")).toBe("/admin/observability/audit-log");
   });
 
   it("lets an admin reach an admin route", async () => {
@@ -468,7 +519,8 @@ describe("information architecture", () => {
 
     it("keeps the admin guard on a legacy admin alias", async () => {
       await setAuth(USER, "tok");
-      expect(await go("/admin/users")).toBe("/login");
+      // Signed in without any admin verb: home, not a sign-in loop (RFC 0042).
+      expect(await go("/admin/users")).toBe("/");
     });
 
     /** Diagnostics are public; a denied request is where they get linked from. */

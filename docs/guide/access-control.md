@@ -69,11 +69,11 @@ granted to nobody.
 | `audit:read` | read the audit log |
 | `audit:purge` | delete audit-log entries older than a cutoff |
 | `gdpr:erase` | pseudonymise one data subject across the audit trail, their tokens and blocks (RFC 0036); not implied by `audit:purge` |
-| `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
-| `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text |
+| `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)); held at the instance tier, it also opens the verdict listing of every registry ([RFC 0042](/rfc/0042-security-console-by-verb)) |
+| `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text; at the instance tier, also in the verdict listing |
 | `flags:read` | list the vulnerability flags pushed by `[[flag_sources]]` — which source said what about which version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
 
-Fourteen more authorise the **control surfaces** — the server itself rather than
+Seventeen more authorise the **control surfaces** — the server itself rather than
 what is published on it. They were one `require_admin` check until they were
 split, so an administrator holds all of them and each is now delegable on its
 own:
@@ -94,6 +94,7 @@ own:
 | `quota:read` | read quota usage |
 | `quota:write` | reset a user's quota counters |
 | `retention:run` | run retention, and pin a version against it |
+| `scans:run` | queue a bulk rescan or a backfill of a registry's verdicts |
 | `tombstones:read` | read tombstones, and compact their detail |
 | `packages:read` | the administrative package list |
 
@@ -282,6 +283,31 @@ Four things are worth knowing before you write one:
   `releases:list` and **not** `releases:read`: they see the versions they were
   granted, and nothing else. If every version is filtered out, the document is
   `404` rather than an empty index — hidden means absent.
+
+### Delegating the security console {#security-console}
+
+A security team does not need to be administrators. Grant its group the
+security verbs at the **instance** tier, and the console shows it a *Security*
+entry, beside *Admin* rather than inside it:
+
+```toml
+[grants]
+"group:oidc1:secops" = ["quarantine:read", "findings:read", "flags:read",
+                        "audit:read", "scans:run"]
+```
+
+Each section of `/security` is drawn only when its verb is held: held versions
+(`quarantine:read`), pushed flags (`flags:read`), exposure (`audit:read`).
+`findings:read` adds the findings to the verdict listing, and `scans:run`
+allows a bulk rescan or a backfill. Nothing else opens: the configuration and
+health still answer `403` to the group.
+
+It has to be the instance tier. Every user holds `quarantine:read` on each
+registry by default, which shows them why *a* version is held; the console
+lists every held version of a registry, private packages included, so it asks
+for the grant one tier up ([RFC 0042](/rfc/0042-security-console-by-verb)).
+The `/api/v1/admin/…` prefix of these endpoints names the back office, not the
+role: a non-administrator granted the verb reaches them.
 
 ### The other policies {#policies}
 
