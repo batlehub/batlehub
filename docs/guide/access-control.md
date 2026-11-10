@@ -69,11 +69,11 @@ granted to nobody.
 | `audit:read` | read the audit log |
 | `audit:purge` | delete audit-log entries older than a cutoff |
 | `gdpr:erase` | pseudonymise one data subject across the audit trail, their tokens and blocks (RFC 0036); not implied by `audit:purge` |
-| `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
-| `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text |
+| `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)); held at the instance tier, it also opens the verdict listing of every registry ([RFC 0042](/rfc/0042-security-console-by-verb)) |
+| `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text; at the instance tier, also in the verdict listing |
 | `flags:read` | list the vulnerability flags pushed by `[[flag_sources]]` — which source said what about which version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
 
-Fourteen more authorise the **control surfaces** — the server itself rather than
+Seventeen more authorise the **control surfaces** — the server itself rather than
 what is published on it. They were one `require_admin` check until they were
 split, so an administrator holds all of them and each is now delegable on its
 own:
@@ -94,6 +94,7 @@ own:
 | `quota:read` | read quota usage |
 | `quota:write` | reset a user's quota counters |
 | `retention:run` | run retention, and pin a version against it |
+| `scans:run` | queue a bulk rescan or a backfill of a registry's verdicts |
 | `tombstones:read` | read tombstones, and compact their detail |
 | `packages:read` | the administrative package list |
 

@@ -206,6 +206,14 @@ pub enum Action {
     QuotaWrite,
     /// Running a retention pass ([RFC 0016](/rfc/0016-retention-and-the-permanence-of-a-published-name)).
     RetentionRun,
+    /// Queuing a bulk rescan or a backfill of a registry's verdicts
+    /// ([RFC 0042](/rfc/0042-security-console-by-verb) §4.2).
+    ///
+    /// Its own verb: `system:write` also reroutes every alert, `gates:exempt`
+    /// *accepts* a finding, and `cache:warm` is a storage delegation. An
+    /// estate that lets a security team re-judge what it holds has decided
+    /// none of those.
+    ScansRun,
     /// Reading tombstones and compacting their detail.
     TombstonesRead,
     /// The administrative package inventory — `/admin/packages` and its detail.
@@ -316,6 +324,7 @@ impl Action {
         Action::QuotaRead,
         Action::QuotaWrite,
         Action::RetentionRun,
+        Action::ScansRun,
         Action::TombstonesRead,
         Action::PackagesRead,
         Action::NpmDistTagsWrite,
@@ -362,6 +371,7 @@ impl Action {
             Action::QuotaRead => "quota:read",
             Action::QuotaWrite => "quota:write",
             Action::RetentionRun => "retention:run",
+            Action::ScansRun => "scans:run",
             Action::TombstonesRead => "tombstones:read",
             Action::PackagesRead => "packages:read",
             Action::NpmDistTagsWrite => "npm:dist-tags:write",

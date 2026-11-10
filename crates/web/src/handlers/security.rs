@@ -701,9 +701,11 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
     }
 }
 
-/// The verdicts of a registry, by state. `system:read`. Findings are
-/// included: the reader is an administrator, and the listing exists to
-/// answer "what is held, and why" in one page.
+/// The verdicts of a registry, by state. `quarantine:read` at the instance
+/// tier (RFC 0042 decision 8): the listing names every held coordinate of the
+/// registry, private packages included, so the per-registry `quarantine:read`
+/// every user holds is not enough. Findings need `findings:read` there too,
+/// and are emptied without it.
 #[utoipa::path(
     get,
     path = "/api/v1/admin/verdicts",
@@ -712,7 +714,7 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
     responses(
         (status = 200, description = "The verdicts, newest first per state", body = VerdictListResponse),
         (status = 400, description = "An unknown `state`"),
-        (status = 403, description = "`system:read` required"),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -723,13 +725,11 @@ pub async fn list_verdicts(
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
 ) -> Result<HttpResponse, AppError> {
-    crate::handlers::back_office::require_verb(
-        &identity,
-        Action::SystemRead,
-        Some(&query.registry),
-        &svc.hot,
-    )
-    .await?;
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
+        .await?;
+    let with_findings = authz::authorize_control(&svc.hot, None, &identity.0, Action::FindingsRead)
+        .await
+        .is_ok();
     let verdicts = {
         let hot = svc.hot.read().await;
         let Some(policy) = hot.security.get(&query.registry).cloned() else {
@@ -752,7 +752,13 @@ pub async fn list_verdicts(
                 .await
                 .map_err(AppError::from)?
                 .into_iter()
-                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy)),
+                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy))
+                .map(|mut v| {
+                    if !with_findings {
+                        v.findings.clear();
+                    }
+                    v
+                }),
         );
     }
     Ok(HttpResponse::Ok().json(VerdictListResponse {
@@ -783,7 +789,7 @@ pub struct BulkScanResponse {
 }
 
 /// Queue a `Rescan` for every verdict of a registry, or every verdict in
-/// one state (RFC 0018 §4.2 *CLI*). `system:write`.
+/// one state (RFC 0018 §4.2 *CLI*). `scans:run` (RFC 0042).
 #[utoipa::path(
     post,
     path = "/api/v1/admin/verdicts/rescan",
@@ -792,7 +798,7 @@ pub struct BulkScanResponse {
     responses(
         (status = 202, description = "The rescans are queued", body = BulkScanResponse),
         (status = 400, description = "An unknown `state`"),
-        (status = 403, description = "`system:write` required"),
+        (status = 403, description = "`scans:run` required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -806,7 +812,7 @@ pub async fn bulk_rescan(
     let req = body.into_inner();
     crate::handlers::back_office::require_verb(
         &identity,
-        Action::SystemWrite,
+        Action::ScansRun,
         Some(&req.registry),
         &svc.hot,
     )
@@ -858,7 +864,7 @@ pub async fn bulk_rescan(
 /// Queue a `Backfill` — the lowest priority — for every cached version of
 /// a registry (RFC 0018 §4.2 *CLI*: `batlehub verdicts backfill`), so an
 /// estate that turned `[security]` on with a warm cache judges what it
-/// already holds without a user waiting on any of it. `system:write`.
+/// already holds without a user waiting on any of it. `scans:run` (RFC 0042).
 #[utoipa::path(
     post,
     path = "/api/v1/admin/verdicts/backfill",
@@ -866,7 +872,7 @@ pub async fn bulk_rescan(
     request_body = BulkScanRequest,
     responses(
         (status = 202, description = "The backfill is queued", body = BulkScanResponse),
-        (status = 403, description = "`system:write` required"),
+        (status = 403, description = "`scans:run` required"),
         (status = 404, description = "The registry has no security profile"),
     ),
     security(("bearer_token" = [])),
@@ -881,7 +887,7 @@ pub async fn backfill_verdicts(
     let req = body.into_inner();
     crate::handlers::back_office::require_verb(
         &identity,
-        Action::SystemWrite,
+        Action::ScansRun,
         Some(&req.registry),
         &svc.hot,
     )

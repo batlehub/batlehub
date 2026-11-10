@@ -56,7 +56,7 @@ GET /api/v1/me                    → { …, verbs: ["audit:read","findings:read
                                       registries: { "npm1": [ …, "quarantine:read", "findings:read" ] } }
 console                           → "Security" link, /security renders four sections
 GET /api/v1/admin/verdicts?registry=npm1          → 200 (quarantine:read; findings kept: findings:read)
-GET /api/v1/admin/verdicts/summary                → 200, every registry the caller may read verdicts of
+GET /api/v1/admin/verdicts/summary                → 200, every registry with a [security] profile
 GET /api/v1/admin/config                          → 403, unchanged: config:read was never granted
 ```
 
@@ -72,7 +72,7 @@ flowchart LR
         U2["secops member"] --> M["/me: verbs"]
         M --> C2["console: can(verb)"]
         C2 --> S["/security"]
-        S --> SUM["/admin/verdicts/summary<br/>quarantine:read per registry"]
+        S --> SUM["/admin/verdicts/summary<br/>quarantine:read, instance"]
         S --> F["/admin/flags<br/>flags:read"]
         S --> E["/admin/exposure<br/>audit:read"]
         S --> V2["/admin/verdicts<br/>quarantine:read"]
@@ -184,8 +184,8 @@ but no reason details, and no flags, exposure or audit sections.
 
 | Endpoint | Today | With this RFC |
 | --- | --- | --- |
-| `GET /api/v1/admin/verdicts?registry=` | `system:read` (registry) | `quarantine:read` (registry); `findings` emptied unless `findings:read` (registry) |
-| `GET /api/v1/admin/verdicts/summary` | — | new; per registry, `quarantine:read` (§4.3) |
+| `GET /api/v1/admin/verdicts?registry=` | `system:read` (registry) | `quarantine:read` (instance); `findings` emptied unless `findings:read` (instance) — decision 8 |
+| `GET /api/v1/admin/verdicts/summary` | — | new; `quarantine:read` (instance) — decision 8 |
 | `POST /api/v1/admin/verdicts/rescan` | `system:write` (registry) | `scans:run` (registry) |
 | `POST /api/v1/admin/verdicts/backfill` | `system:write` (registry) | `scans:run` (registry) |
 | `GET /api/v1/sbom/export` | `system:read` (instance) | `packages:read` (instance) |
@@ -222,11 +222,11 @@ which an SBOM is not.
 - **An active shadow (RFC 0015 §4.7) is not a grant in `/me`**, for the reason
   `installable_registries` gives: a dry run is the state where denials are
   about to start.
-- **The summary covers only registries where the caller holds
-  `quarantine:read`** at the registry tier (instance and registry nodes).
-  A caller who holds it on none gets `200` with `registries: []`, not `403`. The
-  shape of an empty answer does not reveal whether any registry has a security
-  profile. A registry with no `[security]` profile is absent from the summary.
+- **The listing and the summary are instance-tier reads** (decision 8). Both
+  name coordinates across a whole registry, including packages the caller may
+  not be able to read, so the registry-tier `quarantine:read` every user holds
+  by default is not enough. A caller without the instance-tier verb gets
+  `403`. A registry with no `[security]` profile is absent from the summary.
 - **Recent holds in the summary carry reason codes, never findings.** Findings
   stay behind `findings:read` in the per-registry listing. The summary carries
   counts and coordinates, which is what `quarantine:read` already discloses
@@ -273,7 +273,7 @@ sequenceDiagram
     ME-->>UI: verbs, registries
     UI->>UI: can("quarantine:read") → show /security
     UI->>EP: bearer
-    EP->>AC: per registry, quarantine:read
+    EP->>AC: quarantine:read, instance tier
     AC-->>EP: allow / deny (same path as AZ)
     EP-->>UI: counts for the allowed registries
 ```
@@ -291,9 +291,10 @@ can disagree with reality is worse than none"*, applied to the console.
 ```mermaid
 flowchart TD
     R["GET /admin/verdicts/summary"] --> A["registries with a [security] profile"]
-    A --> F{"quarantine:read<br/>on registry?"}
-    F -->|"no"| SKIP["omitted"]
-    F -->|"yes"| K["kept"]
+    R --> F{"quarantine:read<br/>at instance?"}
+    F -->|"no"| SKIP["403"]
+    F -->|"yes"| A
+    A --> K["kept"]
     K --> Q1["count_by_registry_and_state()<br/>one GROUP BY"]
     K --> Q2["list_by_state(r, denied|quarantined, 10)"]
     Q1 --> OUT["{ registries: [{ name, counts, recent }] }"]
@@ -301,7 +302,7 @@ flowchart TD
 ```
 
 Counts come from a single `GROUP BY registry, state` over `artifact_verdicts`,
-filtered in the handler afterwards. This has the shape of
+keeping the registries that have a `[security]` profile. This has the shape of
 `count_unrated_by_registry`, which exists for the same reason. Recent holds
 reuse `list_by_state` with a small limit, so there is no new query.
 
@@ -410,10 +411,9 @@ lockfile. What it proves, on the wire:
 2. `curl /api/v1/admin/verdicts?registry=npm1` as secops: `200`, and the
    items carry `findings`. With a token whose group holds only
    `quarantine:read`: `200`, every `findings` is `[]`.
-3. The same token as a plain `role:user` (registry-tier `quarantine:read`
-   only, no instance grant): `/me.verbs` holds no security verb, and
-   `GET /api/v1/admin/verdicts/summary` answers `200` with the registries
-   where it has `quarantine:read`.
+3. The same calls as a plain `role:user` (registry-tier `quarantine:read`
+   only, no instance grant): `/me.verbs` holds no security verb, and both
+   `GET /api/v1/admin/verdicts?registry=npm1` and `…/summary` answer `403`.
 4. `curl -X POST /api/v1/admin/verdicts/rescan` as secops: `202`, and
    `batlehub_scan_jobs_queued` moves. As a token holding `system:write` only:
    `403`, with the body naming `scans:run`.
@@ -439,8 +439,7 @@ lockfile. What it proves, on the wire:
 - `inbound_webhook.rs`'s `/admin/notifications/inbound` stays `system:read`.
   It shows the wiring of where flags come from, not the flags themselves.
 - `require_verb` and `authorize_control` keep their signatures. The summary
-  calls `authorize_control` once per registry and reuses `require_verb`'s
-  error text.
+  calls `require_verb` once, with no registry.
 - `crates/web/src/middleware/auth.rs` is not touched. `/me` reads the
   identity the middleware already resolved.
 
@@ -468,9 +467,10 @@ lockfile. What it proves, on the wire:
   reaches the verdict listing, which is the point.
 - **Findings stay withheld from a `quarantine:read`-only reader**, now in the
   listing too, where they were not before. This is a narrowing.
-- **The summary cannot be used to enumerate profiles.** A caller with no
-  readable registry gets the same `200 { registries: [] }` whether or not any
-  `[security]` exists.
+- **Neither cross-package read leaks a private package name to a developer.**
+  Both require `quarantine:read` at the instance tier, which no translation
+  grants to `role:user` (decision 8), so the default per-registry
+  `quarantine:read` keeps its per-package meaning.
 - **The UI gates are not authorization.** `navigation.ts`'s header says so,
   and the server enforces every verb above whether the console hid the link or
   not. Case 7 of §6.6 checks presentation, cases 1–6 check enforcement.
@@ -544,6 +544,7 @@ lockfile. What it proves, on the wire:
 | 5 | Should the summary include audit-log refusals? | **No.** `/admin/audit-log` already filters them under `audit:read`, and the dashboard links to it with the filter set. |
 | 6 | Should `/me.registries` list only the registries whose set differs from the instance set? | **No, full sets.** An instance has tens of registries, not thousands, and a merge in the client is a second resolution, which §5.1 exists to avoid. |
 | 7 | `sbom/export` to `packages:read` or `findings:read`? | **`packages:read`.** The export lists components, not findings, and an auditor asking for an inventory should not need the embargo-grade verb. |
+| 8 | At which tier do the verdict listing and the summary check `quarantine:read`? | **The instance tier**, against the draft's registry tier. Found at implementation: `role:user` holds `quarantine:read` on every registry by default (`translate.rs`), so a registry-tier check would let any developer list every held coordinate of a registry, private packages included. A per-registry delegate is lost, and an instance grant covers the case the RFC is for. |
 
 ### Still open
 
