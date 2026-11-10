@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: e6af85dd640c7b0c
+sourceHash: cc6111283125a7c8
 ---
 
 # Référence de configuration

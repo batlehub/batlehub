@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: 2cacc5adcf12d068
+sourceHash: d326219fcebb3472
 ---
 
 # Haute disponibilité

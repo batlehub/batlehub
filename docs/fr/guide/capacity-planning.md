@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/capacity-planning.md
-sourceHash: a1c08bb2652b9747
+sourceHash: 0898b9866ff89b27
 ---
 
 # Dimensionnement
