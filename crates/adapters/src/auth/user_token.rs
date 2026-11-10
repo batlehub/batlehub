@@ -129,8 +129,20 @@ impl AuthProvider for UserTokenAuthProvider {
     }
 
     async fn authenticate(&self, req: &RawAuthRequest) -> Result<Option<Identity>, CoreError> {
-        let Some(raw) = req.bearer_token() else {
-            return Ok(None);
+        // `Bearer`, or the token in a `Basic` header: pip, and mise reading a
+        // `~/.netrc` for a forge, send nothing else, and a PAT they carried
+        // used to arrive anonymous while a static token in the same place
+        // worked (`token.rs` has always read both).
+        let basic;
+        let raw = match req.bearer_token() {
+            Some(t) => t,
+            None => match req.basic_token() {
+                Some(p) => {
+                    basic = p;
+                    basic.as_str()
+                }
+                None => return Ok(None),
+            },
         };
 
         // Fast path: OIDC JWTs contain dots; our hex tokens never do.
@@ -326,6 +338,75 @@ mod tests {
     async fn no_auth_header_returns_none() {
         let p = UserTokenAuthProvider::new(Arc::new(StubRepo(None)));
         assert!(p.authenticate(&no_auth_req()).await.unwrap().is_none());
+    }
+
+    /// A repository that knows one PAT, by its hash, like the real one.
+    struct OneToken(String);
+
+    #[async_trait]
+    impl UserTokenRepository for OneToken {
+        async fn create_token(
+            &self,
+            _: uuid::Uuid,
+            _: &TokenOwner,
+            _: &str,
+            _: &str,
+            _: Role,
+            _: DateTime<chrono::Utc>,
+            _: &[String],
+        ) -> Result<UserToken, CoreError> {
+            Ok(stub_token())
+        }
+        async fn find_by_hash(&self, h: &str) -> Result<Option<UserToken>, CoreError> {
+            Ok((h == hash_token(&self.0)).then(stub_token))
+        }
+        async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
+            Ok(vec![])
+        }
+        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
+            Ok(true)
+        }
+    }
+
+    fn basic(user: &str, token: &str) -> RawAuthRequest {
+        use base64::Engine as _;
+        let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}"));
+        req(&format!("Basic {enc}"))
+    }
+
+    /// pip and mise's netrc send HTTP Basic only. The PAT is the secret half,
+    /// the user name is anything; before this, the request went on anonymous.
+    #[tokio::test]
+    async fn a_pat_in_a_basic_header_authenticates_whatever_the_user_name() {
+        let (pat, _) = generate_token();
+        let p = UserTokenAuthProvider::new(Arc::new(OneToken(pat.clone())));
+        for user in ["carol", "__token__", "x", ""] {
+            let id = p.authenticate(&basic(user, &pat)).await.unwrap();
+            assert_eq!(
+                id.and_then(|i| i.user_id).as_deref(),
+                Some("carol"),
+                "user name {user:?}"
+            );
+        }
+        // The same PAT as Bearer still works, and another token is no one.
+        let bearer = p
+            .authenticate(&req(&format!("Bearer {pat}")))
+            .await
+            .unwrap();
+        assert!(bearer.is_some());
+        assert!(p
+            .authenticate(&basic("carol", "nope"))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(p
+            .authenticate(&req("Basic !!!not-base64!!!"))
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
