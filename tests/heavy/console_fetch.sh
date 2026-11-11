@@ -225,18 +225,18 @@ done
 python3 - "$HEAVY_WORK/security-secops.jsonl" "$HEAVY_WORK/security-user.jsonl" <<'PY' || heavy_fail "the console did not follow the caller's verbs"
 import json, sys
 secops, user = (json.loads(open(p).read().splitlines()[-1]) for p in sys.argv[1:3])
-# `/admin` too, and only for its audit log: `audit:read` is the verb of that
-# one admin page (RFC 0042 §4.3, §13), and the guard sends every other admin
-# page there.
+# `/admin` too: its first page this caller holds is Scans (`quarantine:read`,
+# RFC 0044 §18), so the guard lands there; the audit log (`audit:read`) is
+# reachable too, but comes later in the menu.
 assert "/security" in secops["links"] and "/admin" in secops["links"], secops
 assert secops["securityLanded"] == "/security", secops
 assert {"holds-panel", "flags-panel", "exposure-panel"} <= set(secops["panels"]), secops
-assert secops["adminLanded"] == "/admin/observability/audit-log", secops
+assert secops["adminLanded"] == "/admin/security/scans", secops
 assert "/security" not in user["links"] and "/admin" not in user["links"], user
 assert user["securityLanded"] == "/", user
 assert user["adminLanded"] == "/", user
 print("secops:", secops["links"], secops["panels"], "| user:", user["links"])
 PY
-heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and Admin as its audit log only; a user sees neither)"
+heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and Admin from its Scans page; a user sees neither)"
 
 heavy_done CONSOLE-FETCH-HEAVY-OK
