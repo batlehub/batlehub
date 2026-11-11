@@ -147,7 +147,7 @@ function providerLabel(name: string): string {
               <span class="w-full border-t border-border/60" />
             </div>
             <div class="relative flex justify-center text-xs uppercase">
-              <span class="bg-card px-2 font-mono text-muted-foreground tracking-widest">{{
+              <span class="bg-ground-raised px-2 font-mono text-muted-foreground tracking-widest">{{
                 t("loginPage.orUseAToken")
               }}</span>
             </div>
@@ -167,7 +167,7 @@ function providerLabel(name: string): string {
             />
           </div>
 
-          <p v-if="error" class="text-sm text-destructive">
+          <p v-if="error" role="alert" class="text-sm text-destructive">
             {{ error }}
           </p>
 

@@ -53,7 +53,16 @@ describe("Select", () => {
     expect(wrapper.text()).toContain("Choose…");
     const trigger = wrapper.find('[role="combobox"]');
     expect(trigger.classes()).toContain("flex");
-    expect(trigger.classes()).toContain("rounded-md");
+    expect(trigger.classes()).toContain("h-9");
+  });
+
+  it("names the trigger the reader focuses, not radix's hidden select", () => {
+    const wrapper = mount(Select, {
+      props: { options, ariaLabel: "Visibility" },
+      attachTo: document.body,
+    });
+    expect(wrapper.find('[role="combobox"]').attributes("aria-label")).toBe("Visibility");
+    wrapper.unmount();
   });
 
   it("passes the id prop to the trigger", () => {

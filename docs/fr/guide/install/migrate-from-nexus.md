@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/install/migrate-from-nexus.md
-sourceHash: c09a0617b98c6129
+sourceHash: 484f35d2aea1fd83
 ---
 
 # Migrer depuis Nexus Repository
@@ -34,18 +34,18 @@ ce que le dernier client soit passé.
 
 | Format Nexus | `type` BatleHub | Équivalent hébergé |
 |--------------|-----------------|:------------------:|
-| `maven2` | [`maven`](/fr/registries/maven) | ✅ |
-| `npm` | [`npm`](/fr/registries/npm) | ✅ |
-| `pypi` | [`pypi`](/fr/registries/pypi) | ✅ |
-| `nuget` | [`nuget`](/fr/registries/nuget) (protocole v3) | ✅ |
-| `rubygems` | [`rubygems`](/fr/registries/rubygems) | ✅ |
-| `go` | [`goproxy`](/fr/registries/goproxy) | ✅ |
-| `apt` | [`deb`](/fr/registries/deb) | ✅ |
-| `yum` | [`rpm`](/fr/registries/rpm) | ✅ |
-| `conda` | [`conda`](/fr/registries/conda) | ✅ |
-| `cargo` | [`cargo`](/fr/registries/cargo) | ✅ |
-| `composer` | [`composer`](/fr/registries/composer) | ✅ |
-| `raw` | [`generic`](/fr/registries/generic) | ❌ proxy seulement |
+| `maven2` | [`maven`](/fr/registries/maven) | oui |
+| `npm` | [`npm`](/fr/registries/npm) | oui |
+| `pypi` | [`pypi`](/fr/registries/pypi) | oui |
+| `nuget` | [`nuget`](/fr/registries/nuget) (protocole v3) | oui |
+| `rubygems` | [`rubygems`](/fr/registries/rubygems) | oui |
+| `go` | [`goproxy`](/fr/registries/goproxy) | oui |
+| `apt` | [`deb`](/fr/registries/deb) | oui |
+| `yum` | [`rpm`](/fr/registries/rpm) | oui |
+| `conda` | [`conda`](/fr/registries/conda) | oui |
+| `cargo` | [`cargo`](/fr/registries/cargo) | oui |
+| `composer` | [`composer`](/fr/registries/composer) | oui |
+| `raw` | [`generic`](/fr/registries/generic) | proxy seulement |
 | `docker`, `helm`, `r`, `conan`, `cocoapods`, `p2`, `bower`, `gitlfs` | — | — |
 
 La dernière ligne n'est **pas encore prise en charge**. Certains de ces

@@ -30,6 +30,7 @@ export type RegistryType =
   | "galaxy"
   | "nix"
   | "nodedist"
+  | "mise-versions"
   | "sdkman"
   | "rustup"
   | "devfile"
@@ -487,6 +488,8 @@ export const defaultUpstream: Record<RegistryType, string> = {
   // and a narinfo names its NAR by a path under the same host (RFC 0028 §6.8).
   nix: "https://cache.nixos.org",
   nodedist: "https://nodejs.org/dist",
+  // mise asks this host for a tool's versions before any other (RFC 0043).
+  "mise-versions": "https://mise-versions.jdx.dev",
   // `upstreams` is the candidates API; the download broker is the second host
   // of the one protocol and has its own default (RFC 0010 §4.5).
   sdkman: "https://api.sdkman.io/2",
@@ -528,6 +531,7 @@ export const PROXY_ONLY_TYPES = new Set<RegistryType>([
   "nodedist",
   "sdkman",
   "rustup",
+  "mise-versions",
 ]);
 export const isProxyOnly = (reg: Registry) => PROXY_ONLY_TYPES.has(reg.type);
 
@@ -893,6 +897,7 @@ export const CONTROL_VERBS: string[] = [
   "quota:read",
   "quota:write",
   "retention:run",
+  "scans:run",
   "tombstones:read",
   "packages:read",
 ];

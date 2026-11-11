@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { computed } from "vue";
+import { computed, useTemplateRef } from "vue";
+import { useResizeObserver } from "@vueuse/core";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { Menu, X, BookOpen, FolderKey } from "@lucide/vue";
+import { Menu, X, BookOpen } from "@lucide/vue";
 import { useAuth } from "@/composables/useAuth";
-import { primaryNav } from "@/config/navigation";
+import { accountTabs, primaryNav, SECURITY_VERBS, TOOLS_TABS } from "@/config/navigation";
+import { firstAdminPage } from "@/config/adminSections";
 import { DOCS_URL } from "@/config";
 import { Button } from "@/components/ui/button";
 import DisplaySettings from "@/components/DisplaySettings.vue";
@@ -16,11 +18,9 @@ const { t } = useI18n();
 
 const mobileOpen = defineModel<boolean>("mobileOpen", { default: false });
 
-const { identity, isAdmin, isAuthenticated, logout } = useAuth();
+const { identity, isAuthenticated, isOidcSession, can, canAny, logout } = useAuth();
 const route = useRoute();
 const router = useRouter();
-
-const isOidcUser = computed(() => isAuthenticated.value && !!identity.value?.auth_provider);
 
 /* The bar is opaque and unblurred: DESIGN.md's Elevation rule leaves this
    system no blurs and no layered surfaces, and a translucent sticky bar is
@@ -44,14 +44,31 @@ const isOidcUser = computed(() => isAuthenticated.value && !!identity.value?.aut
 const navLinks = computed(() =>
   primaryNav({
     isAuthenticated: isAuthenticated.value,
-    isAdmin: isAdmin.value,
+    hasAdminPage: firstAdminPage(can) !== undefined,
+    hasSecurity: canAny(SECURITY_VERBS),
     hasRegistryAccess: identity.value?.has_registry_access === true,
   }),
+);
+
+const accountLinks = computed(() =>
+  isAuthenticated.value
+    ? [
+        ...accountTabs({ isOidc: isOidcSession.value }),
+        { to: TOOLS_TABS[0].to, label: "tools.title" },
+      ]
+    : [],
 );
 
 function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
+
+/* The masthead's real height, for the bars that stick under it (`--masthead-h`):
+   it is 57px bare, and taller still while `GlobalBanner` is up. */
+useResizeObserver(useTemplateRef<HTMLElement>("masthead"), ([entry]) => {
+  const height = (entry.target as HTMLElement).offsetHeight;
+  document.documentElement.style.setProperty("--masthead-h", `${height}px`);
+});
 
 function handleLogout() {
   logout();
@@ -61,7 +78,7 @@ function handleLogout() {
 </script>
 
 <template>
-  <header class="sticky top-0 z-40 border-b border-rule-soft bg-ground-sunk">
+  <header ref="masthead" class="sticky top-0 z-40 border-b border-rule-soft bg-ground-sunk">
     <!-- The instance's announcement, above the masthead rather than under it.
 
          It sat below the nav, which put a maintenance or outage notice *third*
@@ -202,52 +219,27 @@ function handleLogout() {
     >
       <nav :aria-label="t('nav.aria')" class="border border-border divide-y divide-border">
         <AppNav :links="navLinks" variant="mobile" @navigate="mobileOpen = false" />
+        <!-- The same destinations the user menu offers, which is hidden below
+             `sm`: hand-listed here, this menu had lost the CLI and Tools. -->
         <RouterLink
-          v-if="isOidcUser"
-          to="/me/tokens"
-          :aria-current="isActive('/me/tokens') ? 'page' : undefined"
+          v-for="link in accountLinks"
+          :key="link.to"
+          :to="link.to"
+          :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'block px-3 py-2.5 text-xs uppercase tracking-[0.1em] transition-colors',
-            isActive('/me/tokens')
+            'block px-3 py-2 text-xs uppercase tracking-[0.1em] transition-colors',
+            isActive(link.to)
               ? 'bg-foreground text-background font-bold'
               : 'text-muted-foreground hover:text-foreground',
           ]"
           @click="mobileOpen = false"
-          >{{ t("appHeader.myTokens") }}</RouterLink
+          >{{ t(link.label) }}</RouterLink
         >
-        <RouterLink
-          v-if="isAuthenticated"
-          to="/me/profile"
-          :aria-current="isActive('/me/profile') ? 'page' : undefined"
-          :class="[
-            'block px-3 py-2.5 text-xs uppercase tracking-[0.1em] transition-colors',
-            isActive('/me/profile')
-              ? 'bg-foreground text-background font-bold'
-              : 'text-muted-foreground hover:text-foreground',
-          ]"
-          @click="mobileOpen = false"
-          >{{ t("appHeader.myProfile") }}</RouterLink
-        >
-        <RouterLink
-          v-if="isAuthenticated"
-          to="/me/namespace"
-          :aria-current="isActive('/me/namespace') ? 'page' : undefined"
-          :class="[
-            'flex items-center gap-2 px-3 py-2.5 text-xs uppercase tracking-[0.1em] transition-colors',
-            isActive('/me/namespace')
-              ? 'bg-foreground text-background font-bold'
-              : 'text-muted-foreground hover:text-foreground',
-          ]"
-          @click="mobileOpen = false"
-        >
-          <FolderKey class="h-3.5 w-3.5" />
-          {{ t("appHeader.myNamespace") }}
-        </RouterLink>
         <a
           :href="DOCS_URL"
           target="_blank"
           rel="noopener noreferrer"
-          class="flex items-center gap-2 px-3 py-2.5 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
+          class="flex items-center gap-2 px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
           @click="mobileOpen = false"
         >
           <BookOpen class="h-3.5 w-3.5" />
@@ -257,7 +249,7 @@ function handleLogout() {
       <button
         v-if="isAuthenticated"
         type="button"
-        class="mt-3 block w-full border border-border px-3 py-2.5 text-left text-xs uppercase tracking-[0.1em] text-destructive transition-colors hover:border-destructive"
+        class="mt-3 block w-full border border-border px-3 py-2 text-left text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         @click="handleLogout"
       >
         {{ t("appHeader.signOut") }}

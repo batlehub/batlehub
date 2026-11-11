@@ -56,6 +56,30 @@ async fn me_with_user_token_returns_user_identity() {
     assert_eq!(body["user_id"], "user-1");
 }
 
+/// RFC 0042 §4.3: `/me` carries the verbs the engine resolves, so the console
+/// can gate on a verb. The administrator's floor is at the instance tier; a
+/// plain user holds no control verb there.
+#[actix_web::test]
+async fn me_reports_the_instance_verbs_the_engine_resolves() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let verbs = |token: &'static str| {
+        let app = &app;
+        async move {
+            let req = TestRequest::get()
+                .uri("/api/v1/me")
+                .insert_header(("Authorization", bearer(token)))
+                .to_request();
+            let body: Value = read_body_json(call_service(app, req).await).await;
+            body["verbs"].as_array().expect("verbs").clone()
+        }
+    };
+    let admin = verbs(ADMIN_TOKEN).await;
+    assert!(admin.contains(&Value::from("config:read")), "{admin:?}");
+    assert!(!admin.contains(&Value::from("gates:exempt")), "{admin:?}");
+    let user = verbs(USER_TOKEN).await;
+    assert!(!user.contains(&Value::from("config:read")), "{user:?}");
+}
+
 #[actix_web::test]
 async fn me_with_invalid_token_falls_back_to_anonymous() {
     let app = make_app(InMemoryRepo::new()).await;

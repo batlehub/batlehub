@@ -478,17 +478,17 @@ const NUGET: &[Conformance] = &[
 // ─────────────────────────────────────────────────────────────────────────────
 const OTHERS: &[Conformance] = &[
     Conformance::get(
-        "/proxy/pypi/simple/requests/",
+        "/proxy/py/simple/requests/",
         "/proxy/{registry}/simple/{package}/",
         "pip — PEP 503 simple index",
     ),
     Conformance::get(
-        "/proxy/pypi/simple/",
+        "/proxy/py/simple/",
         "/proxy/{registry}/simple/",
         "pip — simple index root",
     ),
     Conformance::get(
-        "/proxy/pypi/pypi/requests/json",
+        "/proxy/py/pypi/requests/json",
         "/proxy/{registry}/pypi/{package}/json",
         "Poetry and assorted tooling — the PyPI JSON API",
     ),

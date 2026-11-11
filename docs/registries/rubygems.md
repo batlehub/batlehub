@@ -4,13 +4,13 @@ Proxy and cache rubygems.org for Bundler and the `gem` CLI, or host private gems
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `rubygems` |
 | **Default upstream** | `rubygems.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `gem push` |
+| **Private publish** | yes — `gem push` |
 | **Air gap** | offline, the compact index (`/versions`, `/info/{gem}`, `/names`) and the versions JSON API are composed from the held gems, each gem's dependencies read off its gemspec at import; `bundle install` resolves against it |
 
 ## Proxy setup
@@ -116,6 +116,8 @@ curl -X PUT \
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/rubygems -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -133,6 +135,8 @@ curl -X PUT \
 | `GET` | `/proxy/{registry}/specs.4.8.gz` | Serve the full gem index (specs.4.8.gz). |
 | `GET` | `/proxy/{registry}/versions` | The whole-registry version list Bundler fetches first. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

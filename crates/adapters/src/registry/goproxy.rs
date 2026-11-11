@@ -10,8 +10,9 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, fetch_json_document, fetch_text_document, new_http_client,
-    percent_encode, same_origin as urls_same_origin, to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, fetch_json_document, fetch_text_document,
+    new_http_client, percent_encode, same_origin as urls_same_origin, to_registry_error,
+    UpstreamHttpOptions,
 };
 
 use batlehub_core::ports::UpstreamPackage;
@@ -269,16 +270,28 @@ impl RegistryClient for GoProxyRegistryClient {
                 format!("{}/@v/list", self.module_base(&pkg.name))
             }
             Some("mod") => {
-                format!("{}/@v/{}.mod", self.module_base(&pkg.name), pkg.version)
+                format!(
+                    "{}/@v/{}.mod",
+                    self.module_base(&pkg.name),
+                    encode_path(&pkg.version)
+                )
             }
             Some("zip") => {
-                format!("{}/@v/{}.zip", self.module_base(&pkg.name), pkg.version)
+                format!(
+                    "{}/@v/{}.zip",
+                    self.module_base(&pkg.name),
+                    encode_path(&pkg.version)
+                )
             }
             None if pkg.version == "latest" => {
                 format!("{}/@latest", self.module_base(&pkg.name))
             }
             None => {
-                format!("{}/@v/{}.info", self.module_base(&pkg.name), pkg.version)
+                format!(
+                    "{}/@v/{}.info",
+                    self.module_base(&pkg.name),
+                    encode_path(&pkg.version)
+                )
             }
             Some(other) => {
                 return Err(CoreError::Registry(format!(
@@ -345,7 +358,7 @@ impl RegistryClient for GoProxyRegistryClient {
 impl GoProxyRegistryClient {
     /// Returns `{base_url}/{module}` — the common prefix for all GOPROXY endpoints.
     fn module_base(&self, module: &str) -> String {
-        format!("{}/{}", self.base_url, module)
+        format!("{}/{}", self.base_url, encode_path(module))
     }
 
     async fn fetch_info_latest(&self, module: &str) -> Result<GoVersionInfo, CoreError> {
@@ -358,7 +371,11 @@ impl GoProxyRegistryClient {
         module: &str,
         version: &str,
     ) -> Result<GoVersionInfo, CoreError> {
-        let url = format!("{}/@v/{}.info", self.module_base(module), version);
+        let url = format!(
+            "{}/@v/{}.info",
+            self.module_base(module),
+            encode_path(version)
+        );
         self.fetch_info_url(&url, module, version).await
     }
 

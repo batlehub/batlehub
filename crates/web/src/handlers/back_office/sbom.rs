@@ -136,7 +136,7 @@ pub struct SbomExportQuery {
     responses(
         (status = 200, description = "Merged SBOM document (JSON attachment)", body = SbomDocument),
         (status = 400, description = "Unknown format"),
-        (status = 403, description = "`system:read` required"),
+        (status = 403, description = "`packages:read` required"),
     ),
     security(("bearer_token" = [])),
 )]
@@ -149,7 +149,7 @@ pub async fn export_org_sbom(
 ) -> Result<impl Responder, AppError> {
     crate::handlers::back_office::require_verb(
         &identity,
-        batlehub_core::entities::Action::SystemRead,
+        batlehub_core::entities::Action::PackagesRead,
         None,
         &hot,
     )

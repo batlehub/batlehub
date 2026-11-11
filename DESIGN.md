@@ -409,7 +409,12 @@ JetBrains Mono carries no such constraint and uses a conventional
   Silkscreen is caps-only and the transform would only restate the face.
   It was 56 → 72 → 88 → 104, authored for the catalog specimen alone; 104px costs two lines to any
   title that is not one short word, which is what made it a per-page decision instead of a step.
-- **Pixel Medium** (Silkscreen 700, 24px, 0.04em): the `BatleHub.` wordmark only.
+  **Admin pages and the tabs of a hub (`/me/*`, `/tools/*`) are not primary destinations** and set
+  their title at Pixel Medium instead (`PageHeader variant="display"`): they are dense work
+  surfaces under a section nav, and a poster-scale title would push the first row of data below
+  the fold on every visit. Decided deliberately (UI audit, 2026-11-10), not left to drift.
+- **Pixel Medium** (Silkscreen 700, 24px, 0.04em): the `BatleHub.` wordmark, and the title of an
+  admin page or a hub tab (see Display above).
 - **Pixel Small** (Silkscreen, 16px): pixel-scale labels inside components — the registry name in a
   list row (0.02em), the primary action's label (0.04em, uppercase), a panel heading, the settings
   popover's own heading, a page number. This is the size at which the bitmap face is still a label

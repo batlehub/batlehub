@@ -112,6 +112,9 @@ vi.mock("@/composables/useAuth", async () => {
       token: ref(authState.token),
       isAdmin: ref(authState.isAdmin),
       isAuthenticated: ref(authState.isAuthenticated),
+      // An administrator holds every verb these surfaces ask for but
+      // `gates:exempt`, which no translation grants (RFC 0042 motivation 5).
+      can: (verb: string) => authState.isAdmin && verb !== "gates:exempt",
     }),
   };
 });
@@ -1619,5 +1622,26 @@ describe("PackageDetailPage SBOM downloads", () => {
 
     expect(sbomButton(wrapper, /SPDX/)).toBeUndefined();
     expect(wrapper.text()).not.toContain("No SBOM for this version");
+  });
+});
+
+describe("PackageDetailPage administration section", () => {
+  beforeEach(() => {
+    listRegistriesMock.mockReset().mockResolvedValue({ data: [{ name: "npm1", type: "npm" }] });
+    packageDetailMock.mockReset().mockResolvedValue({ data: null });
+    authFetchMock.mockReset().mockResolvedValue({ ok: false, status: 503 });
+    routeState.query = {};
+  });
+
+  it("is not drawn under a page that failed to load", async () => {
+    authState.isAdmin = true;
+    try {
+      explorePackageDetailMock.mockReset().mockResolvedValue({ error: { message: "HTTP 503" } });
+      const w = await mountPage();
+      expect(w.find('[role="alert"]').exists()).toBe(true);
+      expect(w.find("#admin-heading").exists()).toBe(false);
+    } finally {
+      authState.isAdmin = false;
+    }
   });
 });

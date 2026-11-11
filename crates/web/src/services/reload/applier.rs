@@ -99,6 +99,17 @@ impl ConfigReloadService {
     /// Stores the result as a pending reload (does NOT apply).
     /// Replaces any existing pending reload.
     pub async fn load_pending(&self, source: ReloadSource) -> Result<ReloadDiff, anyhow::Error> {
+        let label = source.actor_label();
+        self.load_pending_by(source, label).await
+    }
+
+    /// [`Self::load_pending`], with a rejection attributed to `by`: the admin
+    /// who asked, when one did (TD-0002 §4).
+    pub(super) async fn load_pending_by(
+        &self,
+        source: ReloadSource,
+        by: &str,
+    ) -> Result<ReloadDiff, anyhow::Error> {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
@@ -108,12 +119,11 @@ impl ConfigReloadService {
             // differ from the last load attempt — nothing to rebuild.
             return Ok(ReloadDiff::default());
         }
-        let label = source.actor_label();
         let result = match self.load_layers(&content).await {
             Ok((new_config, layers)) => self.build_pending(new_config, layers, source).await,
             Err(e) => Err(e),
         };
-        self.record_rejection(&result, label).await;
+        self.record_rejection(&result, by).await;
         result
     }
 
@@ -153,11 +163,12 @@ impl ConfigReloadService {
     }
 
     /// Same as `load_pending` but parses the config from a supplied TOML string
-    /// instead of re-reading the file. Used by the config-editor endpoint.
+    /// instead of re-reading the file. Used by the config-editor endpoint, so
+    /// the source is always an admin request and a rejection names `by`.
     pub async fn load_pending_from_content(
         &self,
         content: &str,
-        source: ReloadSource,
+        by: &str,
     ) -> Result<ReloadOutcome, anyhow::Error> {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
@@ -182,17 +193,16 @@ impl ConfigReloadService {
                 pending_created: false,
             });
         }
-        let label = source.actor_label();
         let loaded = match self.load_layers(content).await {
             Ok((new_config, layers)) => {
                 let warnings = new_config.warnings();
-                self.build_pending(new_config, layers, source)
+                self.build_pending(new_config, layers, ReloadSource::AdminRequest)
                     .await
                     .map(|diff| (diff, warnings))
             }
             Err(e) => Err(e),
         };
-        self.record_rejection(&loaded, label).await;
+        self.record_rejection(&loaded, by).await;
         let (diff, warnings) = loaded?;
         // Store the raw content so apply() can persist it to disk.
         if let Some(ref mut p) = *self.pending.lock().expect("pending reload lock poisoned") {

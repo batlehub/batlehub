@@ -4,13 +4,13 @@ Proxy and cache the npm registry, or host private npm packages. BatleHub serves 
 
 ## At a glance
 
-| | |
+| Property | Value |
 |---|---|
 | **Config type** | `npm` |
 | **Default upstream** | `registry.npmjs.org` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ `npm publish` |
+| **Private publish** | yes — `npm publish` |
 | **Air gap** | offline, the packument is composed from the held versions ([RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap)); a fresh `npm install` resolves against it |
 
 ## Proxy setup
@@ -93,6 +93,8 @@ npm install @myorg/my-package
 
 ### Endpoint reference
 
+::: details Show every endpoint
+
 <!-- BEGIN endpoints: proxy/npm -->
 | Method | Path | Description |
 |--------|------|-------------|
@@ -111,6 +113,8 @@ npm install @myorg/my-package
 | `GET` | `/proxy/{registry}/{package}/{version}` | Fetch package version metadata. |
 | `GET` | `/proxy/{registry}/{package}/{version}/tarball` | Download npm package tarball for a specific version. |
 <!-- END endpoints -->
+
+:::
 
 The packument is BatleHub's own answer, not a copy of the upstream's. Two things
 are rewritten before it reaches the client:

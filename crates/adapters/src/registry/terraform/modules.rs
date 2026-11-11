@@ -1,4 +1,5 @@
 use super::{models, CoreError, PackageId, TerraformRegistryClient};
+use crate::registry::encode_path;
 use models::{TfModuleVersions, TfProviderVersions, TfVersionDetail};
 
 /// Fetch the `published_at` timestamp for a specific version.
@@ -12,7 +13,11 @@ pub(super) async fn fetch_version_published_at(
     pkg: &PackageId,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     let base = client.base_url.trim_end_matches('/');
-    let url = format!("{base}/v1/{}/{}", pkg.name, pkg.version);
+    let url = format!(
+        "{base}/v1/{}/{}",
+        encode_path(&pkg.name),
+        encode_path(&pkg.version)
+    );
     let resp = client.get(&url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;

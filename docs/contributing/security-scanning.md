@@ -27,6 +27,7 @@ you have already deployed.
 | Development toolchain | Trivy (`rootfs` over the installed tools) | `mise-scan.yaml` (PR touching `mise.toml`/`mise.lock`, weekly) | budget on fixable HIGH/CRITICAL — see below |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL `block-new` (a repository ruleset) / Semgrep block on ERROR, WARNING reported |
 | API surface (OAS + OWASP API Top 10 auth rules) | Spectral (`.spectral.yaml`) | `openapi-lint.yaml` (PR touching `ui/openapi.json` or the ruleset) | block on error |
+| Injection flows, secrets, weak crypto, settings, workflows, dependencies | [inkdex](https://inkdex.mlab.sh) ([inkdex-action](https://github.com/mlab-sh/inkdex-action)) | `inkdex.yaml` (PR + push + daily) | `block-new` ≥ high on a pull request, report on push and schedule |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |
 
@@ -80,6 +81,7 @@ the source never rates (RUSTSEC). **Fixable** means a version without the findin
 | Trivy (`mise-scan`) | CVE in a tool | dev | budget | fixable ≥ high, count ≤ budget |
 | Semgrep | rule match | code | block / report | `ERROR` block, `WARNING` report |
 | CodeQL | security alert | code | `block-new` | `security-severity` ≥ high, via a repository ruleset |
+| inkdex | injection flow, secret, crypto, setting, workflow, dependency | code + ships | `block-new` on pull requests, report on push and schedule | ≥ high; code scanning gets high and up |
 | Spectral | OAS / OWASP API rule | API | block | ≥ warn |
 | gitleaks | secret | all | block | any |
 | clippy | lint | code | block | any warning |
@@ -110,7 +112,7 @@ only check the ruleset names. The job names are unique because a ruleset matches
 not by workflow:
 
 `test.yaml`, `back-dep-audit.yaml`, `dep-audit-frontend.yaml`, `postmortem.yaml`, `image-scan.yaml`,
-`semgrep.yaml`, `openapi-lint.yaml`, `secret-scan.yaml`, `front-lint.yaml`, `front-test.yaml`,
+`semgrep.yaml`, `inkdex.yaml`, `openapi-lint.yaml`, `secret-scan.yaml`, `front-lint.yaml`, `front-test.yaml`,
 `front-design.yaml` (the only CI type-check of `ui/src`, and the generated-docs drift),
 `docs-cli-commands.yaml`, `repo-interop.yaml`, `mise-scan.yaml`, `scripts-test.yaml`,
 `helm-lint.yaml`, each followed by ` / required`. `test_required_gate.py` fails when one of them
@@ -133,6 +135,9 @@ does not wait for every other job of its workflow.
   construction; `postmortem-fork.yaml`, run by a maintainer on the reviewed head, posts the verdict
   as a commit status named `postmortem.yaml / required`. That this status satisfies the ruleset
   beside the failed check of the same name is not yet observed on a real fork PR.
+- **inkdex** needs the `INKDEX_TOKEN` secret. Without it — and so on a fork's pull request, which
+  gets no secrets — the action exits 2 and `inkdex.yaml / required` is red: a scan that could not run
+  is not a clean one. A maintainer re-runs a fork's change from a branch of this repository.
 - **Not aggregated**: CodeQL (the ruleset above), vuln-scan (`report`), SonarCloud (an external
   app), and the label- or schedule-driven workflows.
 

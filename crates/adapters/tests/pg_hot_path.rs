@@ -180,6 +180,74 @@ async fn record_access_writes_the_status_row_only_for_an_allowed_read() {
     ));
 }
 
+/// The batched writer (TD-0004 §2) writes the same rows as the inline one:
+/// every event, the status row for an allowed read only, once per coordinate
+/// even when the batch carries it twice, and never over a block. Nothing is
+/// visible before the flush that the server runs at shutdown, everything after.
+#[tokio::test]
+async fn batched_access_events_write_the_same_rows_and_flush_loses_none() {
+    let Some((repo, reg)) = repo().await else {
+        return;
+    };
+    let blocked_pkg = PackageId::new(&reg, "blocked", "1.0.0");
+    repo.set_status(&blocked_pkg, blocked("held"))
+        .await
+        .unwrap();
+    repo.start_access_batching();
+
+    let denied = PackageId::new(&reg, "denied", "1.0.0");
+    let allowed = PackageId::new(&reg, "allowed", "1.0.0");
+    repo.record_access(event(
+        &denied,
+        AccessResult::Denied {
+            reason: "no".into(),
+        },
+    ))
+    .await
+    .unwrap();
+    for _ in 0..3 {
+        repo.record_access(event(&allowed, AccessResult::Allowed))
+            .await
+            .unwrap();
+    }
+    let mut detailed = event(&blocked_pkg, AccessResult::Allowed);
+    detailed.user_id = Some("alice".into());
+    detailed.ip_address = Some("10.0.0.1".into());
+    detailed.throttled_count = Some(3);
+    detailed.detail = Some("d".into());
+    detailed.reason_code = Some("rc".into());
+    repo.record_access(detailed.clone()).await.unwrap();
+    repo.flush_access_events().await;
+
+    let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM access_events WHERE registry = $1")
+        .bind(&reg)
+        .fetch_one(&repo.pool())
+        .await
+        .unwrap();
+    assert_eq!(events, 5, "every queued event is written by the flush");
+    let row: String = sqlx::query_scalar(
+        "SELECT concat_ws('|', user_id, ip_address, throttled_count, detail, reason_code, outcome) \
+         FROM access_events WHERE id = $1",
+    )
+    .bind(detailed.id)
+    .fetch_one(&repo.pool())
+    .await
+    .unwrap();
+    assert_eq!(row, "alice|10.0.0.1|3|d|rc|allowed");
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT package_name FROM package_statuses WHERE registry = $1 ORDER BY package_name",
+    )
+    .bind(&reg)
+    .fetch_all(&repo.pool())
+    .await
+    .unwrap();
+    assert_eq!(names, vec!["allowed".to_owned(), "blocked".to_owned()]);
+    assert!(matches!(
+        repo.get_status(&blocked_pkg).await.unwrap(),
+        PackageStatus::Blocked { .. }
+    ));
+}
+
 fn who(user: Option<&str>, groups: &[&str]) -> Identity {
     Identity {
         user_id: user.map(str::to_owned),

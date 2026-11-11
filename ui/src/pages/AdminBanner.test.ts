@@ -20,12 +20,21 @@ function stubBanner(body: unknown) {
   );
 }
 
+/** `Select` is radix: stubbed as a native select so the level can be picked with `setValue`. */
+const SelectStub = {
+  props: ["modelValue", "options", "id"],
+  emits: ["update:modelValue"],
+  template: `<select :id="id" :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+    <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
+  </select>`,
+};
+
 /** Unmounted in teardown: `useBanner` installs a 30 s poll cleared on unmount. */
 const mounted: VueWrapper[] = [];
 
 async function mountPage() {
   const wrapper = mount(AdminBanner, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { SectionTabs: true, RouterLink: true, Select: SelectStub } },
   });
   mounted.push(wrapper);
   await flushPromises();

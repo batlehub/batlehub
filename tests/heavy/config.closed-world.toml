@@ -176,6 +176,34 @@ anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# mise's versions host (RFC 0043), twice: as it ships, and behind an age gate
+# one day older than jq's newest release — `HEAVY_MV_MIN_AGE`, computed by the
+# script from jq's own list before this file is read, so the gate hides exactly
+# that release whatever it is called on the day the suite runs.
+[[registries]]
+type = "mise-versions"
+name = "mise-versions-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+[[registries]]
+type = "mise-versions"
+name = "mise-versions-gated-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+[[registries.rules]]
+kind = "release_age_gate"
+min_age_secs = ${HEAVY_MV_MIN_AGE}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The second half: the kinds whose client is a *tool installer* or a *gallery*
 # rather than a language's package manager.

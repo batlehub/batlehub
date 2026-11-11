@@ -101,6 +101,20 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# ── mise's versions host (RFC 0043) ─────────────────────────────────────────
+[[registries]]
+type = "mise-versions"
+name = "live-mise-versions-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list"]
+
 # ── SDKMAN: api.sdkman.io plus the broker ───────────────────────────────────
 [[registries]]
 type = "sdkman"

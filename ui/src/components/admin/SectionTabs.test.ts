@@ -72,4 +72,21 @@ describe("SectionTabs", () => {
     await wrapper.get("select").setValue("/admin/security/ip-blocks");
     expect(push).toHaveBeenCalledWith("/admin/security/ip-blocks");
   });
+
+  /** WCAG 3.2.2: an arrow key on the closed select must not load a page. */
+  it("waits for Enter when the tab is changed from the keyboard", async () => {
+    const router = makeRouter("/admin/security/users");
+    await router.isReady();
+    const push = vi.spyOn(router, "push");
+    const wrapper = mount(SectionTabs, {
+      props: { tabs: TABS },
+      global: { plugins: [router] },
+    });
+    const select = wrapper.get("select");
+    await select.trigger("keydown", { key: "ArrowDown" });
+    await select.setValue("/admin/security/ip-blocks");
+    expect(push).not.toHaveBeenCalled();
+    await select.trigger("keydown", { key: "Enter" });
+    expect(push).toHaveBeenCalledWith("/admin/security/ip-blocks");
+  });
 });

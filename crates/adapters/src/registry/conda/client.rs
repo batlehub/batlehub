@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -22,7 +23,7 @@ impl CondaRegistryClient {
         platform: &str,
         package: &str,
     ) -> Vec<String> {
-        let url = format!("{base}/{platform}/repodata.json");
+        let url = format!("{base}/{}/repodata.json", encode_path(platform));
         let resp = match self.get(&url).send().await {
             Ok(r) if r.status().is_success() => r,
             _ => return vec![],
@@ -52,7 +53,7 @@ impl CondaRegistryClient {
         filename: &str,
         pkg: &PackageId,
     ) -> Result<PackageMetadata, CoreError> {
-        let repodata_url = format!("{base}/{platform}/repodata.json");
+        let repodata_url = format!("{base}/{}/repodata.json", encode_path(platform));
         let resp = self
             .get(&repodata_url)
             .send()
@@ -88,7 +89,11 @@ impl CondaRegistryClient {
         Ok(PackageMetadata {
             id: pkg.clone(),
             published_at,
-            download_url: Some(format!("{base}/{platform}/{filename}")),
+            download_url: Some(format!(
+                "{base}/{}/{}",
+                encode_path(platform),
+                encode_path(filename)
+            )),
             checksum: entry.sha256.clone(),
             is_signed: None,
             extra: serde_json::json!({
@@ -247,7 +252,7 @@ impl RegistryClient for CondaRegistryClient {
             }
         };
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{base}/{package}/{filename}");
+        let url = format!("{base}/{}/{filename}", encode_path(package));
         fetch_json_document(
             self.get(&url),
             &format!("conda {filename} for platform '{package}'"),

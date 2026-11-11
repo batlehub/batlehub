@@ -18,7 +18,21 @@ import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 const mounted: ReturnType<typeof mount>[] = [];
 
 function mountComp(registries = ["npm", "pypi"]) {
-  const wrapper = mount(DeleteCachedArtifact, { props: { registries } });
+  const wrapper = mount(DeleteCachedArtifact, {
+    props: { registries },
+    // radix `Select`, stubbed native so the registry can be picked with `setValue`.
+    global: {
+      stubs: {
+        Select: {
+          props: ["modelValue", "options", "id"],
+          emits: ["update:modelValue"],
+          template: `<select :id="id" :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+            <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>`,
+        },
+      },
+    },
+  });
   mounted.push(wrapper);
   return wrapper;
 }

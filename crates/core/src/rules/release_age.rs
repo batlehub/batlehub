@@ -42,6 +42,10 @@ impl Rule for ReleaseAgeGateRule {
         "release_age_gate"
     }
 
+    fn listing_min_age(&self, identity: &crate::entities::Identity) -> Option<Duration> {
+        (!identity.role.clears_bypass(&self.bypass_roles)).then_some(self.min_age)
+    }
+
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision {
         let bypassed = ctx.identity.role.clears_bypass(&self.bypass_roles);
 

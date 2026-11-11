@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/pacman.md
-sourceHash: 192301240c88789b
+sourceHash: 86f9ecd339e61915
 ---
 
 # Pacman (Arch Linux)
@@ -12,13 +12,13 @@ OpenPGP Ed25519 quand `[registries.repo_signing]` est configuré.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `pacman` |
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement pour proxy et hybrid |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par chemin |
-| **Publication privée** | ✅ `curl -X PUT … /pacman/upload` |
+| **Publication privée** | oui — `curl -X PUT … /pacman/upload` |
 | **Coupure réseau** | pas d'index composé hors ligne : une base signée ne peut pas être re-signée ici ; un fichier détenu est servi par chemin |
 
 ## Mise en place du proxy

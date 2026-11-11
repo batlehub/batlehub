@@ -6,7 +6,7 @@ import { useAuth } from "@/composables/useAuth";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import { PageHeader } from "@/components/ui/page-header";
-import { CopyButton } from "@/components/ui/copy-button";
+import { CodeBlock } from "@/components/ui/code-block";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -169,11 +169,11 @@ const usageSnippets = [
 </script>
 
 <template>
-  <div class="space-y-6 max-w-3xl">
+  <div class="space-y-6">
     <!-- Header -->
     <div class="flex items-center gap-3">
-      <Terminal class="h-6 w-6 text-primary shrink-0" />
-      <PageHeader title="CLI" class="flex-1">
+      <Terminal class="h-6 w-6 text-foreground shrink-0" aria-hidden="true" />
+      <PageHeader as="h2" variant="display" :title="t('account.cli')" class="flex-1">
         <template #description>
           <i18n-t keypath="cliDownload.downloadAndConfigure" tag="span">
             <template #cli><code class="font-mono text-xs">batlehub-cli</code></template>
@@ -185,7 +185,7 @@ const usageSnippets = [
     <!-- Download card -->
     <Card>
       <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-base">
+        <CardTitle class="flex items-center gap-2">
           <Download class="h-4 w-4" />
           {{ t("common.download") }}
         </CardTitle>
@@ -194,7 +194,7 @@ const usageSnippets = [
       <CardContent class="space-y-4">
         <!-- Error alert -->
         <Alert v-if="downloadError" variant="destructive" class="flex items-start gap-2">
-          <AlertCircle class="h-4 w-4 shrink-0 mt-0.5" />
+          <AlertCircle class="h-4 w-4 shrink-0 mt-1" />
           <p class="text-sm">{{ downloadError }}</p>
         </Alert>
 
@@ -209,9 +209,7 @@ const usageSnippets = [
 
         <!-- Install tabs -->
         <Tabs default-value="download" class="mt-4">
-          <TabsList
-            class="flex flex-wrap h-auto gap-1 justify-start bg-transparent border-none p-0 mb-2"
-          >
+          <TabsList class="mb-2">
             <TabsTrigger
               v-for="(s, key) in installSnippets"
               :key="key"
@@ -223,17 +221,7 @@ const usageSnippets = [
           </TabsList>
 
           <TabsContent v-for="(s, key) in installSnippets" :key="key" :value="key">
-            <div class="relative rounded-sm border border-border bg-muted/40 overflow-hidden">
-              <pre
-                class="p-4 text-xs font-mono overflow-x-auto text-foreground/90 leading-relaxed"
-                >{{ s.code }}</pre>
-              <CopyButton
-                :text="s.code"
-                size="sm"
-                variant="ghost"
-                class="absolute top-2 right-2 font-mono text-xs h-7 px-2"
-              />
-            </div>
+            <CodeBlock :code="s.code" :lang="s.lang" :copy="s.code" />
           </TabsContent>
         </Tabs>
       </CardContent>
@@ -242,7 +230,7 @@ const usageSnippets = [
     <!-- Configuration card -->
     <Card>
       <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-base">
+        <CardTitle class="flex items-center gap-2">
           <Package class="h-4 w-4" />
           {{ t("common.configuration") }}
         </CardTitle>
@@ -258,17 +246,7 @@ const usageSnippets = [
         </CardDescription>
       </CardHeader>
       <CardContent class="space-y-4">
-        <div class="relative rounded-sm border border-border bg-muted/40 overflow-hidden">
-          <pre class="p-4 text-xs font-mono overflow-x-auto text-foreground/90 leading-relaxed">{{
-            configSnippet
-          }}</pre>
-          <CopyButton
-            :text="configSnippet"
-            size="sm"
-            variant="ghost"
-            class="absolute top-2 right-2 font-mono text-xs h-7 px-2"
-          />
-        </div>
+        <CodeBlock :code="configSnippet" lang="toml" :copy="configSnippet" />
 
         <p class="text-xs text-muted-foreground">
           {{ t("cliDownload.overrideWithEnv") }}
@@ -282,7 +260,7 @@ const usageSnippets = [
     <!-- Quick reference card -->
     <Card>
       <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-base">
+        <CardTitle class="flex items-center gap-2">
           <Terminal class="h-4 w-4" />
           {{ t("cliDownload.quickReference") }}
         </CardTitle>
@@ -290,23 +268,11 @@ const usageSnippets = [
       </CardHeader>
       <CardContent>
         <div class="space-y-3">
-          <div
-            v-for="s in usageSnippets"
-            :key="s.key"
-            class="relative rounded-sm border border-border bg-muted/40 overflow-hidden"
-          >
-            <div class="px-3 pt-2 pb-0.5 text-xs text-muted-foreground font-mono">
+          <div v-for="s in usageSnippets" :key="s.key" class="space-y-1">
+            <div class="text-xs text-muted-foreground font-mono">
               {{ te(s.label) ? t(s.label) : s.label }}
             </div>
-            <pre class="px-3 pb-3 pt-1 text-xs font-mono text-foreground/90 leading-relaxed">{{
-              s.code
-            }}</pre>
-            <CopyButton
-              :text="s.code"
-              size="sm"
-              variant="ghost"
-              class="absolute top-1 right-2 font-mono text-xs h-7 px-2"
-            />
+            <CodeBlock :code="s.code" :lang="s.lang" :copy="s.code" />
           </div>
         </div>
       </CardContent>

@@ -4,6 +4,8 @@
 local environment to pull through it, and publishing private packages when your
 administrator has enabled `local` or `hybrid` mode.
 
+<SectionGrid section="use" />
+
 If you are the one *running* the server — installing it, configuring registries,
 granting access — that is the [operator's guide](/guide/installation).
 

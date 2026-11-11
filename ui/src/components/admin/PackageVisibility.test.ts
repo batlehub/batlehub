@@ -52,6 +52,13 @@ describe("PackageVisibility", () => {
     expect(getVisibilityMock).toHaveBeenCalledTimes(2);
   });
 
+  it("says the load failed rather than showing the fallback visibility", async () => {
+    getVisibilityMock.mockResolvedValueOnce({ error: { message: "no such package" } });
+    const wrapper = await mountComp();
+    expect(wrapper.get('[role="alert"]').text()).toContain("no such package");
+    expect(wrapper.findAll("button").some((b) => b.text().includes("Save"))).toBe(false);
+  });
+
   it("shows an error message when saving fails", async () => {
     setVisibilityMock.mockResolvedValueOnce({ error: { message: "nope" } });
     const wrapper = await mountComp();

@@ -187,7 +187,7 @@ describe("the Undependable Fill Rule", () => {
        because every child overrides it — so it was a trap rather than a
        defect: the next plain word added to that paragraph would have rendered
        under the floor with nothing to catch it. */
-    const catalog = SOURCES["src/pages/PackageCatalog.vue"];
+    const catalog = SOURCES["src/components/catalog/CatalogSpecimen.vue"];
     const specimen = catalog.slice(
       catalog.indexOf('<div class="plate"'),
       catalog.indexOf("</section>", catalog.indexOf('<div class="plate"')),
@@ -221,6 +221,26 @@ describe("no native dialogs", () => {
       }
     }
     expect(offenders, "a native dialog states no scope, count or consequence").toEqual([]);
+  });
+});
+
+/**
+ * DESIGN.md § Layout: "One 4px-based scale, six steps: 4 / 8 / 12 / 16 / 24 /
+ * 40 … a value not on the scale is a defect." In Tailwind's 4px units that is
+ * 1 / 2 / 3 / 4 / 6 / 10 (plus 0 and px). The audit found 41 files off it —
+ * mostly 1.5 and 0.5, the half-steps shadcn ships with — and nothing stopped
+ * the next one. Padding, margin, gap and space only: positions (`top-2.5`)
+ * and sizes (`h-3.5`) are not rhythm.
+ */
+const OFF_SCALE_SPACING =
+  /(?<![\w-])(?:[a-z0-9]+:)*-?(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap-y|space-x|space-y)-(?!(?:0|px|1|2|3|4|6|10|auto)(?![\w.]))\d+(?:\.\d+)?(?![\w.\-\]])/g;
+
+describe("the spacing scale", () => {
+  it("spaces nothing off DESIGN.md's six steps", () => {
+    expect(
+      census(OFF_SCALE_SPACING),
+      "4 / 8 / 12 / 16 / 24 / 40 px — Tailwind 1/2/3/4/6/10",
+    ).toEqual({});
   });
 });
 

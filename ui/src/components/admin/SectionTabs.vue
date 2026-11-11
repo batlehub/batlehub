@@ -2,6 +2,8 @@
 import { useI18n } from "vue-i18n";
 import { computed } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useAuth } from "@/composables/useAuth";
+import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
 
 /** `label` is an i18n key, resolved here — see `config/adminSections.ts`. */
 
@@ -18,10 +20,40 @@ function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
 
-const current = computed(() => props.tabs.find((tab) => isActive(tab.to))?.to ?? "");
+const { can } = useAuth();
+/** Only the tabs whose verb the viewer holds (RFC 0042 §4.3). */
+const tabs = computed(() =>
+  props.tabs.filter((tab) => {
+    const verb = ADMIN_PAGE_VERBS[tab.to];
+    return verb === undefined || can(verb);
+  }),
+);
+
+const current = computed(() => tabs.value.find((tab) => isActive(tab.to))?.to ?? "");
 
 function go(to: string) {
   if (to && to !== current.value) void router.push(to);
+}
+
+/* WCAG 3.2.2: on a closed select, desktop browsers fire `change` on every
+   arrow key, so navigating on `change` turned each keystroke into a page load.
+   A keyboard choice waits for Enter; a pointer or the platform picker still
+   navigates at once. A choice left unconfirmed snaps back on blur. */
+let keyed = false;
+function onKeydown(event: KeyboardEvent) {
+  const select = event.target as HTMLSelectElement;
+  keyed = event.key !== "Enter";
+  if (event.key === "Enter") go(select.value);
+}
+function onPointerdown() {
+  keyed = false;
+}
+function onChange(event: Event) {
+  if (!keyed) go((event.target as HTMLSelectElement).value);
+}
+function onBlur(event: FocusEvent) {
+  keyed = false;
+  (event.target as HTMLSelectElement).value = current.value;
 }
 </script>
 
@@ -39,7 +71,10 @@ function go(to: string) {
       id="section-tab-select"
       class="h-10 w-full border border-border bg-background px-3 font-mono text-sm"
       :value="current"
-      @change="go(($event.target as HTMLSelectElement).value)"
+      @pointerdown="onPointerdown"
+      @keydown="onKeydown"
+      @change="onChange"
+      @blur="onBlur"
     >
       <option v-for="tab in tabs" :key="tab.to" :value="tab.to">{{ t(tab.label) }}</option>
     </select>
@@ -54,7 +89,7 @@ function go(to: string) {
       :to="tab.to"
       :aria-current="isActive(tab.to) ? 'page' : undefined"
       :class="[
-        'px-3 py-1.5 font-mono text-sm whitespace-nowrap border-b -mb-px',
+        'px-3 py-2 font-mono text-sm whitespace-nowrap border-b -mb-px',
         isActive(tab.to)
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground',

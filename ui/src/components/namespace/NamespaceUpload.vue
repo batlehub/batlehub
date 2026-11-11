@@ -6,6 +6,7 @@ import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import { Button } from "@/components/ui/button";
+import { Announcer } from "@/components/ui/announcer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -223,7 +224,7 @@ const currentSnippet = computed(
     {{ t("namespaceUpload.noRegistriesInLocal") }}
   </div>
   <template v-else>
-    <div class="space-y-1.5 w-60">
+    <div class="space-y-2 w-60">
       <Label for="upload-registry">{{ t("common.registry") }}</Label>
       <Select
         id="upload-registry"
@@ -243,8 +244,8 @@ const currentSnippet = computed(
 
       <TabsContent v-if="isBinaryUpload" value="upload" class="space-y-4 pt-4">
         <template v-if="registryType === 'openvsx' || registryType === 'vscode-marketplace'">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="space-y-2">
               <Label for="upload-ext-id"
                 >{{ t("namespaceUpload.extensionId") }}
                 <span class="text-muted-foreground text-xs">{{
@@ -258,7 +259,7 @@ const currentSnippet = computed(
                 class="font-mono text-sm"
               />
             </div>
-            <div class="space-y-1.5">
+            <div class="space-y-2">
               <Label for="upload-version-ext">{{ t("common.version") }}</Label>
               <Input
                 id="upload-version-ext"
@@ -270,8 +271,8 @@ const currentSnippet = computed(
           </div>
         </template>
         <template v-else-if="registryType === 'goproxy'">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="space-y-2">
               <Label for="upload-module">{{ t("namespaceUpload.modulePath") }}</Label>
               <Input
                 id="upload-module"
@@ -280,7 +281,7 @@ const currentSnippet = computed(
                 class="font-mono text-sm"
               />
             </div>
-            <div class="space-y-1.5">
+            <div class="space-y-2">
               <Label for="upload-version-module">{{ t("common.version") }}</Label>
               <Input
                 id="upload-version-module"
@@ -292,8 +293,8 @@ const currentSnippet = computed(
           </div>
         </template>
         <template v-else-if="registryType === 'deb'">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="space-y-2">
               <Label for="upload-distribution"
                 >{{ t("common.distribution") }}
                 <span class="text-muted-foreground text-xs">{{
@@ -307,7 +308,7 @@ const currentSnippet = computed(
                 class="font-mono text-sm"
               />
             </div>
-            <div class="space-y-1.5">
+            <div class="space-y-2">
               <Label for="upload-component">{{ t("common.component") }}</Label>
               <Input
                 id="upload-component"
@@ -319,7 +320,7 @@ const currentSnippet = computed(
           </div>
         </template>
 
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           <Label for="upload-file"
             >{{ t("common.file") }}
             <span class="text-muted-foreground text-xs ml-1">{{
@@ -330,11 +331,12 @@ const currentSnippet = computed(
             id="upload-file"
             type="file"
             :accept="acceptFor(registryType)"
-            class="block text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-sm file:border-0 file:text-xs file:font-medium file:bg-secondary file:text-secondary-foreground hover:file:bg-secondary/80 cursor-pointer"
+            class="block text-sm text-muted-foreground file:mr-3 file:py-2 file:px-3 file:rounded-sm file:border-0 file:text-xs file:font-medium file:bg-ground-raised file:text-foreground cursor-pointer"
             @change="onFileChange"
           />
         </div>
 
+        <Announcer :message="success ? t('namespaceUpload.publishedSuccessfully') : ''" />
         <div class="flex items-center gap-3">
           <Button :disabled="!uploadFile || loading" @click="doUpload">
             {{ loading ? t("namespaceUpload.uploading") : t("namespaceUpload.upload") }}
@@ -345,7 +347,7 @@ const currentSnippet = computed(
           <span v-if="success" class="text-sm text-foreground">{{
             t("namespaceUpload.publishedSuccessfully")
           }}</span>
-          <span v-if="error" class="text-sm text-destructive">{{ error }}</span>
+          <span v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</span>
         </div>
       </TabsContent>
 

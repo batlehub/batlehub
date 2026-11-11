@@ -742,6 +742,42 @@ pub fn percent_encode_path(path: &str) -> String {
         .join("/")
 }
 
+/// Encode a caller-derived coordinate (name, version, file) for an upstream
+/// URL path: `/` and every RFC 3986 `pchar` stay literal, everything else is
+/// percent-encoded, `?`, `#` and `%` included (TD-0005).
+///
+/// Looser than [`percent_encode_path`] on purpose: `@`, `+`, `:`, `!` and `=`
+/// are part of real spellings (npm's `@scope`, semver's `+build`, Go's `!x`
+/// case escape, Maven's classifier) and an upstream may not decode them back.
+/// The only job here is that a coordinate cannot leave its path: no query, no
+/// fragment, no dot segment.
+pub fn encode_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(path.len());
+    for (i, segment) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if !segment.is_empty() && segment.bytes().all(|b| b == b'.') {
+            out.push_str(&segment.replace('.', "%2E"));
+            continue;
+        }
+        for b in segment.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => out.push(b as char),
+                b'-' | b'.' | b'_' | b'~' | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*'
+                | b'+' | b',' | b';' | b'=' | b':' | b'@' => out.push(b as char),
+                _ => {
+                    out.push('%');
+                    out.push(HEX[(b >> 4) as usize] as char);
+                    out.push(HEX[(b & 0x0f) as usize] as char);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Percent-encode a query string value, encoding all characters except
 /// unreserved ones (letters, digits, `-`, `_`, `.`, `~`).
 pub fn percent_encode(s: &str) -> String {
@@ -977,6 +1013,25 @@ mod tests {
         assert_eq!(percent_encode_path("a/./b"), "a/%2E/b");
         assert_eq!(percent_encode_path("a/main.rs"), "a/main.rs");
         assert_eq!(percent_encode_path("a/...hidden/b"), "a/...hidden/b");
+    }
+
+    #[test]
+    fn encode_path_keeps_real_spellings_and_closes_the_path() {
+        // Spellings ecosystems use, unchanged.
+        assert_eq!(encode_path("@scope/pkg"), "@scope/pkg");
+        assert_eq!(encode_path("1.0.0+build.1"), "1.0.0+build.1");
+        assert_eq!(
+            encode_path("github.com/!azure/sdk"),
+            "github.com/!azure/sdk"
+        );
+        assert_eq!(encode_path("org.zz:art"), "org.zz:art");
+        // Nothing leaves the path.
+        assert_eq!(encode_path("p?inj=1"), "p%3Finj=1");
+        assert_eq!(encode_path("p#frag"), "p%23frag");
+        assert_eq!(encode_path("p%3F"), "p%253F");
+        assert_eq!(encode_path("a b"), "a%20b");
+        assert_eq!(encode_path("a/../b"), "a/%2E%2E/b");
+        assert_eq!(encode_path("a/main.rs"), "a/main.rs");
     }
 
     /// A path that walks out of the base is refused even though it never

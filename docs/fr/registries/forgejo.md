@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/forgejo.md
-sourceHash: 013646846368a567
+sourceHash: 1c7a7b8b36fe0472
 ---
 
 # Forgejo / Gitea
@@ -12,13 +12,13 @@ d'URL est celui de GitHub, et le registre de paquets Forgejo / Gitea est
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `forgejo` |
 | **Amont par défaut** | `codeberg.org` |
 | **Modes** | proxy seul |
 | **Adressage** | par paquet |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | hors ligne, la liste des releases et la release par tag sont composées à partir des assets détenus |
 
 ## Mise en place du proxy

@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { Resolution } from "@/components/ui/resolution";
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
-import { Package } from "@lucide/vue";
+import BulkActionBar from "@/components/admin/BulkActionBar.vue";
+import PackageFilterBar from "@/components/admin/PackageFilterBar.vue";
+import { useRowSelection } from "@/composables/useRowSelection";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
 import { PACKAGES_TABS } from "@/config/adminSections";
@@ -26,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Announcer } from "@/components/ui/announcer";
 import {
@@ -200,8 +204,10 @@ async function deletePkg(pkg: AdminPackageSummary) {
       }),
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body.error ?? `HTTP ${res.status}`);
+      // `ErrorBody` puts the kind in `error` ("Forbidden") and the reason in
+      // `message`; the reason is the part the operator can act on.
+      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
     }
     reload();
   } catch (e: unknown) {
@@ -211,7 +217,6 @@ async function deletePkg(pkg: AdminPackageSummary) {
 
 // ── Multi-select + bulk actions ───────────────────────────────────────────────
 
-const selected = ref<Set<string>>(new Set());
 const bulkLoading = ref(false);
 const bulkResultMsg = ref<string | null>(null);
 
@@ -239,27 +244,13 @@ function pkgKey(pkg: AdminPackageSummary) {
   return `${pkg.package_id.registry}:${pkg.package_id.name}:${pkg.package_id.version}:${pkg.package_id.artifact ?? ""}`;
 }
 
-const allSelected = computed(
-  () =>
-    filteredPackages.value.length > 0 &&
-    filteredPackages.value.every((p) => selected.value.has(pkgKey(p))),
-);
-
-function toggleAll() {
-  if (allSelected.value) {
-    filteredPackages.value.forEach((p) => selected.value.delete(pkgKey(p)));
-  } else {
-    filteredPackages.value.forEach((p) => selected.value.add(pkgKey(p)));
-  }
-  selected.value = new Set(selected.value);
-}
-
-function toggleOne(pkg: AdminPackageSummary) {
-  const k = pkgKey(pkg);
-  if (selected.value.has(k)) selected.value.delete(k);
-  else selected.value.add(k);
-  selected.value = new Set(selected.value);
-}
+const {
+  selected,
+  allSelected,
+  toggleAll,
+  toggle: toggleOne,
+  clear: clearSelection,
+} = useRowSelection(filteredPackages, pkgKey);
 
 const selectedPackages = computed(() =>
   (packages.value ?? []).filter((p) => selected.value.has(pkgKey(p))),
@@ -298,7 +289,7 @@ async function bulkBlock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -330,7 +321,7 @@ async function bulkUnblock() {
     }
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -355,21 +346,23 @@ async function bulkDelete() {
       succeeded_count?: number;
       failed_count?: number;
       message?: string;
+      error?: string;
     };
     if (!res.ok) {
       // The same defect the comment in `bulkBlock` describes, on the one sibling
       // that went through raw `authFetch` instead of the generated client: with
       // no status check a 500 with an empty body parsed to `{}` and announced
       // "Deleted 0 packages." — a failed bulk delete reported as a success.
-      actionError.value = json.message ?? `HTTP ${res.status}`;
+      actionError.value = json.message ?? json.error ?? `HTTP ${res.status}`;
       return;
     }
     bulkResultMsg.value = bulkOutcome("deleted", json.succeeded_count ?? 0, json.failed_count ?? 0);
   } catch (e) {
-    bulkResultMsg.value = extractMessage(e);
+    // An error, not a result: written to `bulkResultMsg` it read as an outcome.
+    actionError.value = extractMessage(e);
   } finally {
     bulkLoading.value = false;
-    selected.value = new Set();
+    clearSelection();
     reload();
   }
 }
@@ -481,21 +474,14 @@ async function runPending(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
     <!-- An outcome announced, not only rendered (RFC 0004-bis §2.6). Every bulk
          result, block, warm and cache invalidation in this console reached
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="bulkResultMsg ?? ''" />
     <SectionTabs :tabs="PACKAGES_TABS" />
-    <PageHeader variant="display">
-      <template #title>
-        {{ t("adminNav.allPackages") }}
-        <span v-if="packages?.length" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ packages.length }})</span
-        >
-      </template>
-    </PageHeader>
+    <PageHeader variant="display" :title="t('adminNav.allPackages')" :count="packages?.length" />
     <!-- The form that used to sit here is `/admin/packages/bulk`, one tab
          away and better at the job. A link, not a second implementation. -->
     <p class="text-sm text-muted-foreground">
@@ -524,13 +510,11 @@ async function runPending(): Promise<void> {
          outlined control (its confirmation carries the weight), and Delete is
          the bar's one filled action, set apart at the far end so it is never
          the button beside the one you meant. -->
-    <div
+    <BulkActionBar
       v-if="selected.size > 0"
-      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2.5"
+      :label="t('adminPackages.selectedCount', { count: selected.size }, selected.size)"
+      @clear="clearSelection"
     >
-      <span class="text-sm font-medium">{{
-        t("adminPackages.selectedCount", { count: selected.size }, selected.size)
-      }}</span>
       <Button
         size="sm"
         variant="outline"
@@ -548,25 +532,25 @@ async function runPending(): Promise<void> {
         @click="pending = { kind: 'bulk-unblock' }"
         >{{ t("adminPackages.unblockSelected") }}</Button
       >
-      <Button size="sm" variant="ghost" @click="selected = new Set()">
-        {{ t("common.clearAction") }}
-      </Button>
-      <Button
-        size="sm"
-        variant="destructive"
-        class="ml-auto"
-        :disabled="bulkLoading"
-        @click="pending = { kind: 'bulk-delete' }"
-        >{{ t("adminPackages.deleteSelected") }}</Button
-      >
-    </div>
+      <template #end>
+        <Button
+          size="sm"
+          variant="destructive"
+          class="ml-auto"
+          :disabled="bulkLoading"
+          @click="pending = { kind: 'bulk-delete' }"
+          >{{ t("adminPackages.deleteSelected") }}</Button
+        >
+      </template>
+    </BulkActionBar>
 
     <!-- Outside the selection-gated bar above: every bulk handler clears the
          selection in its `finally`, so a message rendered inside that bar was
          written into a node destroyed in the same tick and never seen. -->
-    <output v-if="bulkResultMsg" class="block text-sm text-muted-foreground">
+    <!-- A plain paragraph: the Announcer at the top already speaks it. -->
+    <p v-if="bulkResultMsg" class="text-sm text-muted-foreground">
       {{ bulkResultMsg }}
-    </output>
+    </p>
 
     <!-- Package list -->
     <Card>
@@ -574,53 +558,31 @@ async function runPending(): Promise<void> {
         <div class="flex flex-row items-center justify-end space-y-0">
           <Button variant="outline" size="sm" @click="reload"> {{ t("common.refresh") }} </Button>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <Input
-            v-model="search"
-            :placeholder="t('adminPackages.filterByNameRegistry')"
-            :aria-label="t('adminPackages.filterPackages')"
-            class="max-w-sm h-8 text-sm"
-          />
-          <!-- Both go to the server. `blocked_only` answers half this page's
-               question and had no control at all. -->
-          <select
-            v-model="registryFilter"
-            :aria-label="t('common.registry')"
-            class="h-8 rounded-sm border border-input bg-transparent px-2 text-sm"
-          >
-            <option value="">{{ t("adminPackages.allRegistries") }}</option>
-            <option v-for="r in registries ?? []" :key="r.name" :value="r.name">
-              {{ r.name }}
-            </option>
-          </select>
-          <label class="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <input v-model="blockedOnly" type="checkbox" class="h-3.5 w-3.5" />
-            {{ t("adminPackages.blockedOnly") }}
-          </label>
-        </div>
+        <PackageFilterBar
+          v-model:search="search"
+          v-model:registry-filter="registryFilter"
+          v-model:blocked-only="blockedOnly"
+          :registries="registries"
+        />
       </CardHeader>
       <CardContent class="p-0">
         <p v-if="actionError" class="px-6 pt-4 text-sm text-destructive">
           {{ actionError }}
         </p>
         <AsyncState :loading="loading" :error="error" :empty="!filteredPackages.length">
+          <!-- Every filter counts: a registry or "blocked only" that matched
+               nothing is not an empty catalogue. -->
           <template #empty>
-            <div class="py-12 text-center space-y-2">
-              <Package class="h-8 w-8 mx-auto text-muted-foreground/50" />
-              <p class="text-sm text-muted-foreground">
-                {{
-                  search
-                    ? t("adminPackages.noPackagesMatchYourFilter")
-                    : t("adminPackages.noPackagesYet")
-                }}
-              </p>
-              <p v-if="search" class="text-xs text-muted-foreground">
-                {{ t("adminPackages.tryClearingTheFilter") }}
-              </p>
-            </div>
+            <EmptyState
+              v-if="search || registryFilter || blockedOnly"
+              filtered
+              :title="t('adminPackages.noPackagesMatchYourFilter')"
+              :description="t('adminPackages.tryClearingTheFilter')"
+            />
+            <EmptyState v-else :title="t('adminPackages.noPackagesYet')" />
           </template>
 
-          <Table>
+          <Table :label="t('common.packages')">
             <TableHeader>
               <TableRow>
                 <TableHead class="w-8">
@@ -700,7 +662,7 @@ async function runPending(): Promise<void> {
                   </RouterLink>
                   <span
                     v-if="pkg.package_id.artifact"
-                    class="ml-1.5 font-mono text-xs text-muted-foreground"
+                    class="ml-2 font-mono text-xs text-muted-foreground"
                     >{{ pkg.package_id.artifact }}</span
                   >
                 </TableCell>
@@ -721,14 +683,15 @@ async function runPending(): Promise<void> {
                   </RouterLink>
                 </TableCell>
                 <TableCell>
-                  <div class="space-y-0.5">
-                    <Badge :variant="pkg.status.status === 'blocked' ? 'destructive' : 'secondary'">
-                      {{
-                        pkg.status.status === "blocked"
-                          ? t("common.blocked")
-                          : t("packageVersionsTable.available")
-                      }}
-                    </Badge>
+                  <div class="space-y-1">
+                    <Resolution
+                      v-if="pkg.status.status === 'blocked'"
+                      state="blocked"
+                      :label="t('common.blocked')"
+                    />
+                    <Badge v-else variant="secondary">{{
+                      t("packageVersionsTable.available")
+                    }}</Badge>
                     <p v-if="pkg.status.status === 'blocked'" class="text-xs text-muted-foreground">
                       {{ pkg.status.reason }}
                     </p>
@@ -762,9 +725,8 @@ async function runPending(): Promise<void> {
                       {{ t("common.block") }}
                     </Button>
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
-                      class="text-destructive hover:text-destructive hover:bg-accent"
                       @click="pending = { kind: 'delete-one', pkg }"
                     >
                       {{ t("common.delete") }}
@@ -791,11 +753,7 @@ async function runPending(): Promise<void> {
     <template v-if="pending?.kind === 'block-one' || pending?.kind === 'bulk-block'">
       <div class="space-y-1">
         <Label for="block-reason">{{ t("common.reason") }}</Label>
-        <Input
-          id="block-reason"
-          v-model="blockReason"
-          placeholder="CVE-2025-XXXX or policy violation"
-        />
+        <Input id="block-reason" v-model="blockReason" placeholder="CVE-2025-29927" />
       </div>
     </template>
   </DestructiveConfirm>

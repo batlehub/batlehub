@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: 27cb1ec777095167
+sourceHash: af8f911ef575780e
 ---
 
 # Cache binaire Nix
@@ -9,15 +9,15 @@ Le protocole *substituter* de Nix est relayé et mis en cache comme un registre 
 
 **À lire d'abord : bloquer un binaire ne bloque pas le logiciel.** Une machine qui possède la dérivation — c'est le cas de toute machine NixOS — compile `hello-1.0.0.2` depuis les sources dès qu'aucun cache ne le sert, et rien dans ce protocole ne peut l'en empêcher. Le levier dont dispose un parc est `max-jobs = 0` sur les machines qui ne doivent pas compiler : c'est une configuration de Nix, pas de ce proxy.
 
-## En bref
+## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nix` |
 | **Amont par défaut** | `cache.nixos.org` |
 | **Modes** | proxy · local · hybride |
 | **Adressage** | le nom du store est la coordonnée — `hello-1.0.0.2-doc` donne `hello` en `1.0.0.2-doc` — et le hash de 32 caractères est l'artefact |
-| **Publication privée** | ✅ `nix copy --to` |
+| **Publication privée** | oui — `nix copy --to` |
 | **Réglage client** | `substituters` dans `nix.conf` |
 
 ## Configuration du proxy
@@ -167,7 +167,7 @@ Le téléversement qui arrive en premier ne nomme aucun paquet : il ne peut donc
 pas être autorisé par rapport à celui-ci. Trois limites s'y appliquent à la
 place :
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Qui** | Un appelant qui détient `releases:publish` sur le registre ou sur l'un de ses espaces de noms. Une autorisation limitée à un *seul paquet* ne couvre pas cette requête — aucun paquet n'est encore nommé — et le `403` le dit. |
 | **Combien de temps** | Un NAR non réclamé est balayé **une heure** après son arrivée — `pending_nar_ttl_secs`. Une publication réclame ses octets quelques secondes plus tard : la limite vise les téléversements abandonnés, pas les lents. |
@@ -260,6 +260,8 @@ Un chemin que le paquet ne transporte pas répond `503` et non `404` : il existe
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nix -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -274,6 +276,8 @@ Un chemin que le paquet ne transporte pas répond `503` et non `404` : il existe
 | `GET` | `/proxy/{registry}/nix/public-key` | `GET public-key` — the line an operator pastes into `trusted-public-keys`. |
 | `GET` | `/proxy/{registry}/nix/realisations/{id}.doi` | `realisations/{id}.doi` — the derivation-to-output mapping of a content-addressed derivation. |
 <!-- END endpoints -->
+
+:::
 
 ## Non pris en charge
 

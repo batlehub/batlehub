@@ -233,7 +233,16 @@ const config = withMermaid(defineConfig({
       {},
       `(()=>{const e=document.documentElement,s=()=>e.setAttribute("data-theme",e.classList.contains("dark")?"dark":"light");s();new MutationObserver(s).observe(e,{attributes:true,attributeFilter:["class"]})})()`,
     ],
-    ["meta", { name: "theme-color", content: "#dc2626" }],
+    // The browser chrome takes each rendition's ground — the same pair as
+    // `ui/index.html`. It was #dc2626, Tailwind's red, in neither palette.
+    [
+      "meta",
+      { name: "theme-color", content: "#030001", media: "(prefers-color-scheme: dark)" },
+    ],
+    [
+      "meta",
+      { name: "theme-color", content: "#faf3f3", media: "(prefers-color-scheme: light)" },
+    ],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "BatleHub" }],
     // The card type is the one social tag that is a property of the *image*
@@ -259,6 +268,14 @@ const config = withMermaid(defineConfig({
     // `oklch(0.99 0.004 18)` rather than #ffffff and a palette tuned against
     // pure white does not survive the move. `light-plus`/`dark-plus` clear both.
     theme: { light: "github-light-high-contrast", dark: "github-dark-high-contrast" },
+  },
+  // Mermaid sizes each node from the width of its label in *this* family, and
+  // the site paints the label in its own. Left at mermaid's default (trebuchet
+  // ms, verdana, arial) the box was measured for a narrower face than the one
+  // drawn, and "apk add busybox" came out as "apk add busybo". Same stack as
+  // `--face-text`; mermaid's config cannot read a custom property.
+  mermaid: {
+    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
   },
 
   // Shared by both locales. Everything that carries a translatable string —
@@ -331,10 +348,16 @@ const config = withMermaid(defineConfig({
         // The 404 link's accessible name has to contain its visible text
         // (WCAG 2.5.3). The theme's defaults are "go to home" on a link that
         // reads "Take me home", which axe reports as label-content-name-mismatch.
-        notFound: { linkLabel: "Take me home", linkText: "Take me home" },
+        notFound: {
+          title: "PAGE NOT FOUND",
+          quote:
+            "This page may have moved when the docs were reorganised. Press Ctrl K to search, or start from the registries index.",
+          linkLabel: "Take me home",
+          linkText: "Take me home",
+        },
         footer: {
           message:
-            "Released under the Apache 2.0 License. Made with ❤️ and too much ☕.",
+            "Released under the Apache 2.0 License. Made with care and too much coffee.",
           copyright: "Copyright © 2026 Batleforc",
         },
       },
@@ -367,7 +390,7 @@ const config = withMermaid(defineConfig({
         },
         footer: {
           message:
-            "Publié sous licence Apache 2.0. Fait avec ❤️ et beaucoup trop de ☕.",
+            "Publié sous licence Apache 2.0. Fait avec soin et beaucoup trop de café.",
           copyright: "Copyright © 2026 Batleforc",
         },
       },

@@ -196,7 +196,7 @@ onMounted(() => void loadStatus());
       -->
       <Card>
         <CardContent class="p-0">
-          <Table>
+          <Table :label="t('adminWarming.cacheWarming')">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t("common.registry") }}</TableHead>
@@ -217,7 +217,7 @@ onMounted(() => void loadStatus());
                     }}
                   </p>
                 </TableCell>
-                <TableCell class="space-y-1.5">
+                <TableCell class="space-y-2">
                   <Input
                     v-if="addressing(reg.name) === 'package'"
                     :id="`warm-${reg.name}`"
@@ -238,7 +238,7 @@ onMounted(() => void loadStatus());
                     {{ errors[reg.name] }}
                   </p>
 
-                  <div v-if="results[reg.name]" class="space-y-1.5">
+                  <div v-if="results[reg.name]" class="space-y-2">
                     <div class="flex gap-2 flex-wrap">
                       <Badge class="text-xs">{{
                         t("adminWarming.warmedCount", { count: results[reg.name].warmed })
@@ -293,7 +293,12 @@ onMounted(() => void loadStatus());
                   </div>
                 </TableCell>
                 <TableCell class="text-right">
-                  <Button size="sm" :disabled="warming[reg.name]" @click="triggerWarm(reg.name)">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="warming[reg.name]"
+                    @click="triggerWarm(reg.name)"
+                  >
                     {{ warming[reg.name] ? t("adminWarming.warming") : t("adminWarming.warmNow") }}
                   </Button>
                 </TableCell>

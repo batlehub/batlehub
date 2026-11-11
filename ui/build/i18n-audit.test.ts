@@ -23,6 +23,11 @@ const vue = (script: string, template = "") =>
  * RFC 0004-bis §2 says four of our gates were missing.
  */
 describe("i18n audit", () => {
+  it("a generic component's type parameters are not text", () => {
+    const source = `<script setup lang="ts" generic="TItem, TForm extends object">\nconst x = 1;\n</script>\n\n<template>\n<div />\n</template>\n`;
+    expect(scan(source)).toEqual([]);
+  });
+
   describe("finds text wherever it is written", () => {
     it("a component prop carrying English fails", () => {
       // §2.1 verbatim: this rendered a "Clear Cache" button above a French

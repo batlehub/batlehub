@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/maven.md
-sourceHash: c89e1694124d77fe
+sourceHash: 0e7d2275f702e35b
 ---
 
 # Maven
@@ -12,13 +12,13 @@ protocole de dépôt Maven.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `maven` |
 | **Amont par défaut** | `repo1.maven.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `mvn deploy` |
+| **Publication privée** | oui — `mvn deploy` |
 | **Coupure réseau** | hors ligne, `maven-metadata.xml` est composé à partir des fichiers détenus ; Maven demande toujours un `.sha1` et un `.md5` à côté de chaque fichier, que le lot peut porter pour les fichiers réels |
 
 ## Mise en place du proxy
@@ -175,12 +175,16 @@ mvn dependency:get -Dartifact=com.example:mylib:1.0.0
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/maven -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/maven2/{path}` | Proxy or serve a Maven repository request. |
 | `PUT` | `/proxy/{registry}/maven2/{path}` | Upload a Maven artifact to the local registry. |
 <!-- END endpoints -->
+
+:::
 
 `{group}` s'écrit en segments de chemin : `com/example` correspond au groupId
 `com.example`.

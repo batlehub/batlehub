@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains-marketplace.md
-sourceHash: 1ca357e8f430afc3
+sourceHash: 0a0b2577d1ab1cdf
 ---
 
 # Place de marché JetBrains
@@ -16,13 +16,13 @@ archives d'IDE.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `jetbrains-marketplace` |
 | **Amont par défaut** | `plugins.jetbrains.com` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ envoi compatible place de marché |
+| **Publication privée** | oui — envoi compatible place de marché |
 | **Coupure réseau** | pas de listing composé hors ligne : une galerie répond à des requêtes |
 
 ## Mise en place du proxy
@@ -134,6 +134,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/jetbrains-marketplace -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -159,6 +161,8 @@ curl -s -H "Authorization: Bearer <your-token>" \
 | `GET` | `/proxy/{registry}/plugins/list` | `/plugins/list?pluginId=` — classic plugin-repository XML: every version of |
 | `GET` | `/proxy/{registry}/updatePlugins.xml` | `updatePlugins.xml` — the custom-plugin-repository document the IDE polls |
 <!-- END endpoints -->
+
+:::
 
 ---
 

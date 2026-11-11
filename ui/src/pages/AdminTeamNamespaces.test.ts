@@ -284,7 +284,7 @@ describe("AdminTeamNamespaces", () => {
     expect(document.body.textContent).toContain("frontend");
     expect(document.body.textContent).toContain("team-fe");
 
-    await clickInDialog(/release claim/i);
+    await clickInDialog(/^release$/i);
 
     expect(releaseMock).toHaveBeenCalledWith({
       path: { registry: "cargo", prefix: "frontend" },
@@ -298,7 +298,7 @@ describe("AdminTeamNamespaces", () => {
 
     await rowButton(wrapper, /release/i).trigger("click");
     await flushPromises();
-    await clickInDialog(/release claim/i);
+    await clickInDialog(/^release$/i);
 
     expect(releaseMock).toHaveBeenCalledWith({
       path: { registry: "cargo", prefix: "frontend/ui" },
@@ -311,7 +311,7 @@ describe("AdminTeamNamespaces", () => {
 
     await rowButton(wrapper, /release/i).trigger("click");
     await flushPromises();
-    await clickInDialog(/release claim/i);
+    await clickInDialog(/^release$/i);
 
     expect(document.body.textContent).toContain("namespace still holds packages");
   });

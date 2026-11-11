@@ -309,6 +309,8 @@ pub fn translate_rbac(
             Action::QuotaRead,
             Action::QuotaWrite,
             Action::RetentionRun,
+            // RFC 0042 §4.2: bulk rescan and backfill, which were `system:write`.
+            Action::ScansRun,
             Action::TombstonesRead,
             Action::PackagesRead,
         ],
@@ -365,8 +367,15 @@ pub fn instance_node(explicit: Option<&GrantMap>) -> Node {
             Action::QuotaRead,
             Action::QuotaWrite,
             Action::RetentionRun,
+            Action::ScansRun,
             Action::TombstonesRead,
             Action::PackagesRead,
+            // RFC 0042 decision 8: the verdict listing and its summary name
+            // coordinates across a registry, so they check the instance tier —
+            // where `role:user`'s per-registry `quarantine:read` does not reach.
+            // The administrator held both on every registry already.
+            Action::QuarantineRead,
+            Action::FindingsRead,
             // The three §4.2 already split out of `require_admin`, so an
             // instance-wide endpoint that reads them (the audit log spans every
             // registry) resolves for an administrator without naming one.
@@ -767,6 +776,9 @@ mod control_surface_tests {
             Action::OwnersWrite,
             Action::ReleasesYank,
             Action::ReleasesDelete,
+            Action::ScansRun,
+            Action::QuarantineRead,
+            Action::FindingsRead,
         ] {
             assert!(
                 holds(&node, Role::Admin, action),

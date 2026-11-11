@@ -236,6 +236,10 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // The tree nvm itself defaults to; io.js takes a second registry
         // pointed at `https://iojs.org/dist` (RFC 0010 §4.1).
         RegistryKind::Nodedist => resolve_urls(&reg.upstreams, "https://nodejs.org/dist"),
+        RegistryKind::MiseVersions => resolve_urls(
+            &reg.upstreams,
+            batlehub_adapters::registry::mise_versions::DEFAULT_BASE,
+        ),
         // The candidates API `sdkman-init.sh` defaults to; the broker is
         // `broker_url`, resolved below (RFC 0010 §4.1).
         RegistryKind::Sdkman => resolve_urls(
@@ -357,6 +361,9 @@ fn make_one(
         RegistryKind::Jetbrains => path_proxy("jetbrains")?,
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
+        RegistryKind::MiseVersions => {
+            Arc::new(batlehub_adapters::registry::MiseVersionsRegistryClient::new(url, opts)?)
+        }
         RegistryKind::Sdkman => Arc::new(SdkmanRegistryClient::new(url, broker_url, opts)?),
         RegistryKind::Rustup => Arc::new(RustupRegistryClient::new(url, opts)?),
         RegistryKind::Galaxy => Arc::new(
@@ -465,6 +472,28 @@ pub(super) fn build_registry_client(
             ))),
         )
     }
+}
+
+/// One upstream's client as `make_one` builds it, without `CoordinateGuard`:
+/// what `name_injection_probe.rs` aims at to prove each client encodes its
+/// own segments (TD-0005).
+#[cfg(test)]
+pub(super) fn build_unguarded_client(
+    reg: &RegistryConfig,
+) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+    let kind: RegistryKind = reg.registry_type.parse().map_err(anyhow::Error::msg)?;
+    make_one(
+        kind,
+        &default_upstreams(kind, reg)[0],
+        &upstream_options(reg, None),
+        &reg.path_allow,
+        &cargo_index_url(reg),
+        batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE,
+        &reg.name,
+        None,
+        Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
+        reg.roles.unwrap_or_default(),
+    )
 }
 
 /// Parse a rule's `bypass_roles` list, failing loudly on the first unrecognized

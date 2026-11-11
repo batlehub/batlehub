@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 557a1aef14f7635b
+sourceHash: 256bfa5d67209a3a
 ---
 
 # Miroir générique
@@ -14,13 +14,13 @@ premier défaut. Il n'y a ni publication, ni index, ni modèle de signature.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `generic` |
 | **Amont par défaut** | aucun — déclarez `upstreams` explicitement (obligatoire) |
 | **Modes** | proxy seul |
 | **Adressage** | par chemin |
-| **Publication privée** | ❌ proxy seul |
+| **Publication privée** | proxy seul |
 | **Coupure réseau** | aucun index à composer ; un fichier détenu est servi par chemin |
 
 ## Mise en place du proxy

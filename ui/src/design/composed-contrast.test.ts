@@ -263,7 +263,7 @@ const PAIRINGS: Pairing[] = [
   },
   {
     what: "the text on the halftone plate composite",
-    site: "pages/PackageCatalog.vue + assets/index.css .plate",
+    site: "components/catalog/CatalogSpecimen.vue + assets/index.css .plate",
     floor: TEXT,
     /* The specimen facts run under the plate from roughly 600px of viewport
        to 1181px, where the plate is 52% of the width and the text is not.

@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -339,7 +340,7 @@ impl RegistryClient for TerraformRegistryClient {
                      document (expected providers/{{ns}}/{{type}}/{{version}}/download/{{os}}/{{arch}})"
                 )));
             }
-            let url = format!("{base}/v1/{package}");
+            let url = format!("{base}/v1/{}", encode_path(package));
             return fetch_json_document(
                 self.get(&url),
                 &format!("terraform download document for '{package}'"),
@@ -352,7 +353,7 @@ impl RegistryClient for TerraformRegistryClient {
                 "terraform has no '{kind}' listing document"
             )));
         }
-        let url = format!("{base}/v1/{package}/versions");
+        let url = format!("{base}/v1/{}/versions", encode_path(package));
         fetch_json_document(
             self.get(&url),
             &format!("terraform versions for '{package}'"),
@@ -362,7 +363,7 @@ impl RegistryClient for TerraformRegistryClient {
 
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{base}/v1/{package}/versions");
+        let url = format!("{base}/v1/{}/versions", encode_path(package));
 
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;
 

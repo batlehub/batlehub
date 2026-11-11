@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/rubygems.md
-sourceHash: d0fa2c89dde7a4a7
+sourceHash: 5925472dca7410c5
 ---
 
 # RubyGems
@@ -12,13 +12,13 @@ publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `rubygems` |
 | **Amont par défaut** | `rubygems.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `gem push` |
+| **Publication privée** | oui — `gem push` |
 | **Coupure réseau** | hors ligne, l'index compact (`/versions`, `/info/{gem}`, `/names`) et l'API JSON des versions sont composés à partir des gems détenues, les dépendances de chaque gem étant lues dans sa gemspec à l'import ; `bundle install` s'y résout |
 
 ## Mise en place du proxy
@@ -130,6 +130,8 @@ curl -X PUT \
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/rubygems -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -147,6 +149,8 @@ curl -X PUT \
 | `GET` | `/proxy/{registry}/specs.4.8.gz` | Serve the full gem index (specs.4.8.gz). |
 | `GET` | `/proxy/{registry}/versions` | The whole-registry version list Bundler fetches first. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

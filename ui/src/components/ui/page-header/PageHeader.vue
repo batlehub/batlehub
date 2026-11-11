@@ -6,8 +6,12 @@ withDefaults(
     title?: string;
     description?: string;
     variant?: "default" | "display" | "poster";
+    /** `h2` for a page rendered inside a hub, whose layout already owns the `h1`. */
+    as?: "h1" | "h2";
+    /** A count after the title, in parentheses; nothing when 0 or absent. */
+    count?: number;
   }>(),
-  { variant: "default" },
+  { variant: "default", as: "h1" },
 );
 </script>
 
@@ -24,7 +28,8 @@ withDefaults(
   -->
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div class="min-w-0">
-      <h1
+      <component
+        :is="as"
         :class="
           cn(
             'text-2xl font-semibold flex items-center gap-2',
@@ -42,11 +47,14 @@ withDefaults(
         "
       >
         <slot name="title">{{ title }}</slot>
-      </h1>
+        <span v-if="count" class="font-mono text-base font-normal text-muted-foreground"
+          >({{ count }})</span
+        >
+      </component>
       <p
         v-if="description || $slots.description"
         :class="
-          cn('text-sm text-muted-foreground max-w-[64ch]', variant === 'poster' ? 'mt-3' : 'mt-0.5')
+          cn('text-sm text-muted-foreground max-w-[64ch]', variant === 'poster' ? 'mt-3' : 'mt-1')
         "
       >
         <slot name="description">{{ description }}</slot>

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { AsyncState } from "@/components/ui/async-state";
 import {
   Table,
   TableHeader,
@@ -105,12 +106,7 @@ onMounted(load);
 <template>
   <Card data-testid="flags-panel">
     <CardHeader>
-      <CardTitle>
-        {{ t("flagsPanel.title") }}
-        <span v-if="total" class="font-mono text-base font-normal text-muted-foreground"
-          >({{ total }})</span
-        >
-      </CardTitle>
+      <CardTitle :count="total">{{ t("flagsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
       <p class="text-sm text-muted-foreground">{{ t("flagsPanel.intro") }}</p>
@@ -125,51 +121,51 @@ onMounted(load);
         <label for="flags-include-dead" class="text-sm">{{ t("flagsPanel.includeDead") }}</label>
       </div>
 
-      <p v-if="error" class="text-sm text-destructive" data-testid="flags-error">{{ error }}</p>
-
-      <Table v-if="items.length" data-testid="flags-rows">
-        <TableHeader>
-          <TableRow>
-            <TableHead>{{ t("flagsPanel.source") }}</TableHead>
-            <TableHead>{{ t("common.package") }}</TableHead>
-            <TableHead>{{ t("flagsPanel.effect") }}</TableHead>
-            <TableHead>{{ t("flagsPanel.kind") }}</TableHead>
-            <TableHead>{{ t("flagsPanel.state") }}</TableHead>
-            <TableHead>{{ t("flagsPanel.summary") }}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <TableRow v-for="f in items" :key="f.id">
-            <TableCell class="font-mono text-xs">{{ f.source }}:{{ f.external_id }}</TableCell>
-            <TableCell class="font-mono text-sm">
-              {{ f.registry }}/{{ f.package_name }}@{{ f.version }}
-            </TableCell>
-            <TableCell>
-              <Badge :variant="effectVariant(f.effect)" class="text-xs">{{ f.effect }}</Badge>
-            </TableCell>
-            <TableCell class="font-mono text-xs">{{ f.kind }}</TableCell>
-            <TableCell class="text-xs">{{ state(f) }}</TableCell>
-            <TableCell class="text-sm">
-              {{ f.summary }}
-              <a
-                v-if="pageUrl(f.url)"
-                :href="pageUrl(f.url)!"
-                class="ml-1 underline text-muted-foreground"
-                target="_blank"
-                rel="noopener noreferrer"
-                >{{ t("flagsPanel.more") }}</a
-              >
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-      <p
-        v-else-if="!loading && !error"
-        class="text-sm text-muted-foreground"
-        data-testid="flags-empty"
+      <!-- A page turn keeps the rows on screen: only a first load is a load state. -->
+      <AsyncState
+        :loading="loading && !items.length"
+        :error="error"
+        :empty="!items.length"
+        :empty-message="t('flagsPanel.empty')"
+        :on-retry="load"
       >
-        {{ t("flagsPanel.empty") }}
-      </p>
+        <Table :label="t('flagsPanel.title')" data-testid="flags-rows">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{{ t("flagsPanel.source") }}</TableHead>
+              <TableHead>{{ t("common.package") }}</TableHead>
+              <TableHead>{{ t("flagsPanel.effect") }}</TableHead>
+              <TableHead>{{ t("flagsPanel.kind") }}</TableHead>
+              <TableHead>{{ t("flagsPanel.state") }}</TableHead>
+              <TableHead>{{ t("flagsPanel.summary") }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="f in items" :key="f.id">
+              <TableCell class="font-mono text-xs">{{ f.source }}:{{ f.external_id }}</TableCell>
+              <TableCell class="font-mono text-sm">
+                {{ f.registry }}/{{ f.package_name }}@{{ f.version }}
+              </TableCell>
+              <TableCell>
+                <Badge :variant="effectVariant(f.effect)" class="text-xs">{{ f.effect }}</Badge>
+              </TableCell>
+              <TableCell class="font-mono text-xs">{{ f.kind }}</TableCell>
+              <TableCell class="text-xs">{{ state(f) }}</TableCell>
+              <TableCell class="text-sm">
+                {{ f.summary }}
+                <a
+                  v-if="pageUrl(f.url)"
+                  :href="pageUrl(f.url)!"
+                  class="ml-1 underline text-muted-foreground"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >{{ t("flagsPanel.more") }}</a
+                >
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </AsyncState>
 
       <div v-if="total > PER_PAGE" class="flex items-center gap-2">
         <Button

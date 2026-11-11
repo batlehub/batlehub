@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/cargo.md
-sourceHash: ed751e26fd208c43
+sourceHash: 6e5f8a8406d549f4
 ---
 
 # Cargo
@@ -13,13 +13,13 @@ en cache : la vérification continue donc de fonctionner.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `cargo` |
 | **Amont par défaut** | `crates.io` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `cargo publish` |
+| **Publication privée** | oui — `cargo publish` |
 | **Coupure réseau** | hors ligne, l'index sparse est composé à partir des crates détenues, leurs dépendances étant lues dans le manifeste de chaque crate à l'import ; une crate importée sans son manifeste n'est pas listée |
 
 ## Mise en place du proxy
@@ -112,6 +112,8 @@ cargo add my-lib --registry internal
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/cargo -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -126,6 +128,8 @@ cargo add my-lib --registry internal
 | `GET` | `/proxy/{registry}/registry/{path}` | Cargo sparse registry index entries. |
 | `GET` | `/proxy/{registry}/registry/config.json` | Cargo sparse registry `config.json`. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

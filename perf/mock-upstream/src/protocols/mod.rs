@@ -24,6 +24,7 @@ mod goproxy;
 mod helm;
 mod marketplaces;
 mod maven;
+mod mise_versions;
 mod nix;
 mod nodedist;
 mod npm;
@@ -49,6 +50,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     helm::configure(cfg);
     marketplaces::configure(cfg);
     maven::configure(cfg);
+    mise_versions::configure(cfg);
     nix::configure(cfg);
     nodedist::configure(cfg);
     npm::configure(cfg);

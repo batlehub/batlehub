@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -45,7 +46,7 @@ pub async fn fetch_simple_page(
     basic_auth: Option<&(String, String)>,
     accept: Option<&str>,
 ) -> Result<(bytes::Bytes, Option<String>), CoreError> {
-    let normalized = normalize_name(name);
+    let normalized = encode_path(&normalize_name(name));
     let url = format!("{}/simple/{}/", base_url.trim_end_matches('/'), normalized);
 
     let mut builder = client.get(&url);
@@ -217,7 +218,11 @@ impl PypiRegistryClient {
         version: &str,
         filename: &str,
     ) -> Result<JsonApiAnswer, CoreError> {
-        let api_url = format!("{base}/pypi/{name}/{version}/json");
+        let api_url = format!(
+            "{base}/pypi/{}/{}/json",
+            encode_path(name),
+            encode_path(version)
+        );
         let api_resp = self
             .get(&api_url)
             .send()
@@ -249,7 +254,7 @@ impl PypiRegistryClient {
         base: &str,
         name: &str,
     ) -> Result<Vec<(String, String)>, CoreError> {
-        let page_url = format!("{base}/simple/{name}/");
+        let page_url = format!("{base}/simple/{}/", encode_path(name));
         let (body, content_type) = fetch_simple_page(
             &self.http,
             base,
@@ -406,7 +411,7 @@ impl RegistryClient for PypiRegistryClient {
     ) -> Result<VersionDocument, CoreError> {
         let base = self.base_url.trim_end_matches('/');
         let name = normalize_name(package);
-        let url = format!("{base}/simple/{name}/");
+        let url = format!("{base}/simple/{}/", encode_path(&name));
         let what = format!("pypi simple page for '{package}'");
 
         match kind {
@@ -453,7 +458,11 @@ impl RegistryClient for PypiRegistryClient {
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let base = self.base_url.trim_end_matches('/');
         let name = normalize_name(&pkg.name);
-        let url = format!("{base}/pypi/{name}/{}/json", pkg.version);
+        let url = format!(
+            "{base}/pypi/{}/{}/json",
+            encode_path(&name),
+            encode_path(&pkg.version)
+        );
 
         let resp = self
             .get(&url)
@@ -615,7 +624,7 @@ impl RegistryClient for PypiRegistryClient {
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
         let base = self.base_url.trim_end_matches('/');
         let name = normalize_name(package);
-        let url = format!("{base}/pypi/{name}/json");
+        let url = format!("{base}/pypi/{}/json", encode_path(&name));
 
         let resp = self.get(&url).send().await.map_err(to_registry_error)?;
 
@@ -647,7 +656,7 @@ impl RegistryClient for PypiRegistryClient {
         _limit: usize,
     ) -> Result<Vec<UpstreamPackage>, CoreError> {
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{base}/pypi/{}/json", normalize_name(query));
+        let url = format!("{base}/pypi/{}/json", encode_path(&normalize_name(query)));
         let res = self.get(&url).send().await.map_err(to_registry_error)?;
 
         if !res.status().is_success() {

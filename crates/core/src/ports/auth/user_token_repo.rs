@@ -89,11 +89,18 @@ pub trait UserTokenRepository: Send + Sync {
 
     async fn list_for_user(&self, owner: &TokenOwner) -> Result<Vec<UserToken>, CoreError>;
 
-    /// Record that `id` was just presented, and from where.
+    /// Record that `id` was just presented, and from where. Returns the source
+    /// recorded *before* this call (`None` if there was none), read in the
+    /// same statement: it is what `token_new_source` compares against, so the
+    /// cached row's `last_used_ip` never has to be fresh.
     ///
     /// Best-effort and off the critical path: a failure here must never turn a
     /// valid credential into a rejected one, so callers log and carry on.
-    async fn touch_last_used(&self, id: Uuid, source_ip: Option<&str>) -> Result<(), CoreError>;
+    async fn touch_last_used(
+        &self,
+        id: Uuid,
+        source_ip: Option<&str>,
+    ) -> Result<Option<String>, CoreError>;
 
     /// Soft-delete a token. Returns true if a row was revoked.
     ///

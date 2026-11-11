@@ -75,11 +75,12 @@ impl AuditConfig {
                  ({access}): the rows would be deleted before they are pseudonymised"
             );
         }
-        if access > 0 && security > 0 && security < access {
+        // `0` keeps forever: as long as any access retention, longer than none.
+        if security > 0 && (access == 0 || security < access) {
             bail!(
                 "[audit] security_retention_days ({security}) is shorter than \
-                 access_retention_days ({access}): the evidence would expire before the \
-                 traffic it explains"
+                 access_retention_days ({access}, where 0 keeps forever): the evidence \
+                 would expire before the traffic it explains"
             );
         }
         Ok(())
@@ -131,10 +132,22 @@ mod tests {
 
     #[test]
     fn zero_means_never_and_is_not_a_conflict() {
-        cfg(
-            "access_retention_days = 0\nsecurity_retention_days = 30\npseudonymise_after_days = 90",
-        )
-        .validate()
-        .unwrap();
+        for ok in [
+            "access_retention_days = 0\nsecurity_retention_days = 0\npseudonymise_after_days = 90",
+            "access_retention_days = 30\nsecurity_retention_days = 0",
+        ] {
+            cfg(ok).validate().unwrap();
+        }
+    }
+
+    /// TD-0002 §5: access kept forever, evidence for 30 days, is the evidence
+    /// expiring before the traffic it explains.
+    #[test]
+    fn security_rows_cannot_expire_while_access_rows_are_kept_forever() {
+        let err = cfg("access_retention_days = 0\nsecurity_retention_days = 30")
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("security_retention_days"), "{err}");
     }
 }

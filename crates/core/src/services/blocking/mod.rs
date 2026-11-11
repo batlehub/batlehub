@@ -53,6 +53,7 @@ pub mod forge;
 pub mod galaxy;
 pub mod goproxy;
 pub mod maven;
+pub mod mise_versions;
 pub mod nodedist;
 pub mod npm;
 pub mod nuget;
@@ -119,6 +120,17 @@ impl BlockedVersions {
 
     pub fn is_empty(&self) -> bool {
         self.normalized.is_empty()
+    }
+
+    /// Add versions to the set, as the document spells them — for a filter that
+    /// hides more than the block list, such as the listing-level age gate of
+    /// RFC 0043. Not a block: nothing is recorded, and `renormalised` is left
+    /// alone because these spellings came from the document itself.
+    pub fn extend(&mut self, versions: impl IntoIterator<Item = String>) {
+        for v in versions {
+            let n = normalize(self.kind, &v).into_owned();
+            self.normalized.insert(n);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -616,6 +628,16 @@ fn strip(
         RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
 
         RegistryKind::Galaxy => Some(strip_galaxy(ctx, doc, blocked)),
+
+        // `data/<tool>.toml`. The age gate reaches this arm as extra entries in
+        // `blocked` — `ProxyService::version_document` adds the too-young
+        // versions before dispatch — so there is one removal path (RFC 0043).
+        RegistryKind::MiseVersions => Some(match ctx.document {
+            DocumentKind::Versions => with_text(doc, |body| {
+                mise_versions::strip_versions_toml(body, blocked)
+            }),
+            _ => Vec::new(),
+        }),
 
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The

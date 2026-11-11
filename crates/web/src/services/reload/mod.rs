@@ -229,8 +229,8 @@ pub enum ReloadSource {
 }
 
 impl ReloadSource {
-    /// Who a rejected candidate is attributed to in `config_changes`: the
-    /// candidate is refused before anyone applies it, so there is no actor yet.
+    /// Who a rejected candidate is attributed to in `config_changes` when no
+    /// caller is known: the watcher, or an admin request made without one.
     pub fn actor_label(&self) -> &'static str {
         match self {
             Self::FileWatcher => "file-watcher",
@@ -586,7 +586,8 @@ impl ConfigReloadService {
     /// Answers with the diff `apply` returns, the one of the reload it applied:
     /// `load_pending`'s is empty when the watcher already staged these bytes.
     pub async fn reload_immediate(&self, triggered_by: &str) -> Result<ReloadDiff, anyhow::Error> {
-        self.load_pending(ReloadSource::AdminRequest).await?;
+        self.load_pending_by(ReloadSource::AdminRequest, triggered_by)
+            .await?;
         self.apply(triggered_by).await
     }
 }

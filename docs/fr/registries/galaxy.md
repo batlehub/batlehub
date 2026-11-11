@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/galaxy.md
-sourceHash: b75d9cc1b7d45c52
+sourceHash: ffc0277fd63ef18e
 ---
 
 # Ansible Galaxy
@@ -11,13 +11,13 @@ Les rôles — l'ancienne API v1 — sont servis en lecture seule, et l'étendue
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de config** | `galaxy` |
 | **Amont par défaut** | `https://galaxy.ansible.com/api/` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | `{namespace}.{name}` — l'orthographe qu'utilise `requirements.yml` — avec un tarball par version |
-| **Publication privée** | ✅ `ansible-galaxy collection publish` |
+| **Publication privée** | oui — `ansible-galaxy collection publish` |
 | **Bascule client** | `server_list` dans `ansible.cfg` |
 
 ## Configuration du proxy
@@ -141,6 +141,8 @@ Une version en double répond `409`, qu'`ansible-galaxy` restitue sous la forme 
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/galaxy -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -155,6 +157,8 @@ Une version en double répond `409`, qu'`ansible-galaxy` restitue sous la forme 
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/` | One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked. |
 | `GET` | `/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/` | The import task a publish returned — always `completed`, because the work is done before the task exists. |
 <!-- END endpoints -->
+
+:::
 
 ## Mode hybride : le local l'emporte en entier, pas version par version
 

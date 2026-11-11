@@ -128,6 +128,7 @@ default = [
   "registry-jetbrains-marketplace",
   "registry-generic",
   "registry-nodedist",
+  "registry-mise-versions",
   "registry-sdkman",
   "registry-rustup",
   "registry-galaxy",
@@ -207,6 +208,9 @@ registry-jetbrains-marketplace = ["dep:quick-xml"]
 # vendor CDNs). Also reuses `PathProxyRegistryClient`.
 registry-generic = []
 registry-nodedist = []
+# mise's versions host: the version lists mise asks for before any backend's,
+# filtered by the block list and the age gate (RFC 0043).
+registry-mise-versions = []
 # SDKMAN: the candidates API and the download broker as one registry, the
 # broker's 302 followed server-side through the SSRF guard (RFC 0010).
 registry-sdkman = []

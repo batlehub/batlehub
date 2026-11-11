@@ -416,8 +416,9 @@ pub async fn load_config_from_content(
     )
     .await?;
     require_hot_reload(&reload_svc)?;
+    let user_id = identity.0.user_id.as_deref().unwrap_or("unknown");
     let outcome = reload_svc
-        .load_pending_from_content(&body.content, crate::services::ReloadSource::AdminRequest)
+        .load_pending_from_content(&body.content, user_id)
         .await
         .map_err(|e| AppError::bad_request(e.to_string()))?;
     Ok(web::Json(ReloadResponse {

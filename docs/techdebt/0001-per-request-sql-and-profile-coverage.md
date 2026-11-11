@@ -2,8 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Open |
+| **Status** | Open: §1 Paid, §3 at its threshold (10.5 % against < 10 %), §2, §4, §5 open |
 | **Found** | 2026-10-09, `perf:profile` on PR #195 ([run 37909702910](https://github.com/batlehub/batlehub/actions/runs/37909702910); numbers below from [run 37924927391](https://github.com/batlehub/batlehub/actions/runs/37924927391), the first with a correct wait report); re-measured 2026-10-10 at `e9ced0d` (§1, §5) |
+| **Paid** | §1, 2026-11-10 (`fix(auth): a PAT's last-used write keeps its cached row`) |
 | **Area** | request middleware, routing, filesystem storage, database, `perf/` |
 
 The end goal is a request that pays only for its own work. On a warm cache a
@@ -95,6 +96,56 @@ spread holds, item 3 comes before item 2.
 
 **Paid when** a metadata read on a warm cache runs at most one statement, and
 the profile's SQL column shows it.
+
+**Nearly paid**, measured 2026-11-10 with
+`tests/heavy/db_calls.sh` on a local Postgres 17 at `2cbea74`. The two
+statements named above are gone from a warm read: `user_blocks.is_blocked` and
+`find_by_hash` are both served from the `LISTEN/NOTIFY` read cache of PR #297
+(`CACHES.user_blocks`, `CACHES.tokens`), so neither the fold into
+`find_by_hash` nor a TTL was needed. A warm `npm` packument runs one statement,
+the request's own work (the version's block list), anonymously or with a
+static token. With a PAT the first repeat still runs two and only the third
+read one; the harness reports the count, not which statement the second read
+added, so that is the one left to name:
+
+| Scenario | cold | warm |
+| --- | ---: | ---: |
+| `proxy-packument-anon` | 1 | 1 |
+| `proxy-packument-static-token` | 2 | 1 |
+| `proxy-packument-pat` | 4 | 2 on the second read, 1 on the third |
+| `proxy-tarball-pat` | 1 | 1, the batched audit write, outside the request |
+
+Item 3, the writes on the download path, is
+[TD-0004 §2](/techdebt/0004-request-routing-and-db-writes): the audit row is
+now written in batches, off the request. The profile's SQL column has not been
+re-read since; that is a `profile` run on the next PR.
+
+### Paid (2026-11-10)
+
+The second statement was `find_by_hash` again. A token's first use writes
+`last_used_ip` (NULL → its address), and two things then threw the cached row
+away: `touch_last_used` evicted it on this replica (`forget_where`), and
+migration 066's trigger notified every replica because `last_used_ip`
+changed. Both existed only because `token_new_source` compared the caller's
+address with the cached row's `last_used_ip`, so that copy had to be fresh.
+
+`touch_last_used` now returns the address recorded *before* its write, read in
+the same statement (`WITH prev AS (SELECT …) , touched AS (UPDATE …) SELECT …
+FROM prev`), and `token_new_source` compares against that. The cached copy of
+the column may be stale, so the eviction is gone and migration 067 drops
+`last_used_ip` from the trigger. Still one statement per token per minute, and
+the comparison is now the database's answer rather than one replica's cache.
+
+`tests/heavy/db_calls.sh` on a local Postgres 17 (the statement-count test;
+its budget, `db_calls.budget.json`, now holds the PAT read to 1):
+
+| Scenario | before (cold, 2nd, 3rd) | after |
+| --- | ---: | ---: |
+| `proxy-packument-pat` | 4, 2, 1 | 4, 1, 1 |
+
+The warm read runs the request's own statement only (the version's block
+list). `a_move_is_judged_from_the_touch_not_the_cached_row`
+(`crates/adapters/src/auth/user_token.rs`) holds the event to the touched row.
 
 ## 2. A cached download waits, and the wait is not attributed yet
 
@@ -188,6 +239,51 @@ move:
   `perf/profile_routes.txt` keep their keys. Check it, don't assume it.
 
 **Paid when** the router's share of CPU on `composer_root` is under 10 %.
+
+**Fixed, at the threshold** (2026-11-10): the scoped router of
+[TD-0004 §1](/techdebt/0004-request-routing-and-db-writes) took a composer
+request from 54.6 to 11.9 µs in process.
+
+### Re-profiled 2026-11-10
+
+`perf/scripts/profile.sh` on one 8-core machine, release build with
+`profiling`, local Postgres 17 and the soak's mock upstream. *Before* is
+`86db4c3` (the commit before `42eb100`, the scoped router), *after* is this
+commit. Router share is the samples whose stack runs through `actix-router`
+(`recognize_fn`, every one of them under `rate_limit/middleware.rs:128`).
+
+`composer_root` alone, 60 s at 200 req/s (12 000 requests a side):
+
+| | before | after |
+| --- | ---: | ---: |
+| CPU per request | 1.05 ms | 0.52 ms |
+| router share | 68.1 % (1708 / 2507 samples) | **10.5 %** (131 / 1242, ± 0.9 pt) |
+| router CPU per request | ≈ 0.71 ms | ≈ 0.055 ms |
+
+The full run (every arm, 15 s at 50 req/s, so 32–1100 samples an arm) shows
+the same on every path; the cheap reads, where the router weighed most:
+
+| Arm | before | after |
+| --- | ---: | ---: |
+| `composer_root` | 47.6 % | 9.4 % (32 samples) |
+| `npm_sbom` | 37.2 % | 23.1 % |
+| `pullability` | 32.3 % | 7.9 % |
+| `vscode_extension` | 30.0 % | 5.6 % |
+| `openvsx_extension` | 29.3 % | 10.4 % |
+| `jetbrains_plugin` | 29.2 % | 8.3 % |
+| `composer_p2` | 26.1 % | 3.1 % |
+| `npm_warm_read` | 25.6 % | 3.7 % |
+| `pypi_simple` | 23.5 % | 5.7 % |
+| `npm_packument` | 21.7 % | 8.5 % |
+
+The router's cost per request fell by about 92 %, but `composer_root` is so
+cheap a request that what is left is still 10.5 % of it, against a bar of
+under 10 %. **What remains:** about one point on `composer_root`, most likely the
+scopes before composer's being matched and guard-checked in turn (the
+`/proxy/{registry}` prefix of each, then `routed_kind`). Registering the
+composer scope, or the hottest kinds' scopes, earlier is the cheap move §3
+already names; `npm_sbom` (23.1 %, an `/api/v1` route behind every proxy
+scope) is the next one to read.
 
 ## 4. 321 of 372 API operations have no profile arm
 

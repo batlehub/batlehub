@@ -25,11 +25,11 @@ const resolvedLabel = computed(() => props.label ?? t("a11y.breadcrumb"));
 
 <template>
   <nav :aria-label="resolvedLabel" :class="cn('font-mono text-xs', props.class)">
-    <ol class="flex flex-wrap items-center gap-1.5">
+    <ol class="flex flex-wrap items-center gap-2">
       <li
         v-for="(item, index) in items"
         :key="`${item.label}-${index}`"
-        class="flex items-center gap-1.5"
+        class="flex items-center gap-2"
       >
         <span v-if="index > 0" aria-hidden="true" class="text-border">/</span>
         <RouterLink

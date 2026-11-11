@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Open |
+| **Status** | Paid |
 | **Found** | 2026-11-10, `server/src/name_injection_probe.rs` (PR #306), after the forge instance of the same defect (inkdex VULN-SSRF, PR #304) |
 | **Area** | `crates/adapters/src/registry/*` (every client but the forges, Galaxy, devfile, Helm and the JetBrains IDE repository) |
 
@@ -53,3 +53,22 @@ swapped for a real client) is the defect again.
    kinds already encoding pass from the start, and each fixed client is added
    to the list the mode asserts. When all 22 are on it, the guard becomes
    defence in depth rather than the only defence, and this entry is Paid.
+
+## Paid
+
+Every client now encodes the caller's name, version and file where it builds
+the URL, with `encode_path` (`crates/adapters/src/registry/http_client.rs`).
+It is looser than `percent_encode_path` on purpose: `/` and every RFC 3986
+`pchar` stay literal, so npm's `@scope`, semver's `+build`, Go's `!x` case
+escape and Maven's `group:artifact` reach the upstream spelled as before, and
+`?`, `#`, `%`, spaces and dot segments are encoded. npm keeps `%2F` between
+scope and name, SDKMAN's relayed query and the search endpoints' query
+values are unchanged.
+
+The probe gained its unguarded mode as step 3 asked:
+`no_unguarded_client_sends_a_probe_outside_its_own_path_segment` builds each
+kind's client with `build_unguarded_client` (`server/src/builders.rs`, test
+only) and requires zero misrouted requests across all 29 kinds, the same bar
+as the guarded test. It went from 327 to 0 in one change rather than one kind
+at a time, so it asserts every kind instead of a growing list.
+`CoordinateGuard` and `reject_url_delimiters` stay, as defence in depth.

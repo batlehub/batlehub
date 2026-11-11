@@ -1,0 +1,106 @@
+name: inkdex
+# inkdex (mlab-sh/inkdex-action): request-to-sink injection flows, secrets,
+# weak crypto, dangerous settings, GitHub workflows and vulnerable
+# dependencies. It is what found the forge SSRF of PR #304 (inkdex VULN-SSRF),
+# which the name-injection probe then generalised to every kind (TD-0005).
+#
+# Placed on the grid of security-scanning.md § The scale like CodeQL, a code
+# scanner whose state cannot be made clean on day one: `block-new` at high on
+# a pull request (`since:` the base, so only what the pull request adds), and
+# `report` on push and schedule (code scanning, high and up). The daily run is
+# what catches a dependency advisory published after the last commit.
+#
+# Needs the `INKDEX_TOKEN` secret. Without it the action exits 2 ("could not
+# run") and the job is red: a scan that never happened is not a clean one. A
+# fork's pull request gets no secrets, so it is red by construction, as with
+# postmortem; a maintainer re-runs it from a branch of this repository.
+#
+# The action uploads no artifact on purpose: the full report holds medium and
+# low leads, and a public repository's artifacts are downloadable by anyone.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "50 23 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  # RFC 0041 decision 28: no workflow-level `paths:` (a skipped pull request
+  # would leave `required` "Expected"); this job applies them instead.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - id: filter
+        uses: ./.github/actions/required-gate
+        with:
+          paths: |
+            **/*.rs
+            **/*.ts
+            **/*.vue
+            **/*.js
+            **/*.mjs
+            **/*.py
+            **/*.sh
+            **/*.toml
+            **/*.yaml
+            **/*.yml
+            **/Cargo.lock
+            **/package.json
+            **/pnpm-lock.yaml
+            mise.lock
+            Containerfile*
+            .github/scripts/required_gate.py
+            .github/actions/required-gate/action.yml
+
+  scan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    name: inkdex scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # `since:` needs the base commit
+          persist-credentials: false
+      - uses: mlab-sh/inkdex-action@d9c96b6515dcdee2c5fb3966d48da2e92a535f08 # v1.1.2
+        with:
+          token: ${{ secrets.INKDEX_TOKEN }}
+          # block-new on a pull request, report everywhere else.
+          since: ${{ github.event.pull_request.base.sha }}
+          fail-on: ${{ github.event_name == 'pull_request' && 'high' || '' }}
+          upload-severity: high
+
+  # The one check the `main` ruleset requires: every job succeeded, or the
+  # gate skipped them all (RFC 0041 decision 28).
+  required:
+    # Unique across workflows: a ruleset matches a required check by this name.
+    name: inkdex.yaml / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate, scan]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 -I .github/scripts/required_gate.py verdict "$NEEDS"

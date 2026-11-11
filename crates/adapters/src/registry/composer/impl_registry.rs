@@ -1,3 +1,4 @@
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use chrono::DateTime;
 use futures::TryStreamExt;
@@ -40,7 +41,7 @@ impl RegistryClient for ComposerRegistryClient {
                 )))
             }
         };
-        let url = format!("{}/p2/{package}{suffix}.json", self.base_url);
+        let url = format!("{}/p2/{}{suffix}.json", self.base_url, encode_path(package));
         fetch_json_document(
             self.get(&url),
             &format!("composer p2{suffix} metadata for '{package}'"),
@@ -53,7 +54,11 @@ impl RegistryClient for ComposerRegistryClient {
         // the actual bytes are fetched lazily by fetch_artifact.
         if let Some(art @ ("p2" | "p2~dev")) = pkg.artifact.as_deref() {
             let dev_suffix = if art == "p2~dev" { "~dev" } else { "" };
-            let url = format!("{}/p2/{}{dev_suffix}.json", self.base_url, pkg.name);
+            let url = format!(
+                "{}/p2/{}{dev_suffix}.json",
+                self.base_url,
+                encode_path(&pkg.name)
+            );
             return Ok(PackageMetadata {
                 id: pkg.clone(),
                 published_at: None,

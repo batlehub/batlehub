@@ -42,6 +42,14 @@ describe("useAuth", () => {
     expect(setConfigMock).toHaveBeenCalledWith({ auth: "access1" });
   });
 
+  it("calls a session OIDC only when the OIDC callback named its provider", async () => {
+    const { isOidcSession } = useAuth();
+    storeTokens("static-tok"); // the login form's pasted token
+    expect(isOidcSession.value).toBe(false);
+    storeTokens("jwt", "refresh", 3600, "keycloak"); // the OIDC callback
+    expect(isOidcSession.value).toBe(true);
+  });
+
   it("fetches the identity and exposes isAuthenticated/isAdmin for an admin", async () => {
     meMock.mockResolvedValue({ data: ADMIN });
     const { identity, isAuthenticated, isAdmin } = useAuth();
@@ -51,6 +59,27 @@ describe("useAuth", () => {
 
     expect(isAuthenticated.value).toBe(true);
     expect(isAdmin.value).toBe(true);
+  });
+
+  it("answers can() from /me's verbs, per registry when asked (RFC 0042)", async () => {
+    const DELEGATE = {
+      ...ADMIN,
+      role: "user" as const,
+      verbs: ["audit:read"],
+      registries: { npm1: ["audit:read", "gates:exempt"] },
+    };
+    meMock.mockResolvedValue({ data: DELEGATE });
+    const { identity, can, canAny } = useAuth();
+    storeTokens("access2", "refresh2", 3600);
+    await vi.waitFor(() => expect(identity.value).toEqual(DELEGATE));
+
+    expect(can("audit:read")).toBe(true);
+    expect(can("config:read")).toBe(false);
+    expect(can("gates:exempt")).toBe(false);
+    expect(can("gates:exempt", "npm1")).toBe(true);
+    // No hierarchy for the registry: the instance tier alone, as the server.
+    expect(can("audit:read", "elsewhere")).toBe(true);
+    expect(canAny(["config:read", "audit:read"])).toBe(true);
   });
 
   it("treats an anonymous identity as not authenticated", async () => {

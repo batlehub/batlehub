@@ -448,19 +448,24 @@ impl AuditTrailService {
         by: &Identity,
         net: CallerNet,
     ) -> Result<u64, CoreError> {
-        let query = CandidateQuery::Expire {
-            access_before: Some(before),
-            security_before: None,
-        };
-        let deleted = self
-            .rewrite(
+        let deleted = if self.sealing() {
+            let query = CandidateQuery::Expire {
+                access_before: Some(before),
+                security_before: None,
+            };
+            self.rewrite(
                 &query,
                 None,
                 &|r| Some(RowOp::Delete(r.id)),
                 SealKind::Expire,
                 u64::MAX,
             )
-            .await?;
+            .await?
+        } else {
+            // No chain to keep: one `DELETE`, not thousands of 5 000-row
+            // batches inside one HTTP request (TD-0002 §1).
+            self.events.purge_events_before(before).await?
+        };
         self.record(AccessEvent::about_identity(
             AccessAction::AuditPurge,
             by.user_id.clone(),

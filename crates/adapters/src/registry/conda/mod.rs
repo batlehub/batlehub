@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::registry::encode_path;
 use batlehub_core::{entities::PackageId, error::CoreError};
 
 use super::http_client::{basic_auth_get, new_http_client, UpstreamHttpOptions};
@@ -70,6 +71,7 @@ impl CondaRegistryClient {
     ) -> Option<(String, &'static str)> {
         use batlehub_core::ports::DocumentKind;
         let base = self.base_url.trim_end_matches('/');
+        let package = encode_path(package);
         match kind {
             DocumentKind::Versions => {
                 Some((format!("{base}/{package}/repodata.json"), "repodata.json"))
@@ -92,6 +94,7 @@ impl CondaRegistryClient {
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> String {
         let base = self.base_url.trim_end_matches('/');
         let (platform, artifact) = platform_and_file(pkg);
+        let platform = encode_path(platform);
 
         match artifact {
             None | Some("repodata.json") => {
@@ -101,7 +104,7 @@ impl CondaRegistryClient {
                 format!("{base}/{platform}/current_repodata.json")
             }
             Some(filename) => {
-                format!("{base}/{platform}/{filename}")
+                format!("{base}/{platform}/{}", encode_path(filename))
             }
         }
     }

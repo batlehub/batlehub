@@ -134,6 +134,14 @@ impl PackageRepository for InMemoryPackageRepository {
         Ok(self.explore_rows(&filter).await.len() as u64)
     }
 
+    async fn purge_events_before(&self, before: DateTime<Utc>) -> Result<u64, CoreError> {
+        // Access class only, as the Postgres `DELETE` (RFC 0036 §4.2).
+        let mut events = self.events.write().await;
+        let len = events.len();
+        events.retain(|e| !(e.action.is_access_class() && e.timestamp < before));
+        Ok((len - events.len()) as u64)
+    }
+
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
         batlehub_core::services::audit_stream::emit(&event, true);
         // Only actions that always carry a real, version-specific package

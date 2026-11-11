@@ -1,5 +1,6 @@
 //! The upstream half of a Nix binary cache (RFC 0028 §6.4).
 
+use crate::registry::encode_path;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 
@@ -55,7 +56,11 @@ impl NixBinaryCacheClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            self.base_url,
+            encode_path(path.trim_start_matches('/'))
+        )
     }
 
     /// Fetch and parse one store path's narinfo.

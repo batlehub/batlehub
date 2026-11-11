@@ -18,6 +18,13 @@ import { cn } from "@/lib/utils";
  * and 7.24:1 in light with a 3.68:1/3.41:1 border. The unfilled ones take the
  * `opacity: .5` DESIGN.md gives the secondary control, per variant rather than
  * from one shared string that could not tell them apart.
+ *
+ * **Which variant.** `default` (the crimson fill) is the *one* primary action
+ * of a view — never one per row, never a toggle's "on" state. An action on a
+ * row is `outline`, whatever it does: an irreversible one earns its weight from
+ * its confirmation (`DestructiveConfirm`), not from a red fill. A toggle is
+ * `outline` with `aria-pressed`. `ghost` is for low-weight chrome (clear,
+ * collapse), not for a destructive verb dressed in crimson text.
  */
 const DISABLED_OUTLINED =
   "disabled:bg-transparent disabled:border disabled:border-border disabled:text-muted-foreground";
@@ -66,9 +73,7 @@ const buttonVariants = cva(
            measurable: 3.68/3.41 to 5.62/7.24 on the boundary, 5.62/7.24 to
            16.88/16.64 on the label. */
         outline: `border border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground aria-pressed:text-foreground aria-pressed:border-copper ${DISABLED_DIM}`,
-        secondary: `bg-secondary text-secondary-foreground hover:bg-secondary/70 ${DISABLED_DIM}`,
         ghost: `hover:bg-accent hover:text-accent-foreground ${DISABLED_DIM}`,
-        link: `text-primary underline-offset-4 hover:underline ${DISABLED_DIM}`,
       },
       size: {
         // Vertical padding is declared even though the fixed height plus
@@ -77,8 +82,7 @@ const buttonVariants = cva(
         // it the label measures flush to the fill edge, which is what a rendered
         // scan reports and what would actually happen if the height were dropped.
         default: "h-9 px-4 py-2",
-        sm: "h-8 px-3 py-1.5 text-xs",
-        lg: "h-10 px-8 py-2",
+        sm: "h-8 px-3 py-1 text-xs",
         icon: "h-9 w-9",
       },
     },

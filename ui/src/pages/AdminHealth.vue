@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { registryHealth, clearRegistryCache, invalidateExploreCache } from "@/client/sdk.gen";
 import type { RegistryHealthDto } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
@@ -20,6 +20,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { OBSERVABILITY_TABS } from "@/config/adminSections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -44,6 +45,9 @@ const { data, error, loading, reload } = useApi<RegistryHealthDto[]>(
 const expandedErrors = ref<Set<string>>(new Set());
 
 const clearTarget = ref<string | null>(null);
+const clearCount = computed(
+  () => data.value?.find((r) => r.registry === clearTarget.value)?.cached_artifact_count ?? 0,
+);
 
 /**
  * The explore-cache invalidation, relocated from `/admin/operations/explore-cache`
@@ -180,7 +184,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
       <!-- RFC 0014 §4.6: the upstream audit, when this process runs it. -->
       <Card v-if="upstream" data-testid="upstream-card">
         <CardHeader class="pb-2">
-          <CardTitle class="text-base">{{ t("adminHealth.upstreamTitle") }}</CardTitle>
+          <CardTitle>{{ t("adminHealth.upstreamTitle") }}</CardTitle>
         </CardHeader>
         <CardContent class="flex flex-wrap items-center gap-3 text-sm">
           <Badge :variant="upstream.policy === 'block' ? 'destructive' : 'secondary'">
@@ -203,11 +207,9 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
         </CardContent>
       </Card>
 
-      <!-- Registry cards grid -->
-      <div
-        v-if="data && data.length > 0"
-        class="grid gap-4 sm:grid-cols-1 lg:grid-cols-2 xl:grid-cols-2"
-      >
+      <!-- One registry per row, full width: the two-column card grid is the
+           shape DESIGN refuses, and it halved the errors table. -->
+      <div v-if="data && data.length > 0" class="space-y-6">
         <!-- `min-w-0`: a grid item defaults to `min-width: auto` and will not
              shrink below its content, so the errors table inside it pushed the
              whole document sideways instead of scrolling in its own box
@@ -215,7 +217,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
         <Card v-for="reg in data" :key="reg.registry" class="flex min-w-0 flex-col">
           <CardHeader class="pb-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle class="min-w-0 text-base font-mono">
+              <CardTitle class="min-w-0 font-mono">
                 {{ reg.registry }}
               </CardTitle>
               <div class="flex flex-wrap items-center gap-2">
@@ -254,63 +256,60 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
           </CardHeader>
 
           <CardContent class="flex-1 space-y-4">
-            <!-- Stats row -->
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <!-- Packages -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
-                <p class="text-xs text-muted-foreground">{{ t("common.packages") }}</p>
-                <p class="text-xl font-semibold tabular-nums">
+            <!-- Facts on a ruled line, not five tiles: DESIGN refuses the stat
+                 row (RFC 0004-bis §6.1, UI audit 7.9). -->
+            <dl
+              class="grid grid-cols-2 gap-x-6 gap-y-3 border-y border-rule-soft py-3 text-sm sm:grid-cols-5"
+            >
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("common.packages") }}</dt>
+                <dd class="font-mono tabular-nums">
                   {{ formatCount(reg.package_count) }}
-                </p>
-                <p class="text-xs text-muted-foreground">tracked</p>
+                  <span class="text-xs text-muted-foreground">{{ t("adminHealth.tracked") }}</span>
+                </dd>
               </div>
-
-              <!-- Cache size -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.cacheSize") }}</p>
-                <p class="text-xl font-semibold">
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.cacheSize") }}</dt>
+                <dd class="font-mono">
                   {{ fmtBytes(reg.total_size_bytes ?? null) }}
-                </p>
-                <p class="text-xs text-muted-foreground">
-                  {{ reg.cached_artifact_count }} artifacts
-                </p>
+                  <span class="block text-xs text-muted-foreground">{{
+                    t("adminHealth.artifactCount", reg.cached_artifact_count)
+                  }}</span>
+                </dd>
               </div>
-
-              <!-- Last pull -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.lastPull") }}</p>
-                <p class="text-base font-semibold">
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.lastPull") }}</dt>
+                <dd class="font-mono">
                   {{ fmtRelative(reg.last_pull_at ?? null) }}
-                </p>
-                <p v-if="reg.last_pull_at" class="text-xs text-muted-foreground">
-                  {{ fmtDate(reg.last_pull_at ?? "") }}
-                </p>
+                  <span v-if="reg.last_pull_at" class="block text-xs text-muted-foreground">{{
+                    fmtDate(reg.last_pull_at)
+                  }}</span>
+                </dd>
               </div>
-
-              <!-- Pulls / hour -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsHour") }}</p>
-                <p
-                  class="text-xl font-semibold tabular-nums"
-                  :class="reg.pulls_last_hour > 0 ? 'text-primary' : 'text-muted-foreground'"
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.pullsHour") }}</dt>
+                <dd
+                  class="font-mono tabular-nums"
+                  :class="reg.pulls_last_hour > 0 ? 'text-foreground' : 'text-muted-foreground'"
                 >
                   {{ formatCount(reg.pulls_last_hour) }}
-                </p>
+                </dd>
               </div>
-
-              <!-- Pulls / day -->
-              <div class="rounded-sm border bg-muted/30 p-3 space-y-0.5">
-                <p class="text-xs text-muted-foreground">{{ t("adminHealth.pullsDay") }}</p>
-                <p class="text-xl font-semibold tabular-nums">
-                  {{ formatCount(reg.pulls_last_day) }}
-                </p>
+              <div>
+                <dt class="text-xs text-muted-foreground">{{ t("adminHealth.pullsDay") }}</dt>
+                <dd class="font-mono tabular-nums">{{ formatCount(reg.pulls_last_day) }}</dd>
               </div>
-            </div>
+            </dl>
 
             <!-- Recent errors -->
             <div>
               <button
+                type="button"
                 class="flex items-center gap-2 w-full text-left font-mono text-sm font-medium py-1 hover:text-accent-foreground transition-colors"
+                :aria-expanded="expandedErrors.has(reg.registry)"
+                :aria-controls="
+                  expandedErrors.has(reg.registry) ? `health-errors-${reg.registry}` : undefined
+                "
                 @click="toggleErrors(reg.registry)"
               >
                 <!-- Healthy mirrors the degraded branch below, in ink rather
@@ -321,12 +320,12 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                      transition. -->
                 <span
                   v-if="reg.recent_errors.length === 0"
-                  class="flex items-center gap-1.5 text-muted-foreground"
+                  class="flex items-center gap-2 text-muted-foreground"
                 >
                   <span class="inline-block h-2 w-2 rounded-sm bg-muted-foreground" />
                   {{ t("adminHealth.noErrors24h") }}
                 </span>
-                <span v-else class="flex items-center gap-1.5 text-destructive">
+                <span v-else class="flex items-center gap-2 text-destructive">
                   <span class="inline-block h-2 w-2 rounded-sm bg-destructive" />
                   {{ t("adminHealth.errorsIn24h", reg.recent_errors.length) }}
                   <span class="text-muted-foreground text-xs ml-auto">
@@ -341,9 +340,10 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 
               <div
                 v-if="expandedErrors.has(reg.registry) && reg.recent_errors.length > 0"
+                :id="`health-errors-${reg.registry}`"
                 class="mt-2 rounded-sm border overflow-x-auto"
               >
-                <Table>
+                <Table :label="t('adminHealth.errorsIn24h', reg.recent_errors.length)">
                   <TableHeader>
                     <TableRow>
                       <TableHead class="text-xs"> {{ t("common.when") }} </TableHead>
@@ -363,7 +363,9 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                       </TableCell>
                       <TableCell class="text-xs">
                         <span v-if="err.user_id">{{ err.user_id }}</span>
-                        <span v-else class="text-muted-foreground italic">anonymous</span>
+                        <span v-else class="text-muted-foreground italic">{{
+                          t("adminHealth.anonymous")
+                        }}</span>
                       </TableCell>
                       <TableCell class="font-mono text-xs">
                         {{ err.package_name
@@ -394,11 +396,11 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
             </div>
 
             <!-- Who has access -->
-            <div class="space-y-1.5">
+            <div class="space-y-2">
               <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 {{ t("adminHealth.whoHasAccess") }}
               </p>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="flex flex-wrap gap-2">
                 <Badge
                   v-for="role in reg.access.roles"
                   :key="role"
@@ -440,11 +442,16 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
   </div>
 
   <!-- Clear cache confirmation dialog -->
-  <ConfirmDialog
+  <DestructiveConfirm
     :open="clearTarget !== null"
-    :confirm-label="t('adminHealth.clearCache')"
-    :loading-label="t('adminHealth.clearing')"
-    destructive
+    :action="t('adminHealth.clear')"
+    :count="clearCount"
+    :item-noun="t('adminHealth.cachedArtifact')"
+    :item-noun-plural="t('adminHealth.cachedArtifacts')"
+    :scope="clearTarget ?? ''"
+    :consequence="t('adminHealth.allCachedArtifactsFor')"
+    :confirm-name="clearTarget ?? ''"
+    allow-empty
     :loading="clearing"
     :error="clearError"
     @update:open="
@@ -456,16 +463,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
       }
     "
     @confirm="confirmClearCache"
-  >
-    <template #title>
-      <i18n-t keypath="adminHealth.clearCacheFor" tag="span">
-        <template #registry
-          ><span class="font-mono">{{ clearTarget }}</span></template
-        >
-      </i18n-t>
-    </template>
-    <template #description>{{ t("adminHealth.allCachedArtifactsFor") }}</template>
-  </ConfirmDialog>
+  />
 
   <!-- Explore-cache invalidation, relocated here from its own route. Confirmed
        like its neighbour: it is cheap and self-healing, but it is still a

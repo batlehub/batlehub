@@ -37,6 +37,19 @@ rather than embedding a token in the URL. mise reads it, and the token stays
 out of shell history, CI logs and `mise doctor` output.
 :::
 
+### 1.1 The versions host
+
+For a tool whose backend is the registry default — `jq`, `node`,
+`terraform` — mise asks `mise-versions.jdx.dev` for the list of versions
+before asking the backend, and after each install it reports the tool,
+version, OS and architecture there. A [`mise-versions`](/registries/mise-versions)
+registry routes both through this instance: the list is filtered by the
+block list (and by an age gate, if the registry has one), so `latest` never
+lands on a version the instance would refuse, and the report is answered here
+and sent nowhere. The generator writes its rule first when the instance has
+such a registry. In an air gap the list answers `404` at once, and mise falls
+back to the backend's list — the one §2 composes from what the bundle held.
+
 ## 2. What an air gap needs
 
 A host with no route off the site cannot install anything mise has not
@@ -227,5 +240,6 @@ would be undoing the block by accident.
 ## See also
 
 - [Registries overview](/registries/) · [Configuration](/guide/configuration#air-gap)
+- [mise versions host](/registries/mise-versions) — the version lists mise reads first
 - [The air-gap runbook](/operations/air-gap) — build, carry, import, reconcile
 - [RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate) — why it is shaped this way

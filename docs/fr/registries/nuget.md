@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nuget.md
-sourceHash: 42383ab70e0689df
+sourceHash: 143df3f89f205013
 ---
 
 # NuGet (.NET)
@@ -12,13 +12,13 @@ garde-fou d'âge de publication.
 
 ## En un coup d'œil
 
-| | |
+| Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `nuget` |
 | **Amont par défaut** | `api.nuget.org` |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
-| **Publication privée** | ✅ `dotnet nuget push` |
+| **Publication privée** | oui — `dotnet nuget push` |
 | **Coupure réseau** | hors ligne, l'index plat est composé à partir des paquets détenus et la page d'enregistrement depuis le `.nuspec` de chaque paquet lu à l'import ; `dotnet restore` lit l'index plat |
 
 ## Mise en place du proxy
@@ -136,6 +136,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 
 ### Référence des endpoints
 
+::: details Afficher tous les endpoints
+
 <!-- BEGIN endpoints: proxy/nuget -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
@@ -151,6 +153,8 @@ curl -s https://batlehub.example.com/proxy/internal-nuget/nuget/v3/flat/mylib/in
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/index.json` | Proxy the NuGet vulnerability database index. |
 | `GET` | `/proxy/{registry}/nuget/v3/vulnerabilities/page/{page}` | Proxy a single page of NuGet vulnerability records. |
 <!-- END endpoints -->
+
+:::
 
 ---
 

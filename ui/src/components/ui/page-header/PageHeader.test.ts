@@ -9,6 +9,12 @@ describe("PageHeader", () => {
     expect(wrapper.text()).toContain("Live status");
   });
 
+  it("renders an h2 inside a hub, whose layout already owns the h1", () => {
+    const wrapper = mount(PageHeader, { props: { title: "Tokens", as: "h2" } });
+    expect(wrapper.find("h1").exists()).toBe(false);
+    expect(wrapper.find("h2").text()).toBe("Tokens");
+  });
+
   it("uses the plain style by default", () => {
     const wrapper = mount(PageHeader, { props: { title: "Health" } });
     expect(wrapper.find("h1").classes()).toContain("text-2xl");
@@ -50,5 +56,18 @@ describe("PageHeader", () => {
     });
     expect(wrapper.find("h1").text()).toContain("Custom Title");
     expect(wrapper.find("h1 svg.icon").exists()).toBe(true);
+  });
+
+  it("follows the title with its count, and shows none for zero", () => {
+    expect(
+      mount(PageHeader, { props: { title: "Audit", count: 42 } })
+        .find("h1")
+        .text(),
+    ).toBe("Audit(42)");
+    expect(
+      mount(PageHeader, { props: { title: "Audit", count: 0 } })
+        .find("h1")
+        .text(),
+    ).toBe("Audit");
   });
 });

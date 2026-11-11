@@ -111,7 +111,17 @@ async function mountPage() {
       // carried by a link rather than by a `router.push` in a click handler,
       // so a stub that swallows `to` would make every navigation assertion
       // below unfalsifiable.
-      stubs: { RouterLink: { template: "<a :href='String(to)'><slot /></a>", props: ["to"] } },
+      stubs: {
+        RouterLink: { template: "<a :href='String(to)'><slot /></a>", props: ["to"] },
+        // radix's select opens on pointer events jsdom does not lay out.
+        Select: {
+          props: ["modelValue", "options", "id"],
+          emits: ["update:modelValue"],
+          template: `<select :id="id" :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+            <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>`,
+        },
+      },
     },
   });
   await flushPromises();

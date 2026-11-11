@@ -21,7 +21,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <footer class="border-t border-rule-soft mt-8">
+  <footer class="border-t border-rule-soft mt-10">
     <!-- The masthead's twin: both are ruled bars framing the sheet, so they
          take the same edge. Left centred while the masthead went full-bleed,
          the two disagreed by ~260px at 1920 — the frame's top rail flush to the
