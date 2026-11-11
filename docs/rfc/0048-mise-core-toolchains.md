@@ -8,7 +8,7 @@ reference: true
 | ----------- | ------------------------------------------------------------ |
 | Status      | Draft                                                         |
 | Short       | mise core toolchains                                          |
-| Settles     | Which route each of mise's fourteen `core:` toolchains takes through BatleHub — a typed kind, a `generic` preset, or a stated refusal — and a `mise-java` kind for the one that has none |
+| Settles     | Which route each of mise's thirteen `core:` toolchains takes through BatleHub — a typed kind, a `generic` preset, or a stated refusal — and a `mise-java` kind for the one that has none |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
@@ -20,24 +20,28 @@ reference: true
 
 ## 1. Summary
 
-mise ships fourteen *core* toolchains — the `core:` backend that its registry
-names first for `node`, `python`, `java`, `go`, `rust` and nine others. Each
+mise ships thirteen *core* toolchains — the `core:` backend that its registry
+names first for `node`, `python`, `java`, `go`, `rust` and eight others
+(`mise registry` lists fourteen `core:` rows because `dotnet-core` is an alias
+of `core:dotnet`; `src/plugins/core/` has thirteen files). Each
 one is a small hand-written client of one vendor's distribution, and each
 reaches a different host. BatleHub covers some of them by accident of
 history (Node through `nodedist`, Rust through `rustup`, Python, Bun and Ruby
 because their bytes happen to live on GitHub) and none of them by design:
-`batlehub-cli registry suggest` knows three of the fourteen, and
-`mise plan` calls the other eleven supported without checking
+`batlehub-cli registry suggest` knows three of the thirteen, and
+`mise plan` calls the other ten supported without checking
 (`cli/src/api/suggest.rs:299`).
 
 This RFC gives every core toolchain a stated route, measured against the
 mise 2026.11.3 source:
 
-- **Six already route** through an existing kind, and the CLI is taught to
-  say so with the *typed* kind rather than a `generic` preset.
-- **Six get a `generic` preset**: Deno, Zig, Elixir, Erlang, Swift and Go.
-  Cached and counted, no per-version policy — the same bargain `generic` is
-  documented to be.
+- **Five already route** through an existing kind — Node (`nodedist`), Rust
+  (`rustup`), Python, Bun and Ruby (`github`) — and the CLI is taught to say so
+  with the *typed* kind rather than a `generic` preset.
+- **Six get a `generic` preset**: Deno, Zig, Elixir, Erlang and Swift are new;
+  Go keeps the `go-dl` preset it has. Cached and counted, no per-version
+  policy — the same bargain `generic` is documented to be. (PyPy, a Python
+  *flavour* rather than a toolchain, gets one too.)
 - **Java gets a new `mise-java` kind**, because 7 450 JVM builds from
   nineteen vendors on eleven hosts sit behind one metadata document, and a
   block on a JDK is the control an operator actually asks for.
@@ -63,17 +67,21 @@ mise 2026.11.3 source:
 zig.use_community_mirrors = false
 
 [settings.url_replacements]
+# mise-java rules come BEFORE the github rules: mise applies the first match
+# (§15 Q1). One rule per vendor_hosts entry, host + path prefix (§4.1).
 "regex:^https://mise-java\\.jdx\\.dev/(.+)" = "https://hub.example.com/proxy/jdk/mise-java/$1"
-"regex:^https://(cdn\\.azul\\.com|corretto\\.aws|download\\.bell-sw\\.com|…)/(.+)" = "https://hub.example.com/proxy/jdk/mise-java/dl/$1/$2"
+"regex:^https://cdn\\.azul\\.com/zulu/(.+)" = "https://hub.example.com/proxy/jdk/mise-java/dl/cdn.azul.com/zulu/$1"
+"regex:^https://github\\.com/adoptium/(.+)" = "https://hub.example.com/proxy/jdk/mise-java/dl/github.com/adoptium/$1"
+# … one line per remaining vendor_hosts entry (§6.1 lists the measured set) …
+"regex:^https://api\\.github\\.com/repos/(.+)" = "https://hub.example.com/proxy/github/$1"   # github rules after
 "regex:^https://ziglang\\.org/(.+)" = "https://hub.example.com/proxy/zig-dl/generic/$1"
 "regex:^https://dl\\.google\\.com/go/(.+)" = "https://hub.example.com/proxy/go-dl/generic/$1"
 ```
 
 ```text
 $ batlehub-cli mise plan
-  unsupported: core:dotnet: mise runs dotnet-install.sh, whose feed mise does
-  not let you set; no rewrite rule reaches it. Use a .NET SDK image, or
-  install it outside mise.
+3 tool(s) · 3 download(s) · 3 registries · 0 host(s) with no mirror configured
+  unsupported: core:dotnet: mise runs dotnet-install.sh, whose feed mise does not let you set; no rewrite rule reaches it
 ```
 
 ---
@@ -83,7 +91,7 @@ $ batlehub-cli mise plan
 1. **`mise plan` says "supported" for toolchains it cannot route.**
    `unsupported_backend_reason` returns `None` for every `core:` backend
    (`cli/src/api/suggest.rs:299-304`), on the theory that a fixed host is
-   covered "when a registry fronts it". For eleven of the fourteen, no preset
+   covered "when a registry fronts it". For ten of the thirteen, no preset
    and no typed host exists, so the plan's *unmirrored hosts* line is the only
    signal — and for `core:dotnet` and compiled Ruby no registry can ever front
    the host, because the request is made by a subprocess. The estate learns at
@@ -116,9 +124,10 @@ $ batlehub-cli mise plan
    only after every mirror has failed — connected, never; air-gapped, after
    seventeen timeouts.
 
-5. **Six toolchains have no preset at all.** Deno (`dl.deno.land`), Elixir and
-   Erlang (`builds.hex.pm`), Swift (`download.swift.org` and
-   `www.swift.org`), PyPy (`downloads.python.org`) and Zig have no entry in
+5. **Five toolchains have no preset at all**, nor does PyPy, a flavour of
+   `core:python`. Deno (`dl.deno.land`), Elixir and Erlang (`builds.hex.pm`),
+   Swift (`download.swift.org` and `www.swift.org`), Zig and PyPy
+   (`downloads.python.org`) have no entry in
    `generic_preset` (`cli/src/api/suggest.rs:137-177`), so `suggest` falls
    back to "no preset for this host" with a `path_allow` of the exact locked
    paths — correct, and stale the next time the pin moves.
@@ -190,9 +199,11 @@ path_allow = ["elixir/**", "otp/**"]
 name      = "jdk"
 type      = "mise-java"
 upstreams = ["https://mise-java.jdx.dev"]   # default
-# The hosts a download may come from. Default: the eleven measured in §6.1.
-# A row naming any other host is dropped from the document served (§4.2 R4).
-vendor_hosts = ["github.com", "cdn.azul.com", "corretto.aws", "…"]
+# Where a download may come from: host + path prefix, never a bare
+# multi-tenant host (§15 Q8). Default: the set measured in §6.1.
+# A row naming anything else is dropped from the document served (§4.2 R4).
+vendor_hosts = ["github.com/adoptium/", "github.com/SAP/SapMachine/",
+                "cdn.azul.com/zulu/", "corretto.aws/downloads/", "…"]
 
   # Optional, as for every kind: an age gate, keyed on the row's `created_at`.
   [[registries.rules]]
@@ -203,8 +214,8 @@ vendor_hosts = ["github.com", "cdn.azul.com", "corretto.aws", "…"]
 | Option | Default | Why this default |
 | --- | --- | --- |
 | `upstreams` | `["https://mise-java.jdx.dev"]` | the only metadata host mise reads (`java.rs:381`) |
-| `vendor_hosts` | the eleven hosts of §6.1 | closed list: a host the operator has not seen is not fetched. Open (`["*"]`) is refused at load (§4.3) |
-| `release_age_gate` rule | absent | same as every kind; `created_at` is present on every row |
+| `vendor_hosts` | the host + prefix set of §6.1 | closed list: a prefix the operator has not seen is not fetched. Open (`["*"]`), empty, or a bare `github.com` is refused at load (§4.3) |
+| `release_age_gate` rule | absent | same as every kind; `created_at` is present on every row, and `MiseJava` joins the kinds whose gate refuses a missing timestamp (§6.3) |
 | `release_types` | `["ga"]` | `ea` builds are opt-in; the URL segment is validated against this list |
 
 ### 4.2 Behaviour rules
@@ -250,10 +261,14 @@ The uninteresting cases, stated:
 - **R5. A blocked Java version.** Its rows are dropped from every metadata
   document the kind serves, and its download route answers `403` with the
   block's reason (§6.P obs. 3).
-- **R6. A Java download not in the current metadata** (a URL the client
-  invents, or one a lock pins but the vendor has withdrawn). `404`, never an
-  upstream fetch: the kind fetches only `(host, path)` pairs it has read from
-  its own upstream (§7.3).
+- **R6. A Java download not in the index** (a URL the client invents, or one
+  a lock pins but the vendor has withdrawn). The index is the union of every
+  cached metadata document, held in the cache store, so it survives a restart
+  and is the same on every replica. On a miss the kind first loads the
+  platform documents through the existing single-flight; still a miss is
+  `404`, never an upstream fetch of the client's URL (§7.3). An archive
+  already cached and verified is served even after its row is withdrawn,
+  unless it is blocked.
 - **R7. A version the versions host does not answer for.** mise falls back to
   the tool's own listing (`src/backend/mod.rs:3596-3612`). For `go` that is a
   git `ls-remote` and cannot be routed; for `deno`, `zig` and `swift` it is a
@@ -261,21 +276,25 @@ The uninteresting cases, stated:
 
 ### 4.3 Validation
 
-Hard errors (the server refuses to load):
+Hard errors (the server refuses to load), in the loader's existing
+`registries[{index}].<field>` path form (`crates/config/src/schema/mod.rs:833`):
 
-| Condition | Rationale |
-| --- | --- |
-| `mise-java` with `vendor_hosts = ["*"]` or empty | an open list makes the kind an open proxy to any host a third party names (§7.1 T1) |
-| `mise-java` `vendor_hosts` entry with a scheme, path, port or wildcard | the list is hostnames, compared exactly |
-| `mise-java` `release_types` outside `ga`, `ea` | they become a URL segment upstream |
+| Condition | Message (registry at index 3) | Rationale |
+| --- | --- | --- |
+| `vendor_hosts = ["*"]` or `[]` | `registries[3].vendor_hosts: must list at least one host/prefix; "*" is not allowed` | an open list makes the kind an open proxy to any host a third party names (§7.1 T1) |
+| an entry with a scheme, port, wildcard or `..` | `registries[3].vendor_hosts[2]: "https://cdn.azul.com": write host/prefix, without a scheme` | entries are compared exactly |
+| a bare multi-tenant host (`github.com`) | `registries[3].vendor_hosts[0]: "github.com" is shared by every GitHub account; name the repository prefix, e.g. "github.com/adoptium/"` | §15 Q8 |
+| `release_types` outside `ga`, `ea` | `registries[3].release_types: "nightly" is not one of ga, ea` | they become a URL segment upstream |
 
-Warnings (load succeeds; seen in `explain-config`, the registry's admin page
-and the CLI's `setup` output):
+Warnings (load succeeds). These are **CLI-side only**: the server never sees a
+mise block, so they are printed by `registry suggest`, `setup` and `mise plan`,
+not by `explain-config`:
 
 | Condition | Behaviour |
 | --- | --- |
-| a `zig-dl` preset exists and the generated block omits `zig.use_community_mirrors = false` | `suggest` and `setup` always write the setting; a hand-written block is not checked by the server, and `mise plan` names the tool under `unmirrored_hosts` with "community mirrors first" |
-| a `go-dl` preset exists | `mise plan` notes that `go`'s fallback listing is git and does not route; connected, the versions host answers first |
+| a `zig-dl` preset exists and the generated block omits `zig.use_community_mirrors = false` | `suggest` and `setup` always write the setting; a hand-written block is not checked by anything, so `mise plan` adds a line to `MisePlan.notes` (the field RFC 0047 §6.3 adds): "zig: community mirrors are tried before ziglang.org" |
+| a `go-dl` preset exists | `mise plan` adds a `notes` line: `go`'s fallback listing is git and does not route; connected, the versions host answers first |
+| a locked `java` entry whose coordinate is blocked on the instance | `mise plan` asks the registry for the coordinate and prints `blocked: java@temurin-21.0.5+11.0.LTS (CVE-2026-…)` — the reason mise itself cannot show (§4.5) |
 | `core:dotnet`, compiled ruby/python/node/erlang in the lock | `mise plan` lists them under `unsupported` with the reason (§4.5) |
 
 ### 4.4 API surface
@@ -289,39 +308,62 @@ New routes, all under the `mise-java` kind scope (`kind_scope` in
 | `GET /proxy/{reg}/mise-java/dl/{host}/{path}` | read on `{reg}`, grant on `java@{version}` | the archive (`ArtifactBytes`) |
 
 No admin API changes. The registry appears in the existing registry list and
-package explorer under package `java`, versions as mise spells them
-(`temurin-21.0.5+11.0.LTS`).
+package explorer under package `java`. One spelling throughout: the version is
+`{vendor}-{version}` exactly as `java_metadata_key` builds it
+(`java.rs:767`), e.g. `temurin-21.0.5+11.0.LTS`; a block entry names that
+string (`java@temurin-21.0.5+11.0.LTS`), and a glob covers a line
+(`java@temurin-21.0.5*`). What the user types to mise (`java@temurin-21.0.5`)
+is mise's prefix match, not the coordinate.
+
+`RegistryInfo` (`cli/src/api/registry.rs:7-21`) gains `vendor_hosts` for a
+`mise-java` registry, so `setup` can write one rule per entry: the DTO, `task
+dump-spec` and `task ui:generate` move with it in phase 2.
 
 ### 4.5 Mocks
 
-The only visible change is CLI output. `registry suggest --mise` on a lock
-naming java, zig, elixir and dotnet:
+The only visible change is CLI output, drawn against today's renderers:
+`render_toml` (`cli/src/api/suggest.rs:1602`) for `registry suggest` and
+`print_summary` (`cli/src/cli/mise.rs:714-735`) for `mise plan`. Two
+additions, both stated: a `# Not routable through BatleHub` comment section at
+the end of the `suggest` output, and `blocked:` / `note:` lines in the plan
+summary, below the existing `no mirror:` and `unsupported:` lines.
+
+`registry suggest --mise` on a lock naming java, zig, elixir and dotnet:
 
 ```text
 $ batlehub-cli registry suggest --mise
-# Registries this project needs (paste into the server config):
+# Generated by `batlehub-cli registry suggest`.
+# Review before applying — names are suggestions, and RBAC below is a
+# permissive starting point.
 
+# from mise.lock: java
 [[registries]]
-name = "jdk"
-type = "mise-java"            # mise.lock: java (core:java)
+type       = "mise-java"
+name       = "jdk"
+# upstreams omitted — the adapter's default upstream applies
 
+[registries.rbac]
+anonymous = ["releases:read"]
+
+# from mise.lock: zig
 [[registries]]
-name = "zig-dl"
-type = "generic"              # mise.lock: zig (core:zig)
+type       = "generic"
+name       = "zig-dl"
 upstreams  = ["https://ziglang.org"]
-path_allow = ["download/**", "builds/**"]
+path_allow = [
+  "download/**",
+  "builds/**",
+]
+…
 
-[[registries]]
-name = "hex-builds"
-type = "generic"              # mise.lock: elixir (core:elixir)
-upstreams  = ["https://builds.hex.pm/builds"]
-path_allow = ["elixir/**", "otp/**"]
+# JDK builds reach 475 MB, Swift 1 007 MB; [limits] max_artifact_size_bytes
+# is 500 MiB by default and instance-wide — raise it before routing swift
+# (there is no per-registry limit yet, §15 Q11).
 
 # Not routable through BatleHub:
 #   dotnet (core:dotnet) — mise runs dotnet-install.sh, whose download feed
 #   mise does not let you set; no rewrite rule reaches it.
 
-# mise config (~/.config/mise/config.toml):
 [settings]
 zig.use_community_mirrors = false   # mirrors are tried before ziglang.org
 
@@ -330,33 +372,39 @@ zig.use_community_mirrors = false   # mirrors are tried before ziglang.org
 ```
 
 Decides: the refusal is printed where the operator is already reading, not
-only in `mise plan`; the Zig setting travels with its rule.
+only in `mise plan`; the Zig setting travels with its rule. Empty case (no
+`core:` tool in the lock): no registry block and no `[settings]` line, exactly
+today's output.
 
-`mise plan` with the same lock, air-gapped instance:
+`mise plan` with the same lock, one JDK blocked:
 
 ```text
 $ batlehub-cli mise plan
-plan: 3 tools, 4 artifacts, 412 MiB
-  java   temurin-21.0.5+11.0.LTS  jdk/mise-java/dl/github.com/adoptium/…  198 MiB
-  zig    0.15.2                   zig-dl/generic/download/0.15.2/…         51 MiB
-  elixir 1.18.4-otp-27            hex-builds/generic/elixir/v1.18.4-otp-27.zip
-unsupported:
-  core:dotnet: mise runs dotnet-install.sh, whose feed mise does not let you
-  set; no rewrite rule reaches it
-exit 0
+3 tool(s) · 3 download(s) · 3 registries · 0 host(s) with no mirror configured
+  unsupported: core:dotnet: mise runs dotnet-install.sh, whose feed mise does not let you set; no rewrite rule reaches it
+  blocked: java@temurin-21.0.5+11.0.LTS (CVE-2026-12345, blocked by alice)
+  note: zig: community mirrors are tried before ziglang.org; keep zig.use_community_mirrors = false
 ```
 
-Error state — a blocked JDK, as mise prints it (exit 1, mise's own text from
-`java.rs:806-809`):
+Error state — the same blocked JDK, as mise prints it (exit 1, mise's own text
+from `java.rs:806-809`):
 
 ```text
 $ mise install java@temurin-21.0.5
 mise ERROR no metadata found for version temurin-21.0.5 on linux-x64
 ```
 
-Decides: the refusal is mise's own "not found", not a new BatleHub message —
-mise has no channel for a reason. The reason is in the access log and on the
-package's page in the explorer (§10.1).
+Decides: mise's own message cannot carry a reason, so the reason is printed
+by `mise plan` before the install (above), and kept in the access log and on
+the package's page in the explorer (§10.1).
+
+Load refusal — a config the server rejects (§4.3), exit 1 at start:
+
+```text
+$ batlehub-server --config config.toml
+Error: invalid configuration
+  registries[3].vendor_hosts[0]: "github.com" is shared by every GitHub account; name the repository prefix, e.g. "github.com/adoptium/"
+```
 
 ---
 
@@ -364,7 +412,7 @@ package's page in the explorer (§10.1).
 
 ### 5.1 Two shapes of toolchain
 
-The fourteen split by *who makes the request*.
+The thirteen split by *who makes the request*.
 
 ```mermaid
 flowchart LR
@@ -397,7 +445,7 @@ sequenceDiagram
     Note over B: "drop rows: host not in vendor_hosts,<br/>blocked version, younger than gate"
     B-->>M: "filtered rows, URLs unchanged"
     M->>B: "GET dl/cdn.azul.com/zulu/bin/… (rewritten)"
-    Note over B: "(host, path) must be a row of the<br/>last document read: else 404"
+    Note over B: "(host, path) must be in the index —<br/>union of cached documents: else 404"
     B->>V: "GET, redirects re-checked per hop"
     V-->>B: "archive"
     Note over B: "verify row checksum, cache"
@@ -463,7 +511,9 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
 `download.bell-sw.com` 230, `aka.ms` 117, `download.oracle.com` 96,
 `download.java.net` 60, `developers.redhat.com` 12, `gds.oracle.com` 12,
 `d3pxv6yz143wms.cloudfront.net` 4. Checksums: `sha256:` 4 183, `sha512:` 1 036,
-`sha1:` 33, none 101. No row carries a `checksum_url`.
+`sha1:` 1 950 (every Liberica row), `md5:` 180, none 101 — so 2 231 rows,
+30 %, carry a weak checksum or none (§15 Q10). No row carries a
+`checksum_url`.
 
 `dotnet-install.sh` (fetched the same day) hard-codes its feeds —
 `https://builds.dotnet.microsoft.com/dotnet` and `https://ci.dot.net/public`
@@ -480,18 +530,42 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
   `https://dl.deno.land`, `path_allow = ["release/**"]`), `ziglang.org`
   (`zig-dl`, `["download/**", "builds/**"]`), `builds.hex.pm` (`hex-builds`,
   upstream `https://builds.hex.pm/builds`, `["elixir/**", "otp/**"]`),
-  `download.swift.org` (`swift-dl`, `["swift-*/**"]`), `www.swift.org`
+  `download.swift.org` (`swift-dl`, `["swift-6.2-release/**", …]`, one literal
+  `swift-{v}-release/` prefix per measured release line), `www.swift.org`
   (`swift-api`, `["api/v1/install/**"]`) and `downloads.python.org`
-  (`pypy-dl`, upstream `https://downloads.python.org/pypy`, `["**"]`).
+  (`pypy-dl`, upstream `https://downloads.python.org/pypy`,
+  `["versions.json", "pypy3.10-v*", "pypy3.11-v*"]` — literal series
+  prefixes, never `**`, so RFC 0047's preset corpus test holds; note that
+  `*` crosses `/` in `generic` globs, RFC 0047 §15). Every preset is written
+  as a literal product prefix for the same reason.
 - `TYPED_HOSTS` gains `nodejs.org → nodedist` and
   `static.rust-lang.org → rustup`, placed before the presets are consulted, so
-  a lock URL on those hosts suggests the typed kind. The two presets stay for
-  an operator who asks for `generic` by name.
+  a lock URL on those hosts suggests the typed kind. The `node-dist` and
+  `rust-dist` presets become unreachable (every `generic_preset` call is by
+  host, after `TYPED_HOSTS`) and are **deleted**; the test pinning
+  `core:rust → rust-dist` (`suggest.rs:1833-1835`) is rewritten to `rustup`, and
+  the typed suggestion carries the `RUSTUP_DIST_SERVER` /
+  `RUSTUP_UPDATE_ROOT` `client_env` the preset carried (`:145-153`).
+- `typed_url_replacements` gains a `nodedist` arm
+  (`^https://nodejs\.org/dist/(.+)` → `{proxy}/$1`), without which a typed
+  `nodedist` suggestion writes no rule and `proxy_path_for` (`:219`) seeds
+  nothing; `render_mise_toml` also writes `node.mirror_url`, which today only
+  `setup` does (`client_setup.rs:2086-2089`). `MiseJava` joins the
+  path-addressed list of `proxy_base_path` (`:241-261`) so its paths carry the
+  `/mise-java` segment.
+- `registry_kind_for_host` keeps answering for an estate that already has a
+  `node-dist` or `rust-dist` generic registry: `mise plan` accepts either kind
+  for `nodejs.org` and `static.rust-lang.org`, so such an estate's bundles do
+  not lose Node or Rust (regression test: a `node-dist`-only estate plans
+  Node).
 - `registry_for_backend`'s `core:` arm becomes a table: `core:node →
   nodedist`, `core:rust → rustup`, `core:go → go-dl`, `core:deno → deno-dl`,
   `core:zig → zig-dl`, `core:elixir → hex-builds`, `core:erlang → hex-builds`
   (plus `github` on macOS locks, which carry the URL), `core:swift → swift-dl`
-  and `swift-api`, `core:java → mise-java`. `core:python`, `core:bun` and
+  and `swift-api`, `core:java → mise-java`. Swift needs two registries, so
+  `registry_for_backend` returns `Vec<SuggestedRegistry>` instead of
+  `Option` (three call sites, `suggest.rs:957`, `:1111`, `:1116`).
+  `core:python`, `core:bun` and
   `core:ruby` resolve through their locked GitHub URLs, as today.
 - `unsupported_backend_reason` stops returning `None` for every `core:`
   (`:299-304`): `core:dotnet` gets the reason of §4.5; the rest keep `None`.
@@ -499,11 +573,20 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
   tool whose precompiled install always records one.
 - A new `mise_settings_for(registries) -> Vec<(key, value)>` writes
   `zig.use_community_mirrors = false` when `zig-dl` is among them; the
-  renderer emits it under `[settings]`, `setup` merges it the same way.
+  renderer emits it under `[settings]`, `setup` merges it the same way. It is
+  the **one** settings function: RFC 0047's `dotnet.registry_url` is a row of
+  it, not a second mechanism. Landing order: RFC 0047's mise pin bump, then
+  RFC 0047 phase 1 (which adds `MisePlan.notes`), then this RFC's phase 1.
 
 `cli/src/api/client_setup.rs`: `MISE_TYPES` (`:1536`) gains `rustup` and
-`mise-java`; `rustup` contributes `RUSTUP_DIST_SERVER` / `RUSTUP_UPDATE_ROOT`
-under mise's `[env]` rather than a rule, since rustup is a subprocess.
+`mise-java` — `mise-java` **before** `github`, because the classic block is
+first-match (§15 Q1); `rustup` contributes `RUSTUP_DIST_SERVER` /
+`RUSTUP_UPDATE_ROOT` under mise's `[env]` rather than a rule, since rustup is
+a subprocess. rustup reads no netrc and takes Basic auth only from URL
+userinfo (`docs/registries/rustup.md:51-61`), so for a registry that is not
+anonymously readable `setup` writes the variables to the **user-level**
+`~/.config/mise/config.toml` only, never a project `mise.toml`, and warns that
+the token is in that file and exported to every subprocess.
 
 ### 6.3 `crates/core` — the `mise-java` kind (phase 2)
 
@@ -518,9 +601,21 @@ under mise's `[env]` rather than a rule, since rustup is a subprocess.
   unparseable by `integrity::parse_expected`
   (`crates/core/src/services/integrity.rs:75-104`), which would silently skip
   cache-write verification with one `WARN` per download (`CLAUDE.md`, step 1).
-  `sha1:` rows are passed through as SHA-1 and flagged (§7.4).
-- The download index: `(host, path) → (row coordinate, checksum)`, rebuilt from
-  each fetched document, so R5 and R6 are one lookup.
+  It handles `sha256:`, `sha512:`, `sha1:`, `md5:` and empty; `parse_expected`
+  has no MD5 branch, so `md5:` rows are unverifiable at cache write. What the
+  kind does with `sha1:`, `md5:` and empty rows by default is §15 Q10.
+- The download index: `(host, path) → (row coordinate, checksum)`, built from
+  the **union** of the cached metadata documents (one per type, OS and
+  architecture) and kept in the cache store, not in process or per-worker
+  memory, so a restart, a second replica or an interleaved client cannot turn
+  a valid download into a `404`. R5 and R6 are one lookup.
+- A fetched document that does not parse, or whose row count is more than
+  25 % below the last good one, is rejected: the last good document is kept
+  and served, with a `WARN` and `reason="implausible"` on the dropped-rows
+  counter.
+- `validate_registry_release_age` (`crates/config/src/schema/mod.rs:2880`)
+  gains `RegistryKind::MiseJava` beside `Nodedist`, `Sdkman` and `Apk`, so a
+  row without `created_at` is refused by a gate rather than waved through.
 
 ### 6.4 `crates/adapters` and `crates/web`
 
@@ -529,9 +624,9 @@ under mise's `[env]` rather than a rule, since rustup is a subprocess.
   client with the ordinary listing TTL; downloads through
   `ssrf::fetch_following_redirects` (`crates/adapters/src/registry/ssrf.rs:231`),
   which re-checks every hop against `is_blocked_ip` (`:87`). Redirect targets
-  are **not** required to be in `vendor_hosts` — three of the eleven hosts are
-  redirectors (§6.1) — but they are SSRF-checked; §15 Q2 asks whether that is
-  enough.
+  are **not** in `vendor_hosts` — three of the eleven hosts are redirectors
+  (§6.1). §15 Q2 now recommends https on the row and on every hop plus a
+  `redirect_hosts` list; until it is decided, they are SSRF-checked only.
 - `crates/web/src/handlers/proxy/mise_java.rs`: the two routes of §4.4, both
   `body = …` declared for `openapi_contract.rs`.
 - `server/src/builders.rs`: the client arm; `crates/config`: the three options
@@ -549,10 +644,13 @@ under mise's `[env]` rather than a rule, since rustup is a subprocess.
 ### 6.P Proof against a real client
 
 Suite: `tests/heavy/closed_world.sh`, new phases `mise-core` and `mise-java`,
-client mise 2026.11.3 pinned through `heavy_runner_for` as `phase_mise`
-(`:1082`) does, egress denied, every request through the tap; assertions on
-the wire transcript with `heavy_wire_re_after`, never on mise's exit code
-alone. The air-gap half is `tests/heavy/airgap.sh`.
+client mise 2026.11.3 — CI's `MISE_VERSION` pin (`.github/workflows/test.yaml`
+lines 1024, 1401, 1550, today `2026.9.5`), bumped first by RFC 0047's pin PR;
+`phase_mise` (`:1082`) itself passes `mise@latest`. Egress denied, every
+request through the tap; assertions on the wire transcript with
+`heavy_wire_re_after`, never on mise's exit code alone. The air-gap half is
+`tests/heavy/airgap.sh`. None of the observations below has been run yet:
+they are the predictions the phases will check.
 
 1. `mise install zig@0.15.2` with the generated config — the tap shows
    `GET /proxy/zig-dl/generic/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz`
@@ -582,6 +680,18 @@ alone. The air-gap half is `tests/heavy/airgap.sh`.
    asserts that the plan's prediction and the transcript agree.
 9. Air-gapped, `mise install` from `mise.lock` for java, zig and node — exactly
    one artifact URL per tool, all `200` from held content.
+10. `mise install rust@1.98.1` with the generated `[env]` — the tap shows
+    `GET /proxy/rust/rustup/dist/channel-rust-1.98.1.toml` and the component
+    tarballs under `/proxy/rust/rustup/`, **no** request to
+    `static.rust-lang.org`: the typed `rustup` route, not the deleted preset.
+11. `mise install node@24.11.0` — `GET /proxy/node/nodedist/v24.11.0/…` and
+    its `SHASUMS256.txt`, nothing under `/generic/`.
+12. Restart the server between the metadata read and the download of obs. 6
+    (and, separately, send the two to different replicas sharing the cache) —
+    the download is `200`: the index is cache-backed (R6), not per-process.
+13. A throttled vendor link (the tap delays the first byte by 40 s) on a cold
+    475 MB bell-sw JDK — records what mise's 30 s `http_timeout` does to a
+    cold miss today; this is the measurement behind §15 Q9.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
@@ -614,12 +724,12 @@ boundary 3 fetches.
 
 | # | Threat (STRIDE) | Mitigation | Enforced by | Residual |
 | --- | --- | --- | --- | --- |
-| T1 | **Tampering / EoP** — a compromised `mise-java.jdx.dev` names an internal URL, turning the kind into an SSRF | rows outside `vendor_hosts` dropped; the download route fetches only indexed `(host, path)`; every hop `is_blocked_ip`-checked | `filter_document`, the download index, `ssrf::fetch_following_redirects` | a vendor host itself compromised — accepted, same as direct; owner: operator |
-| T2 | **Tampering** — the same compromise names a malicious archive with a matching checksum | none at this layer: the checksum comes from the same document | — | equal to mise direct; a committed `mise.lock` pins the checksum on first lock and mise re-verifies. Accepted, recorded in §15 Q5 |
+| T1 | **Tampering / EoP** — a compromised `mise-java.jdx.dev` names an internal URL, or any GitHub user's release asset, turning the kind into an SSRF or a malware relay | rows outside `vendor_hosts` dropped, entries being host + path prefix so `github.com/<anyone>/` is not allowed (§15 Q8); the download route fetches only indexed `(host, path)`; every hop `is_blocked_ip`-checked | `filter_document`, the download index, `ssrf::fetch_following_redirects` | a vendor repository itself compromised — accepted, same as direct; owner: operator. Redirect hops are not allow-listed until §15 Q2 is decided |
+| T2 | **Tampering** — the same compromise names a malicious archive with a matching checksum, or backdates `created_at` past the age gate | none at this layer: checksum and timestamp come from the same document | — | equal to mise direct; a committed `mise.lock` pins the checksum on first lock and mise re-verifies. The age gate can be defeated by a backdated row. Accepted, recorded in §15 Q5 |
 | T3 | **Spoofing** — the client requests `dl/{host}/{path}` for a host it chose | the client's URL is a lookup key only (R6) | download index | none |
-| T4 | **EoP** — a lock-pinned URL bypasses a block because mise skips the metadata when the lock has the URL (`java.rs:615-634`) | the download route resolves the URL to its row and applies the block there (R5) | download handler | rows on `github.com` routed through the `github` kind instead escape it — §15 Q1 |
-| T5 | **Tampering** — a cache-write without verification because of the `sha256:` form | `normalise_checksum` | `services/mise_java.rs` | `sha1:` rows (33) verify with SHA-1 only; flagged in the explorer |
-| T6 | **DoS** — 1 GB Swift tarballs and 475 MB JDKs fill storage | existing quotas and `path_allow`; sizes stated in §10.3 | quota rules | operator sizing |
+| T4 | **EoP** — a lock-pinned URL bypasses a block because mise skips the metadata when the lock has the URL (`java.rs:615-634`) | the download route resolves the URL to its row and applies the block there (R5); the `mise-java` rules precede the `github` rules, an acceptance criterion of phase 2 (§15 Q1) | download handler, rule order in `MISE_TYPES` | under RFC 0045's wire the longest prefix wins, so `github.com/adoptium/` beats `github.com/` there too; a hand-written block that puts `github` first escapes the block |
+| T5 | **Tampering** — a cache-write without verification because of the `sha256:` form, or a weak algorithm | `normalise_checksum` | `services/mise_java.rs` | 2 231 rows (30 %) are weak or unverified: `sha1:` 1 950, `md5:` 180 (no MD5 in `parse_expected`), none 101. Default treatment is §15 Q10 |
+| T6 | **DoS** — 1 GB Swift tarballs and 475 MB JDKs fill storage, and a cold miss fans out | existing quotas and `path_allow`; `[limits] max_artifact_size_bytes` (500 MiB default, instance-wide — Swift is refused at it); sizes stated in §10.3 | quota rules, `proxy/handle.rs:150` | operator sizing; retry fan-out on a cold miss is §15 Q9 |
 | T7 | **Info disclosure** — the client's token sent to a vendor host | upstream requests carry only the registry's own configured credential, never the client's | `UpstreamHttpOptions` per registry (`crates/adapters/src/registry/http_client.rs:122`) | none |
 | T8 | **Tampering** — Zig mirrors bypass the proxy | generated `use_community_mirrors = false`; obs. 2 | `mise_settings_for` | a hand-written config without it goes direct — warned in `mise plan` |
 
@@ -645,8 +755,10 @@ Presets change nothing here: `generic`'s `path_allow` is mandatory
 
 ### 7.4 Secrets and cryptography
 
-No new secret. Checksums: SHA-256/512 from the row, SHA-1 for 33 legacy rows,
-none for 101 rows (cached unverified, `WARN` once, shown in the explorer).
+No new secret in the server; the client-side rustup credential goes to the
+user-level mise config only (§6.2). Checksums: SHA-256/512 from the row for
+5 219 rows; SHA-1 for 1 950 (every Liberica row), MD5 for 180, none for 101 —
+their default is §15 Q10.
 End-to-end signatures that survive the cache untouched, because the verifier
 is mise and the key ships in mise: Node GPG (`node.rs:417-439`), Swift GPG
 (`swift.rs:136-144`), Zig minisign (`zig.rs:238`), Python attestations via
@@ -676,8 +788,9 @@ and `glob`, already in `Cargo.lock`, and `task security` is unchanged. New
 *upstreams*, which are supply chain of a different kind: `mise-java.jdx.dev`
 (operated by mise's author; MIT project, the document is generated from vendor
 APIs) and the eleven vendor hosts, all already reached by any mise estate
-today, directly. The heavy suite pins mise 2026.11.3 as the existing phase
-does; no new CI action.
+today, directly. The heavy suites pin mise **2026.9.5** today (`test.yaml`
+lines 1024, 1401, 1550 and `mise-scan.yaml:98`); RFC 0047's pin-bump PR to
+2026.11.3 is a prerequisite of §6.P. No new CI action.
 
 ---
 
@@ -713,6 +826,11 @@ mise's install beacon is RFC 0043's and is not touched here.
 | a stale row (`404` upstream, as SapMachine 10-ea) | closed | `404` relayed, nothing cached |
 | a redirect to a blocked IP | closed | `502`, `WARN` with the host |
 | checksum mismatch | closed | nothing cached, `502`, `ERROR` with expected and actual |
+| the catalogue answers `200` with `[]`, a truncated array, or a row-count drop > 25 % | closed to the bad document | last good document kept and served, `WARN`, `reason="implausible"` (§6.3) |
+| restart, second replica, cache eviction of a document | — | the index is rebuilt from the cached documents, or the documents are refetched through the single-flight before any `404` (R6) |
+| a cold miss on a large archive slower than mise's 30 s read timeout | **open question** | mise retries up to 3 times, each a new upstream fetch; the fill may never complete — §15 Q9 (blocker) |
+| an artifact over `[limits] max_artifact_size_bytes` (Swift, 1 007 MB) | closed | refused after the transfer, every retry pays it again; `suggest` prints the limit note (§4.5) |
+| a mutable index (`builds.txt`, `api/v1/install/releases.json`, `download/index.json`, PyPy `versions.json`) cached by a preset | stale | `generic` caches it forever (`artifact_ttl_secs` null); a new OTP release finds no row and erlang's checksum lookup fails (`erlang.rs:214`) — §15 Q12 |
 
 No new background job; the document cache uses the existing cache store.
 
@@ -721,7 +839,12 @@ No new background job; the document cache uses the existing cache store.
 One metadata document is 3.4 MB raw; filtered per request it costs one pass
 over ≈7 450 rows — measured in phase 2 against a 5 ms budget per request.
 Storage per artifact: JDK 33–475 MB, Swift ≈1 GB per platform, Go 60 MB,
-Zig 54 MB. `docs/guide/caching.md` gains the table.
+Zig 54 MB. `docs/guide/caching.md` gains the table. Two limits bind before
+storage does: the instance-wide `[limits] max_artifact_size_bytes` (500 MiB
+by default, `crates/config/src/schema/mod.rs:539`), which Swift exceeds and
+bell-sw's 475 MB nears; and the cold-miss path, which stores the whole body
+before serving the first byte
+(`crates/core/src/services/proxy/cache.rs:376-455`) against mise's 30 s `http_timeout` with 3 retries (§15 Q9).
 
 ---
 
@@ -757,12 +880,18 @@ Zig 54 MB. `docs/guide/caching.md` gains the table.
 
 ## 13. Rollout and compatibility
 
-Phase 1 changes only CLI output. An existing generated block keeps working:
-the `node-dist` and `rust-dist` `generic` registries are not removed, and
-`suggest` prints the typed suggestion beside a note that the generic one
-remains valid. A config naming `type = "mise-java"` on an older server fails
-to load with the existing unknown-kind error. No migration, no default
-changes on existing registries.
+Phase 1 changes CLI output, and what the CLI *suggests* for Node and Rust.
+Existing **server** registries are untouched: a `node-dist` or `rust-dist`
+`generic` registry an operator already declared keeps working, and three
+things keep it working on the client side too — `mise plan` accepts either
+kind for `nodejs.org` and `static.rust-lang.org` (so bundles keep Node and
+Rust), the existing block keeps its rule, and `setup` refuses to write a
+second rule for a prefix a declared registry already claims (RFC 0047 §4.3's
+one-claim policy, applied here rather than a silently dead duplicate). The
+CLI's own `node-dist` / `rust-dist` presets are deleted (§6.2). A config
+naming `type = "mise-java"` on an older server fails to load with the
+existing unknown-kind error. No migration, no default changes on existing
+registries.
 
 ---
 
@@ -773,7 +902,8 @@ changes on existing registries.
   with the reason; `zig.use_community_mirrors = false` present iff `zig-dl`
   is; `nodejs.org` and `static.rust-lang.org` suggest the typed kind.
 - **Unit (`core`)**: `filter_document` drops off-list hosts, blocked and gated
-  rows; `normalise_checksum` for `sha256:`, `sha512:`, `sha1:`, empty.
+  rows; `normalise_checksum` for `sha256:`, `sha512:`, `sha1:`, `md5:`, empty;
+  a document drop of > 25 % keeps the last good one.
 - **Integration (`crates/web/tests/mise_java.rs`)**, one negative test per §7
   row: T1 `an_off_list_host_row_is_never_served`, T3/R6
   `a_download_not_in_the_document_is_404_without_upstream`, T4
@@ -781,8 +911,20 @@ changes on existing registries.
   `a_sha256_prefixed_checksum_is_verified_on_cache_write`, T7
   `no_client_credential_reaches_the_vendor`.
 - **Fuzz**: `fuzz_mise_java_filter`.
+- **Unit (`cli`), regressions**: a `node-dist`-only estate still plans Node;
+  the `nodedist` arm of `typed_url_replacements`; `mise-java` precedes
+  `github` in `MISE_TYPES`; the vendor-host rules of a `mise-java` registry
+  come out one per `vendor_hosts` entry.
+- **Integration, added**: T1 `a_row_on_another_github_owner_is_never_served`;
+  T4 `a_locked_blocked_temurin_via_the_rules_is_403` (the phase-2
+  acceptance test of §15 Q1); R6 `the_index_survives_a_restart`;
+  `an_implausible_catalogue_keeps_the_last_good_one`; config
+  `bare_github_vendor_host_is_rejected`.
 - **Gates** (`CLAUDE.md` step 9): `authz.sh` live phase for `mise-java`,
-  `registry_kind_coverage.rs`, `soak_kind_coverage.rs`, `authz_matrix.rs`,
+  `registry_kind_coverage.rs` (phase 2 declares `AirGap::Gap` with its
+  reason; phase 3 flips it to `AirGap::Case` with a case in
+  `crates/web/tests/air_gap.rs`), `soak_kind_coverage.rs`, `authz_matrix.rs`,
+  `profile_route_coverage.rs` (the two routes in `perf/profile_routes.txt`),
   the README-extractor check.
 - **Heavy**: §6.P, both phases, plus `airgap.sh` obs. 9.
 
@@ -799,16 +941,26 @@ changes on existing registries.
 
 ### Still open
 
-1. **Java rows on `github.com`** (3 459 of 7 450). The `github` kind's rules
-   match first, so those downloads bypass `mise-java`'s block when a lock pins
-   the URL (T4). Options: order the `mise-java` rule for the known JDK repos
-   (`adoptium/*`, `SAP/SapMachine`, …) before the `github` rules; or have the
-   `github` kind consult `mise-java` blocks by URL. Recommendation: the first,
-   with the repo list derived from the document.
+1. **Java rows on `github.com`** (3 459 of 7 450). If the `github` kind's
+   rules match first, those downloads bypass `mise-java`'s block when a lock
+   pins the URL (T4) — the block fails open. Options: order the `mise-java`
+   rules for the known JDK repos (`adoptium/`, `SAP/SapMachine/`, …) before
+   the `github` rules; or have the `github` kind consult `mise-java` blocks by
+   URL. Recommendation: the first, with the repo list derived from the
+   document — and it is an **acceptance criterion of phase 2**, proved by
+   `a_locked_blocked_temurin_via_the_rules_is_403`, not a follow-up. In the
+   classic block order is everything (first match); under RFC 0045's wire the
+   longest prefix wins, so the repo-prefixed rule wins there regardless.
 2. **Redirect targets off `vendor_hosts`.** `aka.ms`,
-   `cache-redirector.jetbrains.com` and `gds.oracle.com` redirect to hosts not on the list. SSRF-checked, not
-   allow-listed. Allow-list the targets too (brittle: CloudFront hosts
-   rotate), or accept? Recommendation: accept, log the final host.
+   `cache-redirector.jetbrains.com` and `gds.oracle.com` redirect to hosts not
+   on the list, and `ssrf.rs`'s hop check does not refuse an https→http
+   redirect; with an egress proxy, `public_only_dns` is skipped and the SSRF
+   check rests on the pre-request DNS check (`ensure_public_url`).
+   Recommendation (revised after review): require **https on the row URL and
+   on every hop**, and add `redirect_hosts`, defaulting to the three measured
+   targets (CloudFront distribution names are per distribution, so stable);
+   test: a row whose host redirects to `127.0.0.1` or to `http://` gets `502`
+   and nothing is cached.
 3. **A `godist` kind** for per-version policy on Go — now, or when an estate
    asks?
 4. **.NET**: contribute a `dotnet.feed` setting to mise that passes
@@ -822,6 +974,42 @@ changes on existing registries.
 7. **Erlang on macOS**: confirm the GitHub repository mise reads the
    precompiled asset from — the source names the asset (`erlang.rs:283-289`),
    not verified here which release it reads.
+8. **`vendor_hosts` as host + path prefix.** `github.com` is multi-tenant:
+   with a hostname-only list, a compromised document can name any account's
+   release asset with a matching checksum and pass every control (T1).
+   Recommendation: entries are `host/prefix/`, the default derived from the
+   measured document (`github.com/adoptium/`, `github.com/SAP/SapMachine/`,
+   …), and a bare `github.com` is refused at load (§4.3). Open: whether any
+   other measured host is multi-tenant enough to need the same.
+9. **Cold large downloads versus mise's 30 s timeout — blocker.** The cold-miss
+   path stores the whole upstream body before serving the first byte
+   (`crates/core/src/services/proxy/cache.rs:376-455`), and checksummed
+   downloads are staged and verified first. mise's `http_timeout` is 30 s
+   between reads with 3 retries (`schema/mise.json:2370-2378`). A cold JDK
+   (194–475 MB) or Swift (1 007 MB) can exceed it; each retry is a new
+   upstream fetch (there is no artifact single-flight, only discovery's), and
+   a client disconnect may cancel the fill, so the cache may never fill.
+   Options: stream to the client while caching; an artifact single-flight
+   whose fill is detached from the request; at minimum `setup` writes a
+   larger `http_timeout`. Recommendation: **a detached single-flight fill plus
+   streaming**, proved by §6.P obs. 13. The same question is RFC 0047 §15 Q9;
+   the answer is shared and lands once.
+10. **Default for weak and unverified Java rows.** `md5:` 180 and none 101
+    cannot be verified at cache write; `sha1:` 1 950 (all Liberica) can, by a
+    broken algorithm. Recommendation: drop `md5:` and empty rows by default,
+    counted `reason="unverified"`, with an explicit opt-in to keep them;
+    decide whether SHA-1 rows are kept (Liberica is the only source of some
+    builds) or opted in the same way.
+11. **A per-registry size limit.** `max_artifact_size_bytes` is instance-wide
+    (`proxy/handle.rs:150`), so routing Swift means raising it for every
+    registry. Add a per-registry override, or keep the note `suggest` prints?
+12. **Mutable index files under a preset.** `builds.txt`,
+    `api/v1/install/releases.json`, zig's `download/index.json` and PyPy's
+    `versions.json` are cached forever by `generic` (`artifact_ttl_secs`
+    defaults to null, `crates/config/src/schema/registry.rs:1256-1258`); a
+    registry-wide TTL would also expire the tarballs, which are not served
+    stale on expiry. Recommendation: a per-glob revalidate list on `generic`
+    with stale-on-error. Shared with RFC 0047 §15 Q10; lands once.
 
 ---
 
@@ -829,9 +1017,11 @@ changes on existing registries.
 
 | Phase | Content | Leaves green |
 | --- | --- | --- |
-| 1 | CLI: presets, typed suggestions for node/rust, the `core:` route table, dotnet refusal, Zig setting; `docs/use/mise.md` §5; heavy `mise-core` phase (obs. 1, 2, 7, 8) | unit + heavy |
-| 2 | `mise-java` kind: core filter, adapter, routes, config validation, metrics, the five gates; heavy `mise-java` phase (obs. 3–6) | unit + integration + gates + heavy |
-| 3 | `mise-java` air gap: composed document, bundle import; `airgap.sh` obs. 9 | heavy |
+| 0 | prerequisites, not this RFC: RFC 0047's mise pin bump; RFC 0047 phase 1 (`MisePlan.notes`); §15 Q9 answered | — |
+| 1 | CLI: presets, typed suggestions for node/rust (presets deleted, `nodedist` rule arm, plan accepts both kinds), the `core:` route table, dotnet refusal, Zig setting, `mise_settings_for`; `docs/use/mise.md` §5; heavy `mise-core` phase (obs. 1, 2, 7, 8, 10, 11) | unit + heavy |
+| 2 | `mise-java` kind: core filter, cache-backed index, adapter, routes, config validation, `vendor_hosts` in the registry DTO + `dump-spec` + `ui:generate`, `mise-java` before `github`, metrics, the gates with `AirGap::Gap`; heavy `mise-java` phase (obs. 3–6, 12, 13) | unit + integration + gates + heavy |
+| 3 | `mise-java` air gap: composed document, bundle import, `AirGap::Case` + `air_gap.rs` case; `airgap.sh` obs. 9 | heavy + gates |
+| 4 | move the rows into RFC 0045's `WIRE_RULES` once it lands, as RFC 0047 phase 4 does | unit |
 
 The security controls of §7 (host allowlist, download index, grant before
 fetch) land in phase 2 with the routes they protect.

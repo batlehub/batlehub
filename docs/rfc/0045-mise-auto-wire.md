@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — signed off 2026-11-11 after the review panel, with every question of §15 resolved; Q10 carries a proof obligation for phase 2 |
+| Status      | **In review** — accepted 2026-11-11, reopened the same day by the last-review panel: three questions (§15 Q15–Q17), no blocker; the findings that changed no decision are fixed in the text |
 | Short       | mise auto-wire                                                |
 | Settles     | One mise rule routes every wired host through BatleHub, and the estate's own tools reach mise by short name through an overlay on the floating registry |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -71,7 +71,7 @@ or target, needs nothing on the client.
 [settings]
 registry_floating = true
 [settings.url_replacements]
-"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|mise\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
+"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|mise\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org|conda\\.anaconda\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
 
 [tools]
 acme-deploy = "2.4"
@@ -155,7 +155,10 @@ fetched through BatleHub and carries the estate's own names.
 - Operator-declared tools served to mise by short name through the floating
   registry, without their names leaving the instance.
 - `batlehub-cli registry suggest --mise --auto-wire` prints the block. The
-  current block stays the default.
+  current block stays the default, and motivation 2 is solved only behind
+  `--auto-wire`: the classic block still falls back to codeberg's forgejo
+  rules for a self-hosted Forgejo (`mise_url_replacements`,
+  `cli/src/api/suggest.rs:1362`).
 
 **Non-goals**
 
@@ -393,10 +396,19 @@ Rejected at load:
 | More than 1 000 overlay tools | Upstream holds 1 022 files today, and mise refuses an archive with more than 4 096 tar entries, directories included (`MAX_REGISTRY_ARCHIVE_ENTRIES`, counted by entry index, `src/registry.rs:390-391`). The bound keeps the sum well clear. |
 
 Warnings. Each has a code and a path in the existing `ConfigWarning` shape
-(`crates/config/src/schema/warnings.rs:20`). The three that are known only at
-run time (marked †) come from the last archive build, which
-`get_config_warnings` (`handlers/back_office/config.rs:455`) appends to the
-config's own list.
+(`crates/config/src/schema/warnings.rs:20`), which gains a `dismissible: bool`
+field (OpenAPI and the TypeScript client regenerated): today `dismissible` is
+a prop of the whole list (`ConfigWarningList.vue:11`), and a dismissal only
+hides a row for the browser session (`AdminConfigReload.vue:96-108`). The
+three that are known only at run time (marked †) come from the last archive
+build, which `get_config_warnings` (`handlers/back_office/config.rs:455`)
+appends to the config's own list. That build runs **eagerly** on load, on
+reload and on each archive refresh, not on the first client fetch, so the
+warnings exist after a restart. They are **per replica**: the config page
+shows the replica that answered. The candidate and pending panels
+(`ConfigEditorCard.vue`, `PendingReloadCard.vue`) cannot show a † warning
+before the reload is applied; with the default `"drop"`, a colliding tool
+disappears at the reload and the warning appears then.
 
 | Code | Path | Condition | Behaviour | Dismissible |
 | --- | --- | --- | --- | --- |
@@ -429,7 +441,9 @@ config's own list.
 - `/api/v1/mise/auto-wire` returns `MiseAutoWire { pattern, replacement,
   hosts, air_gap_pattern, registry_floating, overlay_tools }`: the rule the
   CLI prints, computed on the server so that the CLI and the rewrite cannot
-  disagree. `hosts` is filtered to the registries the caller may see (§15 Q5).
+  disagree. `hosts` is filtered to the registries the caller may see (§15 Q5),
+  and the response says how many wired hosts were hidden, so the CLI can say
+  so in the block (§4.5). `overlay_tools` is not filtered yet (§15 Q16).
   The TypeScript client is regenerated (`task dump-spec`, `task ui:generate`).
 
 ### 4.5 Mocks
@@ -450,7 +464,7 @@ $ batlehub-cli registry suggest --mise --auto-wire
 # aqua registry (served by this instance), not the copy baked into mise.
 registry_floating = true
 [settings.url_replacements]
-"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|mise\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
+"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|mise\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org|conda\\.anaconda\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
 
 # Overlay tools (mise ≥ 2026.8.0): acme-deploy (alias deploy), acme-lint
 $ echo $?
@@ -468,7 +482,7 @@ $ batlehub-cli registry suggest --mise --auto-wire
 # Generated by `batlehub-cli registry suggest --mise --auto-wire`.
 # (same header as above, without the aqua comment)
 [settings.url_replacements]
-"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
+"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev|forge\\.acme\\.internal|nodejs\\.org|registry\\.npmjs\\.org|conda\\.anaconda\\.org)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
 $ echo $?
 0
 ```
@@ -476,20 +490,42 @@ $ echo $?
 It decides that no `registry_floating` and no `mise.jdx.dev` are printed when
 nothing would be overlaid: the aqua side effect is not paid for nothing.
 
+**Same command — a caller who sees only part of the wired registries**
+
+```text
+$ batlehub-cli registry suggest --mise --auto-wire
+# Generated by `batlehub-cli registry suggest --mise --auto-wire`.
+# Filtered for alice: 2 wired hosts are hidden from your account. Do not commit
+# this block to a shared mise.toml: teammates would fetch those hosts directly.
+# (rest of the header as above)
+[settings.url_replacements]
+"regex:^https://(api\\.github\\.com|github\\.com|codeload\\.github\\.com|raw\\.githubusercontent\\.com|mise-versions\\.jdx\\.dev)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
+$ echo $?
+0
+```
+
+It decides that a filtered block says so on its first lines, because the
+header otherwise tells the user to put it in a project file.
+
 **Same command — air gap (`--mise-catch-all`)**
 
 ```text
 $ batlehub-cli registry suggest --mise --auto-wire --mise-catch-all
-# (same header as above)
-# Air gap: every host goes to this instance. Hosts it does not mirror answer
-# 501 and are recorded for the next bundle.
-[settings]
-registry_floating = true
+# Generated by `batlehub-cli registry suggest --mise --auto-wire --mise-catch-all`.
+# Put it in ONE config file (see the connected header). Air gap: every host
+# goes to this instance. Hosts it does not mirror answer 501 and are recorded
+# for the next bundle. Troubleshooting: https://hub.example.com/docs/use/mise#auto-wire
 [settings.url_replacements]
 "regex:^https://([^/]+)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
 $ echo $?
 0
 ```
+
+It decides that the air-gap block has its own header (the connected one
+says unlisted hosts are fetched directly, which is false here) and prints no
+`registry_floating` until phase 5 carries the archive in the bundle (§15 Q3):
+before that, floating would only add the aqua side effect. With the overlay
+off the air-gap block is the same, which is why it has no variant.
 
 **Same command — the instance has no wire**
 
@@ -533,13 +569,15 @@ $ echo $?
 $ mise install node@22
 mise ERROR failed to install core:node@22.11.0
 mise ERROR HTTP status client error (404 Not Found) for url (https://hub.example.com/proxy/mise-versions/mise-versions/_wire/nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.gz)
-$ curl -s -n https://hub.example.com/proxy/mise-versions/mise-versions/_wire/nodejs.org/dist/
+$ curl -s -H "Authorization: Bearer $BATLEHUB_TOKEN" https://hub.example.com/proxy/mise-versions/mise-versions/_wire/nodejs.org/dist/
 {"error":"Not Found","message":"nodejs.org/dist/ is not wired on this instance. Regenerate the rule: batlehub-cli registry suggest --mise --auto-wire","code":"not_wired"}
 ```
 
 mise does not print a body, so the URL in its error is what the user has;
 the decision is that the body is still written for whoever runs `curl` on it,
-in the existing `ErrorBody` shape (`crates/web/src/error.rs:8`).
+in the existing `ErrorBody` shape (`crates/web/src/error.rs:8`). The docs
+show the `Authorization` form, since a user of the global config may have no
+netrc.
 
 **mise — an overlay name that is not served (collision dropped, archive
 unavailable on first use, or mise older than 2026.8.0)**
@@ -577,11 +615,11 @@ badge, message, Dismiss)**
 │ registries[2].auto_wire.tools[4].on_collision  [mise.overlay.forced-shadow] │
 │   "terraform" shadows the public tool while on_collision = "overlay".       │
 │ registries[2].auto_wire.tools[1].name          [mise.overlay.collision]     │
-│   "lint" is in the upstream mise registry too. Both are left out of the     │
-│   archive: rename the tool, or set on_collision.              [ Dismiss ]   │
+│   "acme-lint" is in the upstream mise registry too. Both are left out of    │
+│   the archive: rename the tool, or set on_collision.          [ Dismiss ]   │
 │ registries[2].auto_wire.tools[1].backends      [mise.overlay.backend-unwired]│
-│   github:acme/lint is wired. https://dl.acme.io/lint is not: installs go    │
-│   there directly.                                             [ Dismiss ]   │
+│   http:acme-lint names https://dl.acme.io/lint, which is not wired:         │
+│   installs go there directly.                                 [ Dismiss ]   │
 │ registries[5].upstreams                        [mise.wire.prefix-claimed]   │
 │   api.github.com/repos/ is claimed by github and github-ent; github wins.   │
 │                                                               [ Dismiss ]   │
@@ -595,7 +633,28 @@ badge, message, Dismiss)**
 
 It decides that each warning uses the panel's existing row (path, code,
 message), names the way out, and that only the forced shadow has no Dismiss
-button. No new screen is added.
+button. No new screen is added. The panel shows the rows of one replica at a
+time; `mise.overlay.inert` and the † rows cannot appear together on a real
+instance (the † rows need a merge, which `enabled = false` never triggers
+through the wire), and are drawn together here only to show every row.
+
+**Server — a config refused at load or reload**
+
+```text
+$ batlehub-server --config config.toml
+Error: invalid configuration
+  registries[2].auto_wire.tools: 2 tools declared while overlay = false
+  hint: set overlay = true, or move the names to auto_wire.retired
+$ echo $?
+1
+```
+
+The same message is the hot-reload refusal in the server log
+(`config reload refused`, previous config kept) and the config editor's
+validation error under the field, in the editor's existing error row. A
+`source.registry` that is not wired reads:
+`registries[2].auto_wire.tools[0].source.registry: "forge" is not wired (its
+prefix is claimed by "forge-old", or path_routing = false)`.
 
 ---
 
@@ -637,11 +696,16 @@ downstream — route matching, auth, the rate limiter's
 already understands."
 
 The invariant is that **a wired request is the typed request, and every
-answer goes through the same layers**. Because the rewrite happens before
-route matching and authentication, and every outcome (including the wire's
-own `307`, `404` and `400`) is a rewrite to a route rather than a response
-from the middleware, no request leaves the instance without passing the IP
-block, authentication, rate limit and access log. The wire therefore cannot
+answer of the wire goes through the same layers**. Because the rewrite happens
+before route matching and authentication, and every wire outcome (including
+the wire's own `307`, `404` and `400`) is a rewrite to a route rather than a
+response from the middleware, no wire request leaves the instance without
+passing the IP block, authentication, rate limit and span. Two answers are
+outside it, and both predate this RFC: the registry-host `404` and the
+host-only `404` are written by `HostRoutingMiddleware` itself
+(`host_routing.rs:212-227`), the outermost wrap
+(`server/src/server_factory.rs:450`), outside `TracingLogger`. The wire adds
+no third. The wire therefore cannot
 grant access the typed URL lacks, cannot skip a check the typed URL has, and
 cannot reach a path the typed table does not produce. It also never dials
 anything: `{host}` is only looked up, and at most echoed into a `Location`
@@ -730,18 +794,29 @@ answer is `503`.
 ### 6.1 `crates/core` — the wire table
 
 - `crates/core/src/services/mise_wire.rs` (new). `WIRE_RULES` is
-  `typed_url_replacements` from `cli/src/api/suggest.rs:1254`, moved verbatim
-  and keyed on `RegistryKind` rather than `&str`. `cli` already depends on
-  `batlehub-core`, so its **two** callers keep working by calling the moved
-  table: `suggest.rs` (the classic block) and `client_setup.rs:29,2114`.
+  `typed_url_replacements` from `cli/src/api/suggest.rs:1256`, moved verbatim
+  and keyed on `RegistryKind` rather than `&str`, **with** the GitLab rules
+  that today live only in `client_setup.rs` (`GITLAB_MISE_RULES`, `:1554`),
+  and the conda-forge rule added by #318 (`234b095c`). `cli` already depends
+  on `batlehub-core`, so its three call sites keep working by calling the
+  moved table: `suggest.rs:219` (`proxy_path_for`), `suggest.rs:1362`
+  (`mise_url_replacements`, the classic block) and `client_setup.rs:2132`.
+- The **selection** moves with the table, so the CLI and the server cannot
+  disagree on the same config: which upstream of a `generic` registry is
+  wired (every one, first claim wins, the CLI's skip message kept), and
+  `foreign_upstream` (`client_setup.rs:1200`) — a typed rule only for a
+  registry of the public host, and for conda only for the conda-forge channel
+  root. `WireTable::build` and both CLI paths call the same core function; a
+  parity test builds both from one registry list and compares the
+  `(host, prefix)` sets.
 - The overlay's archive rule (`mise.jdx.dev/registry/latest\.tar\.zst` →
   `{proxy}/mise-versions/_registry/latest.tar.zst`) is **not** in the shared
   table. `WireTable::build` adds it only when `overlay = true`, so the classic
   block never prints a rule for a route that does not exist.
 - `WireTable::build(registries, own_host) -> (WireTable, Vec<WireWarning>)`:
-  for each registry in declaration order, the `(host, prefix)` pairs of its
-  kind's rules, or of its first upstream for `generic` and `forgejo`, with the
-  forgejo rules rebased onto that prefix. Regexes are compiled once here. A
+  for each registry in declaration order, the `(host, prefix)` pairs that the
+  shared selection gives it, with the forgejo rules rebased onto a self-hosted
+  forge's prefix. Regexes are compiled once here. A
   later claim on the same prefix becomes `WireWarning::PrefixClaimed`. A
   registry with `path_routing = false` contributes no pair.
 - `WireTable::target(host, rest, air_gap) -> WireOutcome`, with variants
@@ -767,8 +842,10 @@ answer is `503`.
 - §4.3's rejections go beside the existing per-type field checks in
   `AppConfig::validate()`. `CURRENT_CONFIG_VERSION` does not move: the change
   is additive.
-- The resolved `MiseOverlayTool`s and the `WireTable` land on `HotConfig`, not
-  on `RegistryPolicy`, following the existing rule for per-registry settings.
+- The resolved `MiseOverlayTool`s land on `HotConfig`, not on
+  `RegistryPolicy`, following the existing rule for per-registry settings.
+  The `WireTable` does not: it has its own holder (§6.3), because `HotConfig`
+  is swapped before `RegistryMap` on reload.
 - `crates/config/src/reload_keys.rs` gains explicit rows:
   `registries[*].auto_wire` (`Tier::Hot`: the table and the overlay are
   rebuilt on reload) and `registries[*].auto_wire.registry_upstream`
@@ -781,7 +858,10 @@ answer is `503`.
 ### 6.3 `crates/web` — the rewrite
 
 - `crates/web/src/middleware/mise_wire.rs` (new), called from
-  `HostRoutingMiddleware::call`. The fast path returns only when **both** the
+  `HostRoutingMiddleware::call`. `HostRoutingMiddlewareFactory::new(map,
+  trust)` keeps its signature (`crates/web/tests/host_routing.rs:225` and
+  `server/src/server_factory.rs:450` call it), and the table is passed with a
+  new `.with_wire(table)`. The fast path returns only when **both** the
   host map and the wire table are empty. A host-routed request is never wired
   (§5.1). A main-host request is wired, then the path opt-out check runs on the
   rewritten path. The URI update reuses `rewrite_uri`'s two-step
@@ -794,31 +874,54 @@ answer is `503`.
   `/proxy/{reg}/mise-versions/_wire-answer/{outcome}`, carrying the computed
   `Location` or message in a request extension. The handler there writes the
   `307` (with `Cache-Control: no-store`, no body), the `404 not_wired` or the
-  `400`.
+  `400`. `_wire-answer` is an ordinary registered route: called without the
+  extension (directly, or through the own-host case, which never re-enters
+  the wire), it answers `404` and nothing else. The `Location` is built from
+  the table's canonical `host[:port]` (a wired prefix matches the port
+  exactly as configured) and the **raw, still-encoded** `{rest}`; a control
+  character anywhere in it is `Malformed`.
 - The table lives in a `LockedMap`-style holder beside `RegistryHostMap`. On
-  reload it is swapped **after** `RegistryMap` and the host map, so a wire
+  reload it is swapped **after** `RegistryMap` and the host map, right after
+  `registry_host_map.replace_from` (`services/reload/applier.rs:377`), so a wire
   rewrite never names a registry the router does not have yet. An in-flight
   request keeps the snapshot it was rewritten with.
-- `WiredFrom { host }` request extension. Read by the access log and the
-  tracing span (`mise.wire.host`), so a log line shows both the host mise
-  asked for and the route that served it.
+- `WiredFrom { host }` request extension. Read by the request span, which is
+  the access log: `BatleHubSpanBuilder::on_request_start`
+  (`server/src/server_factory.rs`) gains the `mise.wire.host` field, so a log
+  line shows both the host mise asked for and the route that served it.
 
 ### 6.4 `crates/web` and `crates/adapters` — the overlay
 
 - `handlers/proxy/mise_versions.rs` gains `mise_versions_registry_archive`
-  for `GET …/_registry/latest.tar.zst`. The raw upstream bytes go through
-  `cached_forward_with`, the passthrough cache that RFC 0043 already uses for
-  `python-precompiled` (`mise_versions.rs:157`), under one fixed key. The fetch
-  closure runs the archive checks of §4.2 and returns `Err` on failure, which
-  sends the request to the held copy (stale serving is on by default,
-  `serve_stale`, `schema/registry.rs:1254`). An upstream error with nothing
-  held is mapped to `503`, not the passthrough's default `502`
+  for `GET …/_registry/latest.tar.zst`. It calls
+  `ProxyService::cached_passthrough`
+  (`crates/core/src/services/proxy/passthrough.rs:144`) directly, not
+  `cached_forward_with` (`upstream.rs:134`), which builds its own fetch
+  closure, forwards an upstream 4xx as a definite answer and caps bodies at
+  its fixed 32 MiB. The route's own closure caps the body at 4 MiB, runs the
+  archive checks of §4.2, and turns **any non-2xx** (a 403, 404 or 429 from
+  Fastly or from a `registry_upstream` mirror) into `Err`, so the held copy is
+  served and the negative entry applies (stale serving is on by default,
+  `serve_stale`, `schema/registry.rs:1254`). The fetch has its own timeouts,
+  10 s to connect and 30 s in total, because the `reqwest::Client` the
+  `mise-versions` handlers receive has none (`crates/web/src/lib.rs:1926-1929`);
+  a timeout counts as unreachable. It passes `offline = air_gapped(&svc)`, as
+  the python-precompiled route does (`mise_versions.rs:156-165`). An upstream
+  error with nothing held is `503`, not the passthrough's default `502`
   (`upstream.rs:180`).
-- Concurrent misses are coalesced by a single-flight guard on that one key,
-  with a 60-second negative entry per process, following the shape of RFC
-  0007's metadata single-flight (`services/proxy/discovery.rs`). Neither
-  passthrough cache has one today; this route needs it because every
-  networked mise command retries a failed refresh (§10.2).
+- The cache key carries the upstream URL, so changing `registry_upstream`
+  never serves the old upstream's copy. How long the held copy outlives an
+  outage depends on the cache backend: Redis keeps a stale copy for
+  max(TTL, 7 days) (`cache/redis.rs:117-120`), the in-memory store loses it on
+  restart, Postgres keeps it (§10.2).
+- Concurrent misses are coalesced by the single-flight with a negative entry
+  that `ProxyService` already has for metadata (`services/proxy/discovery.rs`,
+  the guard on `ProxyService`, `services/proxy/mod.rs`), reused rather than
+  copied, with a 60-second negative entry. Its state is process-wide (held in
+  a `OnceLock`, as `REFRESH_LIMITER` is, `crates/web/src/lib.rs:1930-1936`),
+  not built in `configure_app`, which runs once per actix worker. Followers
+  share the leader's deadline. This route needs it because every networked
+  mise command retries a failed refresh (§10.2).
 - `data/{tool}.toml` checks the overlay and `retired` names before the cache
   lookup and answers `404` for them.
 - `crates/adapters/src/registry/mise_registry_overlay.rs` (new) does the
@@ -835,9 +938,11 @@ answer is `503`.
   struct. Only the entries it parsed are repacked, with `tar::Builder` (mtime
   0, uid/gid 0, mode `0644`) and `zstd::Encoder` at a fixed level, in name
   order, so the same inputs give the same bytes on every replica.
-- The merge result is memoised in process under
-  `(sha256 of the raw archive, overlay hash)`. All new state is derived from
-  the config and from an upstream document, so nothing needs backing up.
+- The merge result is memoised in **one process-wide slot** keyed on
+  `(sha256 of the raw archive, overlay hash)`, replaced on a new key, so
+  republished archives and overlay edits never accumulate. The merge itself
+  is single-flighted with the fetch. All new state is derived from the config
+  and from an upstream document, so nothing needs backing up.
 - `crates/adapters/Cargo.toml`: the `registry-mise-versions` feature gains
   `dep:zstd`, `dep:tar` and `dep:toml`, which are optional in that crate.
 
@@ -850,8 +955,10 @@ answer is `503`.
 - `ui/src/config/registryTypes.ts`: the `mise-versions` entry gains the
   auto-wire snippet beside the RFC 0043 one.
 - The config page's warnings panel renders §4.3's six codes, with the
-  existing component. `ConfigWarningList.vue` gains a per-warning
-  `dismissible` flag so that `mise.overlay.forced-shadow` has no button.
+  existing component. `ConfigWarningList.vue` reads the new per-warning
+  `dismissible` field instead of its list-wide prop, which touches every
+  caller of the component, so that `mise.overlay.forced-shadow` has no
+  button. It also gains `role="list"` and `role="listitem"` (§11).
 
 ### 6.6 The gates
 
@@ -862,7 +969,8 @@ answer is `503`.
 | `registry_kind_coverage.rs`, `soak_kind_coverage.rs` | unchanged: no new kind |
 | `air_gap.rs` | `a_wired_unmirrored_host_lands_in_the_sink_and_is_recorded` |
 | `openapi_contract.rs` | the archive, `_wire-answer` and `/api/v1/mise/auto-wire` declare their bodies |
-| `fuzz/` | `fuzz_mise_wire_target`, seeded with `%2e%2e`, `%2E%2e`, `%2f`, `%5C`, `%252e` (§14) |
+| `profile_route_coverage.rs` | the same three operations in `perf/profile_routes.txt`: the archive as a soak arm, the other two with `skip: <reason>` |
+| `fuzz/` | `fuzz_mise_wire_target`, seeded with `%2e%2e`, `%2E%2e`, `%2f`, `%5C`, `%252e`, a `host:port` that differs from the wired one, and `%0D%0A`, `%3F`, `%23` in `{rest}` (§14) |
 
 ### 6.P Proof against a real client
 
@@ -935,6 +1043,12 @@ for the `mise-versions` registry. Assertions are on the tap
    non-zero with `404` on `_wire/{host}/c/…`, with no request reaching the
    fixture host.
 
+10. **Bounce carries no credential.** A wired `generic` prefix on a
+    tap-visible fixture origin, and an `http:` tool whose URL falls under it
+    but matches no typed rule: mise follows the `307` to the origin, and the
+    origin's tap shows the request with **no** `Authorization` header, though
+    mise sent the netrc credential to the instance.
+
 Air gap: an `airgap.sh` phase with the `--mise-catch-all` variant. A request
 to an unwired host is `501` and appears in `GET /api/v1/admin/air-gap/missing`
 under its host. `mise install jq@1.8.1` from a held bundle exits 0 with every
@@ -986,13 +1100,13 @@ flowchart LR
 | T1 | Elevation: `_wire/github.com/../../api/v1/admin/…`, `%2e%2e`, `%2F` or the own-host case smuggles a rewrite onto a non-proxy route | B1 | `WireTable::target` reads the path as the router decodes it and rejects any `.`/`..` segment, `%2E`, `%2F`, `%5C` (any case), double-encoded forms and empty segments (`Malformed` → `400`). The own-host case accepts only `{rest}` under `proxy/{registry}/`. Every output starts with `/proxy/` or `/_air-gap/unmirrored/`. | None known; the fuzz target is the check. |
 | T2 | Elevation: the wire grants what the typed URL would not | B2 | The rewrite precedes auth (§5.1), so the target's grants are the only ones evaluated. `mise-versions`' own read grant is not a substitute. | None. |
 | T3 | Spoofing / phishing: the instance used as an open redirect | B3 | `Bounce` only under a wired `(host, prefix)` pair, which comes from the typed table or an operator-configured upstream with its path, and never under a forge API prefix. An unwired prefix is `404`, never `307`. | A redirect to `github.com/<anything>` from the instance's hostname. Accepted: a host the operator chose to mirror, and the exact URL the client asked for. |
-| T4 | Tampering: an overlay entry redirects a public tool (`jq` → `github:evil/jq`), so mise checks the attestation of the wrong repository | B5 | By default, names and aliases met on both sides are dropped from both (§5.3). Replacing an upstream entry takes `on_collision = "overlay"` on that very tool, and the config page shows it, undismissable, while it applies. | An operator can add a new name, or force a shadow, pointing anywhere. Accepted (2026-11-11, the user): config write is already full control of the instance, and the force is visible rather than silent. |
+| T4 | Tampering: an overlay entry redirects a public tool (`jq` → `github:evil/jq`), so mise checks the attestation of the wrong repository | B5 | By default, names and aliases met on both sides are dropped from both (§5.3). Replacing an upstream entry takes `on_collision = "overlay"` on that very tool, and the config page shows it without a Dismiss button while it applies: visible, not undismissable, since a dismissal is per browser session anyway. | An operator can add a new name, or force a shadow, pointing anywhere. Accepted (2026-11-11, the user): config write is already full control of the instance, and the force is visible rather than silent. |
 | T5 | Tampering / confusion: upstream later publishes a tool with an overlay name, and users silently move to the public backend | B4/B5 | `"drop"` by default, counted, warned, and alerted (§10.1). The install fails loudly instead of switching backend. | Until an operator acts, that name does not install (§15 Q9). Accepted: failing is the safe direction. |
-| T6 | Information disclosure: internal tool names sent to jdx.dev | B5→J | `data/<name>.toml` for an overlay or `retired` name is answered `404` before the cache lookup and is never forwarded. The beacon is the RFC 0043 `204`. | After the overlay is switched off, a client keeps its cached archive indefinitely (§13), so its names stay registry tools. `retired` closes this for as long as the operator keeps them listed (§15 Q14). |
+| T6 | Information disclosure: internal tool names sent to jdx.dev | B5→J | `data/<name>.toml` for an overlay or `retired` name is answered `404` before the cache lookup and is never forwarded. The beacon is the RFC 0043 `204`. | After the overlay is switched off, a client keeps its cached archive indefinitely (§13), so its names stay registry tools. `retired` closes this for as long as the operator keeps them listed (§15 Q14). A project `mise.toml` whose old classic block has no `mise-versions.jdx.dev` rule replaces the global block whole while `registry_floating` stays on, so that project's listings of overlay names go to jdx.dev; §13 requires every committed block to route `mise-versions.jdx.dev` before the overlay is turned on. |
 | T7 | Denial of service: a hostile or broken upstream archive (zstd bomb, 100 000 entries, a 2 GiB entry, `../` paths, a truncated `200`) | B4 | mise's limits as mise counts them, decoding stopped at 16 MiB, a 4 MiB compressed cap, only depth-2 `registry/*.toml` regular files, `tar`'s refusal of `..`. A body that fails is never cached, so the held copy survives. | None known. |
 | T8 | Tampering: TOML injection through an overlay field (a `description` with `"\n[backends]…`) | config → B5 | Entries are serialised with `toml::to_string` from a typed struct, never concatenated, and re-parsed by the merge's own test. | None. |
-| T9 | Information disclosure: the wired hosts learnt by a caller who may not see them | API, B1 | `/api/v1/mise/auto-wire` is filtered by visibility (§15 Q5), and every wire outcome is answered by a route that needs read on `{reg}`, so an anonymous caller cannot tell `307` from `404`. | `accessible_registries_for` is rbac-only and misses namespace-only grants (a known gap). Such a caller gets a shorter host list, never a longer one. |
-| T10 | Repudiation: a request served under a path the client never sent, or answered outside the access log | B1 | `WiredFrom` keeps the original host in the access log and span, and every outcome is a routed request (§5.1). | None. |
+| T9 | Information disclosure: the wired hosts learnt by a caller who may not see them | API, B1 | `/api/v1/mise/auto-wire` is filtered by visibility (§15 Q5), and the wire's own answers need read on `{reg}`, so an anonymous caller cannot tell `307` from `404`. | **Open (§15 Q15):** a *rewritten* request is answered by the target registry, so `_wire/forge.acme.internal/…` gets the forge's `401` while `_wire/nope.example/…` gets `{reg}`'s `404`, and in an air gap the sink's `501`, which needs no grant: on a public `mise-versions` an anonymous caller can map the wired hosts. Also: `accessible_registries_for` is rbac-only and misses namespace-only grants, so such a caller gets a shorter host list, never a longer one. |
+| T10 | Repudiation: a request served under a path the client never sent, or answered outside the access log | B1 | `WiredFrom` keeps the original host in the request span, and every wire outcome is a routed request (§5.1). | The two host-routing `404`s that predate the wire stay outside the span (§5.1). |
 | T11 | Elevation: the wire reaches a registry its operator made host-only, or the admin API from a registry host | B1 | The opt-out check re-runs on the rewritten path; a host-routed request is never wired (§5.1). | None. |
 | T12 | Information disclosure: upstream credentials published through a rendered `source` backend | B5 | Only `scheme://host[:port][/path]` is rendered; an upstream with userinfo, a query or a fragment is a load error for a source registry. | None. |
 | T13 | Tampering: an unpinned aqua registry changes what `aqua:` tools resolve to | B6 | Only when the overlay is on, documented in the generated block; served by the `github` kind, so cached once and the same for the whole estate. | aqua tools follow aqua's `HEAD` rather than the mise release's copy (§15 Q13). |
@@ -1087,7 +1201,7 @@ Two run-time inputs change, and neither is a dependency of the build:
 
 | Data | Personal? | Where stored | Retention | Who can read it | Leaves the instance? |
 | --- | --- | --- | --- | --- | --- |
-| Overlay tool names, `retired` names and backends | no | config file | as the config | config readers | no: answered locally (T6) |
+| Overlay tool names, `retired` names and backends | no | config file, and served in the merged archive and in `overlay_tools` | as the config | config readers, **and every reader of the `mise-versions` registry** (possibly anonymous), whatever their read on the source registry (§15 Q16) | no: answered locally (T6) |
 | The raw upstream archive | no | passthrough cache | until replaced or purged | readers of the `mise-versions` registry | no |
 | The merged archive | no | process memory | until the process restarts or its key changes | readers of the `mise-versions` registry | no |
 | `WiredFrom.host` in the access log and span | no: an upstream hostname | logs, traces | as existing logs | log readers | no |
@@ -1113,13 +1227,19 @@ URI or the query: mise puts tokens in queries for some forges
   is a gauge, recomputed on each merge.
 - **Logs**: `not_wired`, `bounced` and `malformed` at `debug`, with the
   outcome and host only. Each `PrefixClaimed` once at `warn` on load and
-  reload. A collision at `warn` once per merge.
+  reload. A collision at `warn` once per merge, naming the tool and its
+  `on_collision` path.
 - **Audit trail**: none added. No security decision is made by the wire; it
   is made by the target route, which already writes its access events.
-- **Alerts**: one shipped rule, `BatlehubMiseOverlayCollision`, firing when
-  `batlehub_mise_overlay_collisions{resolution="drop"}` rises without a config
-  reload in the same window: upstream has taken one of the estate's names, and
-  that name no longer installs anywhere (T5, §15 Q9).
+- **Alerts**: one shipped rule in `deploy/prometheus-alerts.yaml`,
+  `BatleHubMiseOverlayCollision` (spelled like the existing `BatleHub…`
+  rules), firing when `batlehub_mise_overlay_collisions{resolution="drop"}`
+  rises while `batlehub_config_reloads_total` (new, a counter on the reload
+  applier) did not move in the same window, and ignoring series younger than
+  the window, since the gauge reappears from nothing after each restart.
+  Upstream has taken one of the estate's names, and that name no longer
+  installs anywhere (T5, §15 Q9). The alert points to the config warnings
+  panel; the `warn` line names the tool.
 
 ### 10.2 Failure modes
 
@@ -1127,8 +1247,12 @@ URI or the query: mise puts tokens in queries for some forges
 | --- | --- | --- | --- |
 | jdx.dev archive unreachable, raw copy held | upstream metrics | held copy merged and served | automatic, on the next successful fetch |
 | jdx.dev archive unreachable, nothing held | `503`, negative entry, mise `warn` | clients holding an archive keep it; clients with none use the baked registry: public tools resolve, overlay tools do not | automatic |
+| jdx.dev slow (accepts, then trickles) | the 30 s total timeout | counted as unreachable: held copy, or `503` and the negative entry; followers share the leader's deadline | automatic |
+| jdx.dev or a mirror answers 403, 404 or 429, copy held | upstream metrics | any non-2xx is a failure: held copy served, negative entry set, no re-dial for 60 s | automatic |
+| Held copy lost: in-memory store restarted, or a Redis stale copy past max(TTL, 7 days), during an outage | `503` | as "nothing held" | automatic, on the next successful fetch |
+| Air gap, nothing held | `503`, not recorded in the sink | as "nothing held"; overlay names need the connected side until §15 Q3's phase 5 | Q3 |
 | Upstream archive malformed, truncated or over a limit | `mise.overlay.upstream-invalid`, upstream metrics | never cached; the held copy stays, or `503` | automatic once upstream is fixed |
-| Clients retrying a failed refresh on every command | wire request rate | single-flight plus the 60-second negative entry: one upstream attempt a minute per process | automatic |
+| Clients retrying a failed refresh on every command | wire request rate | single-flight plus the 60-second negative entry, process-wide: one upstream attempt a minute per process, not per worker | automatic |
 | Config reload drops a registry a client rule names | `not_wired` counter | `404` for that prefix (closed) | regenerate the rule |
 | Overlay collision appears upstream | gauge, alert, config page | `"drop"` by default: both entries dropped (closed) | rename the overlay tool, or set `on_collision` |
 | Rewrite table build error | config validation | the reload is refused and the previous config stays | fix the config |
@@ -1163,9 +1287,9 @@ before this RFC, not a weaker one.
 ## 11. Other concerns
 
 - **Accessibility**: the only UI change is six warning rows in the existing
-  panel, which already has a heading, a list role and contrast checked by the
-  design gates; a row without a Dismiss button removes a focus stop and adds
-  none.
+  panel, which has a heading and contrast checked by the design gates but
+  renders plain `div`s today: it gains `role="list"` and `role="listitem"`
+  (§6.5). A row without a Dismiss button removes a focus stop and adds none.
 - **Internationalisation**: warning messages are written by the server in
   English, as every existing `ConfigWarning` is; the codes are stable slugs.
   Nothing new is added to `ui/src/i18n`. Translating warning text is a
@@ -1219,7 +1343,12 @@ before this RFC, not a weaker one.
      file's map replaces the others (settings layers are stacked with
      `preloaded`, `src/config/settings.rs:1656-1663`). So the classic block
      is removed from every committed `mise.toml` before a global wire rule is
-     relied on, or the project file silently wins.
+     relied on, or the project file silently wins. To find them, run
+     `mise settings get url_replacements` in each repository, or grep the
+     estate for `url_replacements`; the docs section carries both. Before
+     step 2, every block that stays committed must route
+     `mise-versions.jdx.dev`, or that project's overlay listings leave the
+     instance (T6).
   2. Turn the overlay on and regenerate: `registry_floating = true` appears,
      with its aqua side effect (§4.1). Users need mise ≥ 2026.8.0.
   3. Only then move `[tools]` entries from coordinates to short names, and
@@ -1292,12 +1421,15 @@ before this RFC, not a weaker one.
   - T8 `overlay_description_cannot_inject_toml`;
   - T9 `auto_wire_hosts_are_filtered_by_visibility`, and
     `anonymous_cannot_tell_wired_from_unwired`;
-  - T10 `access_log_keeps_the_wired_host_for_every_outcome`;
+  - T10 `request_span_keeps_the_wired_host_for_every_wire_outcome`;
   - T11 `wire_respects_host_only`, `wire_on_registry_host_is_refused`;
   - T12 `source_backend_never_carries_userinfo`;
   - T13 the §6.P case 3 assertion on the aqua registry request.
 - **Audit**: `task audit` unchanged (§8).
-- **Existing suites that must pass unchanged**: `host_routing.rs`'s tests,
+- **Wire answer route**: `wire_answer_without_extension_is_404`.
+- **Existing suites that must pass unchanged** (the middleware constructor
+  keeps `new(map, trust)` for this; the wire is added with `.with_wire`):
+  `host_routing.rs`'s tests,
   among them `an_empty_map_never_rewrites` (the fast path keeps that meaning
   when no wire is configured); `suggest.rs`'s classic-block tests and
   `client_setup.rs`'s tests (the moved table); the `mise` and `mise-versions`
@@ -1320,10 +1452,10 @@ before this RFC, not a weaker one.
 | 6 | Wired host, untyped path | **`307` to the origin**, bounded by T3, keeping today's behaviour for paths no typed rule covers. As recommended. Its credential cost is reopened as Q11. |
 | 7 | A default `batlehub-cli` entry in the overlay? | **No.** The docs carry the snippet; an instance that adds names on its own is what T4 guards against. As recommended. |
 | 8 | Releases published to the instance itself, with no forge behind them | **(b) now, (a) next, as its own RFC.** `source` covers a tool whose releases live on a forge the instance proxies. A binary with no forge behind it has no home yet: none of `github`, `gitlab`, `forgejo` or `generic` has a local mode (`supports_local_mode()`, `crates/core/src/entities/registry_kind.rs:382`), and RFC 0021's release import publishes only into protocol kinds. So the stopgap is (b): `docs/use/mise.md` documents an `http:` backend in `backends`, with a `url` template on a `generic` registry fronting an internal file server. It works with no code, but has no publish, needs `version_list_url` for a listing, and has no per-version block list. (a) is a local mode for `forgejo` (publish releases and assets, served on the same routes, so a `source` on it works unchanged), in a separate RFC, because it touches publish, storage keys, retention and grants. (c), leaving operators to run a Forgejo, was not chosen. As recommended. |
-| 9 | Does a collision that appears upstream drop both names? (reopened 2) | **Yes: `"drop"` stays the default, with the shipped `BatlehubMiseOverlayCollision` alert (§10.1).** The server stays stateless, and the alert names the tool and the fix. Sticky served names were not chosen. As recommended. |
+| 9 | Does a collision that appears upstream drop both names? (reopened 2) | **Yes: `"drop"` stays the default, with the shipped `BatlehubMiseOverlayCollision` alert (§10.1).** The server stays stateless; the alert points to the config warnings panel and the `warn` line names the tool and the fix (wording corrected by the last-review panel). Sticky served names were not chosen. As recommended. |
 | 10 | Wire by `(host, path prefix)` rather than host? (reopened 4) | **`(host, prefix)`, longest prefix wins**, with a proof obligation: §6.P case 9 and the two-prefix integration test must pass before phase 2 lands. The user asked for it to be tested; if the proof fails, this question reopens rather than the code falling back to host-only wiring. As recommended. |
 | 11 | Should a bounce exist for forge API hosts? (reopened 6) | **No bounce under a forge API prefix: `404 not_wired`, naming the missing typed rule. `307` elsewhere.** A bounced forge API call is anonymous, so it fails on private repositories and spends GitHub's anonymous limit. As recommended. |
-| 12 | GitLab as a `source` | **Out of this RFC.** GitLab rules are missing from the classic block too; both belong in one change, with a gitlab closed-world proof and the `%2F`-after-`projects/` exception tested on its own. As recommended. |
+| 12 | GitLab as a `source` | **Out of this RFC.** GitLab rules are missing from `registry suggest`'s classic block (only `client setup` writes them, `GITLAB_MISE_RULES`); `source` support belongs in one change, with a gitlab closed-world proof and the `%2F`-after-`projects/` exception tested on its own. As recommended. The wire itself carries the GitLab rules (§6.1), so moving to auto-wire does not drop GitLab routing for estates set up with `client setup`. |
 | 13 | Is the aqua side effect of `registry_floating` acceptable? | **Accepted and documented**: printed only with the overlay, commented in the generated block, proven by §6.P case 3. Pinning the aqua registry waits until an estate asks for it. As recommended. |
 | 14 | How long do `retired` names need answering? | **For as long as the operator keeps them in `retired`**, documented in the rollback with the client command that clears mise's cache. Explicit, stateless, reviewable. As recommended. |
 
@@ -1342,9 +1474,30 @@ examples. A finding about `registry_options_shape_listing` in §12 was right:
 that reason was wrong and is removed. The findings that change a decision are
 questions 9 to 14.
 
+**The last-review panel (2026-11-11, after acceptance)** read the accepted
+text through the same six lenses. Its findings that change no decision are
+fixed in the text: the archive route on `cached_passthrough` with its own
+timeouts, non-2xx as failure, `offline` and an upstream-keyed cache (§6.4,
+§10.2); the reused, process-wide single-flight and a one-slot merge memo;
+the selection logic moved into core with a parity test, the GitLab and conda
+rules in `WIRE_RULES`, three call sites and refreshed line numbers (§6.1);
+the `WireTable` holder and its swap point, the unchanged middleware
+constructor, `_wire-answer` without its extension, the `Location` built from
+the raw path (§6.2, §6.3); the narrowed invariant and T10 (§5.1); the
+`dismissible` field, eager merge, per-replica warnings and the alert's
+spelling and reload signal (§4.3, §6.5, §10.1); the filtered-block,
+air-gap and load-refusal mocks (§4.5); the list roles (§11); the bounce
+proof (§6.P case 10); the profile-route gate (§6.6); the project-file leak
+in T6 and §13; and the dependency line of §16. The findings that change a
+decision are questions 15 to 17.
+
 ### Still open
 
-Nothing.
+| # | Question | Evidence | Recommendation |
+| --- | --- | --- | --- |
+| 15 | Must a rewritten request whose target the caller cannot read answer like an unwired host? | A rewrite is answered by the *target* registry: `_wire/forge.acme.internal/…` gets the forge's `401`, `_wire/nope.example/…` gets `{reg}`'s `404`; in an air gap the sink answers `501` with no grant (`handlers/air_gap.rs:52-75`). On a public `mise-versions`, an anonymous caller maps the wired hosts, against T9. | **Yes.** When the caller cannot read the target registry, answer exactly as `not_wired`, and route the air-gap sink branch through `_wire-answer` so it needs read on `{reg}`. T9's test gains both arms. |
+| 16 | Who may read overlay tool names? | The merged archive and `overlay_tools` are served to every reader of `mise-versions`, independent of read on the source registry, so Q5's `hosts` filter is undone by the archive (§9). | Filter `overlay_tools` like `hosts`, and add a load warning (`mise.overlay.readers-wider`) when `mise-versions`' readers are not a subset of a source registry's readers. The archive itself cannot be filtered per caller without breaking determinism, so the warning is the control. |
+| 17 | What does the wire do with `mise.jdx.dev/registry/` once the overlay is switched off? | `WireTable::build` adds the archive rule only with `overlay = true`, so a client block generated while it was on gets `404 not_wired`, and mise keeps its cached archive indefinitely (`src/registry.rs:34-56`): the client's registry freezes on the connected side too, not only in an air gap (§13). | Keep `mise.jdx.dev/registry/` wired while `enabled = true`, whatever `overlay` says: a raw passthrough of the upstream archive when the overlay is off. Test: overlay on → off → the next refresh gets the public archive. |
 
 ---
 
@@ -1352,11 +1505,12 @@ Nothing.
 
 | Phase | Content |
 | --- | --- |
-| 1 | `crates/core::mise_wire` (the table moved and keyed on `RegistryKind`, `WireTable`, `target`, `source_backend`) with its unit tests and the fuzz target; `suggest.rs` and `client_setup.rs` read the moved table, and their tests pass unchanged. No behaviour change: the archive rule is not in the shared table. Useful alone as a refactor. |
+| 1 | `crates/core::mise_wire` (the table moved and keyed on `RegistryKind` with the GitLab and conda rules, the shared selection with its CLI/server parity test, `WireTable`, `target`, `source_backend`) with its unit tests and the fuzz target; `suggest.rs` and `client_setup.rs` read the moved table, and their tests pass unchanged. No behaviour change: the archive rule is not in the shared table. Useful alone as a refactor. |
 | 2 | Config (`auto_wire` without `overlay`), the rewrite with its fast path, opt-out re-check and registry-host refusal, `_wire-answer`, `WiredFrom`, `/api/v1/mise/auto-wire`, `registry suggest --auto-wire`, reload rows, the T1–T3 and T9–T11 tests. The closed-world phase, cases 1, 2, 7 and 9 (Q10's proof, which must pass before the phase lands), and case 5 against a `github` source until phase 3 brings `source`. Useful alone: the one-rule block. |
 | 3 | The overlay: config (`tools`, `retired`, `source`), `_registry/latest.tar.zst` with validation, single-flight and negative entry, the merge, the local `404` for overlay and retired listings, collisions, the six warning codes and the non-dismissible row, the alert rule, T4–T8, T12, T13. Cases 3, 4, 5 (on the forgejo source), 6 and 8. T6's local `404` lands in the same phase as the overlay names it protects. |
 | 4 | `airgap.sh` phase, `authz.sh` `live:mise-auto-wire`, docs (EN + FR) including the migration, the rollback, the troubleshooting list and the `http:` stopgap of Q8, ROADMAP. |
 | 5 | Q3: the bundle carries the raw archive, if Q3 is decided that way. |
 
 Phases 2 and 3 depend on RFC 0043 phase 1 (the `mise-versions` kind), which
-is on `feat/rfc-0042-phase-1` and not yet on `main`.
+is on `main` (`RegistryKind::MiseVersions`,
+`crates/core/src/entities/registry_kind.rs:270`).

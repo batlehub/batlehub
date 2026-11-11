@@ -12,8 +12,8 @@ reference: true
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
-| Supersedes  | —                                                             |
-| Touches     | `cli` (`api/suggest.rs`, `api/client_setup.rs`, `api/mise_plan.rs`), `crates/core` (`services/mise_wire.rs` once RFC 0045 phase 1 lands), `tests/heavy` (`closed_world.sh`, `airgap.sh`), `.github/workflows/test.yaml` (the pinned `MISE_VERSION`), docs (`use/mise.md`, `registries/generic.md`, `registries/conda.md`, `registries/nuget.md`) |
+| Supersedes  | — (amends RFC 0045 §6.1: conda joins the upstream-derived kinds, §6.4) |
+| Touches     | `cli` (`api/suggest.rs`, `api/client_setup.rs`, `api/mise_plan.rs`, `cli/mise.rs`), `crates/core` (`services/mise_wire.rs` once RFC 0045 phase 1 lands), `tests/heavy` (`closed_world.sh`, `airgap.sh`), `.github/workflows/test.yaml` and `mise-scan.yaml` (the pinned mise), docs (`use/mise.md`, `registries/generic.md`, `registries/conda.md`, `registries/nuget.md`) |
 | Risk        | medium — §7 (the CLI writes the client rules that decide which host a tool's bytes come from) |
 
 ---
@@ -39,10 +39,11 @@ although the `nuget` kind exists. And the 17 `http:` tools (dart, flutter,
 julia, nim, oc…) have no preset, so each locked version gets a generic mirror
 narrowed to that one file.
 
-This RFC corrects the table, adds the generic presets the measured hosts call
-for, maps `dotnet:` and `packslip:` onto the kinds that already serve them,
-derives the conda rule from the registry's upstream channel, and states what
-stays out (`asdf:`, `s3:`, `spm:` source builds, the one non-embedded vfox
+This RFC corrects the table, adds generic presets for the hosts that carry
+the most measured defaults (§2, per-tool table in §2.7 — it does not cover
+every tool), maps `dotnet:` and `packslip:` onto the kinds that already serve
+them, derives the conda rule from the registry's upstream channel, and states
+what stays out (`asdf:`, `s3:`, `spm:` source builds, the one non-embedded vfox
 plugin) with the reason. Every rule it adds lands in RFC 0045's wire table,
 so the auto-wire mode picks them up without a second list. The `core:*`
 toolchains (java, ruby, zig, deno, …) are RFC 0048's.
@@ -50,20 +51,23 @@ toolchains (java, ruby, zig, deno, …) are RFC 0048's.
 ### Before / after
 
 ```text
-# today — `batlehub-cli registry suggest --mise` on a mise.toml with
-#   kubectl, ant, dotnet:dotnet-outdated-tool, conda:ffmpeg (no lock yet)
-[[registries]] name = "github"   type = "github"     # from aqua:kubernetes/kubectl — wrong host
-# unsupported: vfox:jdx/vfox-ant: a git-fetched plugin backend; mise clones it, …
-# unsupported: dotnet:dotnet-outdated-tool: no registry kind fronts this backend, …
-[[registries]] name = "conda"    type = "conda"      # conda-forge only (baseline)
+# today — `batlehub-cli mise plan` on a mise.toml with kubectl, ant,
+#   dotnet:dotnet-outdated-tool, conda:ffmpeg (no lock yet)
+4 tool(s) · 0 download(s) · 2 registries · 0 host(s) with no mirror configured
+  unsupported: vfox:jdx/vfox-ant: a git-fetched plugin backend; mise clones it, …
+  unsupported: dotnet:dotnet-outdated-tool: no registry kind fronts this backend, …
+# and `registry suggest --mise` proposes a `github` registry for kubectl,
+# which downloads from dl.k8s.io
 
-# with this RFC
-[[registries]] name = "k8s-dl"         type = "generic"   # preset: dl.k8s.io
-[[registries]] name = "apache-archive" type = "generic"   # preset: archive.apache.org (ant)
-[[registries]] name = "nuget"          type = "nuget"     # dotnet: → NuGet.config + dotnet.registry_url
-[[registries]] name = "conda"          type = "conda"     # rule derived from the upstream channel
-# note: aqua:kubernetes/kubectl downloads from dl.k8s.io, not GitHub — run `mise lock`
-#       for the exact URL of every other aqua tool
+# with this RFC, still no lock
+4 tool(s) · 0 download(s) · 3 registries · 0 host(s) with no mirror configured
+  note: aqua: packages of type `http` download from their vendor's host, not GitHub; run `mise lock` to see which
+  note: vfox:jdx/vfox-ant: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL
+
+# with this RFC, after `mise lock` — the URLs decide
+4 tool(s) · 4 download(s) · 4 registries · 0 host(s) with no mirror configured
+# registry suggest: k8s-dl (generic, dl.k8s.io), apache-archive (generic),
+#   nuget (dotnet.registry_url + NuGet.config), conda (rule from its upstream)
 ```
 
 ```mermaid
@@ -101,10 +105,11 @@ aquaproj/aqua-registry at `017ef00e`).
    `github_release`, 4 `github_archive`, 4 `github_content` — those are
    GitHub, and the six GitHub rules cover them. The other **48 are aqua type
    `http`**: `releases.hashicorp.com` (8: terraform's siblings boundary,
-   consul, nomad, packer, waypoint…), `storage.googleapis.com` (5, among them
-   `claude`, `skaffold`), `archive.apache.org` (3: maven, spark, tomcat),
+   consul, nomad, packer, waypoint…), `storage.googleapis.com` (6 tool rows:
+   cloud-sql-proxy, skaffold, spin, claude, claude-code, nelm),
+   `archive.apache.org` (3: maven, spark, tomcat),
    `awscli.amazonaws.com` (3), `dl.k8s.io` (2: kubectl, kubectl-convert),
-   `binaries.sonarsource.com` (2), `cli.crossplane.io` (2) and one each on
+   `binaries.sonarsource.com` (2), `releases.crossplane.io` (2) and one each on
    download.docker.com, downloads.haskell.org, get.helm.sh,
    download.racket-lang.org, download.oracle.com, pkgs.tailscale.com and
    others. Without a lock, `registry suggest --mise` proposes a `github`
@@ -164,12 +169,32 @@ aquaproj/aqua-registry at `017ef00e`).
    fronts this backend" (`cli/src/api/suggest.rs:305-307`).
 
 6. **The conda rule only knows conda-forge.** The baseline fix
-   (branch `fix/mise-conda-backend`) adds `conda:` to `BACKEND_REGISTRIES`
+   (#318, merged as `234b095c`) adds `conda:` to `BACKEND_REGISTRIES`
    and a rule anchored on `https://conda.anaconda.org/conda-forge/`, and
    refuses the rule for a registry of any other channel
    (`foreign_upstream`, `cli/src/api/client_setup.rs:1200`). A tool with
    `channel = "bioconda"` — or an estate whose `conda.channel` is its own
    channel — goes direct, with a `shortcut:` comment saying so.
+
+7. **What this RFC covers, per tool group, and what it leaves.** The
+   threshold for a vendor-host preset is **two or more mise default tools
+   downloading from the host**, measured on the pinned mise; below it, a lock
+   yields a narrow generic mirror from `generic_from_unknown_url`, as today.
+
+   | Group (defaults) | Routed after this RFC | Correct verdict, no route yet | Gap |
+   | --- | --- | --- | --- |
+   | aqua GitHub types (656) | 656 (`github`) | — | — |
+   | aqua `http` (48) | 23: hashicorp 8, storage.googleapis.com 6 (bucket widening), apache 3, k8s 2, sonarsource 2 (existing preset), helm 1 (existing), docker 1 | — | 25: awscli 3 and crossplane 2 meet the threshold and get a preset after a probe (§15 Q6); 20 single-tool hosts |
+   | `http:` (17) | 10: julia, oc, openshift-install, sentinel, tfc-agent, nomad-pack, dart, flutter, grok, … | — | 7: nim, kotlin-toolchain, neo4j, cursor-agent, muse, twg, android-cli |
+   | vfox embedded (40) | 2 by preset: ant, groovy | 38: the verdict becomes a note; a lock gives a narrow generic | — |
+   | vfox cloned (1, `tiny`) | — | — | unsupported (git) |
+   | conda (20) | 20 (conda-forge; other channels by upstream) | — | — |
+   | packslip (16) | the `github.com/` and owner/repo forms | — | `packslip:{host}` forms |
+   | `dotnet:` | listing and install through `nuget` (§6.2) | — | — |
+   | npm, pypi, cargo, go, gem, github, gitlab | unchanged, covered | — | — |
+
+   So the headline is narrower than "every backend": the verdicts become
+   true for all of them, and routes are added where the volume is.
 
 ---
 
@@ -180,7 +205,7 @@ aquaproj/aqua-registry at `017ef00e`).
 - The CLI's verdict on a backend matches what mise 2026.11.3 actually
   fetches: no covered backend reported unsupported, no uncovered one
   reported covered.
-- Every host a mise default backend downloads from in measurable volume has
+- Every host that two or more mise default tools download from (§2.7) has
   either a typed rule or a generic preset whose allowlist survives a version
   bump and includes the version list mise reads.
 - `dotnet:` installs through a `nuget` registry; `conda:` through a `conda`
@@ -229,7 +254,11 @@ CLI suggests:
 name       = "hashicorp-releases"
 type       = "generic"
 upstreams  = ["https://releases.hashicorp.com"]
-path_allow = ["*/index.json", "*/*/*"]
+# one literal product prefix each: in `generic` globs `*` also crosses `/`
+# (`path_proxy.rs:90`), so "*/*/*" would be the whole host
+path_allow = ["terraform/**", "consul/**", "nomad/**", "packer/**",
+              "vault/**", "waypoint/**", "boundary/**", "sentinel/**",
+              "tfc-agent/**", "nomad-pack/**"]
 
 [[registries]]
 name       = "conda-bio"
@@ -241,7 +270,7 @@ and on the client, in the mise block:
 
 ```toml
 [settings]
-dotnet.registry_url = "https://hub.example.com/proxy/nuget/v3/index.json"
+dotnet.registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
 
 [settings.url_replacements]
 "regex:^https://conda\\.anaconda\\.org/bioconda/(.+)" = "https://hub.example.com/proxy/conda-bio/$1"
@@ -252,13 +281,24 @@ dotnet.registry_url = "https://hub.example.com/proxy/nuget/v3/index.json"
   version of the tools that use the host, plus the listing document mise
   reads. Absent `path_allow` on a hand-written generic registry keeps
   today's meaning (validated by `validate_registry_path_allow`,
-  `crates/config/src/schema/mod.rs:2600`); the presets never emit `**` for a
-  whole vendor host.
+  `crates/config/src/schema/mod.rs:2600`). The presets are written as literal
+  product prefixes, because `glob::Pattern::matches` runs with default
+  options in `path_proxy.rs:90`, where `*` also crosses `/`: `*/*/*` would be
+  the whole host. Whether `generic` should switch to
+  `require_literal_separator` is §15 Q7.
 - `dotnet.registry_url` is written only when a `nuget` registry is chosen
-  for the mise target. Absent, mise lists from nuget.org as today.
+  for the mise target, together with the NuGet.config source the install
+  needs (§6.2). Absent, mise lists from nuget.org as today.
 - The conda rule is derived from the registry's first upstream, so it
-  exists only for the channel that registry fronts. No default changes on
-  the server side.
+  exists only for the channel that registry fronts. An upstream with no
+  channel segment — the server's own default, the bare
+  `https://conda.anaconda.org` (`server/src/builders.rs:212`) — derives no
+  rule: it would claim every channel on the host. `setup` skips it with that
+  reason, as today. No default changes on the server side.
+- Each rule has a minimum mise version (conda middleware, embedded vfox,
+  `dotnet.registry_url`); an older mise only *warns* on an unknown setting
+  (`src/config/config_file/mise_toml.rs:681`) and the tool goes direct, so
+  `docs/use/mise.md` states the minimum per rule and `setup` prints it.
 
 ### 4.2 Behaviour rules
 
@@ -278,15 +318,26 @@ dotnet.registry_url = "https://hub.example.com/proxy/nuget/v3/index.json"
   embedded plugin from a cloned one by name alone without a list that
   drifts, so it tells the operator how to find out instead.
 - **`asdf:`** keeps today's "unsupported" reason unchanged.
-- **`dotnet:`** maps to `nuget`. The mise target writes
-  `dotnet.registry_url`; the NuGet target writes NuGet.config as today.
-- **`packslip:`** maps to `github` for `github.com/{owner}/{repo}` and
-  `{owner}/{repo}` forms; a `packslip:{host}` form maps to nothing and gets a
-  reason naming the host and its `.well-known` path.
-- **`spm:`** maps to `github`, with a note that source builds clone over git.
+- **`dotnet:`** maps to `nuget`. mise reads only the version list itself
+  (`dotnet.registry_url`, `src/backend/dotnet.rs:175-179`); the install is a
+  `dotnet tool install` subprocess (`:138-154`) that reads NuGet.config and
+  never sees the rewriter. So the mise target writes `dotnet.registry_url`
+  **and** the NuGet.config source the NuGet target writes today; without the
+  latter the listing would be proxied and the bytes not (§7.1 T7).
+- **`packslip:`** maps to `github` for the `github.com/{owner}/{repo}` and
+  `{owner}/{repo}` forms — a predicate (no dot in the first segment), not a
+  prefix row; a `packslip:{host}` form maps to nothing and gets a reason
+  naming the host and its `.well-known` path.
+- **`spm:`** maps to `github`, with a note that source builds clone over git;
+  the GitLab form (mise tests `tool_name.contains("gitlab.com")`,
+  `src/backend/spm.rs:812`) maps to `gitlab`.
 - **`ubi:`, `github:`, `gitlab:`, `forgejo:`** unchanged.
 - **conda.** The rule is `^{upstream}/(.+)` → `{proxy}/$1`, the shape the
-  generic kind already uses (`cli/src/api/suggest.rs:1348-1360`).
+  generic kind already uses (`cli/src/api/suggest.rs:1348-1360`), for an
+  upstream that names a channel. A lock-less `conda:` suggestion carries
+  `upstreams = ["https://conda.anaconda.org/conda-forge"]`, so it keeps the
+  rule #318 writes today, and `proxy_path_for` keeps a conda-forge fallback so
+  plans with conda entries still seed (`cli/src/api/suggest.rs:219`).
   `foreign_upstream`'s conda branch compares the **whole channel URL**, as the
   baseline does, against the channel the rule names — so two conda registries
   of two channels each get their own rule, and neither can take the other's.
@@ -299,8 +350,8 @@ Rejected:
 
 | Condition | Rationale |
 | --- | --- |
-| Two `conda` registries with the same upstream channel chosen for one mise target | Two rules on one prefix: mise applies the first and the second is dead. `WireWarning::PrefixClaimed` (RFC 0045 §6.1) already names this for the server side; the CLI refuses rather than emitting a dead rule. |
-| A preset whose `path_allow` would be `**` on a vendor host | The preset table is code; a unit test fails the build (§14), so this never reaches an operator. |
+| Two `conda` registries with the same upstream channel chosen for one mise target | Two rules on one prefix: mise applies the first and the second is dead. `WireWarning::PrefixClaimed` (RFC 0045 §6.1) already names this for the server side; the CLI refuses rather than emitting a dead rule. The same one-claim policy applies to every prefix, typed or generic (RFC 0048 §13 uses it for `nodejs.org`). Text and exit code in §4.5. |
+| A preset whose `path_allow` admits a path of another product or the host root | The preset table is code; a unit test runs each preset against a corpus of paths it must refuse (§14), so this never reaches an operator. A "no `**`" check is not enough: `*` crosses `/` too. |
 
 Warnings:
 
@@ -308,7 +359,9 @@ Warnings:
 | --- | --- | --- |
 | aqua tool, no lock | `github` suggested, note printed | `registry suggest --mise` output, next to the registry |
 | vfox tool, no lock | not unsupported; note printed | same, and `mise plan`'s `notes` |
-| conda registry fronting a channel the tool does not use | rule written, tool goes direct | `setup`'s `detail` line, as `foreign_upstream` does today |
+| a locked `conda:` tool on a channel no registry fronts | the tool goes direct | `mise plan`: its host under `no mirror:` (the lock carries the URL) |
+| a conda registry on a channel-less upstream | no rule, skipped with the reason | `setup`'s `detail` line, as `foreign_upstream` does today |
+| `dotnet:` chosen without the NuGet source writable | listing proxied, install would go direct | `setup` prints "also run `setup --client nuget`" |
 | `packslip:{host}` | reason names the host | `mise plan`'s `unsupported` |
 
 ### 4.4 API surface
@@ -318,54 +371,105 @@ wire table RFC 0045 already specifies.
 
 ### 4.5 Mocks
 
-**`batlehub-cli registry suggest --mise` — no lock, nominal**
+Drawn against today's renderers: `render_toml` (`cli/src/api/suggest.rs:1602`)
+for `registry suggest`, whose output is TOML with `# from {src}` and `# {note}`
+comments, and `print_summary` (`cli/src/cli/mise.rs:714-735`) for `mise plan`.
+The one format change is a `note:` line in the plan summary, from the new
+`MisePlan.notes` (§6.3).
+
+**`batlehub-cli registry suggest --mise` — no lock**
 
 ```text
 $ batlehub-cli registry suggest --mise
-Scanned mise.toml (no mise.lock — run `mise lock` for exact URLs)
+# Generated by `batlehub-cli registry suggest`.
+# Review before applying — names are suggestions, and RBAC below is a
+# permissive starting point.
 
-  k8s-dl            generic  dl.k8s.io                      kubectl
-  apache-archive    generic  archive.apache.org             ant
-  nuget             nuget    api.nuget.org                  dotnet:dotnet-outdated-tool
-  conda             conda    conda.anaconda.org/conda-forge conda:ffmpeg
-  github            github   api.github.com                 aqua:cli/cli, hk
-
-  note  aqua: aqua packages of type `http` download from their vendor's host,
-        not GitHub; `mise lock` records which.
-  note  vfox: ant is a plugin built into mise and downloads over HTTP; the
-        URL is known once `mise lock` has run.
+# from mise.toml: kubectl
+# aqua packages of type `http` download from their vendor's host, not
+# GitHub; run `mise lock` to see which.
+[[registries]]
+type       = "github"
+name       = "github"
+# upstreams omitted — the adapter's default upstream applies
+…
+# from mise.toml: dotnet:dotnet-outdated-tool
+[[registries]]
+type       = "nuget"
+name       = "nuget"
+…
+# from mise.toml: conda:ffmpeg
+[[registries]]
+type       = "conda"
+name       = "conda"
+upstreams  = ["https://conda.anaconda.org/conda-forge"]
+…
 ```
 
-It decides that the lock-less path still suggests something useful, and that
-both guesses carry their caveat beside them, not in a footer.
+`ant` (vfox) yields no registry here: without a lock the CLI cannot know its
+host, and §12 rejects shipping a list. It decides that lock-less output
+guesses nothing it cannot know, and that each caveat sits above its registry.
 
-**`batlehub-cli mise plan` — refusal**
+**The same, after `mise lock`** — the URLs decide (`registry_for_url`):
+
+```text
+# from mise.lock: kubectl
+[[registries]]
+type       = "generic"
+name       = "k8s-dl"
+upstreams  = ["https://dl.k8s.io"]
+path_allow = [
+  "v1.*/bin/**",
+  "release/stable.txt",
+]
+…
+# from mise.lock: ant
+[[registries]]
+type       = "generic"
+name       = "apache-archive"
+upstreams  = ["https://archive.apache.org/dist"]
+path_allow = [
+  "ant/**",
+  …
+]
+```
+
+**`batlehub-cli mise plan` — notes and refusal**
 
 ```text
 $ batlehub-cli mise plan
-…
-unsupported (2):
-  asdf:mise-plugins/mise-postgres  a git-fetched plugin backend; mise clones it,
-                                   and there is no HTTP path through BatleHub
-  packslip:tool.example.com        reads https://tool.example.com/.well-known/packslip.json;
-                                   no registry mirrors tool.example.com
-exit 0
+3 tool(s) · 1 download(s) · 1 registry · 1 host(s) with no mirror configured
+  no mirror: tool.example.com
+  unsupported: asdf:mise-plugins/mise-postgres: a git-fetched plugin backend; mise clones it, and there is no HTTP path through BatleHub
+  unsupported: packslip:tool.example.com: reads https://tool.example.com/.well-known/packslip.json; no registry mirrors tool.example.com
+  note: vfox:jdx/vfox-ant: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL
 ```
 
-It decides that the refusal names the host the operator would have to add,
-and that `exit 0` is kept (a plan with unsupported tools is still a plan,
-RFC 0008 §2.1).
+Exit 0: a plan with unsupported tools is still a plan (RFC 0008 §2.1). Empty
+case — nothing unsupported, nothing to note: the summary line alone, as today.
 
-**`batlehub-cli setup --client mise` — another channel's registry**
+**`batlehub-cli setup --client mise` — two conda channels, a nuget registry**
 
 ```text
-mise  ~/.config/mise/conf.d/batlehub.toml  would write 2 rules
-      skipped: conda registry bio (it proxies https://conda.anaconda.org/bioconda,
-               which conda:ffmpeg does not read)
+mise  ~/.config/mise/conf.d/batlehub.toml  would write 2 rules, 1 setting
+      conda      → ^https://conda\.anaconda\.org/conda-forge/(.+)
+      conda-bio  → ^https://conda\.anaconda\.org/bioconda/(.+)
+      nuget      → dotnet.registry_url = https://hub.example.com/proxy/nuget/nuget/v3/index.json
+      also run `batlehub-cli setup --client nuget`: `dotnet tool install` reads NuGet.config, not mise
 ```
 
-It decides the wording of the one case where a registry exists and is still
-not wired.
+Setup works per registry: both channels get their rule, nothing is skipped.
+
+**Refusal — two registries on one channel**
+
+```text
+$ batlehub-cli setup --client mise
+error: conda registries conda and conda-mirror both front https://conda.anaconda.org/conda-forge; mise applies the first rule only
+hint: choose one with --registry, or remove the other from the selection
+exit 4
+```
+
+Exit 4 is the CLI's `Refused` (`cli/src/exit.rs`).
 
 ---
 
@@ -432,27 +536,34 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
 
 ### 6.1 `cli/src/api/suggest.rs`
 
-- `BACKEND_REGISTRIES` gains `("dotnet:", "nuget", "nuget")`,
-  `("packslip:github.com/", "github", "github")`, a `packslip:` owner/repo
-  match (no dot in the first segment), and `("spm:", "github", "github")`.
-  The baseline's `("conda:", "conda", "conda")` stays.
+- `BACKEND_REGISTRIES` gains `("dotnet:", "nuget", "nuget")` and
+  `("packslip:github.com/", "github", "github")`; the baseline's
+  `("conda:", "conda", "conda")` stays. Two verdicts are not prefix rows and
+  live in `registry_for_backend` as predicates: `packslip:{owner}/{repo}` (no
+  dot in the first segment) → `github`, and `spm:` → `gitlab` when the name
+  contains `gitlab.com` (`src/backend/spm.rs:812`), else `github`. The table
+  stays a `starts_with` list of three-tuples (`cli/src/api/suggest.rs:310`).
 - `unsupported_backend_reason`: `vfox:` returns `None` from the "unsupported"
   branch and is reported as a **note**, not an unsupported tool; `asdf:`
   keeps its reason; `packslip:{host}` gets a reason naming the
   `.well-known` URL.
 - `registry_for_backend` returns a `note` for `aqua:` (the `http`-type
   caveat) and `spm:`; the `SuggestedRegistry.note` field exists
-  (`cli/src/api/suggest.rs:1040-1044`).
+  (`cli/src/api/suggest.rs:51-52`).
 - `generic_preset` gains, from the measured hosts (§2.1, §2.4):
 
   | Host | Name | Upstream | `path_allow` | Tools (mise defaults) |
   | --- | --- | --- | --- | --- |
-  | `releases.hashicorp.com` | `hashicorp-releases` | `https://releases.hashicorp.com` | `*/index.json`, `*/*/*` | 8 aqua + nomad-pack, sentinel, tfc-agent |
-  | `dl.k8s.io` | `k8s-dl` | `https://dl.k8s.io` | `v*/bin/**`, `release/stable*.txt` | kubectl, kubectl-convert |
+  | `releases.hashicorp.com` | `hashicorp-releases` | `https://releases.hashicorp.com` | one `{product}/**` per product (§4.1) | 8 aqua + nomad-pack, sentinel, tfc-agent |
+  | `api.releases.hashicorp.com` | `hashicorp-api` | `https://api.releases.hashicorp.com` | `v1/releases/**` | the `version_date_url` of the HashiCorp `http:` tools (`registry/sentinel.toml:19`) |
+  | `dl.k8s.io` | `k8s-dl` | `https://dl.k8s.io` | `v1.*/bin/**`, `release/stable.txt` | kubectl, kubectl-convert |
   | `archive.apache.org` | `apache-archive` | `https://archive.apache.org/dist` | `maven/**`, `ant/**`, `groovy/**`, `spark/**`, `tomcat/**` | maven, spark, tomcat (aqua), ant, groovy (vfox) |
   | `mirror.openshift.com` | `openshift-mirror` | `https://mirror.openshift.com/pub/openshift-v4/clients` | `ocp/**` | oc, openshift-install |
-  | `julialang-s3.julialang.org` | `julia-dist` | `https://julialang-s3.julialang.org/bin` | `versions.json`, `*/x64/**`, `*/aarch64/**` | julia |
-  | `download.docker.com` | `docker-dl` | `https://download.docker.com` | `*/static/stable/**` | docker-cli |
+  | `julialang-s3.julialang.org` | `julia-dist` | `https://julialang-s3.julialang.org/bin` | `versions.json`, `linux/**`, `mac/**`, `winnt/**` | julia |
+  | `download.docker.com` | `docker-dl` | `https://download.docker.com` | `linux/static/stable/**`, `mac/static/stable/**` | docker-cli |
+
+  Every pattern starts with a literal product segment: `*` crosses `/` in
+  `generic` globs (§4.1, §15 Q7).
 
   `storage.googleapis.com` is already a bucket host
   (`cli/src/api/suggest.rs:182-186`): dart (`dart-archive`), flutter
@@ -460,20 +571,30 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
   bucket-scoped generic from `generic_from_unknown_url`, and this RFC widens
   that function's allowlist for a bucket to the *directory* of the observed
   path plus the `version_list_url` the registry TOML names, instead of the
-  single file. The `dl.google.com` preset stays `go*` (RFC 0048 owns it);
-  android-sdk's `dl.google.com/android/**` is §15 Q3.
-- `typed_url_replacements("conda")` disappears in favour of the
-  upstream-derived rule (§4.2); until RFC 0045 phase 1 moves the table, the
-  derivation lives next to the generic one in `mise_url_replacements`
-  (`cli/src/api/suggest.rs:1342-1366`).
+  single file — and checks that `version_list_url` is on the same host and
+  bucket before admitting it. The `dl.google.com` preset stays `go*`
+  (RFC 0048 owns it); android-sdk's `dl.google.com/android/**` is §15 Q3,
+  whose answer is to key presets by host **and** path prefix
+  (`generic_preset`, `proxy_path_for` and `registry_kind_for_host`,
+  `:137`, `:214`, `:277`, all assume one preset per host today).
+- `mise_url_replacements` (`cli/src/api/suggest.rs:1342-1366`) derives the
+  conda rule from the registry's upstream, next to the generic derivation,
+  until RFC 0045 phase 1 moves the table. `typed_url_replacements("conda")`
+  **stays** as the conda-forge fallback that `proxy_path_for` (`:219`, no
+  upstream argument) uses, so plans keep seeding conda entries; a plan test
+  pins it.
 
 ### 6.2 `cli/src/api/client_setup.rs`
 
 - `MISE_TYPES` (`cli/src/api/client_setup.rs:1536`) gains `nuget`.
 - The mise target, for a chosen `nuget` registry, writes
-  `dotnet.registry_url = "{base}/v3/index.json"` under `[settings]` and no
-  `url_replacements` rule (the rewrite would also catch the `dotnet` CLI's
-  NuGet.config-driven reads, which are not mise's).
+  `dotnet.registry_url = "{base}/nuget/v3/index.json"` (the form NuGet.config
+  already uses, `client_setup.rs:3074`) through RFC 0048's
+  `mise_settings_for`, the one settings function, and no `url_replacements`
+  rule (the rewrite would also catch the `dotnet` CLI's NuGet.config-driven
+  reads, which are not mise's). Because the install itself reads
+  NuGet.config, the mise target also prints "also run `setup --client
+  nuget`" when that target is not selected (§4.5).
 - `foreign_upstream`'s conda branch compares against the channel the
   derived rule names (the registry's own upstream), so it refuses nothing for
   a correctly configured second channel; the check that remains is "the
@@ -481,9 +602,13 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
 
 ### 6.3 `cli/src/api/mise_plan.rs`
 
-- A `vfox:` entry with no URL lands in a new `notes` list of the plan (the
-  struct carries `unsupported`, `cli/src/api/mise_plan.rs:50`, and
-  `unmirrored_hosts`, `:52`), not in `unsupported`.
+- A `vfox:` entry with no URL lands in a new `notes: Vec<String>` of the plan
+  (the struct carries `unsupported`, `cli/src/api/mise_plan.rs:50`, and
+  `unmirrored_hosts`, `:52`), not in `unsupported`. `MisePlan` is read back
+  from disk (`cli/src/cli/mise.rs:366`, `:583`), bundles included, so the
+  field is `#[serde(default)]` and `PLAN_VERSION` (`mise_plan.rs:41`) moves
+  to 2; a test reads a version-1 plan. `print_summary` prints each note as
+  `  note: …`. RFC 0048 writes its Zig and Go advisories to the same field.
 
 ### 6.4 `crates/core/src/services/mise_wire.rs` (RFC 0045)
 
@@ -495,10 +620,12 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
 
 ### 6.5 `tests/heavy` and CI
 
-- `.github/workflows/test.yaml` pins `MISE_VERSION: "2026.9.5"` (lines 1024,
-  1401). The conda `url_replacements` middleware and the embedded vfox
-  plugins this RFC relies on are verified in 2026.11.3's source; the pin
-  moves to 2026.11.3 in phase 1 (§15 Q1).
+- mise is pinned to 2026.9.5 in four places: `MISE_VERSION` in
+  `.github/workflows/test.yaml` (lines 1024, 1401, 1550) and `version:` in
+  `.github/workflows/mise-scan.yaml:98`, whose comment requires it to equal
+  `test.yaml`'s. The conda `url_replacements` middleware and the embedded
+  vfox plugins this RFC relies on are verified in 2026.11.3's source; all
+  four move to 2026.11.3 in their own PR, first (§15 Q1).
 - `closed_world.sh` `phase_mise` (line 1082) gains the cases of §6.P;
   `airgap.sh` gains the refusal cases.
 
@@ -526,8 +653,10 @@ not yet resolved against each backend.
    GET under `/proxy/apache-archive/`, and **no request to
    `github.com/jdx/vfox-ant`** (the plugin was not cloned).
 5. `mise install dotnet:dotnet-outdated-tool@4.6.4` with
-   `dotnet.registry_url` and NuGet.config on the proxy — the version list and
-   the `.nupkg` GET both reach `/proxy/nuget/`; none reaches `api.nuget.org`.
+   `dotnet.registry_url` and the NuGet.config `setup --client nuget` writes —
+   the version list and the `.nupkg` GET both reach `/proxy/nuget/`; none
+   reaches `api.nuget.org`. Negative arm: with `4.6.4` blocked on the `nuget`
+   registry, the install fails and the tap shows no `.nupkg` upstream GET.
 6. **Refusal.** `mise install consul` (aqua `http`) through a
    `hashicorp-releases` registry whose `path_allow` is narrowed by the fixture
    to `terraform/**` — the proxy answers 403, mise exits
@@ -540,6 +669,12 @@ not yet resolved against each backend.
 8. `batlehub-cli mise plan` on a lock holding `asdf:mise-plugins/mise-postgres`
    and `ant` — `asdf` under `unsupported` with the git reason; `ant` planned
    with its archive URL, not unsupported.
+9. **Credential and downgrade (T3).** A fixture block whose replacement
+   targets `http://` — mise refuses to send the netrc credential over the
+   downgrade (the request fails or goes without `Authorization`), asserted on
+   the rewritten request the proxy-side tap receives. The connected arm
+   asserts that the rewritten request to the proxy carries the credential and
+   the vendor-side tap sees none.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
@@ -576,11 +711,12 @@ second registry on a shared host.
 | # | Threat (STRIDE) | Where | Mitigation | Residual risk |
 | --- | --- | --- | --- | --- |
 | T1 | Tampering — a registry of one conda channel answers another channel's reads | boundary 1 | rule derived from the registry's own upstream; `foreign_upstream` compares the whole channel URL (`cli/src/api/client_setup.rs:1200`) | none known; accepted by the author |
-| T2 | Elevation — a preset turns BatleHub into an open fetcher for a whole vendor host | boundary 2 | presets use product-scoped globs, never `**`; unit test over the preset table | a product directory is still wide (all of `maven/**`); accepted, it is one product |
-| T3 | Info disclosure — the netrc credential for the proxy follows a rewritten URL to another host, or over http | boundary 1 | mise clears cross-host credentials and refuses a downgrade on a rewrite (`src/backend/conda.rs:65-80`, the same rule `crate::http::Client` applies); BatleHub rules always target the instance | relies on mise; regression covered by §6.P 1 |
+| T2 | Elevation — a preset turns BatleHub into an open fetcher for a whole vendor host | boundary 2 | presets start with a literal product segment; a unit test runs every preset against a corpus of paths it must refuse (another product, the host root) — not a "no `**`" check, since `*` crosses `/` in `generic` globs (`path_proxy.rs:90`) | a product directory is still wide (all of `maven/**`); accepted, it is one product. Operator-written `*` patterns are as wide as `**` today (§15 Q7) |
+| T3 | Info disclosure — the netrc credential for the proxy follows a rewritten URL to another host, or over http | boundary 1 | mise clears cross-host credentials and refuses a downgrade on a rewrite (`src/backend/conda.rs:65-80`, the same rule `crate::http::Client` applies); BatleHub rules always target the instance | relies on mise; regression covered by §6.P 9 (an assertion on a host egress already blocks would be vacuous) |
 | T4 | Repudiation/DoS — a backend reported covered goes direct in an air gap and times out | boundary 1 | catch-all rule (`cli/src/api/suggest.rs:1439`) sinks every unwired host to a `501` recorded under `unmirrored` | none for HTTP; T5 remains |
 | T5 | Info disclosure — a vfox plugin's subprocess (php's build, poetry's installer) fetches directly | boundary 4 | out of the rewriter's reach; documented per plugin in `docs/use/mise.md` | **accepted, highest residual**: in connected mode those requests leave the estate unproxied; in an air gap they fail |
-| T6 | Spoofing — upstream registry data points a template at an attacker host | boundary 3 | a rewritten URL only reaches hosts with a registry; an unwired host is direct (connected) or sunk (air gap), as today | unchanged from today |
+| T6 | Spoofing — upstream registry data points a template at an attacker host | boundary 3 | a rewritten URL only reaches hosts with a registry; an unwired host is direct (connected) or sunk (air gap), as today; a bucket's `version_list_url` is admitted only on the same host and bucket (§6.1) | unchanged from today |
+| T7 | Tampering / EoP — `dotnet:` reported covered while its install bypasses the proxy: `dotnet tool install` is a subprocess reading NuGet.config (`src/backend/dotnet.rs:138-154`), so with only `dotnet.registry_url` written the listing is proxied and the `.nupkg` is not, skipping blocks connected and missing the catch-all air-gapped | boundary 4 | `setup` writes or demands the NuGet.config source (§6.2); `mise plan` notes `dotnet:` as subprocess-fetched | the install's correctness rests on NuGet.config, outside mise; §6.P 5's negative arm proves a blocked `.nupkg` does not install |
 
 ### 7.2 Authentication and authorisation
 
@@ -617,8 +753,9 @@ RBAC on every route, the catch-all sink of RFC 0008, and RFC 0045's
 ## 8. Supply chain
 
 No new dependency, image, action or tool in BatleHub; `task audit` is
-unchanged. The heavy suite's **pinned mise moves from 2026.9.5 to
-2026.11.3** (MIT, the release asset CI already verifies by URL). The bump
+unchanged. The **pinned mise moves from 2026.9.5 to 2026.11.3** in all four
+places (`test.yaml` lines 1024, 1401, 1550; `mise-scan.yaml:98`; MIT, the
+release asset CI already verifies by URL). The bump
 also changes mise's behaviour in every other mise phase; phase 1 runs them
 all before the pin lands (§13).
 
@@ -649,6 +786,10 @@ generic read.
 | A vendor host changes its URL layout (a new path outside the preset glob) | `403` on the client, generic log line | closed: refused, not fetched | widen the preset in a CLI release; the operator can widen `path_allow` by hand at once |
 | A future mise un-embeds a vfox plugin | §6.P case 4 (the tap sees a git clone) | the tool goes direct (connected) or fails (air gap) | the plan's note already tells the operator to check |
 | An aqua package changes type | the lock's URL | lock path is right by construction | none needed |
+| A vendor host down or slow, cold miss | generic `502`, upstream latency metric | closed: `502`; a cached artifact is still served | retry once the vendor is back |
+| A large cold artifact slower than mise's 30 s read timeout | mise's own timeout and retries | **open** — the fill may never complete; §15 Q9 (blocker) | — |
+| A mutable index under a preset (`release/stable.txt`, `*/index.json`, `versions.json`) | stale "latest" | cached forever (`artifact_ttl_secs` null) — §15 Q10 | purge by hand until Q10 lands |
+| Air gap, per tool | — | only lock-driven installs work; an aqua or vfox listing request goes to the catch-all sink (`501`, recorded); a held artifact is served by path | carry the version in the next bundle |
 
 ### 10.3 Performance and capacity
 
@@ -684,7 +825,7 @@ CPU path.
 | One `**` generic per vendor host | Turns the proxy into an open fetcher for the host (T2). |
 | A `url_replacements` rule for `api.nuget.org` instead of `dotnet.registry_url` | The rule would also rewrite reads the `dotnet` CLI makes for unrelated restores in the same shell; the setting scopes it to mise. |
 | Keep conda pinned to conda-forge | An estate on its own channel (the reason to run a conda proxy at all) gets nothing. |
-| Do nothing | 48 aqua tools and 40 vfox tools keep leaving the estate with nothing on the wire, and the plan tells the operator the opposite of the truth about 40 of them. |
+| Do nothing | The plan keeps telling the operator the opposite of the truth about 40 vfox tools and `dotnet:`. This RFC routes 23 of the 48 aqua `http` tools and 2 of the 40 vfox tools by preset (§2.7); the rest get a true verdict and, with a lock, a narrow generic — less than "every tool", more than nothing. |
 
 ---
 
@@ -697,7 +838,14 @@ CPU path.
 - **Operator prerequisites**: none beyond the registries the CLI suggests.
 - **Rollback**: an older CLI writes the older block; registries created from
   presets keep serving. Rolling back re-opens §2's gaps, nothing in §7.
-- **Staged rollout**: the mise pin bump runs every existing mise phase first.
+- **Staged rollout**: the mise pin bump (all four pins, §6.5) lands as its
+  own PR and runs every existing mise phase first. Landing order with RFC
+  0048: pin PR → this RFC's phase 1 (`MisePlan.notes`) → RFC 0048 phase 1.
+- **Old plans and bundles**: `MisePlan.notes` is `#[serde(default)]` and
+  `PLAN_VERSION` moves to 2, so a plan written by an older CLI still reads.
+- **Existing conda behaviour**: a lock-less `conda:` suggestion keeps writing
+  the conda-forge rule (#318's test stays), and plan seeding keeps the
+  conda-forge fallback.
 
 ---
 
@@ -705,19 +853,22 @@ CPU path.
 
 - **Unit** (`cli/src/api/suggest.rs`): each new `BACKEND_REGISTRIES` row;
   `vfox:` is not unsupported and carries the note; `asdf:` still is;
-  `packslip:host` reason names the `.well-known` URL; every preset's
-  `path_allow` contains no `**` at the root (T2); `proxy_path_for` on one
-  real URL per preset; the conda derivation escapes a channel URL with `.`
-  and `+`; the bucket-host allowlist widening.
+  `packslip:host` reason names the `.well-known` URL; every preset refuses a
+  corpus of paths of another product and the host root (T2); `proxy_path_for`
+  on one real URL per preset; the conda derivation escapes a channel URL with
+  `.` and `+`, and derives nothing from a channel-less upstream; a lock-less
+  `conda:` keeps the conda-forge rule; `spm:` GitLab form → `gitlab`; the
+  bucket-host allowlist widening and its same-bucket check.
 - **Unit** (`cli/src/api/client_setup.rs`): `nuget` writes
   `dotnet.registry_url`, no rule; two conda registries of two channels write
   two rules; a conda registry with no named upstream is skipped (T1).
-- **Unit** (`cli/src/api/mise_plan.rs`): the `notes` list for `vfox:`.
+- **Unit** (`cli/src/api/mise_plan.rs`): the `notes` list for `vfox:`; a
+  version-1 plan without `notes` still reads; a conda entry still gets a
+  `proxy_path`.
 - **Proof**: §6.P, cases 1–8.
-- **Security**: T1 (§6.P 2 and the two-channel unit test), T2 (preset glob
-  test, §6.P 6), T3 (§6.P 1's tap shows no credential to
-  `conda.anaconda.org`), T4 (§6.P 7). T5 has no negative test: it is the
-  accepted residual.
+- **Security**: T1 (§6.P 2 and the two-channel unit test), T2 (preset corpus
+  test, §6.P 6), T3 (§6.P 9), T4 (§6.P 7), T7 (§6.P 5's negative arm). T5
+  has no negative test: it is the accepted residual.
 - **Audit**: `task audit` unchanged.
 - **Existing suites**: every `closed_world.sh` mise phase and `airgap.sh`
   under the bumped pin; `cargo test -p batlehub-cli`.
@@ -730,7 +881,7 @@ CPU path.
 
 | # | Question | Decision |
 | --- | --- | --- |
-| 1 | Is conda-forge-only routing acceptable as a first step? | **Yes, as the baseline already shipped on `fix/mise-conda-backend`.** It closed the "unsupported" verdict for the 20 conda tools at once; this RFC generalises it. |
+| 1 | Is conda-forge-only routing acceptable as a first step? | **Yes, as the baseline shipped in #318 (`234b095c`).** It closed the "unsupported" verdict for the 20 conda tools at once; this RFC generalises it. |
 
 ### Still open
 
@@ -753,10 +904,43 @@ CPU path.
    (`src/backend/packslip.rs:1032`) is not read here: whether it fetches a
    TUF root online decides whether packslip tools install in an air gap at
    all. To be read in the packslip crate before phase 3.
-6. **Preset ownership.** Six vendor hosts are a start; does the preset table
-   grow by measurement (a host enters when N mise defaults use it) or on
-   request? Recommendation: by measurement, re-run on each mise pin bump with
-   the script this RFC used.
+6. **Preset ownership.** The threshold is now stated (§2.7: two or more
+   defaults on the host); does the table grow only by that measurement, or
+   on request too? awscli.amazonaws.com (3) and releases.crossplane.io (2)
+   meet it and need a probe of their path layout before a preset is written.
+   Recommendation: by measurement, re-run on each mise pin bump with the
+   script this RFC used.
+7. **`generic` glob semantics.** `path_proxy.rs:90` calls
+   `glob::Pattern::matches` with default options, so `*` crosses `/`:
+   product-scoped patterns read narrower than they are, in operators' own
+   configs too (`go*` admits `go1.25/anything/below`). Options: switch the
+   kind to `require_literal_separator` (a behaviour change that needs a
+   migration note, since some hand-written allowlists will start refusing),
+   or keep it and document it. Meanwhile the presets use literal product
+   prefixes and the T2 test uses a refusal corpus.
+8. **Minimum mise version per rule.** An older mise warns on an unknown
+   setting and goes direct (§4.1). State a floor per rule in the docs and
+   have `setup` print it (recommended), or refuse to write a rule the user's
+   `mise --version` cannot honour?
+9. **Cold large downloads versus mise's 30 s timeout — blocker.** The
+   cold-miss path stores the whole upstream body before serving the first
+   byte (`crates/core/src/services/proxy/cache.rs:376-455`); mise's
+   `http_timeout` is 30 s between reads with 3 retries. A large cold
+   artifact through a preset (or RFC 0048's JDKs and Swift) can exceed it;
+   each retry is a new upstream fetch (no artifact single-flight), and a
+   client disconnect may cancel the fill, so the cache may never fill.
+   Options: stream to the client while caching; an artifact single-flight
+   with a detached fill; at minimum `setup` writes `http_timeout`.
+   Recommendation: **detached single-flight fill plus streaming**. Same
+   question as RFC 0048 §15 Q9; answered once.
+10. **Mutable index files under a preset.** `release/stable.txt`,
+   `*/index.json`, `versions.json` (and RFC 0048's `builds.txt`,
+   `api/v1/install/releases.json`, zig's `download/index.json`) are cached
+   forever by `generic` (`artifact_ttl_secs` null,
+   `crates/config/src/schema/registry.rs:1256-1258`); a registry-wide TTL
+   would also expire tarballs, which are not served stale on expiry.
+   Recommendation: a per-glob revalidate list on `generic` with
+   stale-on-error. Same as RFC 0048 §15 Q12; answered once.
 
 ---
 
@@ -764,7 +948,8 @@ CPU path.
 
 | Phase | Content |
 | --- | --- |
-| 1 | Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`, `spm:`), the `vfox:` note, the `aqua:` note, `mise_plan` `notes`, unit tests, `docs/use/mise.md` §5 corrected. Useful alone: the plan stops lying about 40 tools. |
+| 0 | The mise pin bump, all four pins, its own PR (§15 Q1). |
+| 1 | Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions. Useful alone: the plan stops lying about 40 tools. |
 | 2 | Presets and the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
 | 3 | `dotnet.registry_url` in the mise target, conda rule derived from the upstream, `foreign_upstream` per channel; §6.P 1, 2, 5, 8; `registries/conda.md`, `registries/nuget.md`. |
 | 4 | Move the presets and the conda derivation into `WIRE_RULES` once RFC 0045 phase 1 is on `main` (or nothing, if RFC 0045 phase 1 moved them). |
