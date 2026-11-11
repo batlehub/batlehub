@@ -722,10 +722,13 @@ token. The observations to produce, none of them run yet:
 6. **Bookmarks.** Each old path of the §15 question 8 table, loaded
    directly after phase 3, ends on its M3 path with the query string
    intact.
-7. **Unsaved edit.** With an edit typed in the configuration `textarea`,
-   `Ctrl+K` from the header button then `Enter` on another page: a
-   confirmation appears, and *Stay* leaves the edit in place (§15
-   question 9).
+7. **Unsaved edit.** With an edit typed in the configuration `textarea`, a
+   click on another sidebar page (phase 1), then `Ctrl+K` and `Enter` on
+   another page (phase 2): the *Discard 1 unsaved edit* confirmation
+   appears each time, and *Cancel* leaves the edit in place. Closing the tab
+   with the edit still typed raises the browser's own leave prompt
+   (`beforeunload`); after the edit is reverted or staged, neither prompt
+   appears (§15 question 9).
 
 ---
 
@@ -973,6 +976,7 @@ rendered gate's existing budgets at four viewports.
 | R1 | Scope | **The three changes of §1, in that order, as one RFC.** The user asked for all three; phasing keeps each shippable alone. |
 | R2 | Backend changes? | **None.** Every list the palette needs already has a filtered reader (§4.4). |
 | R3 | Package search in the palette | **A hand-off row to `/packages?q=`, not results.** The catalog ranks and pages; a second search would disagree with it. |
+| 9 | An unsaved configuration edit is lost on navigation | **In phase 1: the page is dirty while the editor's text differs from the text last loaded from disk or last staged as a pending reload (returning to it clears the flag; a stage or a reload from disk resets the baseline); while dirty, `onBeforeRouteLeave` asks with the house `DestructiveConfirm` and a `beforeunload` handler raises the browser's own prompt, both removed when clean or on unmount. No draft in browser storage: the TOML can hold secrets.** Decided 2026-11-11 with the user; matches the recommendation. |
 
 ### Still open
 
@@ -1046,14 +1050,6 @@ rendered gate's existing budgets at four viewports.
    `upstream` or `warming`, and a static sibling route would shadow its hub.
    An old `/admin/security` bookmark therefore opens Scans; Blocks is one row
    further, under Access. Recommendation: this table.
-9. **An unsaved configuration edit is lost on navigation.** The palette, the
-   expanded sidebar and the hub's actions make leaving the editor one key
-   away, and nothing warns: `ui/src` has no `onBeforeRouteLeave` and no
-   `beforeunload` handler, and `ConfigEditorCard` keeps no dirty state. The
-   loss exists today; this RFC makes it likelier. Recommendation: in phase 1,
-   a dirty flag on `ConfigEditorCard` (content differs from the loaded
-   text), an `onBeforeRouteLeave` confirmation and a `beforeunload` handler
-   while dirty; §6.P observation 7 proves it.
 10. **Phase-3 rollback.** A revert after phase 3 leaves new-path bookmarks
     that match nothing (§13). Recommendation: roll forward; and ship the
     reverse table (each M3 path → its old path) **one release before**

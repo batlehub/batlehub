@@ -14,11 +14,15 @@ vi.mock("@/composables/useAuth", () => ({
 }));
 
 import AdminLayout from "./AdminLayout.vue";
-import { ADMIN_SIDEBAR } from "@/config/adminSections";
+import { ADMIN_SECTIONS, ADMIN_SIDEBAR } from "@/config/adminSections";
 
 function mountAdmin(path = "/admin/dashboard") {
   route.path = path;
   return mount(AdminLayout);
+}
+
+function hrefsIn(w: ReturnType<typeof mountAdmin>, selector: string) {
+  return w.findAll(`${selector} a`).map((a) => a.attributes("href"));
 }
 
 /**
@@ -30,15 +34,37 @@ function mountAdmin(path = "/admin/dashboard") {
  * design gate was measuring that width.
  */
 describe("AdminLayout", () => {
-  it("offers a delegate only the sections holding a page of their verbs (RFC 0042)", () => {
+  it("offers a delegate only the pages and sections of their verbs (RFC 0042)", () => {
     held.verbs = ["audit:read"];
     try {
-      const hrefs = new Set(
-        mountAdmin("/admin/observability/audit-log")
-          .findAll("a")
-          .map((a) => a.attributes("href")),
-      );
-      expect(hrefs).toEqual(new Set(["/admin/observability"]));
+      const w = mountAdmin("/admin/observability/audit-log");
+      expect(hrefsIn(w, "aside")).toEqual(["/admin/observability/audit-log"]);
+      expect(hrefsIn(w, "#admin-sections-mobile")).toEqual(["/admin/observability"]);
+    } finally {
+      held.verbs = null;
+    }
+  });
+
+  /** RFC 0046 M1: every page one click away, grouped under its section. */
+  it("lists every admin page in the desktop sidebar, under its section (M1)", () => {
+    const w = mountAdmin();
+    expect(hrefsIn(w, "aside")).toEqual(
+      ADMIN_SECTIONS.flatMap((section) => section.pages.map((page) => page.to)),
+    );
+    // Headings are text: not links, not focusable, so Tab moves page to page.
+    const headings = w.findAll('aside [role="group"] > span');
+    expect(headings).toHaveLength(ADMIN_SECTIONS.length - 1);
+    for (const heading of headings) expect(heading.attributes("tabindex")).toBeUndefined();
+    expect(w.get("aside").text()).toContain("Security & Access");
+  });
+
+  /** RFC 0046 M1′: a section shows only the pages held, never a greyed-out row. */
+  it("shows a security group its two pages and nothing else (M1′)", () => {
+    held.verbs = ["quarantine:read", "findings:read"];
+    try {
+      const w = mountAdmin("/admin/security/scans");
+      expect(hrefsIn(w, "aside")).toEqual(["/admin/security/scans", "/admin/security/findings"]);
+      expect(w.findAll('aside [role="group"]')).toHaveLength(1);
     } finally {
       held.verbs = null;
     }
@@ -52,23 +78,23 @@ describe("AdminLayout", () => {
     expect(root.classes()).toContain("md:flex-row");
   });
 
-  it("offers every admin section in both the sidebar and the mobile strip", () => {
-    const hrefs = mountAdmin()
-      .findAll("a")
-      .map((a) => a.attributes("href"));
-    for (const link of ADMIN_SIDEBAR) {
-      // Once in the sidebar, once in the strip: one is hidden at any width.
-      expect(hrefs.filter((h) => h === link.to)).toHaveLength(2);
-    }
+  /** RFC 0046 M1″: the phone menu stays a list of sections, not ~23 rows. */
+  it("keeps the mobile menu a list of sections (M1″)", () => {
+    expect(hrefsIn(mountAdmin(), "#admin-sections-mobile")).toEqual(
+      ADMIN_SIDEBAR.map((link) => link.to),
+    );
   });
 
-  it("marks the section the route is in, including its sub-routes", () => {
-    const active = mountAdmin("/admin/packages/bulk")
-      .findAll("a")
-      // The position is announced, not only painted.
-      .filter((a) => a.attributes("aria-current") === "page")
-      .map((a) => a.attributes("href"));
-    expect(new Set(active)).toEqual(new Set(["/admin/packages"]));
+  it("marks the page on desktop and its section on mobile, sub-routes included", () => {
+    const w = mountAdmin("/admin/observability/registries/npm");
+    // The position is announced, not only painted.
+    const current = (selector: string) =>
+      w
+        .findAll(`${selector} a`)
+        .filter((a) => a.attributes("aria-current") === "page")
+        .map((a) => a.attributes("href"));
+    expect(current("aside")).toEqual(["/admin/observability/registries"]);
+    expect(current("#admin-sections-mobile")).toEqual(["/admin/observability"]);
   });
 
   /**

@@ -60,7 +60,10 @@ withDefaults(
         <slot name="description">{{ description }}</slot>
       </p>
     </div>
-    <div v-if="$slots.actions" class="flex items-center gap-2 shrink-0">
+    <!-- `max-w-full` + `flex-wrap`: two actions wider than a phone (one
+         registry's Edit configuration + Monitoring, at 390px) wrap onto a
+         second row instead of pushing the document 14px sideways. -->
+    <div v-if="$slots.actions" class="flex max-w-full flex-wrap items-center gap-2 shrink-0">
       <slot name="actions" />
     </div>
   </div>

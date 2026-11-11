@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ConfigWarning } from "@/client/types.gen";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
-import { API_BASE_URL } from "@/config";
+import { API_BASE_URL, docsUrl } from "@/config";
+import { locateRegistry } from "@/lib/configLocate";
 import ConfigWarningList from "@/components/admin/ConfigWarningList.vue";
 import ConfigReadOnlyView from "@/components/admin/ConfigReadOnlyView.vue";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -26,12 +27,22 @@ const props = defineProps<{
   hasPending: boolean;
   /** Re-reads the pending reload once one is staged; awaited, so the button waits for it. */
   refreshPending: () => Promise<void>;
+  /**
+   * RFC 0046 §6.3: the registry `?registry=` named, handed down only once the
+   * page knows whether a reload is staged. Applied once, when the content has
+   * loaded — never on mount against an empty editor.
+   */
+  jumpTo?: string | null;
 }>();
-const emit = defineEmits<{ reloadFromDisk: [] }>();
+const emit = defineEmits<{
+  reloadFromDisk: [];
+  /** The content just staged as a pending reload: the page's new "saved" baseline. */
+  staged: [content: string];
+}>();
 const configContent = defineModel<string>("content", { required: true });
 const candidateWarnings = defineModel<ConfigWarning[]>("candidateWarnings", { required: true });
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { authFetch } = useAuthFetch();
 
 /**
@@ -40,6 +51,46 @@ const { authFetch } = useAuthFetch();
  * 18-row textarea between the operator and the Apply they came for.
  */
 const editorOpen = ref(false);
+
+// ── `?registry=` jump (RFC 0046 M5) ──────────────────────────────────────────
+
+const textarea = ref<HTMLTextAreaElement | null>(null);
+/** M5's notice: which state the jump ended in, announced as `role=status`. */
+const jumpNotice = ref<{ key: "jumpedTo" | "jumpStaged" | "jumpOtherLayer"; name: string } | null>(
+  null,
+);
+let jumped = false;
+
+async function applyJump() {
+  const name = props.jumpTo;
+  if (jumped || !name || props.configLoading || props.configLoadError) return;
+  jumped = true;
+  // The read-only screen draws its own jump; it has no caret to place.
+  if (props.configReadonly) return;
+  // A staged reload folds the editor: no caret on a hidden textarea.
+  if (props.hasPending && !editorOpen.value) {
+    jumpNotice.value = { key: "jumpStaged", name };
+    return;
+  }
+  const at = locateRegistry(configContent.value, name);
+  jumpNotice.value = { key: at ? "jumpedTo" : "jumpOtherLayer", name };
+  if (!at) return;
+  await nextTick();
+  const el = textarea.value;
+  if (!el) return;
+  el.focus();
+  el.setSelectionRange(at.offset, at.offset);
+  // The line into the top third of the textarea, not wherever focus left it.
+  const lineHeight = el.scrollHeight / Math.max(1, configContent.value.split("\n").length);
+  el.scrollTop = Math.max(0, at.line * lineHeight - el.clientHeight / 3);
+}
+
+watch(
+  () => [props.jumpTo, props.configLoading, props.configLoadError] as const,
+  () => void applyJump(),
+  { immediate: true },
+);
+
 const editorValidating = ref(false);
 const editorCreating = ref(false);
 const editorSuccess = ref<string | null>(null);
@@ -100,7 +151,10 @@ async function createPendingFromContent() {
       pending_created?: boolean;
     };
     candidateWarnings.value = body.warnings ?? [];
+    const staged = validatedContent.value ?? configContent.value;
     validatedContent.value = null;
+    // Staged — or identical to what is loaded — so nothing is left unsaved.
+    emit("staged", staged);
     if (body.pending_created) {
       editorSuccess.value = t("adminConfigReload.pendingCreatedReviewIt");
     } else {
@@ -138,8 +192,36 @@ async function createPendingFromContent() {
           {{ t("adminConfigReload.editConfig") }}
         </Button>
       </CardHeader>
+      <!-- RFC 0046 M5: where the `?registry=` jump landed, announced. -->
+      <CardContent v-if="jumpNotice" class="pb-3">
+        <p role="status" class="text-sm text-muted-foreground" data-testid="jump-notice">
+          <i18n-t
+            v-if="jumpNotice.key === 'jumpOtherLayer'"
+            keypath="adminConfigReload.jumpOtherLayer"
+            tag="span"
+          >
+            <template #name>{{ jumpNotice.name }}</template>
+            <template #link>
+              <a
+                class="underline underline-offset-2 hover:text-foreground"
+                :href="docsUrl('guide/configuration#layered-config-files', locale)"
+                target="_blank"
+                rel="noopener"
+                >{{ t("adminConfigReload.jumpOtherLayerLink") }}</a
+              >
+            </template>
+          </i18n-t>
+          <template v-else-if="jumpNotice.key === 'jumpStaged'">
+            {{ t("adminConfigReload.jumpStaged", { name: jumpNotice.name }) }}
+          </template>
+          <template v-else>
+            {{ t("adminConfigReload.jumpedTo", { name: jumpNotice.name }) }}
+          </template>
+        </p>
+      </CardContent>
       <CardContent v-if="!hasPending || editorOpen" class="space-y-3">
         <textarea
+          ref="textarea"
           v-model="configContent"
           rows="18"
           class="w-full border border-border bg-background font-mono text-xs p-3 resize-y"
@@ -191,6 +273,11 @@ async function createPendingFromContent() {
       </CardContent>
     </Card>
 
-    <ConfigReadOnlyView v-else :content="configContent" :error="configLoadError" />
+    <ConfigReadOnlyView
+      v-else
+      :content="configContent"
+      :error="configLoadError"
+      :jump-to="jumpTo ?? null"
+    />
   </template>
 </template>

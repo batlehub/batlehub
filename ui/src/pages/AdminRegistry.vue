@@ -383,7 +383,7 @@ watch(
                 ⚠ {{ suggestionText(s) }}
                 <RouterLink
                   :to="suggestionLink(s)"
-                  class="text-muted-foreground hover:underline underline-offset-[3px]"
+                  class="text-muted-foreground underline underline-offset-[3px] hover:text-foreground"
                   >→ {{ t("adminRegistry.see") }}</RouterLink
                 >
               </li>
@@ -506,7 +506,7 @@ watch(
               {{ queueText }}
               <RouterLink
                 :to="scansLink"
-                class="ml-2 text-muted-foreground hover:underline underline-offset-[3px]"
+                class="ml-2 text-muted-foreground underline underline-offset-[3px] hover:text-foreground"
                 >→ {{ t("adminRegistry.scansFiltered") }}</RouterLink
               >
             </dd>

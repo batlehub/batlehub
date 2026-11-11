@@ -832,7 +832,9 @@
       "openvsx:namespace:claim",
       "terraform:signing-keys:write",
       "jetbrains:channel:assign",
-      "devfile:stack:claim"
+      "devfile:stack:claim",
+      "quarantine:read",
+      "findings:read"
     ],
     "registries": {}
   },
@@ -1325,5 +1327,513 @@
     "rendered_html": "<h1>react</h1><p>A JavaScript library for building user interfaces.</p><pre><code class=\"language-bash\"># install it\nnpm install react@18.2.0</code></pre><h2>Documentation</h2><p>See <a href=\"https://react.dev\">react.dev</a>.</p><table><thead><tr><th>Export</th><th>Since</th></tr></thead><tbody><tr><td><code>useState</code></td><td>16.8</td></tr></tbody></table>",
     "source_text": "# react\n\nA JavaScript library for building user interfaces.\n\n```bash\n# install it\nnpm install react@18.2.0\n```\n",
     "extracted_at": "2026-08-19T09:12:00Z"
+  },
+  "/api/v1/admin/scans": {
+    "items": [
+      {
+        "registry": "npm",
+        "name": "left-pad",
+        "version": "1.3.0",
+        "state": "scanning",
+        "trigger": "first_seen",
+        "attempts": 1,
+        "since": "2026-11-10T11:42:51Z",
+        "leased_by": "worker-7f3c",
+        "deferred_since": null,
+        "last_error": null,
+        "error_withheld": false,
+        "can_rescan": false
+      },
+      {
+        "registry": "npm",
+        "name": "@babel/core",
+        "version": "7.26.0",
+        "state": "failed",
+        "trigger": "rescan",
+        "attempts": 3,
+        "since": "2026-11-10T09:14:07Z",
+        "leased_by": null,
+        "deferred_since": null,
+        "last_error": "grype exited 1: database is older than 5 days (run `grype db update`)",
+        "error_withheld": false,
+        "can_rescan": true
+      },
+      {
+        "registry": "cargo",
+        "name": "serde_json",
+        "version": "1.0.133",
+        "state": "queued",
+        "trigger": "backfill",
+        "attempts": 0,
+        "since": "2026-11-11T06:03:19Z",
+        "leased_by": null,
+        "deferred_since": "2026-11-11T06:03:19Z",
+        "last_error": null,
+        "error_withheld": false,
+        "can_rescan": false
+      }
+    ],
+    "page": 1,
+    "per_page": 50,
+    "total": 3
+  },
+  "/api/v1/admin/verdicts": {
+    "registry": "npm",
+    "items": [
+      {
+        "package": {
+          "registry": "npm",
+          "name": "lodash",
+          "version": "4.17.20",
+          "artifact": null
+        },
+        "state": "denied",
+        "reason_codes": [
+          "VULNERABILITY"
+        ],
+        "policy_ref": "security.max_severity=high",
+        "evaluated_at": "2026-11-10T11:42:51Z",
+        "last_scanned_at": "2026-11-10T11:42:51Z",
+        "available_at": "2026-11-10T09:14:07Z",
+        "scanners_done": [
+          "osv",
+          "grype"
+        ],
+        "findings": [
+          {
+            "kind": "vulnerability",
+            "code": "VULNERABILITY",
+            "reference": "GHSA-35jh-r3h4-6jhm",
+            "severity": "high",
+            "scanner": "osv",
+            "summary": "Command injection in lodash template",
+            "confidence": 90,
+            "judged_as": "unknown",
+            "available_at": "2026-11-10T09:14:07Z",
+            "raw": null
+          },
+          {
+            "kind": "vulnerability",
+            "code": "VULNERABILITY",
+            "reference": "CVE-2021-23337",
+            "severity": "high",
+            "scanner": "grype",
+            "summary": "Command injection via template()",
+            "confidence": 80,
+            "judged_as": "unknown",
+            "available_at": "2026-11-10T09:14:07Z",
+            "raw": null
+          }
+        ]
+      },
+      {
+        "package": {
+          "registry": "npm",
+          "name": "react",
+          "version": "19.0.0",
+          "artifact": null
+        },
+        "state": "allowed",
+        "reason_codes": [
+          "MIN_AGE_NOT_MET"
+        ],
+        "policy_ref": "release_age=72h",
+        "evaluated_at": "2026-11-11T06:03:19Z",
+        "last_scanned_at": "2026-11-11T06:03:19Z",
+        "available_at": "2026-11-11T06:03:19Z",
+        "scanners_done": [
+          "osv"
+        ],
+        "findings": [
+          {
+            "kind": "age",
+            "code": "MIN_AGE_NOT_MET",
+            "reference": "release_age",
+            "severity": "unknown",
+            "scanner": "policy",
+            "summary": "Published 31 h ago; the gate holds releases for 72 h",
+            "confidence": 100,
+            "judged_as": "unknown",
+            "available_at": "2026-11-11T06:03:19Z",
+            "raw": null
+          }
+        ]
+      }
+    ]
+  },
+  "/api/v1/admin/findings": {
+    "items": [
+      {
+        "registry": "npm",
+        "name": "lodash",
+        "version": "4.17.20",
+        "kind": "vulnerability",
+        "code": "VULNERABILITY",
+        "reference": "GHSA-35jh-r3h4-6jhm",
+        "severity": "high",
+        "scanner": "osv",
+        "summary": "Command injection in lodash template",
+        "verdict": "denied",
+        "can_exempt": true
+      },
+      {
+        "registry": "cargo",
+        "name": "openssl",
+        "version": "0.10.55",
+        "kind": "vulnerability",
+        "code": "VULNERABILITY",
+        "reference": "RUSTSEC-2023-0044",
+        "severity": "medium",
+        "scanner": "osv",
+        "summary": "openssl X509VerifyParamRef::set_host buffer over-read",
+        "verdict": "allowed",
+        "can_exempt": true
+      }
+    ],
+    "page": 1,
+    "per_page": 50,
+    "total": 2
+  },
+  "/api/v1/admin/registries/npm": {
+    "name": "npm",
+    "registry_type": "npm",
+    "mode": "proxy",
+    "monitoring_url": "https://grafana.example.com/d/batlehub?var-registry=npm",
+    "config": {
+      "upstreams": [
+        "https://registry.npmjs.org"
+      ],
+      "upstream_count": 1,
+      "other_urls": [
+        "https://registry.npmjs.org/-/v1/search"
+      ],
+      "upstream_auth": {
+        "state": "none"
+      },
+      "cache": {
+        "metadata_ttl_secs": 300,
+        "artifact_ttl_secs": null,
+        "serve_stale": true
+      },
+      "rules": [
+        "deny_latest",
+        "release_age_gate"
+      ],
+      "grant_subjects": 4,
+      "namespaces": 2,
+      "security": {
+        "mode": "enforce",
+        "max_severity": "high",
+        "scanners": [
+          "osv",
+          "grype"
+        ],
+        "rescan_interval_secs": 86400
+      }
+    },
+    "live": {
+      "since": "2026-11-10T09:14:07Z",
+      "upstream_degraded": true,
+      "upstream_error_rate": 0.18,
+      "upstream_latency_ms": 742
+    },
+    "scan": {
+      "enabled": true,
+      "queued": 4,
+      "scanning": 1,
+      "failed": 2,
+      "sbom_recheck_enabled": true,
+      "sbom_recheck": {
+        "last_scan_at": "2026-11-10T11:42:51Z",
+        "next_at": "2026-11-11T06:03:19Z",
+        "artifacts_scanned": 1840,
+        "findings": 12
+      }
+    },
+    "suggestions": [
+      {
+        "code": "degraded_without_stale",
+        "count": 1
+      },
+      {
+        "code": "scan_failures",
+        "count": 2
+      }
+    ]
+  },
+  "/api/v1/admin/stats/history": {
+    "from": "2026-11-04T00:00:00Z",
+    "to": "2026-11-11T00:00:00Z",
+    "window_days": 7,
+    "trend": {
+      "hits": 18240,
+      "misses": 2210,
+      "hit_rate": 0.892,
+      "previous_hit_rate": 0.861,
+      "delta": 0.031
+    },
+    "per_registry": [
+      {
+        "registry": "npm",
+        "points": [
+          {
+            "window_start": "2026-11-04T00:00:00Z",
+            "hits": 2460,
+            "misses": 252,
+            "cached_bytes": 1500000000
+          },
+          {
+            "window_start": "2026-11-05T00:00:00Z",
+            "hits": 2550,
+            "misses": 240,
+            "cached_bytes": 1525000000
+          },
+          {
+            "window_start": "2026-11-06T00:00:00Z",
+            "hits": 2640,
+            "misses": 228,
+            "cached_bytes": 1550000000
+          },
+          {
+            "window_start": "2026-11-07T00:00:00Z",
+            "hits": 2730,
+            "misses": 216,
+            "cached_bytes": 1575000000
+          },
+          {
+            "window_start": "2026-11-08T00:00:00Z",
+            "hits": 2820,
+            "misses": 204,
+            "cached_bytes": 1600000000
+          },
+          {
+            "window_start": "2026-11-09T00:00:00Z",
+            "hits": 2910,
+            "misses": 192,
+            "cached_bytes": 1625000000
+          },
+          {
+            "window_start": "2026-11-10T00:00:00Z",
+            "hits": 3000,
+            "misses": 180,
+            "cached_bytes": 1650000000
+          }
+        ]
+      },
+      {
+        "registry": "cargo",
+        "points": [
+          {
+            "window_start": "2026-11-04T00:00:00Z",
+            "hits": 640,
+            "misses": 48,
+            "cached_bytes": 326000000
+          },
+          {
+            "window_start": "2026-11-05T00:00:00Z",
+            "hits": 670,
+            "misses": 45,
+            "cached_bytes": 330000000
+          },
+          {
+            "window_start": "2026-11-06T00:00:00Z",
+            "hits": 700,
+            "misses": 42,
+            "cached_bytes": 334000000
+          },
+          {
+            "window_start": "2026-11-07T00:00:00Z",
+            "hits": 730,
+            "misses": 39,
+            "cached_bytes": 338000000
+          },
+          {
+            "window_start": "2026-11-08T00:00:00Z",
+            "hits": 760,
+            "misses": 36,
+            "cached_bytes": 342000000
+          },
+          {
+            "window_start": "2026-11-09T00:00:00Z",
+            "hits": 790,
+            "misses": 33,
+            "cached_bytes": 346000000
+          },
+          {
+            "window_start": "2026-11-10T00:00:00Z",
+            "hits": 820,
+            "misses": 30,
+            "cached_bytes": 350000000
+          }
+        ]
+      }
+    ]
+  },
+  "/api/v1/admin/upstream/disappeared": {
+    "policy": "keep",
+    "registries": [
+      "npm",
+      "cargo"
+    ],
+    "counts": [
+      {
+        "registry": "npm",
+        "policy": "keep",
+        "overridden": false,
+        "missing": 2,
+        "disappeared": 1
+      },
+      {
+        "registry": "cargo",
+        "policy": "block",
+        "overridden": true,
+        "missing": 0,
+        "disappeared": 1
+      }
+    ],
+    "items": [
+      {
+        "registry": "npm",
+        "package_name": "event-stream",
+        "version": "3.3.6",
+        "state": "disappeared",
+        "consecutive_misses": 5,
+        "first_missed_at": "2026-11-10T09:14:07Z",
+        "last_checked_at": "2026-11-11T06:03:19Z",
+        "confirmed_at": "2026-11-10T11:42:51Z",
+        "last_error": "404 Not Found"
+      },
+      {
+        "registry": "cargo",
+        "package_name": "rustdecimal",
+        "version": "1.23.1",
+        "state": "missing",
+        "consecutive_misses": 2,
+        "first_missed_at": "2026-11-10T11:42:51Z",
+        "last_checked_at": "2026-11-11T06:03:19Z",
+        "confirmed_at": null,
+        "last_error": "404 Not Found"
+      }
+    ],
+    "page": 1,
+    "per_page": 50,
+    "total": 2
+  },
+  "/api/v1/admin/bundle": {
+    "items": [
+      {
+        "bundle_id": "b-2026-11-10-a41f",
+        "created_from": "hub.connected.example.com",
+        "signer_key": "3b1f9c2e7d0a",
+        "entries": 214,
+        "blobs": 198,
+        "rejected": 1,
+        "rejected_sample": "npm/left-pad/1.3.0: digest mismatch",
+        "imported_at": "2026-11-10T11:42:51Z",
+        "imported_by": "ops-airgap"
+      },
+      {
+        "bundle_id": "b-2026-11-03-77c0",
+        "created_from": "hub.connected.example.com",
+        "signer_key": "3b1f9c2e7d0a",
+        "entries": 167,
+        "blobs": 160,
+        "rejected": 0,
+        "rejected_sample": null,
+        "imported_at": "2026-11-10T09:14:07Z",
+        "imported_by": "ops-airgap"
+      }
+    ]
+  },
+  "/api/v1/admin/air-gap/missing": {
+    "air_gapped": true,
+    "empty_registries": [
+      "terraform"
+    ],
+    "items": [
+      {
+        "registry": "npm",
+        "kind": "artifact",
+        "coordinate": "react@19.0.1",
+        "requested_version": "19.0.1",
+        "held_versions": [
+          "18.3.1",
+          "19.0.0"
+        ],
+        "storage_key": "npm/react/19.0.1",
+        "count": 7,
+        "first_seen": "2026-11-10T09:14:07Z",
+        "last_seen": "2026-11-11T06:03:19Z"
+      },
+      {
+        "registry": "go",
+        "kind": "document",
+        "coordinate": "golang.org/x/net",
+        "requested_version": null,
+        "held_versions": [
+          "v0.31.0"
+        ],
+        "storage_key": "go/golang.org/x/net/@v/list",
+        "count": 2,
+        "first_seen": "2026-11-10T11:42:51Z",
+        "last_seen": "2026-11-11T06:03:19Z"
+      }
+    ],
+    "page": 1,
+    "per_page": 100,
+    "total": 2
+  },
+  "/api/v1/admin/authz/shadow": {
+    "no_shadow_configured": false,
+    "kept": 2,
+    "by_node": [
+      {
+        "node": "rbac.registry.npm",
+        "count": 14,
+        "last_seen": "2026-11-11T06:03:19Z",
+        "shadow_until": "2026-11-30",
+        "actions": [
+          "releases:read"
+        ],
+        "subjects": [
+          "user:ci-bot",
+          "group:oidc1:interns"
+        ]
+      },
+      {
+        "node": "grants.namespace.@acme",
+        "count": 3,
+        "last_seen": "2026-11-10T11:42:51Z",
+        "shadow_until": "2026-11-30",
+        "actions": [
+          "releases:publish"
+        ],
+        "subjects": [
+          "user:alice"
+        ]
+      }
+    ],
+    "recent": [
+      {
+        "at": "2026-11-11T06:03:19Z",
+        "node": "rbac.registry.npm",
+        "subject": "user:ci-bot",
+        "action": "releases:read",
+        "registry": "npm",
+        "package": "lodash",
+        "version": "4.17.21",
+        "shadow_until": "2026-11-30"
+      },
+      {
+        "at": "2026-11-10T11:42:51Z",
+        "node": "grants.namespace.@acme",
+        "subject": "user:alice",
+        "action": "releases:publish",
+        "registry": "npm",
+        "package": "@acme/ui",
+        "version": "2.4.0",
+        "shadow_until": "2026-11-30"
+      }
+    ]
   }
 }

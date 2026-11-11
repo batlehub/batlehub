@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { onBeforeRouteLeave, useRoute } from "vue-router";
 import {
   discardPendingReload,
   applyPendingReload,
@@ -132,6 +133,26 @@ const configReadonly = ref(false);
 const configLoadError = ref<string | null>(null);
 const configLoading = ref(true);
 
+/**
+ * RFC 0046 §6.3: `?registry=` is read once and **held** until the content and
+ * the pending reload have first settled, then handed to the editor — read on
+ * mount against an empty textarea, it would be dropped, and the slower the API
+ * the likelier: during an incident. It is only ever matched against the text;
+ * no request is built from it.
+ */
+const route = useRoute();
+const jumpRegistry = typeof route.query.registry === "string" ? route.query.registry : null;
+const pendingSettled = ref(false);
+
+/**
+ * RFC 0046 §15 question 9: an unsaved edit is not lost on navigation. The
+ * baseline is the text last loaded from disk or last staged as a pending
+ * reload; returning to it clears the flag. Nothing is drafted to browser
+ * storage — the TOML can hold secrets.
+ */
+const savedContent = ref("");
+const dirty = computed(() => !configReadonly.value && configContent.value !== savedContent.value);
+
 async function loadConfigContent() {
   configLoadError.value = null;
   configLoading.value = true;
@@ -144,6 +165,7 @@ async function loadConfigContent() {
     }
     const body = (await res.json()) as { content: string; is_readonly: boolean };
     configContent.value = body.content;
+    savedContent.value = body.content;
     configReadonly.value = body.is_readonly;
     hotReloadEnabled.value = !body.is_readonly;
   } catch (e) {
@@ -180,6 +202,7 @@ async function fetchPending() {
     pendingError.value = extractMessage(e);
   } finally {
     loadingPending.value = false;
+    pendingSettled.value = true;
   }
 }
 
@@ -267,7 +290,41 @@ onMounted(() => {
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
+  window.removeEventListener("beforeunload", onBeforeUnload);
 });
+
+// ── Unsaved edit (RFC 0046 §15 question 9) ──────────────────────────────────
+
+/** Closing or reloading the tab: the browser's own prompt, only while dirty. */
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  event.preventDefault();
+  // Chrome before 119 needs returnValue set; its text is never shown.
+  event.returnValue = "";
+}
+watch(dirty, (isDirty) => {
+  if (isDirty) window.addEventListener("beforeunload", onBeforeUnload);
+  else window.removeEventListener("beforeunload", onBeforeUnload);
+});
+
+/**
+ * Leaving inside the console — the sidebar, a tab, the back button — asks
+ * first, with the house confirmation rather than `window.confirm`, which can
+ * state neither what is lost nor in which language.
+ */
+const confirmLeave = ref(false);
+let resolveLeave: ((leave: boolean) => void) | null = null;
+onBeforeRouteLeave(() => {
+  if (!dirty.value) return true;
+  confirmLeave.value = true;
+  return new Promise<boolean>((resolve) => {
+    resolveLeave = resolve;
+  });
+});
+function settleLeave(leave: boolean) {
+  confirmLeave.value = false;
+  resolveLeave?.(leave);
+  resolveLeave = null;
+}
 </script>
 
 <template>
@@ -358,7 +415,9 @@ onUnmounted(() => {
       :hot-reload-enabled="hotReloadEnabled"
       :has-pending="!!pendingReload"
       :refresh-pending="fetchPending"
+      :jump-to="pendingSettled ? jumpRegistry : null"
       @reload-from-disk="loadConfigContent"
+      @staged="savedContent = $event"
     />
 
     <!-- Force reload: an outlined control — the confirmation is where its
@@ -427,6 +486,23 @@ onUnmounted(() => {
         }
       "
       @update:open="confirmForce = $event"
+    />
+
+    <!--
+      Leaving with an unsaved edit. Not `reversible` — the edit is kept nowhere
+      — but no typed word either: the cost is one person's own draft, not a
+      shared instance, and a typed confirmation on every misclick would teach
+      typing through the prompt.
+    -->
+    <DestructiveConfirm
+      :open="confirmLeave"
+      :action="t('adminConfigReload.leaveDiscard')"
+      :count="1"
+      :item-noun="t('adminConfigReload.leaveItemNoun')"
+      :scope="t('adminConfigReload.leaveScope')"
+      :consequence="t('adminConfigReload.leaveConsequence')"
+      @confirm="settleLeave(true)"
+      @update:open="(open: boolean) => !open && settleLeave(false)"
     />
 
     <!-- Change History -->
