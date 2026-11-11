@@ -391,6 +391,14 @@ export const sidebar = {
           text: "0046 — Admin red paths",
           link: "/rfc/0046-admin-red-paths",
         },
+        {
+          text: "0047 — mise backends coverage",
+          link: "/rfc/0047-mise-backends-coverage",
+        },
+        {
+          text: "0048 — mise core toolchains",
+          link: "/rfc/0048-mise-core-toolchains",
+        },
       ],
     },
     {
