@@ -217,3 +217,10 @@ path = "fuzz_targets/fuzz_osv_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_mise_wire_target"
+path = "fuzz_targets/fuzz_mise_wire_target.rs"
+test = false
+doc = false
+bench = false

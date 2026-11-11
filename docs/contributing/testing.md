@@ -1102,6 +1102,10 @@ gems, archives, SSRF ranges):
   coordinate, no key equals another's `.sigzip` sibling, and a version's
   delete prefix covers only that version. Also `PackageId::cache_key`
   (deterministic, carries its registry, injective at equal segment counts).
+- `fuzz_mise_wire_target.rs` — RFC 0045's wire table (`mise_wire::WireTable`):
+  whatever host and path arrive, a rewrite stays under `/proxy/`, the air-gap
+  sink under `/_air-gap/unmirrored/`, a bounce is the request's own URL, and
+  none of them carries a `.`/`..` segment or a control character.
 - `fuzz_path_safe.rs` — the traversal guard every storage key goes through
   (`validate_coordinate`, `validate_package_name`): whatever it accepts builds a
   key with no `..` segment at any percent-decoding depth, no NUL, no backslash,

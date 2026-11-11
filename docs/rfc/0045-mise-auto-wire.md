@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — accepted 2026-11-11, reopened the same day by the last-review panel: three questions (§15 Q15–Q17), no blocker; the findings that changed no decision are fixed in the text |
+| Status      | **Accepted** — re-accepted 2026-11-11 after the last-review panel; §15 Q15–Q17 decided with the user, no blocker |
 | Short       | mise auto-wire                                                |
 | Settles     | One mise rule routes every wired host through BatleHub, and the estate's own tools reach mise by short name through an overlay on the floating registry |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -414,6 +414,7 @@ disappears at the reload and the warning appears then.
 | --- | --- | --- | --- | --- |
 | `mise.wire.prefix-claimed` | `registries[i].upstreams` | two registries claim the same wired prefix | first declared wins | yes |
 | `mise.overlay.backend-unwired` | `registries[i].auto_wire.tools[j].backends` | a `backends` entry names a host that is not wired | served; the install goes to the origin, or fails in an air gap | yes |
+| `mise.overlay.readers-wider` | `registries[i].auto_wire.tools[j].source.registry` | the readers of the `mise-versions` registry are not a subset of the source registry's readers (§15 Q16) | served; the overlay name and backend reach readers who cannot read the source | yes |
 | `mise.overlay.inert` | `registries[i].auto_wire.overlay` | `overlay = true` with `enabled = false` | inert: the archive is reached only through the wire | yes |
 | `mise.overlay.collision` † | `registries[i].auto_wire.tools[j].name` | an overlay name collides with the upstream archive | settled by `on_collision` | yes |
 | `mise.overlay.forced-shadow` † | `registries[i].auto_wire.tools[j].on_collision` | `"overlay"` is in force | the overlay shadows a public tool | **no**, while it applies |
@@ -443,7 +444,8 @@ disappears at the reload and the warning appears then.
   CLI prints, computed on the server so that the CLI and the rewrite cannot
   disagree. `hosts` is filtered to the registries the caller may see (§15 Q5),
   and the response says how many wired hosts were hidden, so the CLI can say
-  so in the block (§4.5). `overlay_tools` is not filtered yet (§15 Q16).
+  so in the block (§4.5). `overlay_tools` is filtered the same way, by the
+  caller's read on each tool's source registry (§15 Q16).
   The TypeScript client is regenerated (`task dump-spec`, `task ui:generate`).
 
 ### 4.5 Mocks
@@ -811,8 +813,13 @@ answer is `503`.
   `(host, prefix)` sets.
 - The overlay's archive rule (`mise.jdx.dev/registry/latest\.tar\.zst` →
   `{proxy}/mise-versions/_registry/latest.tar.zst`) is **not** in the shared
-  table. `WireTable::build` adds it only when `overlay = true`, so the classic
-  block never prints a rule for a route that does not exist.
+  table, so the classic block never prints a rule for a route that does not
+  exist. `WireTable::build` keeps the `mise.jdx.dev/registry/` prefix wired
+  whenever `auto_wire.enabled = true`, whatever `overlay` says (§15 Q17): to
+  the merged archive with the overlay on, to a raw passthrough of the public
+  archive with it off. The prefix therefore exists independently of
+  `overlay`, and switching the overlay off never strands a client on its
+  cached archive.
 - `WireTable::build(registries, own_host) -> (WireTable, Vec<WireWarning>)`:
   for each registry in declaration order, the `(host, prefix)` pairs that the
   shared selection gives it, with the forgejo rules rebased onto a self-hosted
@@ -954,7 +961,7 @@ answer is `503`.
   `hint:` form and the exit codes of §4.5.
 - `ui/src/config/registryTypes.ts`: the `mise-versions` entry gains the
   auto-wire snippet beside the RFC 0043 one.
-- The config page's warnings panel renders §4.3's six codes, with the
+- The config page's warnings panel renders §4.3's seven codes, with the
   existing component. `ConfigWarningList.vue` reads the new per-warning
   `dismissible` field instead of its list-wide prop, which touches every
   caller of the component, so that `mise.overlay.forced-shadow` has no
@@ -1105,7 +1112,7 @@ flowchart LR
 | T6 | Information disclosure: internal tool names sent to jdx.dev | B5→J | `data/<name>.toml` for an overlay or `retired` name is answered `404` before the cache lookup and is never forwarded. The beacon is the RFC 0043 `204`. | After the overlay is switched off, a client keeps its cached archive indefinitely (§13), so its names stay registry tools. `retired` closes this for as long as the operator keeps them listed (§15 Q14). A project `mise.toml` whose old classic block has no `mise-versions.jdx.dev` rule replaces the global block whole while `registry_floating` stays on, so that project's listings of overlay names go to jdx.dev; §13 requires every committed block to route `mise-versions.jdx.dev` before the overlay is turned on. |
 | T7 | Denial of service: a hostile or broken upstream archive (zstd bomb, 100 000 entries, a 2 GiB entry, `../` paths, a truncated `200`) | B4 | mise's limits as mise counts them, decoding stopped at 16 MiB, a 4 MiB compressed cap, only depth-2 `registry/*.toml` regular files, `tar`'s refusal of `..`. A body that fails is never cached, so the held copy survives. | None known. |
 | T8 | Tampering: TOML injection through an overlay field (a `description` with `"\n[backends]…`) | config → B5 | Entries are serialised with `toml::to_string` from a typed struct, never concatenated, and re-parsed by the merge's own test. | None. |
-| T9 | Information disclosure: the wired hosts learnt by a caller who may not see them | API, B1 | `/api/v1/mise/auto-wire` is filtered by visibility (§15 Q5), and the wire's own answers need read on `{reg}`, so an anonymous caller cannot tell `307` from `404`. | **Open (§15 Q15):** a *rewritten* request is answered by the target registry, so `_wire/forge.acme.internal/…` gets the forge's `401` while `_wire/nope.example/…` gets `{reg}`'s `404`, and in an air gap the sink's `501`, which needs no grant: on a public `mise-versions` an anonymous caller can map the wired hosts. Also: `accessible_registries_for` is rbac-only and misses namespace-only grants, so such a caller gets a shorter host list, never a longer one. |
+| T9 | Information disclosure: the wired hosts learnt by a caller who may not see them | API, B1 | `/api/v1/mise/auto-wire` is filtered by visibility (§15 Q5), and the wire's own answers need read on `{reg}`, so an anonymous caller cannot tell `307` from `404`. | None beyond Q5's: `accessible_registries_for` is rbac-only and misses namespace-only grants, so such a caller gets a shorter host list, never a longer one. Since §15 Q15, a rewrite whose target the caller cannot read answers exactly as `not_wired`, and the air-gap sink goes through `_wire-answer`; `anonymous_cannot_tell_wired_from_unwired` covers both arms (target unreadable, air-gap sink). |
 | T10 | Repudiation: a request served under a path the client never sent, or answered outside the access log | B1 | `WiredFrom` keeps the original host in the request span, and every wire outcome is a routed request (§5.1). | The two host-routing `404`s that predate the wire stay outside the span (§5.1). |
 | T11 | Elevation: the wire reaches a registry its operator made host-only, or the admin API from a registry host | B1 | The opt-out check re-runs on the rewritten path; a host-routed request is never wired (§5.1). | None. |
 | T12 | Information disclosure: upstream credentials published through a rendered `source` backend | B5 | Only `scheme://host[:port][/path]` is rendered; an upstream with userinfo, a query or a fragment is a load error for a source registry. | None. |
@@ -1201,7 +1208,7 @@ Two run-time inputs change, and neither is a dependency of the build:
 
 | Data | Personal? | Where stored | Retention | Who can read it | Leaves the instance? |
 | --- | --- | --- | --- | --- | --- |
-| Overlay tool names, `retired` names and backends | no | config file, and served in the merged archive and in `overlay_tools` | as the config | config readers, **and every reader of the `mise-versions` registry** (possibly anonymous), whatever their read on the source registry (§15 Q16) | no: answered locally (T6) |
+| Overlay tool names, `retired` names and backends | no | config file, and served in the merged archive and in `overlay_tools` | as the config | config readers; the archive is served to every reader of the `mise-versions` registry, identical for all (§15 Q16), while `overlay_tools` in `/api/v1/mise/auto-wire` is filtered by the caller's read on each source registry, and the `mise.overlay.readers-wider` warning flags a source whose readers are narrower | no: answered locally (T6) |
 | The raw upstream archive | no | passthrough cache | until replaced or purged | readers of the `mise-versions` registry | no |
 | The merged archive | no | process memory | until the process restarts or its key changes | readers of the `mise-versions` registry | no |
 | `WiredFrom.host` in the access log and span | no: an upstream hostname | logs, traces | as existing logs | log readers | no |
@@ -1286,7 +1293,7 @@ before this RFC, not a weaker one.
 
 ## 11. Other concerns
 
-- **Accessibility**: the only UI change is six warning rows in the existing
+- **Accessibility**: the only UI change is seven warning rows in the existing
   panel, which has a heading and contrast checked by the design gates but
   renders plain `div`s today: it gains `role="list"` and `role="listitem"`
   (§6.5). A row without a Dismiss button removes a focus stop and adds none.
@@ -1363,6 +1370,9 @@ before this RFC, not a weaker one.
   (`src/registry.rs:34-56`), and a client whose rule now sends `mise.jdx.dev`
   to the sink would keep the overlay names forever; restore the classic
   block; then move the overlay names to `retired` and set `overlay = false`.
+  Switching the overlay off alone freezes no client: while `enabled = true`
+  the wire keeps `mise.jdx.dev/registry/` and serves the public archive raw,
+  so the next refresh drops the overlay names (§15 Q17).
   Keep them in `retired` for as long as any client may hold an old archive:
   otherwise their listings reach jdx.dev and T6 reopens (§15 Q14).
 - **Server downgrade:** an older server ignores `auto_wire` silently
@@ -1380,7 +1390,7 @@ before this RFC, not a weaker one.
   rules; a host-only registry contributes no pair; `Bounce` only under a wired
   prefix and never under a forge API prefix; air gap turns `Bounce` and
   `NotWired` into `Sink`; the own host only
-  under `proxy/`; the archive rule present only with `overlay = true`;
+  under `proxy/`; the archive prefix present whenever `enabled = true`, merged with `overlay = true` and raw without (§15 Q17);
   `source_backend` for github and forgejo.
 - **Unit** (`crates/adapters/src/registry/mise_registry_overlay.rs`): check
   and merge of the recorded v2026.11.3 archive fixture; no overlay → bytes
@@ -1458,6 +1468,9 @@ before this RFC, not a weaker one.
 | 12 | GitLab as a `source` | **Out of this RFC.** GitLab rules are missing from `registry suggest`'s classic block (only `client setup` writes them, `GITLAB_MISE_RULES`); `source` support belongs in one change, with a gitlab closed-world proof and the `%2F`-after-`projects/` exception tested on its own. As recommended. The wire itself carries the GitLab rules (§6.1), so moving to auto-wire does not drop GitLab routing for estates set up with `client setup`. |
 | 13 | Is the aqua side effect of `registry_floating` acceptable? | **Accepted and documented**: printed only with the overlay, commented in the generated block, proven by §6.P case 3. Pinning the aqua registry waits until an estate asks for it. As recommended. |
 | 14 | How long do `retired` names need answering? | **For as long as the operator keeps them in `retired`**, documented in the rollback with the client command that clears mise's cache. Explicit, stateless, reviewable. As recommended. |
+| 15 | Must a rewritten request whose target the caller cannot read answer like an unwired host? | **Yes: when the caller cannot read the target registry, the answer is exactly `not_wired`, and the air-gap sink branch goes through `_wire-answer`, so it needs read on `{reg}`.** Closes T9's enumeration through the target's `401` and the sink's grant-free `501`. Cost accepted: a legitimate user without read on the target sees "not wired" rather than `401`. Decided 2026-11-11 with the user; matches the recommendation. |
+| 16 | Who may read overlay tool names? | **`overlay_tools` is filtered like `hosts`, and a load warning `mise.overlay.readers-wider` fires when `mise-versions`' readers are not a subset of a source registry's readers.** The archive stays identical for every reader, since per-caller archives would break determinism; the warning is the control. Decided 2026-11-11 with the user; matches the recommendation. |
+| 17 | What does the wire do with `mise.jdx.dev/registry/` once the overlay is switched off? | **While `auto_wire.enabled = true`, `mise.jdx.dev/registry/` stays wired whatever `overlay` says: a raw passthrough of the public archive when the overlay is off.** A client block written while the overlay was on never freezes on its cached archive. Test: overlay on → off → the next refresh gets the public archive. Decided 2026-11-11 with the user; matches the recommendation. |
 
 **The review panel (2026-11-11)** read the draft through six lenses. Its
 findings that changed no decision are fixed in the text: the wire's fast path
@@ -1489,15 +1502,11 @@ spelling and reload signal (§4.3, §6.5, §10.1); the filtered-block,
 air-gap and load-refusal mocks (§4.5); the list roles (§11); the bounce
 proof (§6.P case 10); the profile-route gate (§6.6); the project-file leak
 in T6 and §13; and the dependency line of §16. The findings that change a
-decision are questions 15 to 17.
+decision are questions 15 to 17, decided with the user the same day.
 
 ### Still open
 
-| # | Question | Evidence | Recommendation |
-| --- | --- | --- | --- |
-| 15 | Must a rewritten request whose target the caller cannot read answer like an unwired host? | A rewrite is answered by the *target* registry: `_wire/forge.acme.internal/…` gets the forge's `401`, `_wire/nope.example/…` gets `{reg}`'s `404`; in an air gap the sink answers `501` with no grant (`handlers/air_gap.rs:52-75`). On a public `mise-versions`, an anonymous caller maps the wired hosts, against T9. | **Yes.** When the caller cannot read the target registry, answer exactly as `not_wired`, and route the air-gap sink branch through `_wire-answer` so it needs read on `{reg}`. T9's test gains both arms. |
-| 16 | Who may read overlay tool names? | The merged archive and `overlay_tools` are served to every reader of `mise-versions`, independent of read on the source registry, so Q5's `hosts` filter is undone by the archive (§9). | Filter `overlay_tools` like `hosts`, and add a load warning (`mise.overlay.readers-wider`) when `mise-versions`' readers are not a subset of a source registry's readers. The archive itself cannot be filtered per caller without breaking determinism, so the warning is the control. |
-| 17 | What does the wire do with `mise.jdx.dev/registry/` once the overlay is switched off? | `WireTable::build` adds the archive rule only with `overlay = true`, so a client block generated while it was on gets `404 not_wired`, and mise keeps its cached archive indefinitely (`src/registry.rs:34-56`): the client's registry freezes on the connected side too, not only in an air gap (§13). | Keep `mise.jdx.dev/registry/` wired while `enabled = true`, whatever `overlay` says: a raw passthrough of the upstream archive when the overlay is off. Test: overlay on → off → the next refresh gets the public archive. |
+None.
 
 ---
 
@@ -1506,8 +1515,8 @@ decision are questions 15 to 17.
 | Phase | Content |
 | --- | --- |
 | 1 | `crates/core::mise_wire` (the table moved and keyed on `RegistryKind` with the GitLab and conda rules, the shared selection with its CLI/server parity test, `WireTable`, `target`, `source_backend`) with its unit tests and the fuzz target; `suggest.rs` and `client_setup.rs` read the moved table, and their tests pass unchanged. No behaviour change: the archive rule is not in the shared table. Useful alone as a refactor. |
-| 2 | Config (`auto_wire` without `overlay`), the rewrite with its fast path, opt-out re-check and registry-host refusal, `_wire-answer`, `WiredFrom`, `/api/v1/mise/auto-wire`, `registry suggest --auto-wire`, reload rows, the T1–T3 and T9–T11 tests. The closed-world phase, cases 1, 2, 7 and 9 (Q10's proof, which must pass before the phase lands), and case 5 against a `github` source until phase 3 brings `source`. Useful alone: the one-rule block. |
-| 3 | The overlay: config (`tools`, `retired`, `source`), `_registry/latest.tar.zst` with validation, single-flight and negative entry, the merge, the local `404` for overlay and retired listings, collisions, the six warning codes and the non-dismissible row, the alert rule, T4–T8, T12, T13. Cases 3, 4, 5 (on the forgejo source), 6 and 8. T6's local `404` lands in the same phase as the overlay names it protects. |
+| 2 | Config (`auto_wire` without `overlay`), the rewrite with its fast path, opt-out re-check and registry-host refusal, `_wire-answer`, `WiredFrom`, `/api/v1/mise/auto-wire`, `registry suggest --auto-wire`, reload rows, the T1–T3 and T9–T11 tests; §15 Q15 (an unreadable target answers `not_wired`, the sink through `_wire-answer`) and Q17 (`mise.jdx.dev/registry/` wired while enabled, a raw passthrough of the public archive until phase 3 brings the merge, with the on → off → refresh test). The closed-world phase, cases 1, 2, 7 and 9 (Q10's proof, which must pass before the phase lands), and case 5 against a `github` source until phase 3 brings `source`. Useful alone: the one-rule block. |
+| 3 | The overlay: config (`tools`, `retired`, `source`), `_registry/latest.tar.zst` with validation, single-flight and negative entry, the merge, the local `404` for overlay and retired listings, collisions, the seven warning codes (with §15 Q16's `mise.overlay.readers-wider`) and the filtered `overlay_tools`, the non-dismissible row, the alert rule, T4–T8, T12, T13. Cases 3, 4, 5 (on the forgejo source), 6 and 8. T6's local `404` lands in the same phase as the overlay names it protects. |
 | 4 | `airgap.sh` phase, `authz.sh` `live:mise-auto-wire`, docs (EN + FR) including the migration, the rollback, the troubleshooting list and the `http:` stopgap of Q8, ROADMAP. |
 | 5 | Q3: the bundle carries the raw archive, if Q3 is decided that way. |
 

@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use batlehub_core::entities::RegistryKind;
+use batlehub_core::services::mise_wire;
 
 use crate::api::client_setup::NODEDIST_VARS;
 use crate::api::setup::scan_project_types;
@@ -239,26 +240,9 @@ pub(crate) fn proxy_path_for(
 /// and by the plan's own paths, because a plan whose paths disagree with the
 /// rules it emits is a bundle seeded from 404s.
 pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> String {
-    let base = format!("/proxy/{registry_name}");
     match registry_type.parse::<RegistryKind>() {
-        // `helm` for the same reason: `…/helm` is the repository URL
-        // `helm repo add` takes (RFC 0029 §4.2).
-        // `galaxy` joins them: its whole surface hangs off
-        // `/proxy/{name}/galaxy/api/`, and the URL an operator writes into
-        // `ansible.cfg` is that root (RFC 0031 §4.2).
-        Ok(kind)
-            if kind.is_path_addressed()
-                || matches!(
-                    kind,
-                    RegistryKind::Nodedist
-                        | RegistryKind::Sdkman
-                        | RegistryKind::Galaxy
-                        | RegistryKind::Helm
-                ) =>
-        {
-            format!("{base}/{kind}")
-        }
-        _ => base,
+        Ok(kind) => mise_wire::proxy_base_path(registry_name, kind),
+        Err(_) => format!("/proxy/{registry_name}"),
     }
 }
 
@@ -1245,91 +1229,14 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
 
 // ── mise url_replacements ─────────────────────────────────────────────────────
 
-/// Curated rewrite rules for typed registries, as `(regex, replacement)` pairs
-/// with single-backslash regex escapes and `{proxy}` for the registry's proxy
-/// base URL.
-///
-/// GitHub needs six rules because mise reaches GitHub through several distinct
-/// URL shapes. The `api.github.com/repos/…` rule is the load-bearing one: aqua
-/// and ubi resolve *and* download assets through the API
-/// (`/releases/assets/{id}`), not through `github.com/…/releases/download/…`.
+/// The curated rules of a registry type: [`mise_wire::typed_rules`], read by
+/// type name. An unknown type has none.
 pub(crate) fn typed_url_replacements(
     registry_type: &str,
 ) -> &'static [(&'static str, &'static str)] {
-    match registry_type {
-        "github" => &[
-            // API: release listings, tag metadata, and asset downloads.
-            (r"^https://api\.github\.com/repos/(.+)", "{proxy}/$1"),
-            // Release asset binaries (browser_download_url).
-            (
-                r"^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)",
-                "{proxy}/$1/$2/releases/download/$3/$4",
-            ),
-            // Source tarballs.
-            (
-                r"^https://github\.com/([^/]+)/([^/]+)/archive/(?:refs/tags/)?(.+?)\.tar\.gz",
-                "{proxy}/$1/$2/tarball/$3",
-            ),
-            (
-                r"^https://codeload\.github\.com/([^/]+)/([^/]+)/tar\.gz/(?:refs/tags/)?(.+)",
-                "{proxy}/$1/$2/tarball/$3",
-            ),
-            // Zip archives.
-            (
-                r"^https://github\.com/([^/]+)/([^/]+)/archive/(?:refs/tags/)?(.+?)\.zip",
-                "{proxy}/$1/$2/zipball/$3",
-            ),
-            // Raw files (install scripts, manifests).
-            (
-                r"^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)",
-                "{proxy}/$1/$2/raw/$3/$4",
-            ),
-        ],
-        "forgejo" => &[
-            // API: release listings and tag metadata.
-            (r"^https://codeberg\.org/api/v1/repos/(.+)", "{proxy}/$1"),
-            // The asset itself, by attachment uuid. mise's `forgejo:` backend
-            // builds this URL from its own configured api_url and never reads
-            // the `browser_download_url` the rule below covers, so without this
-            // one the checksum sibling comes here and the binary does not.
-            (
-                r"^https://codeberg\.org/attachments/(.+)",
-                "{proxy}/attachments/$1",
-            ),
-            // Release asset binaries, for the clients that do follow the
-            // document they were served.
-            (
-                r"^https://codeberg\.org/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)",
-                "{proxy}/$1/$2/releases/download/$3/$4",
-            ),
-        ],
-        // mise's versions host (RFC 0043): its whole surface under one rule —
-        // the lists, the install beacon and the GitHub mirror the kind refuses.
-        "mise-versions" => &[(
-            r"^https://mise-versions\.jdx\.dev/(.+)",
-            "{proxy}/mise-versions/$1",
-        )],
-        "npm" => &[(r"^https://registry\.npmjs\.org/(.+)", "{proxy}/$1")],
-        "cargo" => &[(
-            r"^https://static\.crates\.io/crates/([^/]+)/([^/]+)/.+\.crate",
-            "{proxy}/$1/$2/download",
-        )],
-        "openvsx" => &[(
-            r"^https://open-vsx\.org/api/([^/]+)/([^/]+)/([^/]+)/file/.+\.vsix$",
-            "{proxy}/$1.$2/$3/vsix",
-        )],
-        // mise's `conda:` backend: rattler fetches repodata and packages from
-        // `conda.channel` (default `conda-forge`) and sends every request
-        // through `url_replacements`. A registry is one channel, so the rule
-        // is anchored on conda-forge's root and the subdir path carries over.
-        // shortcut: only the default channel is routed; a `channel = "bioconda"`
-        // tool goes direct until the rule is derived from the registry's upstream.
-        "conda" => &[(
-            r"^https://conda\.anaconda\.org/conda-forge/(.+)",
-            "{proxy}/$1",
-        )],
-        _ => &[],
-    }
+    registry_type
+        .parse::<RegistryKind>()
+        .map_or(&[], mise_wire::typed_rules)
 }
 
 impl SuggestedRegistry {
@@ -1366,20 +1273,7 @@ impl SuggestedRegistry {
     }
 }
 
-/// Escape the regex metacharacters that occur in URLs. `.` is the one that
-/// actually matters (`nodejs.org` would otherwise match `nodejsXorg`), but the
-/// rest are escaped too so a query string or a `+` in a path cannot change the
-/// pattern's meaning.
-pub(crate) fn regex_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if r".+*?()[]{}^$|\".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
+pub(crate) use batlehub_core::services::mise_wire::regex_escape;
 
 /// Quote a string as a TOML basic string.
 ///
