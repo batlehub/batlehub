@@ -232,7 +232,7 @@ onMounted(async () => {
   void load();
   try {
     const { data } = await listRegistries();
-    registries.value = (data ?? []).map((r) => r.name).sort();
+    registries.value = (data ?? []).map((r) => r.name).sort((a, b) => a.localeCompare(b));
   } catch {
     // The filter falls back to "all"; the lists themselves still load.
   }

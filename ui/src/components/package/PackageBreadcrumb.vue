@@ -56,7 +56,7 @@ function goBack() {
     router.back();
     return;
   }
-  router.push({ path: "/packages", query: { registry: props.registry } });
+  void router.push({ path: "/packages", query: { registry: props.registry } });
 }
 
 /**
