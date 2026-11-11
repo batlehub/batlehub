@@ -56,8 +56,8 @@ jobs:
           SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
-          case "$PR" in ''|*[!0-9]*) echo "::error::pr must be a number"; exit 1 ;; esac
-          case "$SHA" in *[!0-9a-f]*) echo "::error::sha must be a full hex SHA"; exit 1 ;; esac
+          case "$PR" in ''|*[!0-9]*) echo "::error::pr must be a number"; exit 1 ;; *) ;; esac
+          case "$SHA" in *[!0-9a-f]*) echo "::error::sha must be a full hex SHA"; exit 1 ;; *) ;; esac
           [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be a full 40-character SHA"; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
           head=$(jq -r .head.sha "$RUNNER_TEMP/pr.json")

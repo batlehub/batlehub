@@ -111,7 +111,7 @@ describe("AdminScans", () => {
     expect(w.find('[data-testid="polling"]').exists()).toBe(false);
     const calls = listScansMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(listScansMock.mock.calls.length).toBe(calls);
+    expect(listScansMock.mock.calls).toHaveLength(calls);
   });
 
   it("polls every 5 s while the queue holds a transient row", async () => {
@@ -120,7 +120,7 @@ describe("AdminScans", () => {
     await mountPage();
     const calls = listScansMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(listScansMock.mock.calls.length).toBe(calls + 2);
+    expect(listScansMock.mock.calls).toHaveLength(calls + 2);
   });
 
   it("shows failures with the error, the withheld case and the lease-expired case", async () => {
@@ -154,7 +154,7 @@ describe("AdminScans", () => {
     expect(rescanVerdictMock).toHaveBeenCalledWith({
       path: { registry: "npm", name: "huge", version: "1.0.0" },
     });
-    expect(listScansMock.mock.calls.length).toBe(before + 2);
+    expect(listScansMock.mock.calls).toHaveLength(before + 2);
     expect(w.text()).toContain("Queue (1)");
     expect(w.text()).toContain("Failures (0)");
   });

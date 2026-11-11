@@ -41,7 +41,7 @@ const redirect = computed(() =>
 // Already signed in → skip the login page.
 onMounted(async () => {
   if (isAuthenticated.value) {
-    router.replace(redirect.value);
+    void router.replace(redirect.value);
     return;
   }
   // Fetch the list of available OIDC providers.
@@ -76,7 +76,7 @@ async function submit() {
       client.setConfig({ auth: undefined });
     } else {
       storeTokens(tok); // no refresh token or expiry for static tokens
-      router.push(redirect.value);
+      void router.push(redirect.value);
     }
   } catch {
     error.value = t("loginPage.invalidToken");
@@ -97,7 +97,7 @@ function signInWithOidc(providerName: string) {
 
 function continueAnonymously() {
   const dest = redirect.value === "/login" ? "/packages" : redirect.value;
-  router.push(dest);
+  void router.push(dest);
 }
 
 function providerLabel(name: string): string {

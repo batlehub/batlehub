@@ -62,7 +62,7 @@ import os
 import re
 import sys
 import time
-import urllib.error
+from typing import Any
 import urllib.request
 
 RANK = {"low": 1, "medium": 2, "moderate": 2, "high": 3, "critical": 4}
@@ -215,7 +215,7 @@ def check_online(online: dict, base_scripts: dict, head_scripts: dict, root: str
         )
 
 
-def api_get(url: str, token: str, timeout: float) -> object:
+def api_get(url: str, token: str, timeout: float) -> Any:
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -232,7 +232,7 @@ def rate_limit_reset() -> str:
         return ""
     try:
         core = api_get(f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}/rate_limit", token, 10)["resources"]["core"]
-    except Exception:  # noqa: BLE001 — a hint, never the verdict
+    except Exception:  # noqa: BLE001  # a hint, never the verdict
         return ""
     if core.get("remaining", 1) > 0:
         return ""
@@ -247,7 +247,7 @@ def approval(pr: int) -> tuple[str | None, str | None]:
         return None, "GITHUB_REPOSITORY or GITHUB_TOKEN unset — cannot read the reviews"
     deadline = time.monotonic() + API_BUDGET_SECS
 
-    def get(path: str) -> object:
+    def get(path: str) -> Any:
         left = deadline - time.monotonic()
         if left <= 0:
             raise TimeoutError(f"the reviews API took over {API_BUDGET_SECS}s")
@@ -276,7 +276,7 @@ def approval(pr: int) -> tuple[str | None, str | None]:
         for login, state in latest.items():
             if state == "APPROVED" and get(f"collaborators/{login}/permission").get("role_name") in LIFTING_ROLES:
                 return login, None
-    except (urllib.error.URLError, TimeoutError, OSError, KeyError, TypeError, ValueError) as exc:
+    except (OSError, KeyError, TypeError, ValueError) as exc:
         return None, f"the reviews API failed — {esc(exc)}"
     return None, f"no approving review of head {esc(head)} by a maintainer other than the author"
 

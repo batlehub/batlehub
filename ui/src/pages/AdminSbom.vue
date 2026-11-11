@@ -49,7 +49,7 @@ async function downloadBlob(url: string, defaultFilename: string) {
   const resp = await authFetch(`${API_BASE_URL}${url}`);
   if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
   const disposition = resp.headers.get("Content-Disposition") ?? "";
-  const match = disposition.match(/filename="([^"]+)"/);
+  const match = /filename="([^"]+)"/.exec(disposition);
   const filename = match?.[1] ?? defaultFilename;
   const blob = await resp.blob();
   const a = Object.assign(document.createElement("a"), {

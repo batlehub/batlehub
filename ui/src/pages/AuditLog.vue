@@ -202,7 +202,7 @@ async function exportAuditLog() {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     const cd = resp.headers.get("Content-Disposition") ?? "";
-    const match = cd.match(/filename="([^"]+)"/);
+    const match = /filename="([^"]+)"/.exec(cd);
     a.download = match ? match[1] : `audit-log.${exportFormat.value}`;
     a.click();
     URL.revokeObjectURL(a.href);

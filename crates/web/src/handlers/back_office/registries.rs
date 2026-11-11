@@ -8,7 +8,7 @@
 //! is joined on each request and never frozen at reload time.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use actix_web::{get, web, HttpResponse};
 use chrono::{DateTime, Utc};
@@ -109,11 +109,11 @@ impl RegistryViews {
     }
 
     pub fn replace(&self, snapshot: RegistryViewsSnapshot) {
-        *self.0.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(snapshot);
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot);
     }
 
     fn get(&self) -> Arc<RegistryViewsSnapshot> {
-        Arc::clone(&self.0.read().unwrap_or_else(|e| e.into_inner()))
+        Arc::clone(&self.0.read().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// `[stats] dashboard_url`, for `/admin/stats`.

@@ -200,7 +200,9 @@ const submitLabel = computed(() =>
 
 /** The registries the pending action touches, for the dialog's scope line. */
 const affectedScope = computed(() => {
-  const registries = [...new Set(validRows.value.map((r) => r.registry))].sort();
+  const registries = [...new Set(validRows.value.map((r) => r.registry))].sort((a, b) =>
+    a.localeCompare(b),
+  );
   if (registries.length === 1) return registries[0];
   return t("adminBulk.acrossRegistries", { count: registries.length });
 });

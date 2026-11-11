@@ -87,7 +87,7 @@ runs:
         version=""
         for _ in $(seq 1 "$TIMEOUT"); do
           version="$(curl -sS -m 2 "http://127.0.0.1:${PORT}/json/version" 2>/dev/null || true)"
-          case "$version" in *webSocketDebuggerUrl*) break ;; esac
+          case "$version" in *webSocketDebuggerUrl*) break ;; *) ;; esac
           version=""
           kill -0 "$chrome_pid" 2>/dev/null || report_and_die "Chrome exited during startup"
           sleep 1

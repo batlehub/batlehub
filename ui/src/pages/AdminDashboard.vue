@@ -144,7 +144,7 @@ const { data: history } = useApi<StatsHistoryResponse>(
  */
 const trend = computed(() => {
   const t0 = history.value?.trend;
-  if (!t0 || t0.hit_rate == null) return null;
+  if (t0?.hit_rate == null) return null;
   const days = history.value?.window_days ?? 30;
   if (t0.previous_hit_rate == null || t0.delta == null) {
     return { tone: "unknown" as const, days, rate: t0.hit_rate, delta: null };

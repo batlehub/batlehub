@@ -290,8 +290,8 @@ describe("AdminRegistry", () => {
       ]),
     );
     w = await mountPage({ tab: "activity" });
-    expect(w.findAll('[data-testid="bar"]').length).toBe(3);
-    expect(w.findAll('[data-testid="gap"]').length).toBe(1);
+    expect(w.findAll('[data-testid="bar"]')).toHaveLength(3);
+    expect(w.findAll('[data-testid="gap"]')).toHaveLength(1);
     const week = w.findAll("button").find((b) => b.text() === "7 d");
     await week!.trigger("click");
     await flushPromises();

@@ -329,6 +329,7 @@ for c in npm pnpm yarn; do
     pnpm) client "$MH" "$OUT" "$dir" pnpm install ;;
     yarn) : > "$dir/yarn.lock"
           client "$MH" "$OUT" "$dir" YARN_ENABLE_TELEMETRY=0 yarn install ;;
+    *)    heavy_fail "unknown client $c" ;;
   esac || { cat "$OUT" >&2; heavy_fail "$c install failed with the configuration apply wrote"; }
   heavy_wire_after "$c" "GET /proxy/$NPM/left-pad -> 200" "$c did not read the packument through the instance"
   # yarn 4 installs Plug'n'Play into a global cache: its lockfile is the record.

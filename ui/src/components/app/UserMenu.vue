@@ -28,7 +28,7 @@ const userInitials = computed(() => {
 
 function handleLogout() {
   logout();
-  router.push("/login");
+  void router.push("/login");
 }
 </script>
 

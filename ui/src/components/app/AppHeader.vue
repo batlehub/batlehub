@@ -72,7 +72,7 @@ useResizeObserver(useTemplateRef<HTMLElement>("masthead"), ([entry]) => {
 
 function handleLogout() {
   logout();
-  router.push("/login");
+  void router.push("/login");
   mobileOpen.value = false;
 }
 </script>
