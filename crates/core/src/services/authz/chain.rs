@@ -616,6 +616,65 @@ pub async fn installable_registries(
         .collect()
 }
 
+/// Whether `identity` holds each of `actions` over each coordinate's
+/// **config** tiers (instance, registry, matching namespaces), resolved
+/// without a shadow — what a list page decides a scan status's tier from
+/// (RFC 0044 §4.2).
+///
+/// Three choices, each the fail-closed one:
+///
+/// - **A shadow is not a grant**, as in [`installable_registries`]: under a
+///   dry run a list can be stricter than the per-version verdict GET, never
+///   wider.
+/// - **Stored package and version tiers are not read.** They only ever widen
+///   (a stored node is never a seal), so leaving them out can only answer
+///   *no* where the GET would answer *yes*; reading them is one query per row,
+///   the N+1 this batch exists to avoid.
+/// - **A registry with no hierarchy holds nothing**, where
+///   [`authorize_grants`] lets it through as a routing question.
+///
+/// A registry without namespaces resolves once, whatever the page holds.
+pub async fn config_tier_holds(
+    hot: &HotConfigLock,
+    identity: &Identity,
+    coords: &[PackageId],
+    actions: &[Action],
+) -> Vec<Vec<bool>> {
+    let (instance, grants) = {
+        let hot = hot.read().await;
+        (hot.instance.clone(), hot.grants.clone())
+    };
+    let subject = crate::entities::Subject::Identity(identity.clone());
+    let prefix: Vec<crate::entities::Node> = instance.iter().map(|n| (**n).clone()).collect();
+    let mut per_registry: std::collections::HashMap<&str, Vec<bool>> =
+        std::collections::HashMap::new();
+    coords
+        .iter()
+        .map(|c| {
+            let Some(registry) = grants.get(c.registry.as_str()) else {
+                return vec![false; actions.len()];
+            };
+            let held = |path: Vec<crate::entities::Node>| {
+                let set = crate::entities::resolve(&path, &subject);
+                actions.iter().map(|a| set.holds(*a)).collect::<Vec<_>>()
+            };
+            let path = |name: &str| {
+                let mut p = prefix.clone();
+                p.extend(registry.path_for(name));
+                p
+            };
+            if registry.namespaces.is_empty() {
+                per_registry
+                    .entry(c.registry.as_str())
+                    .or_insert_with(|| held(path("")))
+                    .clone()
+            } else {
+                held(path(&c.name))
+            }
+        })
+        .collect()
+}
+
 /// What one caller holds, for `/me` (RFC 0042 §5.1).
 ///
 /// `instance` is the set a control endpoint naming no registry checks;

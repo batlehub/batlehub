@@ -387,7 +387,9 @@
    only moved off-screen. */
 :is(#at-a-glance, #en-un-coup-d-œil) + table {
   display: grid;
-  grid-template-columns: minmax(8rem, max-content) 1fr;
+  /* minmax(0, …): a bare 1fr has an `auto` floor, so one long URL widened the
+     grid past a 390px screen. */
+  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
   align-items: baseline;
   column-gap: var(--s5);
   width: 100%;
@@ -416,6 +418,7 @@
   /* A fact is scanned, not read for minutes: the Row step's 1.5, not 1.7. */
   padding: 6px 0;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 /* The label column: Meta, uppercase, the Tracking Ladder's column-head step. */
@@ -788,9 +791,10 @@
 /* A label is a <p> inside the SVG, so the Reading rule at the top of this file
    reached it: 16px at line-height 1.7, after mermaid had sized the box for its
    own 1.5. Two lines then needed 54px in a 48px box and the last one was cut.
-   A node label is data, not prose. */
+   A node label is data, not prose. Body (13px), not `inherit`: inherit took
+   mermaid's own 14px, off the Text Ramp, and 13 still fits a box sized for 14. */
 .vp-doc .mermaid :is(p, span, div) {
-  font-size: inherit;
+  font-size: var(--t-body);
   line-height: 1.5;
   max-width: none;
 }

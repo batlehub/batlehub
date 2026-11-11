@@ -84,16 +84,27 @@ pub fn versions(body: &str) -> Vec<(String, Option<DateTime<Utc>>)> {
 
 /// The versions published less than `min_age` before `now`: what a
 /// `release_age_gate` on this registry hides from the listing (RFC 0043 §11,
-/// decision 2). An entry without a readable `created_at` is not one of them —
-/// the format requires the field, so its absence is a parse gap, and the
-/// filter fails open on those.
-pub fn younger_than(body: &str, min_age: std::time::Duration, now: DateTime<Utc>) -> Vec<String> {
-    let Ok(min_age) = chrono::Duration::from_std(min_age) else {
+/// decision 2). An entry without a readable `created_at` is hidden only under
+/// `deny_missing_timestamp`, as the gate treats an artifact with no date
+/// (review of #311).
+///
+/// shortcut: a line the parser cannot read at all has no version to name, so
+/// it stays listed even under `deny_missing_timestamp`; drop such lines in
+/// `strip_versions_toml` if the upstream format ever produces them.
+pub fn younger_than(
+    body: &str,
+    gate: crate::rules::ListingAgeGate,
+    now: DateTime<Utc>,
+) -> Vec<String> {
+    let Ok(min_age) = chrono::Duration::from_std(gate.min_age) else {
         return Vec::new();
     };
     versions(body)
         .into_iter()
-        .filter(|(_, at)| at.is_some_and(|at| now - at < min_age))
+        .filter(|(_, at)| match at {
+            Some(at) => now - *at < min_age,
+            None => gate.deny_missing_timestamp,
+        })
         .map(|(v, _)| v)
         .collect()
 }
@@ -136,8 +147,28 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let day = std::time::Duration::from_secs(86_400);
-        assert_eq!(younger_than(JQ, day * 200, now), ["1.8.2"]);
-        assert!(younger_than(JQ, day, now).is_empty());
-        assert_eq!(younger_than(JQ, day * 365 * 30, now).len(), 4);
+        let gate = |min_age| crate::rules::ListingAgeGate {
+            min_age,
+            deny_missing_timestamp: false,
+        };
+        assert_eq!(younger_than(JQ, gate(day * 200), now), ["1.8.2"]);
+        assert!(younger_than(JQ, gate(day), now).is_empty());
+        assert_eq!(younger_than(JQ, gate(day * 365 * 30), now).len(), 4);
+    }
+
+    /// A date the parser cannot read (a local date here) fails open by
+    /// default and closed under `deny_missing_timestamp` (RFC 0043 §6.2).
+    #[test]
+    fn deny_missing_timestamp_hides_an_undated_entry() {
+        let body = "[versions]\n\"1.8.1\" = { created_at = 2025-07-01T11:50:06.000Z }\n\"1.9.0\" = { created_at = 2026-11-09 }\n";
+        assert_eq!(versions(body)[1], ("1.9.0".to_owned(), None));
+        let now = Utc::now();
+        let min_age = std::time::Duration::from_secs(86_400);
+        let gate = |deny_missing_timestamp| crate::rules::ListingAgeGate {
+            min_age,
+            deny_missing_timestamp,
+        };
+        assert!(younger_than(body, gate(false), now).is_empty());
+        assert_eq!(younger_than(body, gate(true), now), ["1.9.0"]);
     }
 }

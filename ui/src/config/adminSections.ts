@@ -32,6 +32,11 @@ export const ADMIN_PAGE_VERBS: Record<string, string> = {
   "/admin/packages/all": "packages:read",
   "/admin/packages/bulk": "packages:block",
   "/admin/security/blocks": "blocks:read",
+  // RFC 0044: GET /admin/scans is instance-tier quarantine:read.
+  "/admin/security/scans": "quarantine:read",
+  // shortcut: the server also answers findings:read held on one registry only;
+  // the console checks the instance tier, like the security console's panel.
+  "/admin/security/findings": "findings:read",
   "/admin/security/access-check": "authz:read",
   "/admin/security/authorization": "authz:read",
   "/admin/namespaces/team-namespaces": "owners:read",
@@ -44,6 +49,9 @@ export const ADMIN_PAGE_VERBS: Record<string, string> = {
   "/admin/operations/sbom": "packages:read",
   "/admin/operations/air-gap": "system:read",
   "/admin/observability/health": "system:read",
+  // The list reads /admin/stats; one registry's page (a dynamic path) carries
+  // its own `meta.verb` in the router.
+  "/admin/observability/registries": "stats:read",
   "/admin/observability/audit-log": "audit:read",
   "/admin/notifications/subscriptions": "system:read",
   "/admin/notifications/inbound": "system:read",
@@ -84,6 +92,11 @@ export const SECURITY_TABS = [
   // both answer "why was this refused?", and an operator arriving with that
   // question should not have to know which of two mechanisms produced it.
   { to: "/admin/security/authorization", label: "adminNav.authorization" },
+  // RFC 0044 phase 2: where scans are followed — the queue, the failures and
+  // the verdicts by state.
+  { to: "/admin/security/scans", label: "adminNav.scans" },
+  // RFC 0044 phase 3: findings across registries, by finding or by reference.
+  { to: "/admin/security/findings", label: "adminNav.findings" },
 ];
 
 export const NAMESPACES_TABS = [
@@ -131,5 +144,7 @@ export const NOTIFICATIONS_TABS = [
 
 export const OBSERVABILITY_TABS = [
   { to: "/admin/observability/health", label: "adminNav.health" },
+  // RFC 0044 phase 5: one registry's configuration and health, from its list.
+  { to: "/admin/observability/registries", label: "adminNav.registries" },
   { to: "/admin/observability/audit-log", label: "adminNav.auditLog" },
 ];

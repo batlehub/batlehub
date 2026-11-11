@@ -517,7 +517,8 @@
     ],
     "total": 3,
     "page": 0,
-    "per_page": 1000
+    "per_page": 1000,
+    "scan_status_unavailable": false
   },
   "/api/v1/admin/registries/cargo/beta-channel": [
     {
@@ -1140,7 +1141,8 @@
     "upstream_unavailable": false,
     "readme_search_enabled": false,
     "searched_in": "name",
-    "truncated": false
+    "truncated": false,
+    "scan_status_unavailable": false
   },
   "/api/v1/explore/packages/npm/react": {
     "registry": "npm",
@@ -1305,7 +1307,8 @@
       },
       "vulnerabilities_scanned": true,
       "state": "cached"
-    }
+    },
+    "scan_status_unavailable": false
   },
   "/api/v1/explore/packages/npm/react/readme": {
     "registry": "npm",

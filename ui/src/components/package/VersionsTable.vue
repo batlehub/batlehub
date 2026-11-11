@@ -7,6 +7,7 @@ import { formatCount, formatDay } from "@/lib/format";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
 import { Badge } from "@/components/ui/badge";
 import { Resolution } from "@/components/ui/resolution";
+import ScanBadge from "@/components/package/ScanBadge.vue";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
@@ -38,6 +39,8 @@ const props = defineProps<{
   versionPage: number;
   versionTotalPages: number;
   refShas: Record<string, string>;
+  /** RFC 0044: the detail's scan-status batch failed. */
+  scanUnavailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -212,6 +215,13 @@ const shortSha = (version: string) => props.refShas[version]?.slice(0, 7) ?? nul
           >
             <TableCell class="pl-0 pr-3 py-3 align-baseline">
               <Resolution :state="rowState(ver)" :label="stateLabel(ver)" />
+              <div class="mt-1">
+                <ScanBadge
+                  :status="ver.scan_status"
+                  :unavailable="scanUnavailable === true"
+                  in-list
+                />
+              </div>
             </TableCell>
             <TableCell class="pl-0 pr-3 py-3 align-baseline font-mono text-sm">
               <!-- A link, not a click handler on the `<tr>`.

@@ -171,6 +171,9 @@ sha2 = "0.11"
 hmac = "0.13"
 hex = "0.4"
 form_urlencoded = "1"
+# Parses the `[stats]` monitoring links at load (RFC 0044 §4.3); 2.5.8 was
+# already in the tree through reqwest.
+url = "2.5"
 # CIDR prefix matching for `[server].trusted_proxies` (already in the tree via
 # the HTTP stack; declared here so config/web can depend on it directly).
 ipnet = "2"

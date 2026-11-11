@@ -249,6 +249,9 @@ pub struct ExplorePackageDetailResponse {
     pub selected: Option<ExploreVersionDto>,
     /// `true` when the upstream database was unreachable and this package has no cached data.
     pub upstream_unavailable: bool,
+    /// The scan-status batch failed or timed out, so no version carries
+    /// `scan_status` (RFC 0044 §10.2).
+    pub scan_status_unavailable: bool,
     /// What the discovery read did (RFC 0007 §4.2).
     pub upstream: UpstreamReadDto,
     /// Whether the console may offer **Fetch this version** on an
@@ -372,6 +375,11 @@ pub struct ExploreVersionDto {
     /// this endpoint holds, and inventing either would be the same class of
     /// claim this field exists to stop.
     pub state: String,
+    /// This version's scan status, as last recorded (RFC 0044 §4.2). Absent on
+    /// a registry without `[security]` and for a caller without
+    /// `quarantine:read` alike.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_status: Option<crate::handlers::security::ScanStatusDto>,
 }
 
 #[derive(Clone, Serialize, ToSchema)]
@@ -639,7 +647,7 @@ pub async fn explore_package_detail(
     // on the page there is nothing to do but take the enriched copy; when it is
     // not, it is enriched alone — one extra vulnerability read and one licence
     // read, for the one row the reader is actually looking at.
-    let selected = match subject_row {
+    let mut selected = match subject_row {
         Some(row) => match versions.iter().find(|r| r.version == row.version) {
             Some(on_page) => Some(on_page.clone()),
             None => {
@@ -650,6 +658,21 @@ pub async fn explore_package_detail(
         },
         None => None,
     };
+
+    // RFC 0044: one batch for the page and the subject, wherever it is.
+    let coords: Vec<batlehub_core::entities::PackageId> = versions
+        .iter()
+        .chain(selected.as_ref())
+        .map(|v| batlehub_core::entities::PackageId::new(registry, name, &v.version))
+        .collect();
+    let (mut statuses, scan_status_unavailable) =
+        crate::handlers::security::scan_status_for(&hot, &identity.0, &coords).await;
+    if let Some(sel) = selected.as_mut() {
+        sel.scan_status = statuses.pop().flatten();
+    }
+    for (v, status) in versions.iter_mut().zip(statuses) {
+        v.scan_status = status;
+    }
 
     // The row the reader is actually looking at, which is what its links should
     // describe: npm carries `repository` per version, and a package that changed
@@ -673,6 +696,7 @@ pub async fn explore_package_detail(
         selected_version,
         selected,
         upstream_unavailable,
+        scan_status_unavailable,
         upstream: upstream.dto,
         fetch: fetch_offer(
             &local_svc.hot,
@@ -798,6 +822,7 @@ fn held_version_rows(
             // Graded in `enrich_page`, the one funnel every rendered row passes
             // through — see `version_state`.
             state: String::new(),
+            scan_status: None,
             // RFC 0015 §4.5's one definition, not `contains('-')`. The crude
             // rule was defended by this table's own consistency — two lists in
             // one table must grade a row the same way — and one shared function
@@ -834,6 +859,7 @@ fn held_version_rows(
             readme: readme_state(&pkg.version),
             vulnerabilities_scanned: true,
             state: String::new(),
+            scan_status: None,
             // The same definition as the proxied rows above, which is the
             // property this table needed all along.
             is_prerelease: batlehub_core::services::version_order::is_prerelease(&pkg.version),
@@ -904,6 +930,7 @@ fn merge_upstream_rows(
                 // this instance has never held is a claim we cannot support.
                 vulnerabilities_scanned: false,
                 state: String::new(),
+                scan_status: None,
                 version: candidate.version.clone(),
                 source: "upstream".to_owned(),
                 firewall,

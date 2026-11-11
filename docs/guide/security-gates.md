@@ -545,6 +545,106 @@ The user-facing side, with what each package manager prints, is on
 
 ---
 
+## Reading scan status {#scan-status}
+
+On a `[security]` registry, the catalogue, the admin package list and each
+version of a package page carry a **scan status** next to the existing state
+badge. One server-side function derives it, first match wins:
+
+| Status | When |
+| --- | --- |
+| *(none)* | the registry has no `[registries.security]` |
+| `scanning` | an open job is leased by a worker whose lease has not run out |
+| `queued` | an open job nobody holds: never leased, lease expired, or deferred on an advisory database outage |
+| `not scanned` | no verdict has been recorded for the version |
+| `scan failed` | the latest closed job ran out of attempts, or the verdict carries `SCANNER_ERROR` |
+| `queued` | the verdict carries `SCAN_PENDING` |
+| `scanned · <verdict>` | otherwise, with `allowed`, `warned`, `quarantined` or `denied` |
+
+**Who sees it** follows the verbs that already decide who may learn a version
+is held:
+
+- without `quarantine:read`, nothing — the row reads exactly as it does on a
+  registry that does not scan, so an anonymous visitor cannot tell the two
+  apart or learn that a version is held;
+- with `quarantine:read` (the `user` and `admin` roles by default), the status
+  and the verdict;
+- with `findings:read` too (`admin` by default), the last scan time, the
+  attempts and the worker's last error, with any URL in it stripped of its
+  credentials and query, cut to 200 characters.
+
+A list decides this per registry from the configured grants and **ignores an
+active `dry_run` shadow**: during a dry run a list can show less than the
+per-version verdict endpoint, never more.
+
+**A list shows the verdict as last recorded.** `GET /api/v1/verdicts/…`
+re-judges against the current policy and clock; the lists read the stored row
+and never trigger a scan. The two can differ for the few minutes after a
+release-age window lifts or a policy changes.
+
+When the status could not be read within 500 ms, the list is served without it
+and carries `scan_status_unavailable: true`; the console then draws "—" in
+place of each badge.
+
+**The verdict endpoint carries the same status**, as `scan_status`, and for a
+holder of `quarantine:read` at the instance tier a `next_rescan` block: when the verdict is rescanned
+(`last_scanned_at` plus `[registries.security.rescan] interval_secs`; absent
+without an interval, and in the past means due) and when the registry-wide SBOM
+re-check runs next (its last run plus `[vulnerability_scan] interval_secs`;
+absent when the re-check is off or has never covered the registry). The
+package page's Security tab shows both as *Next rescan*.
+
+### The Scans page {#scans-page}
+
+*Admin → Security & Access → Scans* follows the scan queue
+(`GET /api/v1/admin/scans`):
+
+- **Queue**: every open job, the ones a worker holds first, with the trigger,
+  the time it was queued, the worker and the attempts. A deferred job shows
+  when its deferral began.
+- **Failures**: each version whose latest scan job ran out of attempts and that
+  has no job open, with the worker's last error. [Rescan] queues a new job
+  (`POST /api/v1/verdicts/…/rescan`) and the row moves to the queue.
+- **Verdicts by state**: the verdicts of one registry, from
+  `GET /api/v1/admin/verdicts`.
+
+Opening the page needs `quarantine:read` at the instance tier, the verb the
+security console reads with (RFC 0042); the registry-tier `quarantine:read`
+every user holds is not enough. Rows then come only from the registries where
+you hold `quarantine:read`, minus the packages under a namespace seal, and the
+last error only where you hold `findings:read`. [Rescan] appears
+where the configured grants give you `gates:exempt` on the registry — nobody
+holds it by default — and the rescan endpoint checks it again. `per_page` is at
+most 200.
+
+A job closed before this release carries no failure marker, so a failure older
+than the upgrade does not appear under Failures; its verdict still reads
+`SCANNER_ERROR` under *Verdicts by state*.
+
+### The Findings page {#findings-page}
+
+*Admin → Security & Access → Findings* lists what the scanners found, across
+registries (`GET /api/v1/admin/findings`). Each row names the version, the
+severity, the scanner, the advisory id and the state of the verdict the finding
+fed. The filters are the registry, a minimum severity, the scanner, the verdict
+state and an advisory-id prefix (matched literally, at most 128 characters).
+*By reference* puts each advisory's versions together, to answer "which
+versions does this CVE reach?". [Exempt…] lifts a held version's verdict: it
+asks for a reason and an expiry and writes a `security_verdict` exemption
+([Per-namespace gates and exemptions](#namespaces)).
+
+Findings name advisories that may be embargoed, so the list needs
+`findings:read`, checked per registry: you see the registries where you hold
+it, and a page where you hold it nowhere is refused. Naming another registry in
+the filter returns an empty page, not a refusal. A namespace that seals a
+package away from you removes its rows, as it does for that version's verdict.
+[Exempt…] appears where the configured grants give you `gates:exempt` and the
+verdict holds the version; the exemption endpoint checks it again. `per_page`
+is at most 200, and because of namespace seals a page can hold fewer rows than
+it asked for.
+
+---
+
 ## Watching it {#observability}
 
 - **Every refusal** writes a `denied_download` audit row with the reason, the

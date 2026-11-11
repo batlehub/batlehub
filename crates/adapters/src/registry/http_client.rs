@@ -241,6 +241,34 @@ pub fn redacted(url: &reqwest::Url) -> reqwest::Url {
     url
 }
 
+/// Every `http(s)://` URL in free text through [`redacted`]: a worker's
+/// `last_error` can quote the URL it failed on, token and all, and reaches an
+/// administrator's page (RFC 0044 §7.3, T5). A URL that does not parse is
+/// replaced whole — it cannot be told safe. Call it **before** truncating, or
+/// a cut mid-URL leaves a remainder that no longer parses as one.
+pub fn redact_text_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = ["http://", "https://"]
+        .iter()
+        .filter_map(|p| rest.find(p))
+        .min()
+    {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`'))
+            .unwrap_or(tail.len());
+        match reqwest::Url::parse(&tail[..end]) {
+            Ok(url) => out.push_str(redacted(&url).as_str()),
+            Err(_) => out.push_str("[url]"),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// GET an upstream *version-listing document* and return it as JSON.
 ///
 /// Shared by every adapter's `fetch_version_document`, because they all need
@@ -728,13 +756,14 @@ pub fn ensure_url_under_base(url: &str, base_url: &str) -> Result<(), CoreError>
 /// itself — a literal `%2e%2e` filename — rather than a navigation instruction.
 ///
 /// `.` is unreserved, so `percent_encode` leaves it alone and a segment of
-/// nothing but dots would survive as navigation. Those are encoded here
-/// explicitly; every other segment keeps its dots, so `main.rs` stays readable.
+/// nothing but dots would survive as navigation. Those go through
+/// [`dot_segment`]; every other segment keeps its dots, so `main.rs` stays
+/// readable.
 pub fn percent_encode_path(path: &str) -> String {
     path.split('/')
         .map(|segment| {
             if !segment.is_empty() && segment.bytes().all(|b| b == b'.') {
-                return segment.replace('.', "%2E");
+                return dot_segment(segment);
             }
             percent_encode(segment)
         })
@@ -759,7 +788,7 @@ pub fn encode_path(path: &str) -> String {
             out.push('/');
         }
         if !segment.is_empty() && segment.bytes().all(|b| b == b'.') {
-            out.push_str(&segment.replace('.', "%2E"));
+            out.push_str(&dot_segment(segment));
             continue;
         }
         for b in segment.bytes() {
@@ -776,6 +805,14 @@ pub fn encode_path(path: &str) -> String {
         }
     }
     out
+}
+
+/// A segment of nothing but dots, made inert. `%2E` is not enough: the `url`
+/// crate reqwest parses with treats `%2E`/`%2e` as `.`, so `a/%2E%2E/b`
+/// still climbs to `b` (review of #311). Encoding the `%` too leaves a
+/// literal `%2E%2E` segment the parser keeps and an upstream reads as a name.
+fn dot_segment(segment: &str) -> String {
+    segment.replace('.', "%252E")
 }
 
 /// Percent-encode a query string value, encoding all characters except
@@ -808,6 +845,22 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC 0044 T5: credentials in a quoted URL never survive, and the text
+    /// around it does.
+    #[test]
+    fn redact_text_urls_strips_userinfo_and_query_from_every_url() {
+        let text = format!(
+            "GET https://u:p@h.test/a?token=x failed; retry http://h2.test/b#frag {}",
+            "e".repeat(300)
+        );
+        let out = redact_text_urls(&text);
+        assert!(out.starts_with("GET https://h.test/a failed; retry http://h2.test/b "));
+        assert!(!out.contains(":p@") && !out.contains("token") && !out.contains("frag"));
+        assert!(out.ends_with(&"e".repeat(300)));
+        assert_eq!(redact_text_urls("no url here"), "no url here");
+        assert_eq!(redact_text_urls("bad http://[::1 tail"), "bad [url] tail");
+    }
 
     #[test]
     fn parse_http_date_valid() {
@@ -1006,11 +1059,11 @@ mod tests {
     fn percent_encode_path_keeps_separators_and_encodes_the_segments() {
         assert_eq!(percent_encode_path("src/main.rs"), "src/main.rs");
         // The dot segments a URL parser would act on become literal filenames.
-        assert_eq!(percent_encode_path("a/../b"), "a/%2E%2E/b");
+        assert_eq!(percent_encode_path("a/../b"), "a/%252E%252E/b");
         assert_eq!(percent_encode_path("a/%2e%2e/b"), "a/%252e%252e/b");
         assert_eq!(percent_encode_path("a b/c"), "a%20b/c");
         // A single dot is navigation too, and a filename keeps its dots.
-        assert_eq!(percent_encode_path("a/./b"), "a/%2E/b");
+        assert_eq!(percent_encode_path("a/./b"), "a/%252E/b");
         assert_eq!(percent_encode_path("a/main.rs"), "a/main.rs");
         assert_eq!(percent_encode_path("a/...hidden/b"), "a/...hidden/b");
     }
@@ -1030,8 +1083,39 @@ mod tests {
         assert_eq!(encode_path("p#frag"), "p%23frag");
         assert_eq!(encode_path("p%3F"), "p%253F");
         assert_eq!(encode_path("a b"), "a%20b");
-        assert_eq!(encode_path("a/../b"), "a/%2E%2E/b");
+        assert_eq!(encode_path("a/../b"), "a/%252E%252E/b");
         assert_eq!(encode_path("a/main.rs"), "a/main.rs");
+    }
+
+    /// The parser reqwest sends with must keep every dot segment: the
+    /// assertion is on the URL it builds, not on the string we hand it.
+    #[test]
+    fn dot_segments_survive_the_url_parser() {
+        for coordinate in [
+            "../../admin",
+            "a/../../admin",
+            "./x",
+            "a/./../b",
+            "..",
+            "...",
+        ] {
+            for encoded in [encode_path(coordinate), percent_encode_path(coordinate)] {
+                let url =
+                    reqwest::Url::parse(&format!("https://up.example/simple/{encoded}/")).unwrap();
+                assert!(
+                    url.path().starts_with("/simple/"),
+                    "{coordinate} → {encoded} climbed to {}",
+                    url.path()
+                );
+                let segments = url.path().split('/').count();
+                assert_eq!(
+                    segments,
+                    format!("/simple/{encoded}/").split('/').count(),
+                    "{coordinate} → {encoded} lost a segment: {}",
+                    url.path()
+                );
+            }
+        }
     }
 
     /// A path that walks out of the base is refused even though it never

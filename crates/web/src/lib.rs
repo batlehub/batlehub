@@ -489,6 +489,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 
 pub use handlers::auth::OidcProviderNames;
 pub use handlers::back_office::exposure::ExposureConfig;
+pub use handlers::back_office::registries::RegistryViews;
 pub use handlers::flags::FlagSources;
 pub use handlers::front_office::cli_download::CliBinaryPath;
 pub use handlers::healthz::{healthz, livez};
@@ -689,6 +690,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 delete_package, invalidate_package, list_packages as admin_list_packages,
                 package_detail, unblock_package,
             },
+            registries::get_registry_view,
             retention::{run_retention, set_retention_pin},
             sbom::{export_org_sbom, get_artifact_sbom},
             stats::admin_stats,
@@ -904,6 +906,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::security::list_pullers); // GET  /api/v1/verdicts/{registry}/{name}/{version}/pullers
     cfg.service(crate::handlers::security::verdict_summary); // GET  /api/v1/admin/verdicts/summary
     cfg.service(crate::handlers::security::list_verdicts); // GET  /api/v1/admin/verdicts
+    cfg.service(crate::handlers::security::list_scans); // GET  /api/v1/admin/scans
+    cfg.service(crate::handlers::security::list_findings); // GET  /api/v1/admin/findings
     cfg.service(crate::handlers::security::bulk_rescan); // POST /api/v1/admin/verdicts/rescan
     cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
     cfg.service(download_cli);
@@ -976,6 +980,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // More specific first: `/stats/history` before `/stats`.
     cfg.service(admin_stats_history);
     cfg.service(admin_stats);
+    cfg.service(get_registry_view); // GET  /api/v1/admin/registries/{name} (RFC 0044 §5.3)
     cfg.service(admin_access_check);
     cfg.service(admin_authz_explain);
     cfg.service(authz_shadow);

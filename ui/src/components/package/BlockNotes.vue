@@ -12,6 +12,9 @@ defineProps<{
   registry: string;
   name: string;
   selectedRow: ExploreVersionDto;
+  /** RFC 0044: the page draws the notes on Overview and the vulnerabilities on
+      Security; absent, both. */
+  part?: "notes" | "vulnerabilities";
 }>();
 
 const { t } = useI18n();
@@ -39,7 +42,7 @@ function blockedInfo(fw: FirewallDto) {
        It is the answer the page exists to give, so it is simply on the
        page. The tie bar is the denial note's own, ported from the catalog
        rather than invented here. -->
-  <RuleNote v-if="blockedInfo(selectedRow.firewall)" class="mt-4">
+  <RuleNote v-if="part !== 'vulnerabilities' && blockedInfo(selectedRow.firewall)" class="mt-4">
     <span class="text-primary">{{ t("common.reasonLabel") }}</span>
     {{ blockedInfo(selectedRow.firewall)!.reason }}
     <span class="px-2" aria-hidden="true">·</span>
@@ -62,7 +65,7 @@ function blockedInfo(fw: FirewallDto) {
   <!-- The deprecation message, which was a `title=` on a chip in the
        table — the upstream's own sentence about why not to use this
        version, available only to a mouse held still. -->
-  <RuleNote v-if="selectedRow.deprecated" class="mt-4">
+  <RuleNote v-if="part !== 'vulnerabilities' && selectedRow.deprecated" class="mt-4">
     <span class="text-copper">{{ t("packageDetailPage.deprecated") }}</span>
     {{ selectedRow.deprecation_message ?? t("packageDetailPage.deprecatedNoReason") }}
   </RuleNote>
@@ -70,7 +73,8 @@ function blockedInfo(fw: FirewallDto) {
   <!-- Vulnerabilities as text, for the same reason. A severity chip whose
        identifier and summary appear only under a stationary mouse is a
        supply-chain fact this page is not really reporting. -->
-  <ul v-if="selectedRow.vulnerabilities.length" class="mt-4 space-y-2">
+  <template v-if="part === 'notes'" />
+  <ul v-else-if="selectedRow.vulnerabilities.length" class="mt-4 space-y-2">
     <RuleNote v-for="vuln in selectedRow.vulnerabilities" :key="vuln.osv_id" as="li">
       <Badge :variant="severityVariant(vuln.severity)" class="mr-2 text-xs">{{
         vuln.severity

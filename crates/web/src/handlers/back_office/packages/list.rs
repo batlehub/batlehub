@@ -26,10 +26,24 @@ pub struct AdminPackageQuery {
 /// instead of returning a bare array with no way to tell if more pages exist.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct AdminPackageListResponse {
-    pub items: Vec<batlehub_core::entities::PackageSummary>,
+    pub items: Vec<AdminPackageRow>,
     pub total: u64,
     pub page: u64,
     pub per_page: u64,
+    /// The scan-status batch failed or timed out, so no row carries
+    /// `scan_status` (RFC 0044 §10.2).
+    pub scan_status_unavailable: bool,
+}
+
+/// One version, and where it stands in scanning (RFC 0044 §4.2).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct AdminPackageRow {
+    #[serde(flatten)]
+    pub summary: batlehub_core::entities::PackageSummary,
+    /// Absent on a registry without `[security]` and for a caller without
+    /// `quarantine:read` alike.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_status: Option<crate::handlers::security::ScanStatusDto>,
 }
 
 /// List all known packages (admin).
@@ -90,11 +104,24 @@ pub async fn list_packages(
     )
     .map_err(AppError::from)?;
 
+    let coords: Vec<PackageId> = items.iter().map(|s| s.package_id.clone()).collect();
+    let (statuses, scan_status_unavailable) =
+        crate::handlers::security::scan_status_for(&hot, &identity.0, &coords).await;
+    let items = items
+        .into_iter()
+        .zip(statuses)
+        .map(|(summary, scan_status)| AdminPackageRow {
+            summary,
+            scan_status,
+        })
+        .collect();
+
     Ok(web::Json(AdminPackageListResponse {
         items,
         total,
         page: query.page,
         per_page: query.per_page,
+        scan_status_unavailable,
     }))
 }
 

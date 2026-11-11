@@ -164,7 +164,8 @@ function checkMetaGuards(
       : { path: "/login", query: { redirect: to.fullPath } };
   }
   if (to.meta.adminArea) {
-    const verb = ADMIN_PAGE_VERBS[to.path];
+    // A dynamic page (`…/registries/:name`) names its verb in `meta.verb`.
+    const verb = (to.meta.verb as string | undefined) ?? ADMIN_PAGE_VERBS[to.path];
     if (!verb || !can(verb)) {
       if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
       const section = to.path.split("/").slice(0, 3).join("/") + "/";
@@ -321,6 +322,10 @@ export const router = createRouter({
         { path: "packages/all", component: () => import("@/pages/AdminPackages.vue") },
         { path: "packages/bulk", component: () => import("@/pages/AdminBulk.vue") },
         { path: "security/blocks", component: () => import("@/pages/AdminBlocks.vue") },
+        // RFC 0044 phase 2: the scan queue and its failures.
+        { path: "security/scans", component: () => import("@/pages/AdminScans.vue") },
+        // RFC 0044 phase 3: findings across the registries the caller reads them on.
+        { path: "security/findings", component: () => import("@/pages/AdminFindings.vue") },
         { path: "security/access-check", component: () => import("@/pages/AdminAccessCheck.vue") },
         {
           path: "security/authorization",
@@ -341,6 +346,17 @@ export const router = createRouter({
         { path: "operations/warming", component: () => import("@/pages/AdminWarming.vue") },
         { path: "operations/imports", component: () => import("@/pages/AdminImports.vue") },
         { path: "observability/health", component: () => import("@/pages/AdminHealth.vue") },
+        // RFC 0044 phase 5: every registry, and one registry's config and health.
+        {
+          path: "observability/registries",
+          component: () => import("@/pages/AdminRegistries.vue"),
+        },
+        {
+          path: "observability/registries/:name",
+          component: () => import("@/pages/AdminRegistry.vue"),
+          // GET /admin/registries/{name} asks system:read.
+          meta: { verb: "system:read" },
+        },
         { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
         { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },
         { path: "operations/upstream", component: () => import("@/pages/AdminUpstream.vue") },

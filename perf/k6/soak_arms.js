@@ -201,6 +201,15 @@ export const ARMS = [
     request: () => ({ url: p(`/api/v1/packages?registry=${NPM_REGISTRY}&limit=50`) }),
   },
   {
+    op: "explore_list",
+    kind: "npm",
+    registry: NPM_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "the catalogue page and its per-page scan-status batch (RFC 0044 §10.3)",
+    request: () => ({ url: p(`/api/v1/explore/packages?registry=${NPM_REGISTRY}`) }),
+  },
+  {
     op: "pullability",
     kind: "npm",
     registry: NPM_REGISTRY,

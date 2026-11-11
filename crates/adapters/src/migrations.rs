@@ -277,6 +277,11 @@ pub fn embedded_migrator() -> Migrator {
             "read cache tokens ignore last used ip",
             "../migrations/067_read_cache_tokens_ignore_last_used_ip.sql"
         ),
+        mig!(
+            68,
+            "rfc 0044 scan status indexes",
+            "../migrations/068_rfc0044_scan_status_indexes.sql"
+        ),
     ])
 }
 

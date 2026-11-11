@@ -18,6 +18,7 @@ const stubs = {
   FlagsPanel: { template: "<section data-testid='flags' />" },
   ExposurePanel: { template: "<section data-testid='exposure' />" },
   FindingsPanel: { template: "<section data-testid='findings' />" },
+  RouterLink: { props: ["to"], template: '<a :data-to="to"><slot /></a>' },
 };
 
 function sections(verbs: string[]) {
@@ -50,5 +51,19 @@ describe("SecurityDashboard", () => {
     held.verbs = ["quarantine:read"];
     const narrow = mount(SecurityDashboard, { global: { stubs } });
     expect(narrow.findComponent({ name: "HoldsPanel" }).props("canOpenFindings")).toBe(false);
+  });
+
+  it("links the admin Scans and Findings pages on their own verbs (RFC 0044)", () => {
+    const links = (verbs: string[]) => {
+      held.verbs = verbs;
+      const w = mount(SecurityDashboard, { global: { stubs } });
+      return w.findAll("a[data-to]").map((l) => l.attributes("data-to"));
+    };
+    expect(links(["quarantine:read", "findings:read"])).toEqual([
+      "/admin/security/scans",
+      "/admin/security/findings",
+    ]);
+    expect(links(["findings:read"])).toEqual(["/admin/security/findings"]);
+    expect(links(["flags:read"])).toEqual([]);
   });
 });

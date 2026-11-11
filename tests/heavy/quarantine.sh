@@ -243,6 +243,21 @@ new_consumer() {  # dir
 EOF
 }
 
+# ── RFC 0044 §6.P: the console's scan status, as the API serves it ──────────
+
+USER_TOKEN="heavy-user-token"
+
+# scan_row <token|-> <registry> <name> — the explore list's row for the
+# package, as JSON, or nothing when the list does not carry it.
+scan_row() {
+  local auth=()
+  [[ "$1" == "-" ]] || auth=(-H "Authorization: Bearer $1")
+  curl -s "${auth[@]}" "$HEAVY_BASE/api/v1/explore/packages?registry=$2&q=$3" \
+    | python3 -c 'import json,sys
+rows=[r for r in json.load(sys.stdin)["items"] if r["name"]==sys.argv[1]]
+print(json.dumps(rows[0]) if rows else "")' "$3"
+}
+
 # ── 1. First contact holds ───────────────────────────────────────────────────
 
 CONSUMER="$HEAVY_WORK/consumer"
@@ -277,6 +292,46 @@ grep -q "batlehub-cli why $REG/" "$HEAVY_WORK/install-1.err" \
 TARBALL_REQUESTS="$(heavy_wire_count_after first-contact "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 403")"
 heavy_log "HOLD-OK (npm exit $RC, $TARBALL_REQUESTS request(s) for the held tarball, SCAN_PENDING printed)"
 
+# RFC 0044 §6.P observation 1, first half. A refused first contact caches
+# nothing (the worker fetches the bytes itself), so the catalogue has no row
+# for the version until it is first served — the first CI run measured that
+# (RFC 0044 §18.2). The transient status is read where it exists: the verdict
+# GET, which the user tier reads without detail. The embedded worker may
+# already have finished, so `scanned` is accepted; the second half, after
+# `wait`, reads the catalogue and is exact.
+ROW="$(scan_row "$USER_TOKEN" "$REG" "$PKG")"
+[[ -z "$ROW" ]] || heavy_fail "the explore list has a row for $PKG before anything was served — the refused install cached something: $ROW"
+VERDICT="$(curl -fsS -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$REG/$PKG/$CLEAN")" \
+  || heavy_fail "the verdict GET failed for the user tier after the refused install"
+python3 - "$VERDICT" <<'PY' || heavy_fail "scan_status during the scan is wrong for the user tier: $VERDICT"
+import json, sys
+s = json.loads(sys.argv[1]).get("scan_status") or {}
+assert s.get("state") in ("queued", "scanning", "scanned"), s
+assert "detail" not in s, s
+PY
+# Observation 2: anonymous holds no quarantine:read — the row, and no key.
+ROW="$(scan_row - "$REG" "$PKG")"
+[[ -z "$ROW" ]] || python3 -c 'import json,sys; assert "scan_status" not in json.loads(sys.argv[1])' "$ROW" \
+  || heavy_fail "an anonymous caller was told the scan status of $PKG: $ROW"
+heavy_log "SCAN-STATUS-TRANSIENT-OK (user: $(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["scan_status"]["state"])' "$VERDICT"); anonymous: no scan_status)"
+
+# Observation 4 (phase 2): the Scans page needs instance-tier
+# `quarantine:read` (RFC 0044 §18) — the user, who holds it per registry only,
+# gets `403` — and the admin finds the refused version on the queue, unless the
+# embedded worker already closed it, in which case the list says scanned.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/scans")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/scans, not 403"
+SCANS="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/scans?registry=$REG")" \
+  || heavy_fail "/api/v1/admin/scans failed for the admin"
+python3 - "$SCANS" "$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$REG/$PKG/$CLEAN")" "$PKG" "$CLEAN" <<'PY' \
+  || heavy_fail "the held version is neither on the Scans queue nor scanned: $SCANS"
+import json, sys
+page, row, name, version = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3], sys.argv[4]
+queued = [r for r in page["items"] if (r["name"], r["version"]) == (name, version)]
+assert queued and queued[0]["state"] in ("queued", "scanning") or row["scan_status"]["state"] == "scanned", (page, row)
+PY
+heavy_log "SCANS-PAGE-OK (user 403; admin sees $PKG@$CLEAN queued, scanning or already scanned)"
+
 # ── 2. The worker clears it ──────────────────────────────────────────────────
 
 heavy_log "batlehub wait $REG:$PKG@$CLEAN"
@@ -299,6 +354,17 @@ INSTALLED="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["ver
 heavy_wire_re_after "recover" "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 200" \
   "the tarball was not served through the proxy after the verdict cleared"
 heavy_log "RECOVER-OK ($PKG@$CLEAN installed, verdict allowed)"
+
+# RFC 0044 §6.P observation 1, second half: the same call now reads the
+# verdict `wait` saw, and the admin tier carries the detail.
+python3 - "$(scan_row "$USER_TOKEN" "$REG" "$PKG")" "$(scan_row "$ADMIN_TOKEN" "$REG" "$PKG")" <<'PY' \
+  || heavy_fail "the explore list does not read scanned/allowed for $PKG@$CLEAN after wait"
+import json, sys
+user, admin = (json.loads(a)["scan_status"] for a in sys.argv[1:3])
+assert user == {"state": "scanned", "verdict": "allowed"}, user
+assert admin["state"] == "scanned" and admin["detail"]["last_scanned_at"], admin
+PY
+heavy_log "SCAN-STATUS-OK (scanned · allowed for the user, with detail for the admin)"
 
 # ── 3. A finding refuses ─────────────────────────────────────────────────────
 #
@@ -378,6 +444,39 @@ grep -q "$ADVISORY" "$HEAVY_WORK/why.out" \
 grep -q "denied" "$HEAVY_WORK/why.out" \
   || { cat "$HEAVY_WORK/why.out" >&2; heavy_fail "batlehub why does not say the verdict is denied"; }
 heavy_log "FINDING-OK ($ADVISORY on the wire, printed by npm, and in 'why')"
+
+# RFC 0044 §6.P observation 4 (phase 3): the Findings page is
+# `findings:read`'s, which the user role holds nowhere — `403` — and the
+# admin finds the advisory, by reference, on the version it denied.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/findings")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/findings, not 403"
+FINDINGS="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/findings?group=reference&reference=$ADVISORY")" \
+  || heavy_fail "/api/v1/admin/findings failed for the admin"
+python3 - "$FINDINGS" "$REG" "$PKG" "$VULN" <<'PY' || heavy_fail "the Findings page does not list $ADVISORY on $PKG@$VULN as denied: $FINDINGS"
+import json, sys
+page, reg, name, version = json.loads(sys.argv[1]), *sys.argv[2:]
+rows = [r for r in page["items"] if (r["registry"], r["name"], r["version"]) == (reg, name, version)]
+assert rows and rows[0]["verdict"] == "denied", page
+assert "raw" not in rows[0], rows[0]
+PY
+heavy_log "FINDINGS-PAGE-OK (user 403; admin sees $ADVISORY on $PKG@$VULN, denied)"
+
+# RFC 0044 §6.P observations 4 and 8 (phase 5): the registry page is
+# `system:read`'s, and its monitoring link is the configured template with
+# this registry's name in it, built by the server. The upstream credential
+# never appears, only that one is or is not configured.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/admin/registries/$REG")"
+[[ "$CODE" == "403" ]] || heavy_fail "the user token got $CODE on /api/v1/admin/registries/$REG, not 403"
+VIEW="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/registries/$REG")" \
+  || heavy_fail "/api/v1/admin/registries/$REG failed for the admin"
+python3 - "$VIEW" "$REG" <<'PY' || heavy_fail "the registry view of $REG is wrong: $VIEW"
+import json, sys
+view, reg = json.loads(sys.argv[1]), sys.argv[2]
+assert view["monitoring_url"] == f"https://grafana.test/d/x?var-registry={reg}", view
+assert view["scan"]["enabled"] is True, view
+assert view["config"]["upstream_auth"]["state"] in ("none", "configured"), view
+PY
+heavy_log "REGISTRY-VIEW-OK (user 403; admin sees the monitoring link for $REG)"
 
 # ── 3b. `download` explains a refusal (RFC 0040 heavy case 10) ───────────────
 #
@@ -638,6 +737,31 @@ set -e
   || { cat "$HEAVY_WORK/install-9.err" >&2; heavy_fail "npm install through $RESCAN_REG failed after the clean scan"; }
 heavy_wire_re_after "flip-first-contact" "GET /proxy/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION/tarball -> 200" \
   "the tarball was not served after the clean scan"
+
+# RFC 0044 §6.P observation 7 (phase 4): `next_rescan` is the last scan plus
+# `rescan.interval_secs` (1 s here), only for `system:read`; the first
+# registry sets no interval, so its clock is absent rather than invented.
+NEXT="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION")" \
+  || heavy_fail "the admin could not read the verdict of $FLIP_PKG@$FLIP_VERSION"
+NONE="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$REG/$PKG/$CLEAN")" \
+  || heavy_fail "the admin could not read the verdict of $PKG@$CLEAN"
+USERS="$(curl -fsS -H "Authorization: Bearer $USER_TOKEN" "$HEAVY_BASE/api/v1/verdicts/$RESCAN_REG/$FLIP_PKG/$FLIP_VERSION")" \
+  || heavy_fail "the user could not read the verdict of $FLIP_PKG@$FLIP_VERSION"
+python3 - "$NEXT" "$NONE" "$USERS" <<'PY' || heavy_fail "next_rescan is wrong: $NEXT / $NONE / $USERS"
+import json, sys
+from datetime import datetime, timedelta
+nxt, none, user = (json.loads(a) for a in sys.argv[1:])
+import re
+# chrono writes up to 9 fractional digits; fromisoformat takes 6.
+at = lambda s: datetime.fromisoformat(re.sub(r"(\.\d{6})\d*", r"\1", s).replace("Z", "+00:00"))
+n = nxt["next_rescan"]
+assert n["verdict_interval_secs"] == 1, n
+assert at(n["verdict_at"]) == at(nxt["last_scanned_at"]) + timedelta(seconds=1), nxt
+assert "verdict_at" not in none.get("next_rescan", {}), none
+assert "next_rescan" not in user, user
+assert nxt["scan_status"]["state"] in ("scanned", "queued", "scanning"), nxt
+PY
+heavy_log "NEXT-RESCAN-OK (last scan + 1 s on $RESCAN_REG; none on $REG; absent for the user)"
 # The hold's release reached the receiver: the identity refused on first
 # contact is the one named.
 RELEASED="$(sink_wait artifact_released 1)"

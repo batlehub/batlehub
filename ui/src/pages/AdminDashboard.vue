@@ -12,6 +12,7 @@ import { useI18n } from "vue-i18n";
  */
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
+import { ExternalLink } from "@lucide/vue";
 import { adminStats, adminStatsHistory, registryHealth } from "@/client/sdk.gen";
 import type { StatsResponse, StatsHistoryResponse, RegistryHealthDto } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
@@ -34,7 +35,7 @@ import { Resolution } from "@/components/ui/resolution";
 import { AsyncState } from "@/components/ui/async-state";
 const { t } = useI18n();
 
-const { token } = useAuth();
+const { token, can } = useAuth();
 
 const {
   data: stats,
@@ -112,6 +113,11 @@ const totalRequests = computed(
   () => (stats.value?.aggregate.artifact_hits ?? 0) + (stats.value?.aggregate.artifact_misses ?? 0),
 );
 const hitRate = computed(() => stats.value?.aggregate.hit_rate ?? null);
+/** `[stats] dashboard_url`, bound only when http(s): an `href` is a script vector (T11). */
+const monitoring = computed(() => {
+  const u = stats.value?.monitoring_url;
+  return u && /^https?:\/\//i.test(u) ? u : undefined;
+});
 const fmtPct = (n: number | null): string => (n == null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 /**
@@ -169,7 +175,16 @@ const trendText = computed(() => {
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" :title="t('dashboard.title')" />
+    <PageHeader variant="display" :title="t('dashboard.title')">
+      <template v-if="monitoring" #actions>
+        <Button as-child size="sm" variant="outline">
+          <a :href="monitoring" target="_blank" rel="noopener noreferrer" data-testid="monitoring">
+            {{ t("adminRegistry.monitoring") }}
+            <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
+        </Button>
+      </template>
+    </PageHeader>
 
     <Skeleton v-if="healthLoading" :lines="3" />
 
@@ -279,7 +294,16 @@ const trendText = computed(() => {
           </TableHeader>
           <TableBody>
             <TableRow v-for="r in stats.per_registry" :key="r.registry">
-              <TableCell class="font-mono text-sm">{{ r.registry }}</TableCell>
+              <TableCell class="font-mono text-sm">
+                <!-- The registry page asks system:read; this page only stats:read. -->
+                <RouterLink
+                  v-if="can('system:read')"
+                  :to="`/admin/observability/registries/${encodeURIComponent(r.registry)}`"
+                  class="hover:underline underline-offset-[3px]"
+                  >{{ r.registry }}</RouterLink
+                >
+                <template v-else>{{ r.registry }}</template>
+              </TableCell>
               <TableCell class="text-right font-mono text-sm">
                 {{ fmtPct(r.hit_rate ?? null) }}
               </TableCell>

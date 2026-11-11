@@ -26,6 +26,13 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
+# RFC 0044: the `user` role holds `quarantine:read`, so a list it reads runs
+# the scan-status batch; anonymous does not, and must not.
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-db-calls-storage"
@@ -50,3 +57,30 @@ mode = "local"
 anonymous = ["releases:read", "source:read"]
 user = ["releases:read", "source:read"]
 admin = ["*"]
+
+# RFC 0044 §10.3: a registry behind [security], so the list routes carry a
+# scan status and their budget measures its batch. Without a worker the job
+# the first download queues stays open — a status to read — and the mock's
+# 2024 publish date is past `mature_age_secs`, so the download is served as
+# `warned` and the catalogue lists it. The scanner is never called.
+[[registries]]
+type = "npm"
+name = "npm-sec-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${DB_CALLS_MOCK_PORT}/npm"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "warn"
+min_age_secs = 3600
+mature_age_secs = 86400
+scanners = ["osv"]
+required_scanners = ["osv"]
+
+[scanners.osv]
+type = "osv"
+api_url = "http://127.0.0.1:${DB_CALLS_MOCK_PORT}/osv"

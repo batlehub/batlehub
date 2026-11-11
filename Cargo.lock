@@ -1139,12 +1139,14 @@ dependencies = [
  "anyhow",
  "batlehub-core",
  "chrono",
+ "form_urlencoded",
  "glob",
  "ipnet",
  "regex",
  "serde",
  "tempfile",
  "toml",
+ "url",
  "utoipa",
 ]
 

@@ -16,6 +16,8 @@ const props = defineProps<{
   sbomState: "available" | "none" | "unknown";
   sbomLoading: string | null;
   sbomError?: string;
+  /** RFC 0044: the download on Overview, the SBOM on Security; absent, both. */
+  part?: "download" | "sbom";
 }>();
 
 const emit = defineEmits<{ "download-sbom": [version: string, fmt: "spdx" | "cyclonedx"] }>();
@@ -72,7 +74,7 @@ function downloadUrl(version: string): string | null {
        nothing to offer, which is the same answer without the furniture. -->
   <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
     <a
-      v-if="downloadUrl(selectedRow.version)"
+      v-if="part !== 'sbom' && downloadUrl(selectedRow.version)"
       :href="downloadUrl(selectedRow.version)!"
       target="_blank"
       rel="noopener noreferrer"
@@ -81,7 +83,8 @@ function downloadUrl(version: string): string | null {
       <Download class="h-4 w-4" aria-hidden="true" />
       {{ t("packageDetailPage.downloadViaProxy", { version: selectedRow.version }) }}
     </a>
-    <template v-if="token && sbomState === 'available'">
+    <template v-if="part === 'download'" />
+    <template v-else-if="token && sbomState === 'available'">
       <button
         v-if="sbomFormats.includes('spdx')"
         type="button"
@@ -110,7 +113,7 @@ function downloadUrl(version: string): string | null {
       t("packageDetailPage.sbomPending")
     }}</span>
   </div>
-  <output v-if="sbomError" class="mt-2 block text-sm text-destructive">
+  <output v-if="part !== 'download' && sbomError" class="mt-2 block text-sm text-destructive">
     {{
       t("packageDetailPage.sbomFailed", {
         reason: sbomError,

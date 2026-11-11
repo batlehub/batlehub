@@ -370,6 +370,9 @@ impl PgPackageRepository {
     }
 }
 
+/// How long a request waits for queued access events to be written.
+const REQUEST_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[async_trait]
 impl PackageRepository for PgPackageRepository {
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
@@ -386,8 +389,22 @@ impl PackageRepository for PgPackageRepository {
         result
     }
 
+    /// The request-path flush (first cache write, pullers) is bounded: a sick
+    /// database must not hold a download behind the writer's retries (review
+    /// of #311). The shutdown flush, the inherent method, still waits.
     async fn flush_access_events(&self) {
-        PgPackageRepository::flush_access_events(self).await
+        if tokio::time::timeout(
+            REQUEST_FLUSH_TIMEOUT,
+            PgPackageRepository::flush_access_events(self),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                timeout_ms = REQUEST_FLUSH_TIMEOUT.as_millis() as u64,
+                "access events not flushed in time; answering without them"
+            );
+        }
     }
 
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError> {

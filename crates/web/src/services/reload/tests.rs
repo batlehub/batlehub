@@ -123,6 +123,7 @@ fn empty_pending() -> PendingReload {
         new_registry_host_map: crate::RegistryHostMap::default(),
         new_proxy_trust: crate::middleware::ProxyTrust::default(),
         warnings: Vec::new(),
+        new_registry_views: Default::default(),
     }
 }
 
@@ -217,6 +218,30 @@ fn expire_stale_clears_expired_pending() {
 
 // ── Apply / reload tests ──────────────────────────────────────────────────────
 
+/// RFC 0044 decision 32: the `[stats]` links are hot. `build_pending` projects
+/// them and `apply` swaps them into the handle the registry pages hold.
+#[actix_web::test]
+async fn apply_swaps_the_registry_views() {
+    let svc = make_svc(true);
+    let live = svc.registry_views();
+    assert_eq!(live.dashboard_url(), None);
+    let config = batlehub_config::load_from_str(
+        "[database]\ntype = \"postgresql\"\nurl = \"postgresql://localhost/t\"\n\
+         [storage]\ntype = \"filesystem\"\npath = \"/tmp/t\"\n\
+         [server]\nhost = \"127.0.0.1\"\nport = 8080\n\
+         [stats]\ndashboard_url = \"https://grafana.test/d/all\"\n",
+    )
+    .unwrap();
+    *svc.pending.lock().unwrap() = Some(PendingReload {
+        new_registry_views: crate::handlers::back_office::registries::project(&config),
+        ..empty_pending()
+    });
+    svc.apply("test-user").await.unwrap();
+    assert_eq!(
+        live.dashboard_url().as_deref(),
+        Some("https://grafana.test/d/all")
+    );
+}
 #[tokio::test]
 async fn apply_success_swaps_hot_config() {
     let svc = make_svc(true);
@@ -273,6 +298,7 @@ async fn apply_success_swaps_hot_config() {
             "10.42.0.0/16".to_owned()
         ])),
         warnings: Vec::new(),
+        new_registry_views: Default::default(),
     };
     // The handle the app's middleware would hold. It must see the swap, or host
     // routing can go live while trust stays at its startup value.

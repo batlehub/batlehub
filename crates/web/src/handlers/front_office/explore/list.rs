@@ -103,6 +103,9 @@ pub struct ExplorePackageListResponse {
     /// `true` when the upstream database was unreachable and no cached data was available.
     /// The result set will be empty; the UI should surface a warning to the user.
     pub upstream_unavailable: bool,
+    /// The scan-status batch failed or timed out, so no row carries
+    /// `scan_status`; the list is otherwise current (RFC 0044 §10.2).
+    pub scan_status_unavailable: bool,
     /// Whether `[search] readmes` is on for this instance.
     ///
     /// So a client can tell "no package here says that" from "this instance does
@@ -171,6 +174,11 @@ pub struct ExploreEntryDto {
     /// package-authored content reached by a much cheaper path — no navigation,
     /// just a query (RFC 0007-bis §7.4).
     pub snippet: Option<String>,
+    /// The scan status of `newest_version`, as last recorded (RFC 0044 §4.2).
+    /// Absent on a registry without `[security]` and for a caller without
+    /// `quarantine:read` alike, so the two cannot be told apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_status: Option<crate::handlers::security::ScanStatusDto>,
 }
 
 /// Explore available packages (one entry per unique package name).
@@ -274,6 +282,7 @@ pub async fn explore_packages(
             page,
             per_page,
             upstream_unavailable: false,
+            scan_status_unavailable: false,
             readme_search_enabled,
             searched_in: scope.as_str().to_owned(),
             truncated: false,
@@ -349,10 +358,11 @@ pub async fn explore_packages(
         )
         .map_err(AppError::from)?;
 
-        let items: Vec<ExploreEntryDto> = packages
+        let mut items: Vec<ExploreEntryDto> = packages
             .into_iter()
             .map(|e| to_dto(e, &resolution, &identity, now, "name", None))
             .collect();
+        let scan_status_unavailable = attach_scan_status(&hot, &identity, &mut items).await;
 
         return Ok(web::Json(ExplorePackageListResponse {
             total: total as usize,
@@ -360,6 +370,7 @@ pub async fn explore_packages(
             page,
             per_page,
             upstream_unavailable: pkg_unavailable || count_unavailable,
+            scan_status_unavailable,
             readme_search_enabled,
             searched_in: scope.as_str().to_owned(),
             truncated: false,
@@ -389,7 +400,8 @@ pub async fn explore_packages(
     let total = merged.len();
     let start = (page * per_page).min(total as u64) as usize;
     let end = (start + per_page as usize).min(total);
-    let items = merged[start..end].to_vec();
+    let mut items = merged[start..end].to_vec();
+    let scan_status_unavailable = attach_scan_status(&hot, &identity, &mut items).await;
 
     Ok(web::Json(ExplorePackageListResponse {
         total,
@@ -397,10 +409,40 @@ pub async fn explore_packages(
         page,
         per_page,
         upstream_unavailable,
+        scan_status_unavailable,
         readme_search_enabled,
         searched_in: scope.as_str().to_owned(),
         truncated,
     }))
+}
+
+/// Each row's `scan_status`, for its most recently cached version, in one
+/// batch for the page. Returns whether the batch failed.
+async fn attach_scan_status(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    identity: &AuthIdentity,
+    items: &mut [ExploreEntryDto],
+) -> bool {
+    let rows: Vec<usize> = (0..items.len())
+        .filter(|&i| items[i].newest_version.is_some())
+        .collect();
+    let coords: Vec<batlehub_core::entities::PackageId> = rows
+        .iter()
+        .map(|&i| {
+            let e = &items[i];
+            batlehub_core::entities::PackageId::new(
+                &e.registry,
+                &e.name,
+                e.newest_version.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let (statuses, unavailable) =
+        crate::handlers::security::scan_status_for(hot, &identity.0, &coords).await;
+    for (i, status) in rows.into_iter().zip(statuses) {
+        items[i].scan_status = status;
+    }
+    unavailable
 }
 
 /// The catalogue's sort order, defaulting to downloads for anything unknown.
@@ -688,5 +730,6 @@ fn to_dto(
         newest_version: e.newest_version,
         matched_in: matched_in.to_owned(),
         snippet,
+        scan_status: None,
     }
 }

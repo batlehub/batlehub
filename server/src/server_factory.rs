@@ -369,6 +369,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .app_data(web::Data::new(flag_sources.clone()))
             .app_data(web::Data::new(exposure_config.clone()))
             .app_data(web::Data::new(Arc::clone(&reload_svc)))
+            .app_data(web::Data::new(reload_svc.registry_views()))
             .app_data(web::Data::new(Arc::clone(&banner_svc)))
             .app_data(web::Data::new(proxy_trust.clone()))
             .app_data(web::Data::new(registry_host_map.clone()))

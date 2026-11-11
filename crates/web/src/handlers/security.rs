@@ -291,6 +291,153 @@ pub async fn hold_http_response(
     hold_response(kind, verdict, visibility, chrono::Utc::now())
 }
 
+// ── scan status (RFC 0044) ───────────────────────────────────────────────────
+
+/// How long a list waits for its status batch before it is served without
+/// one (RFC 0044 §6.3).
+const SCAN_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The longest `last_error` a status carries, after redaction.
+const LAST_ERROR_MAX_CHARS: usize = 200;
+
+/// Where a version stands in scanning, as one caller may see it (RFC 0044
+/// §4.2): `state` and `verdict` with `quarantine:read`, `detail` with
+/// `findings:read` too, nothing at all without.
+///
+/// The fields are private and the only constructor is private to this module,
+/// so a status reaches a response through [`scan_status_for`] or not at all.
+/// There is no `Deserialize`: it cannot arrive from outside either.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ScanStatusDto {
+    state: batlehub_core::entities::ScanState,
+    /// Present only when `state` is `scanned`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verdict: Option<VerdictState>,
+    /// Present only with `findings:read`. `last_error` redacted and cut to
+    /// 200 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<batlehub_core::entities::ScanDetail>,
+}
+
+impl ScanStatusDto {
+    fn filtered(
+        status: batlehub_core::entities::ScanStatus,
+        visibility: HoldVisibility,
+    ) -> Option<Self> {
+        let detail = match visibility {
+            HoldVisibility::Hidden => return None,
+            HoldVisibility::Reason => None,
+            HoldVisibility::Findings => {
+                let mut d = status.detail;
+                d.last_error = d.last_error.as_deref().map(redact_error);
+                Some(d)
+            }
+        };
+        Some(Self {
+            state: status.state,
+            verdict: status.verdict,
+            detail,
+        })
+    }
+}
+
+/// A worker's error as a reader may see it: URLs redacted **then** cut to
+/// 200 characters — a cut mid-URL would no longer parse as one (§6.3).
+fn redact_error(e: &str) -> String {
+    batlehub_adapters::registry::http_client::redact_text_urls(e)
+        .chars()
+        .take(LAST_ERROR_MAX_CHARS)
+        .collect()
+}
+
+/// The scan status of each of `coords` for `identity`, and whether the batch
+/// failed (RFC 0044 §5.1). The one way a status reaches a response.
+///
+/// - The tier is decided per registry from the config tiers, without a
+///   shadow ([`batlehub_core::services::authz::config_tier_holds`]), so a
+///   list is never wider than the per-version verdict GET.
+/// - When no coordinate is both on a `[security]` registry and visible, the
+///   batch is **not run**: an anonymous list on a default config stays at
+///   zero statements (T8b).
+/// - Jobs are read before verdicts, in one statement each, under a 500 ms
+///   timeout. A failure or a timeout drops every status and answers `true`:
+///   closed for disclosure, open for availability (§10.2).
+/// - Stored rows only. `VerdictService::current()` writes, and a page view
+///   must not enqueue a scan (T15).
+pub async fn scan_status_for(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    identity: &Identity,
+    coords: &[PackageId],
+) -> (Vec<Option<ScanStatusDto>>, bool) {
+    let mut out = vec![None; coords.len()];
+    let (security_on, verdicts, queue) = {
+        let hot = hot.read().await;
+        let on: Vec<bool> = coords
+            .iter()
+            .map(|c| hot.security.contains_key(&c.registry))
+            .collect();
+        (on, hot.verdicts.clone(), hot.scan_queue.clone())
+    };
+    if !security_on.contains(&true) {
+        return (out, false);
+    }
+    let holds = authz::config_tier_holds(
+        hot,
+        identity,
+        coords,
+        &[Action::QuarantineRead, Action::FindingsRead],
+    )
+    .await;
+    let visibility: Vec<HoldVisibility> = holds
+        .iter()
+        .zip(&security_on)
+        .map(|(h, on)| match (on, h.first(), h.get(1)) {
+            (true, Some(true), Some(true)) => HoldVisibility::Findings,
+            (true, Some(true), _) => HoldVisibility::Reason,
+            _ => HoldVisibility::Hidden,
+        })
+        .collect();
+    let wanted: Vec<usize> = (0..coords.len())
+        .filter(|&i| visibility[i] != HoldVisibility::Hidden)
+        .collect();
+    if wanted.is_empty() {
+        return (out, false);
+    }
+    let (Some(verdicts), Some(queue)) = (verdicts, queue) else {
+        tracing::warn!("scan status: a [security] registry with no verdict store; status withheld");
+        return (out, true);
+    };
+    let batch: Vec<PackageId> = wanted.iter().map(|&i| coords[i].clone()).collect();
+    let read = async {
+        let jobs = queue.jobs_for(&batch).await?;
+        let found = verdicts.get_many(&batch).await?;
+        Ok::<_, batlehub_core::error::CoreError>((jobs, found))
+    };
+    let (jobs, found) = match tokio::time::timeout(SCAN_STATUS_TIMEOUT, read).await {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "scan status: batch failed; list served without it");
+            return (out, true);
+        }
+        Err(_) => {
+            tracing::warn!("scan status: batch timed out; list served without it");
+            return (out, true);
+        }
+    };
+    let now = chrono::Utc::now();
+    for ((&i, (open, closed)), verdict) in wanted.iter().zip(&jobs).zip(&found) {
+        out[i] = batlehub_core::services::scan_status::derive(
+            true,
+            open.as_ref(),
+            closed.as_ref(),
+            verdict.as_ref(),
+            now,
+        )
+        .and_then(|s| ScanStatusDto::filtered(s, visibility[i]));
+    }
+    (out, false)
+}
+
 // ── the endpoint ─────────────────────────────────────────────────────────────
 
 /// A verdict as the endpoint serves it: the stored row, findings only for a
@@ -312,6 +459,15 @@ pub struct VerdictResponse {
     pub ref_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_commit: Option<String>,
+    /// Where the version stands in scanning, at the caller's tier (RFC 0044
+    /// §4.2). The same field the lists carry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_status: Option<ScanStatusDto>,
+    /// When the version is looked at again; only with `quarantine:read` at
+    /// the instance tier, the verb RFC 0042 gives the security reads (RFC 0044
+    /// §7.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_rescan: Option<batlehub_core::services::scan_status::NextRescan>,
 }
 
 /// The current verdict for one version (RFC 0018 §4.2 *Verdict endpoint*).
@@ -341,6 +497,8 @@ pub async fn get_verdict(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    exposure: Option<web::Data<crate::handlers::back_office::exposure::ExposureConfig>>,
+    advisories: Option<web::Data<Arc<dyn batlehub_core::ports::AdvisoryRepository>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
     let requested = PackageId::new(&registry, &name, &version);
@@ -412,9 +570,40 @@ pub async fn get_verdict(
     if findings_withheld {
         verdict.findings.clear();
     }
+    let (statuses, _) = scan_status_for(&svc.hot, &identity.0, std::slice::from_ref(&pkg)).await;
+    let next_rescan =
+        if authz::authorize_control(&svc.hot, None, &identity.0, Action::QuarantineRead)
+            .await
+            .is_ok()
+        {
+            let interval = exposure.as_ref().and_then(|e| e.sbom_recheck_interval);
+            // A failed read drops the SBOM clock, not the answer.
+            let sbom_last_run = match (&advisories, interval) {
+                (Some(repo), Some(_)) => repo
+                    .list_scan_state()
+                    .await
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "next_rescan: scan state unreadable"),
+                    )
+                    .ok()
+                    .and_then(|rows| rows.into_iter().find(|r| r.registry == registry))
+                    .map(|r| r.last_scan_at),
+                _ => None,
+            };
+            Some(batlehub_core::services::scan_status::next_rescan(
+                &verdict,
+                policy.rescan_interval,
+                sbom_last_run,
+                interval,
+            ))
+        } else {
+            None
+        };
     Ok(web::Json(VerdictResponse {
         verdict,
         findings_withheld,
+        scan_status: statuses.into_iter().next().flatten(),
+        next_rescan,
         requested_ref: resolution.as_ref().map(|r| r.requested.clone()),
         ref_kind: resolution.as_ref().map(|r| r.kind.as_str().to_owned()),
         resolved_commit: resolution.as_ref().map(|r| r.sha.clone()),
@@ -707,7 +896,8 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
 /// tier (RFC 0042 decision 8): the listing names every held coordinate of the
 /// registry, private packages included, so the per-registry `quarantine:read`
 /// every user holds is not enough. Findings need `findings:read` there too,
-/// and are emptied without it.
+/// and are emptied without it. Each row is then re-checked at its registry
+/// and namespace, so a seal cuts the listing as it cuts the per-version GET.
 #[utoipa::path(
     get,
     path = "/api/v1/admin/verdicts",
@@ -754,18 +944,454 @@ pub async fn list_verdicts(
                 .await
                 .map_err(AppError::from)?
                 .into_iter()
-                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy))
-                .map(|mut v| {
-                    if !with_findings {
-                        v.findings.clear();
-                    }
-                    v
-                }),
+                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy)),
         );
     }
+    let items = sealed_out(&svc.hot, &identity.0, items, with_findings).await;
     Ok(HttpResponse::Ok().json(VerdictListResponse {
         registry: query.registry.clone(),
         items,
+    }))
+}
+
+/// Drops the verdicts the caller may not learn of at their own registry and
+/// namespace, and their findings where `findings:read` does not reach. The
+/// instance-tier check alone ignores a seal below it (a sealed namespace or
+/// registry drops the inherited grant), which `hold_visibility` honours on
+/// the per-version GET.
+async fn sealed_out(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    identity: &Identity,
+    items: Vec<Verdict>,
+    with_findings: bool,
+) -> Vec<Verdict> {
+    let coords: Vec<PackageId> = items.iter().map(|v| v.package.clone()).collect();
+    let holds = authz::config_tier_holds(
+        hot,
+        identity,
+        &coords,
+        &[Action::QuarantineRead, Action::FindingsRead],
+    )
+    .await;
+    items
+        .into_iter()
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(mut v, h)| {
+            if !(with_findings && h.get(1).copied().unwrap_or(false)) {
+                v.findings.clear();
+            }
+            v
+        })
+        .collect()
+}
+
+// ── the Scans page (RFC 0044 phase 2) ────────────────────────────────────────
+
+/// The most rows one `/admin/scans` page carries (§4.3).
+const SCANS_MAX_PER_PAGE: u64 = 200;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ScanListQuery {
+    /// Only this registry. A filter, not a scope: one the caller may not
+    /// read answers an empty page.
+    pub registry: Option<String>,
+    /// `queued`, `scanning` or `failed`; absent lists every open job.
+    pub state: Option<String>,
+    /// 1-based; default 1.
+    pub page: Option<u64>,
+    /// Default 50, at most 200.
+    pub per_page: Option<u64>,
+}
+
+/// One job on the Scans page.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScanJobRow {
+    pub registry: String,
+    pub name: String,
+    pub version: String,
+    /// `queued`, `scanning` or `failed`.
+    pub state: batlehub_core::entities::ScanState,
+    pub trigger: String,
+    pub attempts: u32,
+    /// An open job's `created_at`; a failed one's `completed_at`.
+    pub since: chrono::DateTime<chrono::Utc>,
+    /// The worker holding the lease, while one does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leased_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// The worker's last error, redacted and cut to 200 characters; only
+    /// with `findings:read` on the registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Whether `last_error` was withheld for lack of `findings:read`.
+    pub error_withheld: bool,
+    /// Whether the caller holds `gates:exempt` here at the config tiers, so
+    /// the page draws [Rescan]. Cosmetic: the rescan endpoint checks again.
+    pub can_rescan: bool,
+}
+
+/// A page of `/admin/scans`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScanQueuePage {
+    /// At most `per_page`, fewer when a namespace seal withheld rows.
+    pub items: Vec<ScanJobRow>,
+    /// Matching rows inside the caller's registries across every page,
+    /// counted before the namespace check: an upper bound.
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// The scan queue and its failures (RFC 0044 §4.4). `quarantine:read` at the
+/// instance tier, as RFC 0042's verdict listing (its decision 8); then rows
+/// only from registries where the caller holds `quarantine:read`, each row
+/// re-checked at its namespace so a seal cuts the queue as it cuts the
+/// per-version GET, and `last_error` only with `findings:read` (T16).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/scans",
+    tag = "security",
+    params(ScanListQuery),
+    responses(
+        (status = 200, description = "One page of scan jobs", body = ScanQueuePage),
+        (status = 400, description = "An unknown `state`, or `per_page` over 200"),
+        (status = 403, description = "`quarantine:read` at the instance tier required"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/scans")]
+pub async fn list_scans(
+    query: web::Query<ScanListQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    use batlehub_core::entities::{ScanJobFilter, ScanState};
+    crate::handlers::back_office::require_verb(&identity, Action::QuarantineRead, None, &svc.hot)
+        .await?;
+    let filter = match query.state.as_deref().map(str::trim) {
+        None | Some("") => ScanJobFilter::Open,
+        Some("queued") => ScanJobFilter::Queued,
+        Some("scanning") => ScanJobFilter::Scanning,
+        Some("failed") => ScanJobFilter::Failed,
+        Some(s) => {
+            return Err(AppError::bad_request(format!(
+                "state '{s}' is not one of: queued, scanning, failed"
+            )))
+        }
+    };
+    let per_page = query.per_page.unwrap_or(50);
+    if per_page == 0 || per_page > SCANS_MAX_PER_PAGE {
+        return Err(AppError::bad_request(format!(
+            "per_page must be between 1 and {SCANS_MAX_PER_PAGE}"
+        )));
+    }
+    let page = query.page.unwrap_or(1).max(1);
+    let (mut registries, queue) = {
+        let hot = svc.hot.read().await;
+        let mut r: Vec<String> = hot.security.keys().cloned().collect();
+        r.sort();
+        (r, hot.scan_queue.clone())
+    };
+    if let Some(only) = &query.registry {
+        registries.retain(|r| r == only);
+    }
+    // The registry list is a ceiling bound into the query: a row the caller
+    // may not see is never read.
+    let mut readable = Vec::new();
+    let mut findings = std::collections::HashSet::new();
+    for r in registries {
+        let may = |a| authz::authorize_control(&svc.hot, Some(&r), &identity.0, a);
+        if may(Action::QuarantineRead).await.is_ok() {
+            if may(Action::FindingsRead).await.is_ok() {
+                findings.insert(r.clone());
+            }
+            readable.push(r);
+        }
+    }
+    let empty = || ScanQueuePage {
+        items: Vec::new(),
+        total: 0,
+        page,
+        per_page,
+    };
+    let Some(queue) = queue.filter(|_| !readable.is_empty()) else {
+        return Ok(HttpResponse::Ok().json(empty()));
+    };
+    let offset = (page - 1).saturating_mul(per_page);
+    let (jobs, total) = queue
+        .list_jobs(&readable, filter, per_page, offset)
+        .await
+        .map_err(AppError::from)?;
+    let coords: Vec<PackageId> = jobs.iter().map(|j| j.package.clone()).collect();
+    let holds = authz::config_tier_holds(
+        &svc.hot,
+        &identity.0,
+        &coords,
+        &[Action::QuarantineRead, Action::GatesExempt],
+    )
+    .await;
+    let now = chrono::Utc::now();
+    let items = jobs
+        .into_iter()
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(j, h)| {
+            let failed = j.completed_at.is_some();
+            let state = if failed {
+                ScanState::Failed
+            } else {
+                batlehub_core::services::scan_status::derive(true, Some(&j), None, None, now)
+                    .map_or(ScanState::Queued, |s| s.state)
+            };
+            let error = if failed {
+                j.last_error
+                    .as_deref()
+                    .and_then(|e| e.strip_prefix(batlehub_core::entities::EXHAUSTED_PREFIX))
+            } else if j.deferred_since.is_none() {
+                j.last_error.as_deref()
+            } else {
+                None
+            }
+            .map(str::trim)
+            .filter(|e| !e.is_empty());
+            let shown = findings.contains(&j.package.registry);
+            ScanJobRow {
+                state,
+                trigger: j.trigger.as_str().to_owned(),
+                attempts: j.attempts,
+                since: j.completed_at.unwrap_or(j.created_at),
+                leased_by: j.leased_by.filter(|_| state == ScanState::Scanning),
+                deferred_since: j.deferred_since,
+                last_error: error.filter(|_| shown).map(redact_error),
+                error_withheld: error.is_some() && !shown,
+                can_rescan: h.get(1).copied().unwrap_or(false),
+                registry: j.package.registry,
+                name: j.package.name,
+                version: j.package.version,
+            }
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(ScanQueuePage {
+        items,
+        total,
+        page,
+        per_page,
+    }))
+}
+
+// ── the Findings page (RFC 0044 phase 3) ─────────────────────────────────────
+
+/// The longest `reference` prefix `/admin/findings` takes (§4.3).
+const REFERENCE_MAX_CHARS: usize = 128;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FindingsQuery {
+    /// Only this registry. A filter, not a scope: one the caller may not
+    /// read answers an empty page, not a `403`.
+    pub registry: Option<String>,
+    /// At or above this severity: `unknown`, `low`, `medium`, `high`, `critical`.
+    pub severity: Option<String>,
+    /// Exactly this scanner (`osv`, `age`, …).
+    pub scanner: Option<String>,
+    /// A prefix of the advisory id, matched literally; at most 128 characters.
+    pub reference: Option<String>,
+    /// Only findings of versions in this verdict state.
+    pub verdict: Option<String>,
+    /// `finding` (default: most severe first) or `reference` (one advisory's
+    /// versions together).
+    pub group: Option<String>,
+    /// 1-based; default 1.
+    pub page: Option<u64>,
+    /// Default 50, at most 200.
+    pub per_page: Option<u64>,
+}
+
+/// One finding on the Findings page.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FindingListRow {
+    pub registry: String,
+    pub name: String,
+    pub version: String,
+    pub scanner: String,
+    pub kind: batlehub_core::entities::FindingKind,
+    pub code: batlehub_core::entities::ReasonCode,
+    pub severity: batlehub_core::entities::Severity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    pub summary: String,
+    /// The state of the verdict this finding fed.
+    pub verdict: VerdictState,
+    /// Whether the page draws [Exempt…]: the verdict holds the version and
+    /// the caller holds `gates:exempt` at the config tiers. Cosmetic: the
+    /// exemption endpoint checks again.
+    pub can_exempt: bool,
+}
+
+/// A page of `/admin/findings`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FindingsPage {
+    /// At most `per_page`, fewer when a namespace seal withheld rows.
+    pub items: Vec<FindingListRow>,
+    /// Matching rows inside the caller's registries across every page,
+    /// counted before the namespace check: an upper bound.
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// Findings across registries (RFC 0044 §5.2). `findings:read` per
+/// configured registry through `authorize_control`, never `authorize_grants`
+/// (which answers `Ok` under a shadow and for a registry with no hierarchy):
+/// the registries it opens are bound into the query, and each row is then
+/// re-checked at its namespace, so a seal cuts the list as it cuts the
+/// per-version GET (T3, T3b, T3c).
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/findings",
+    tag = "security",
+    params(FindingsQuery),
+    responses(
+        (status = 200, description = "One page of findings", body = FindingsPage),
+        (status = 400, description = "An unknown `severity`, `verdict` or `group`, a `reference` over 128 characters, or `per_page` over 200"),
+        (status = 403, description = "`findings:read` is held on no registry"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/findings")]
+pub async fn list_findings(
+    query: web::Query<FindingsQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    use batlehub_core::entities::{FindingsFilter, Severity};
+    let opt = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let min_severity = match opt(&query.severity) {
+        None => None,
+        Some(s) => Some(Severity::parse(&s).ok_or_else(|| {
+            AppError::bad_request(format!(
+                "severity '{s}' is not one of: unknown, low, medium, high, critical"
+            ))
+        })?),
+    };
+    let verdict = match opt(&query.verdict) {
+        None => None,
+        Some(s) => Some(s.parse::<VerdictState>().map_err(|_| {
+            AppError::bad_request(format!(
+                "verdict '{s}' is not one of: allowed, warned, quarantined, denied"
+            ))
+        })?),
+    };
+    let by_reference = match opt(&query.group).as_deref() {
+        None | Some("finding") => false,
+        Some("reference") => true,
+        Some(g) => {
+            return Err(AppError::bad_request(format!(
+                "group '{g}' is not one of: finding, reference"
+            )))
+        }
+    };
+    let reference_prefix = opt(&query.reference);
+    if reference_prefix
+        .as_ref()
+        .is_some_and(|r| r.chars().count() > REFERENCE_MAX_CHARS)
+    {
+        return Err(AppError::bad_request(format!(
+            "reference is at most {REFERENCE_MAX_CHARS} characters"
+        )));
+    }
+    let per_page = query.per_page.unwrap_or(50);
+    if per_page == 0 || per_page > SCANS_MAX_PER_PAGE {
+        return Err(AppError::bad_request(format!(
+            "per_page must be between 1 and {SCANS_MAX_PER_PAGE}"
+        )));
+    }
+    let page = query.page.unwrap_or(1).max(1);
+
+    let (configured, verdicts) = {
+        let hot = svc.hot.read().await;
+        let mut r: Vec<String> = hot.registries.keys().cloned().collect();
+        r.sort();
+        (r, hot.verdicts.clone())
+    };
+    let mut readable = Vec::new();
+    for r in configured {
+        if authz::authorize_control(&svc.hot, Some(&r), &identity.0, Action::FindingsRead)
+            .await
+            .is_ok()
+        {
+            readable.push(r);
+        }
+    }
+    if readable.is_empty() {
+        return Err(AppError::forbidden(
+            "findings:read is held on no registry: findings name advisories that may be embargoed",
+        ));
+    }
+    if let Some(only) = opt(&query.registry) {
+        readable.retain(|r| *r == only);
+    }
+    let empty = FindingsPage {
+        items: Vec::new(),
+        total: 0,
+        page,
+        per_page,
+    };
+    let Some(verdicts) = verdicts.filter(|_| !readable.is_empty()) else {
+        return Ok(HttpResponse::Ok().json(empty));
+    };
+    let filter = FindingsFilter {
+        registries: readable,
+        min_severity,
+        scanner: opt(&query.scanner),
+        reference_prefix,
+        verdict,
+        by_reference,
+    };
+    let offset = (page - 1).saturating_mul(per_page);
+    let (rows, total) = verdicts
+        .list_findings(&filter, per_page, offset)
+        .await
+        .map_err(AppError::from)?;
+    let coords: Vec<PackageId> = rows.iter().map(|r| r.package.clone()).collect();
+    let holds = authz::config_tier_holds(
+        &svc.hot,
+        &identity.0,
+        &coords,
+        &[Action::FindingsRead, Action::GatesExempt],
+    )
+    .await;
+    let items = rows
+        .into_iter()
+        .zip(holds)
+        .filter(|(_, h)| h.first().copied().unwrap_or(false))
+        .map(|(r, h)| FindingListRow {
+            can_exempt: h.get(1).copied().unwrap_or(false) && !r.verdict.is_served(),
+            verdict: r.verdict,
+            scanner: r.finding.scanner,
+            kind: r.finding.kind,
+            code: r.finding.code,
+            severity: r.finding.severity,
+            reference: r.finding.reference,
+            summary: r.finding.summary,
+            registry: r.package.registry,
+            name: r.package.name,
+            version: r.package.version,
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(FindingsPage {
+        items,
+        total,
+        page,
+        per_page,
     }))
 }
 
@@ -844,6 +1470,21 @@ pub async fn verdict_summary(
         .map_err(AppError::from)?;
     let mut registries = Vec::with_capacity(names.len());
     for registry in names {
+        // A sealed registry node drops the instance grant: not summarised.
+        // shortcut: the counts still include versions under a sealed
+        // namespace (numbers, no coordinate); count per namespace if a seal
+        // ever has to hide how many versions it holds.
+        if authz::authorize_control(
+            &svc.hot,
+            Some(&registry),
+            &identity.0,
+            Action::QuarantineRead,
+        )
+        .await
+        .is_err()
+        {
+            continue;
+        }
         let mut counts = VerdictCounts::default();
         for (_, state, n) in counted.iter().filter(|(r, _, _)| *r == registry) {
             *match state {
@@ -862,6 +1503,7 @@ pub async fn verdict_summary(
                     .map_err(AppError::from)?,
             );
         }
+        let mut recent = sealed_out(&svc.hot, &identity.0, recent, false).await;
         recent.sort_by_key(|v| std::cmp::Reverse(v.evaluated_at));
         recent.truncate(RECENT_HOLDS);
         registries.push(RegistryVerdictSummary {

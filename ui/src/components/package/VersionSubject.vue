@@ -171,11 +171,13 @@ function upstreamBadgeKey(row: UpstreamRow): string {
       />
     </div>
 
-    <BlockNotes :registry="registry" :name="name" :selected-row="selectedRow" />
+    <!-- RFC 0044: vulnerabilities and the SBOM live on the Security tab. -->
+    <BlockNotes :registry="registry" :name="name" :selected-row="selectedRow" part="notes" />
 
     <InstallLine :registry-type="registryType" :name="name" :version="selectedVersion" />
 
     <ArtifactDownloads
+      part="download"
       :registry="registry"
       :name="name"
       :registry-type="registryType"

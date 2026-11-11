@@ -150,6 +150,139 @@ async fn an_expired_lease_returns_to_the_queue_and_spent_attempts_are_reported()
         .all(|j| j.package != p));
 }
 
+/// RFC 0044 §5.1: the batch reads behind a list page's scan statuses, and
+/// decision 34's marker on an exhausted row.
+#[tokio::test]
+async fn jobs_for_and_get_many_answer_per_coordinate_in_order() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    let repo = PgVerdictRepository::new(pool.clone());
+    let a = PackageId::new(&reg, "pkg", "1.0.0");
+    let b = PackageId::new(&reg, "pkg", "2.0.0");
+    let none = PackageId::new(&reg, "pkg", "3.0.0");
+
+    // `a`: one failed-and-closed job, then a later successful one, then an
+    // open one. `b`: one exhausted job.
+    for _ in 0..2 {
+        q.enqueue(&a, None, ScanTrigger::FirstSeen).await.unwrap();
+        let j = q
+            .lease("w", std::slice::from_ref(&reg), 1, 60, 3)
+            .await
+            .unwrap();
+        q.complete(j[0].id, Some("w")).await.unwrap();
+    }
+    q.enqueue(&a, None, ScanTrigger::Rescan).await.unwrap();
+    q.enqueue(&b, None, ScanTrigger::Rescan).await.unwrap();
+    let jb = q
+        .lease("w", std::slice::from_ref(&reg), 2, 60, 3)
+        .await
+        .unwrap();
+    let jb = jb.iter().find(|j| j.package == b).unwrap();
+    assert_eq!(jb.leased_by.as_deref(), Some("w"));
+    q.complete_exhausted(jb.id, "exhausted: tar: unexpected EOF")
+        .await
+        .unwrap();
+
+    let got = q
+        .jobs_for(&[none.clone(), a.clone(), b.clone(), a.clone()])
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 4);
+    assert!(got[0].0.is_none() && got[0].1.is_none());
+    for (open, closed) in [&got[1], &got[3]] {
+        assert_eq!(open.as_ref().unwrap().package, a);
+        assert!(closed.as_ref().unwrap().last_error.is_none());
+    }
+    assert!(got[2].0.is_none());
+    assert_eq!(
+        got[2].1.as_ref().unwrap().last_error.as_deref(),
+        Some("exhausted: tar: unexpected EOF")
+    );
+
+    let v = Verdict {
+        package: b.clone(),
+        state: VerdictState::Allowed,
+        reason_codes: vec![],
+        findings: vec![],
+        policy_ref: format!("{reg}/default"),
+        available_at: None,
+        evaluated_at: Utc::now(),
+        last_scanned_at: Some(Utc::now()),
+        scanners_done: vec!["osv".into()],
+    };
+    repo.upsert(&v).await.unwrap();
+    let many = repo.get_many(&[a.clone(), b.clone()]).await.unwrap();
+    assert!(many[0].is_none());
+    assert_eq!(many[1].as_ref().unwrap().state, VerdictState::Allowed);
+}
+
+/// RFC 0044 phase 2: the Scans page reads open jobs scanning first, and as
+/// failed only a coordinate whose **latest** closed job is exhausted and that
+/// has no open job.
+#[tokio::test]
+async fn list_jobs_reads_the_queue_and_rule_5_failures() {
+    use batlehub_core::entities::ScanJobFilter;
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    let regs = std::slice::from_ref(&reg);
+    let pkg = |n: &str| PackageId::new(&reg, n, "1");
+    let close = |n: &'static str, err: Option<&'static str>| {
+        let q = &q;
+        let p = pkg(n);
+        async move {
+            q.enqueue(&p, None, ScanTrigger::FirstSeen).await.unwrap();
+            let j = q.lease("w", regs, 1, 60, 3).await.unwrap().remove(0);
+            match err {
+                Some(e) => q.complete_exhausted(j.id, e).await.unwrap(),
+                None => q.complete(j.id, Some("w")).await.unwrap(),
+            }
+        }
+    };
+    close("failed", Some("exhausted: tar: unexpected EOF")).await;
+    // Failed, then succeeded: not failed.
+    close("recovered", Some("exhausted: boom")).await;
+    close("recovered", None).await;
+    // Failed, then rescanning: on the queue, not under Failures.
+    close("retrying", Some("exhausted: boom")).await;
+    q.enqueue(&pkg("retrying"), None, ScanTrigger::Rescan)
+        .await
+        .unwrap();
+    q.enqueue(&pkg("running"), None, ScanTrigger::FirstSeen)
+        .await
+        .unwrap();
+    q.lease("w-2", regs, 1, 60, 3).await.unwrap();
+
+    let (failed, total) = q
+        .list_jobs(regs, ScanJobFilter::Failed, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(failed[0].package, pkg("failed"));
+    assert!(failed[0].completed_at.is_some());
+
+    let (open, total) = q.list_jobs(regs, ScanJobFilter::Open, 50, 0).await.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(open[0].package, pkg("running"), "scanning first");
+    assert_eq!(open[1].package, pkg("retrying"));
+    let (queued, _) = q
+        .list_jobs(regs, ScanJobFilter::Queued, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(queued.len(), 1);
+    let (page2, total) = q.list_jobs(regs, ScanJobFilter::Open, 1, 1).await.unwrap();
+    assert_eq!((page2.len(), total), (1, 2));
+    let (none, _) = q.list_jobs(&[], ScanJobFilter::Open, 50, 0).await.unwrap();
+    assert!(none.is_empty());
+}
+
 #[tokio::test]
 async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
     let Some(url) = db_url() else {
@@ -518,4 +651,157 @@ async fn leadership_is_one_process_at_a_time_and_released_on_drop() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("the lock was not released after the holder was dropped");
+}
+
+/// RFC 0044 phase 3: `list_findings` ranks severity (not alphabetically),
+/// stays inside `registries`, and matches `reference` literally (T10).
+#[tokio::test]
+async fn list_findings_ranks_filters_and_escapes_the_prefix() {
+    use batlehub_core::entities::FindingsFilter;
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let (_, other) = fixture(&url).await;
+    let repo = PgVerdictRepository::new(pool.clone());
+    let put = |r: String, name: &'static str, state, sev, reference: &'static str| {
+        let repo = &repo;
+        async move {
+            repo.upsert(&Verdict {
+                package: PackageId::new(&r, name, "1"),
+                state,
+                reason_codes: vec![],
+                findings: vec![Finding::new(
+                    "osv",
+                    FindingKind::Vulnerability,
+                    ReasonCode::Vulnerability,
+                    sev,
+                    reference,
+                )
+                .with_reference(reference)],
+                policy_ref: format!("{r}/default"),
+                available_at: None,
+                evaluated_at: Utc::now(),
+                last_scanned_at: Some(Utc::now()),
+                scanners_done: vec!["osv".into()],
+            })
+            .await
+            .unwrap();
+        }
+    };
+    put(
+        reg.clone(),
+        "a",
+        VerdictState::Warned,
+        Severity::Low,
+        "GHSA-b",
+    )
+    .await;
+    put(
+        reg.clone(),
+        "b",
+        VerdictState::Denied,
+        Severity::Critical,
+        "GHSA-c",
+    )
+    .await;
+    put(
+        reg.clone(),
+        "c",
+        VerdictState::Warned,
+        Severity::Medium,
+        "GHSA-a",
+    )
+    .await;
+    put(
+        other.clone(),
+        "d",
+        VerdictState::Denied,
+        Severity::Critical,
+        "GHSA-a",
+    )
+    .await;
+
+    let filter = |f: FindingsFilter| FindingsFilter {
+        registries: vec![reg.clone()],
+        ..f
+    };
+    let names = |rows: &[batlehub_core::entities::FindingRow]| {
+        rows.iter()
+            .map(|r| r.package.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let (rows, total) = repo
+        .list_findings(&filter(FindingsFilter::default()), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 3, "the other registry is never read");
+    assert_eq!(names(&rows), ["b", "c", "a"], "critical, medium, low");
+    assert!(rows.iter().all(|r| r.finding.raw.is_null()));
+    assert_eq!(rows[0].verdict, VerdictState::Denied);
+
+    let (rows, total) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                by_reference: true,
+                ..Default::default()
+            }),
+            2,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!((names(&rows), total), (vec!["c".into(), "a".into()], 3));
+
+    let (rows, _) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                min_severity: Some(Severity::Medium),
+                verdict: Some(VerdictState::Warned),
+                ..Default::default()
+            }),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(names(&rows), ["c"]);
+
+    for prefix in ["GHSA-%", "GHSA_", "%"] {
+        let (rows, total) = repo
+            .list_findings(
+                &filter(FindingsFilter {
+                    reference_prefix: Some(prefix.into()),
+                    ..Default::default()
+                }),
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (rows.len(), total),
+            (0, 0),
+            "{prefix} matched as a wildcard"
+        );
+    }
+    let (_, total) = repo
+        .list_findings(
+            &filter(FindingsFilter {
+                reference_prefix: Some("GHSA-".into()),
+                ..Default::default()
+            }),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(total, 3);
+
+    let (rows, total) = repo
+        .list_findings(&FindingsFilter::default(), 50, 0)
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), total), (0, 0), "no registry, no rows");
 }

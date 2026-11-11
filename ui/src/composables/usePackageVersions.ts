@@ -444,6 +444,26 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
     }
   }
 
+  /**
+   * RFC 0044 §4.2: one silent re-read of the explore detail for the Security
+   * tab's poll, which always answers — never the verdict GET, whose `404` means
+   * "no verdict yet" to `batlehub-cli wait`. A failure throws, with the
+   * response, so the poll can back off on it.
+   */
+  async function pollDetail() {
+    const seq = ++versionSeq;
+    const {
+      data: res,
+      error: apiErr,
+      response,
+    } = await explorePackageDetail({
+      path: { registry: registry.value, name: name.value },
+      query: versionQuery(),
+    });
+    if (apiErr || !res) throw Object.assign(new Error(), { response });
+    if (seq === versionSeq) data.value = res as ExplorePackageDetailResponse;
+  }
+
   /** A version-control change: same request, no page-wide loading state. */
   function fetchVersions() {
     return fetchDetail({ silent: true });
@@ -565,6 +585,7 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
     fetchResult,
     onFetchVersion,
     fetchDetail,
+    pollDetail,
   };
 }
 

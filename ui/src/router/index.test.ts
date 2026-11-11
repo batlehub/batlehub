@@ -202,6 +202,18 @@ describe("router navigation guards (integration)", () => {
     expect(await go("/admin")).toBe("/admin/observability/audit-log");
   });
 
+  it("gates one registry's page, a dynamic path, on its meta verb (RFC 0044)", async () => {
+    await setAuth({ ...USER, verbs: ["stats:read"] }, "tok");
+    expect(await go("/admin/observability/registries")).toBe("/admin/observability/registries");
+    expect(await go("/admin/observability/registries/npm1")).toBe(
+      "/admin/observability/registries",
+    );
+    await setAuth({ ...USER, verbs: ["system:read"] }, "tok");
+    expect(await go("/admin/observability/registries/npm1")).toBe(
+      "/admin/observability/registries/npm1",
+    );
+  });
+
   it("lets an admin reach an admin route", async () => {
     await setAuth(ADMIN, "tok");
     expect(await go("/admin/observability/health")).toBe("/admin/observability/health");

@@ -1504,6 +1504,116 @@
         ]
       }
     },
+    "/api/v1/admin/findings": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Findings across registries (RFC 0044 §5.2). `findings:read` per\nconfigured registry through `authorize_control`, never `authorize_grants`\n(which answers `Ok` under a shadow and for a registry with no hierarchy):\nthe registries it opens are bound into the query, and each row is then\nre-checked at its namespace, so a seal cuts the list as it cuts the\nper-version GET (T3, T3b, T3c).",
+        "operationId": "list_findings",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Only this registry. A filter, not a scope: one the caller may not\nread answers an empty page, not a `403`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "At or above this severity: `unknown`, `low`, `medium`, `high`, `critical`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scanner",
+            "in": "query",
+            "description": "Exactly this scanner (`osv`, `age`, …).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "description": "A prefix of the advisory id, matched literally; at most 128 characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "description": "Only findings of versions in this verdict state.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "description": "`finding` (default: most severe first) or `reference` (one advisory's\nversions together).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based; default 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Default 50, at most 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of findings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `severity`, `verdict` or `group`, a `reference` over 128 characters, or `per_page` over 200"
+          },
+          "403": {
+            "description": "`findings:read` is held on no registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/flags": {
       "get": {
         "tags": [
@@ -2754,6 +2864,49 @@
           },
           "403": {
             "description": "`quota:write` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registries/{name}": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "One registry's configuration and health (RFC 0044 §4.4). `system:read`\nfirst, so an unknown name never answers an unauthorised caller; then each\nblock behind its own verb.",
+        "operationId": "get_registry_view",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The registry view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "404": {
+            "description": "No registry with that name"
           }
         },
         "security": [
@@ -5150,6 +5303,80 @@
         ]
       }
     },
+    "/api/v1/admin/scans": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The scan queue and its failures (RFC 0044 §4.4). `quarantine:read` at the\ninstance tier, as RFC 0042's verdict listing (its decision 8); then rows\nonly from registries where the caller holds `quarantine:read`, each row\nre-checked at its namespace so a seal cuts the queue as it cuts the\nper-version GET, and `last_error` only with `findings:read` (T16).",
+        "operationId": "list_scans",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Only this registry. A filter, not a scope: one the caller may not\nread answers an empty page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`queued`, `scanning` or `failed`; absent lists every open job.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based; default 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Default 50, at most 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of scan jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanQueuePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`, or `per_page` over 200"
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/stats": {
       "get": {
         "tags": [
@@ -5573,7 +5800,7 @@
         "tags": [
           "security"
         ],
-        "summary": "The verdicts of a registry, by state. `quarantine:read` at the instance\ntier (RFC 0042 decision 8): the listing names every held coordinate of the\nregistry, private packages included, so the per-registry `quarantine:read`\nevery user holds is not enough. Findings need `findings:read` there too,\nand are emptied without it.",
+        "summary": "The verdicts of a registry, by state. `quarantine:read` at the instance\ntier (RFC 0042 decision 8): the listing names every held coordinate of the\nregistry, private packages included, so the per-registry `quarantine:read`\nevery user holds is not enough. Findings need `findings:read` there too,\nand are emptied without it. Each row is then re-checked at its registry\nand namespace, so a seal cuts the listing as it cuts the per-version GET.",
         "operationId": "list_verdicts",
         "parameters": [
           {
@@ -22658,13 +22885,14 @@
           "items",
           "total",
           "page",
-          "per_page"
+          "per_page",
+          "scan_status_unavailable"
         ],
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PackageSummary"
+              "$ref": "#/components/schemas/AdminPackageRow"
             }
           },
           "page": {
@@ -22677,12 +22905,40 @@
             "format": "int64",
             "minimum": 0
           },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status` (RFC 0044 §10.2)."
+          },
           "total": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           }
         }
+      },
+      "AdminPackageRow": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PackageSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scan_status": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScanStatusDto",
+                    "description": "Absent on a registry without `[security]` and for a caller without\n`quarantine:read` alike."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One version, and where it stands in scanning (RFC 0044 §4.2)."
       },
       "AdvisoryRelation": {
         "type": "string",
@@ -22832,6 +23088,44 @@
             "minimum": 0
           }
         }
+      },
+      "AuthPresence": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "state"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`bearer`, `basic` or `header`."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "configured"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Whether an upstream credential is configured, and of which kind — never\nits value, its length or a hash of it."
       },
       "BannerLevel": {
         "type": "string",
@@ -23380,6 +23674,32 @@
           },
           "signer_key": {
             "type": "string"
+          }
+        }
+      },
+      "CacheView": {
+        "type": "object",
+        "description": "`[registries.cache]`, the keys the page shows.",
+        "required": [
+          "metadata_ttl_secs",
+          "serve_stale"
+        ],
+        "properties": {
+          "artifact_ttl_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "metadata_ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "serve_stale": {
+            "type": "boolean"
           }
         }
       },
@@ -24474,6 +24794,17 @@
           "registry": {
             "type": "string"
           },
+          "scan_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanStatusDto",
+                "description": "The scan status of `newest_version`, as last recorded (RFC 0044 §4.2).\nAbsent on a registry without `[security]` and for a caller without\n`quarantine:read` alike, so the two cannot be told apart."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "snippet": {
             "type": [
               "string",
@@ -24522,6 +24853,7 @@
           "versions",
           "versions_page",
           "upstream_unavailable",
+          "scan_status_unavailable",
           "upstream",
           "fetch"
         ],
@@ -24556,6 +24888,10 @@
           },
           "registry": {
             "type": "string"
+          },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no version carries\n`scan_status` (RFC 0044 §10.2)."
           },
           "selected": {
             "oneOf": [
@@ -24603,6 +24939,7 @@
           "page",
           "per_page",
           "upstream_unavailable",
+          "scan_status_unavailable",
           "readme_search_enabled",
           "searched_in",
           "truncated"
@@ -24627,6 +24964,10 @@
           "readme_search_enabled": {
             "type": "boolean",
             "description": "Whether `[search] readmes` is on for this instance.\n\nSo a client can tell \"no package here says that\" from \"this instance does\nnot search prose\". `in=readme` with the feature off is accepted and\nanswers as `in=name` does — a parameter that silently means something\nelse is the failure this RFC family keeps finding — and this field is how\nthe console says which happened (RFC 0007-bis §4.3)."
+          },
+          "scan_status_unavailable": {
+            "type": "boolean",
+            "description": "The scan-status batch failed or timed out, so no row carries\n`scan_status`; the list is otherwise current (RFC 0044 §10.2)."
           },
           "searched_in": {
             "type": "string",
@@ -24733,6 +25074,17 @@
           "sbom": {
             "$ref": "#/components/schemas/SbomDto",
             "description": "Which SBOM formats this version has here — the answer the console needs\n*before* it draws a download control. See [`SbomDto`]."
+          },
+          "scan_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanStatusDto",
+                "description": "This version's scan status, as last recorded (RFC 0044 §4.2). Absent on\na registry without `[security]` and for a caller without\n`quarantine:read` alike."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "socket_badge_url": {
             "type": [
@@ -25105,6 +25457,97 @@
           "block_list",
           "ref"
         ]
+      },
+      "FindingListRow": {
+        "type": "object",
+        "description": "One finding on the Findings page.",
+        "required": [
+          "registry",
+          "name",
+          "version",
+          "scanner",
+          "kind",
+          "code",
+          "severity",
+          "summary",
+          "verdict",
+          "can_exempt"
+        ],
+        "properties": {
+          "can_exempt": {
+            "type": "boolean",
+            "description": "Whether the page draws [Exempt…]: the verdict holds the version and\nthe caller holds `gates:exempt` at the config tiers. Cosmetic: the\nexemption endpoint checks again."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ReasonCode"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registry": {
+            "type": "string"
+          },
+          "scanner": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/VerdictState",
+            "description": "The state of the verdict this finding fed."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "FindingsPage": {
+        "type": "object",
+        "description": "A page of `/admin/findings`.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingListRow"
+            },
+            "description": "At most `per_page`, fewer when a namespace seal withheld rows."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matching rows inside the caller's registries across every page,\ncounted before the namespace check: an upper bound.",
+            "minimum": 0
+          }
+        }
       },
       "FirewallDto": {
         "oneOf": [
@@ -26083,6 +26526,37 @@
           }
         }
       },
+      "LiveView": {
+        "type": "object",
+        "description": "Upstream health, from this replica's counters since it started.",
+        "required": [
+          "upstream_degraded",
+          "upstream_error_rate",
+          "upstream_latency_ms",
+          "since"
+        ],
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this replica's counters started."
+          },
+          "upstream_degraded": {
+            "type": "boolean",
+            "description": "Error rate or latency over threshold."
+          },
+          "upstream_error_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Rolling, in [0, 1]."
+          },
+          "upstream_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "MeResponse": {
         "type": "object",
         "required": [
@@ -26498,6 +26972,44 @@
           "node": {
             "type": "string",
             "description": "The node that dropped it, e.g. `namespace:@acme/billing`."
+          }
+        }
+      },
+      "NextRescan": {
+        "type": "object",
+        "description": "When a version is next looked at again (RFC 0044 §4.2 *Next rescan*).",
+        "properties": {
+          "sbom_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The registry-wide SBOM re-check: its last run plus\n`[vulnerability_scan] interval_secs`. Absent when the re-check is off\nor has never covered this registry."
+          },
+          "sbom_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "verdict_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`last_scanned_at + rescan.interval_secs`; a version never scanned is\ndue from its verdict's `evaluated_at`. Absent without an interval. In\nthe past means due: the scheduler ticks every minute."
+          },
+          "verdict_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -28091,6 +28603,76 @@
           }
         }
       },
+      "RegistryConfigView": {
+        "type": "object",
+        "description": "The registry's configuration, allow-listed. URL fields are redacted, and\nserved only with `upstreams:read`.",
+        "required": [
+          "upstream_count",
+          "upstream_auth",
+          "cache",
+          "rules",
+          "grant_subjects",
+          "namespaces"
+        ],
+        "properties": {
+          "cache": {
+            "$ref": "#/components/schemas/CacheView"
+          },
+          "grant_subjects": {
+            "type": "integer",
+            "description": "Subjects named in `[registries.grants]`.",
+            "minimum": 0
+          },
+          "namespaces": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "other_urls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`index_url`, `broker_url` and `search_url` where set, redacted; absent\nwithout `upstreams:read`."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rule kinds, in chain order."
+          },
+          "security": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SecurityView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "upstream_auth": {
+            "$ref": "#/components/schemas/AuthPresence"
+          },
+          "upstream_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "upstreams": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Redacted; absent without `upstreams:read`."
+          }
+        }
+      },
       "RegistryHealthDto": {
         "type": "object",
         "required": [
@@ -28423,6 +29005,59 @@
           }
         }
       },
+      "RegistryView": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/registries/{name}`.",
+        "required": [
+          "name",
+          "registry_type",
+          "mode",
+          "live",
+          "scan",
+          "suggestions"
+        ],
+        "properties": {
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RegistryConfigView",
+                "description": "Only with `config:read`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "live": {
+            "$ref": "#/components/schemas/LiveView"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "monitoring_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`[stats] registry_dashboard_url` for this registry, encoded."
+          },
+          "name": {
+            "type": "string"
+          },
+          "registry_type": {
+            "type": "string"
+          },
+          "scan": {
+            "$ref": "#/components/schemas/ScanView"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Suggestion"
+            }
+          }
+        }
+      },
       "ReloadDiff": {
         "type": "object",
         "required": [
@@ -28712,6 +29347,319 @@
           "state": {
             "type": "string",
             "description": "`available` — [`Self::formats`] lists what can be downloaded;\n`none` — this instance holds no SBOM for the version;\n`unknown` — nothing has opened these bytes yet (an upstream-only row),\nor the lookup itself failed."
+          }
+        }
+      },
+      "SbomRecheckView": {
+        "type": "object",
+        "description": "The registry-wide SBOM re-check.",
+        "required": [
+          "last_scan_at",
+          "artifacts_scanned",
+          "findings"
+        ],
+        "properties": {
+          "artifacts_scanned": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_scan_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "next_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ScanDetail": {
+        "type": "object",
+        "description": "The `findings:read` tier of a scan status: when, how many attempts, and\nthe error. Never the worker id, which is `system:read`'s (§9).",
+        "properties": {
+          "attempts": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The open job's attempts, else the latest closed one's.",
+            "minimum": 0
+          },
+          "deferred_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw as stored; the web layer redacts and truncates it before it leaves.\nNever the `deferred since ` anchor, which `deferred_since` carries."
+          },
+          "last_scanned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "queued_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The open job's `created_at`."
+          }
+        }
+      },
+      "ScanJobRow": {
+        "type": "object",
+        "description": "One job on the Scans page.",
+        "required": [
+          "registry",
+          "name",
+          "version",
+          "state",
+          "trigger",
+          "attempts",
+          "since",
+          "error_withheld",
+          "can_rescan"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "can_rescan": {
+            "type": "boolean",
+            "description": "Whether the caller holds `gates:exempt` here at the config tiers, so\nthe page draws [Rescan]. Cosmetic: the rescan endpoint checks again."
+          },
+          "deferred_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error_withheld": {
+            "type": "boolean",
+            "description": "Whether `last_error` was withheld for lack of `findings:read`."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker's last error, redacted and cut to 200 characters; only\nwith `findings:read` on the registry."
+          },
+          "leased_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker holding the lease, while one does."
+          },
+          "name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "An open job's `created_at`; a failed one's `completed_at`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScanState",
+            "description": "`queued`, `scanning` or `failed`."
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ScanQueuePage": {
+        "type": "object",
+        "description": "A page of `/admin/scans`.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScanJobRow"
+            },
+            "description": "At most `per_page`, fewer when a namespace seal withheld rows."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matching rows inside the caller's registries across every page,\ncounted before the namespace check: an upper bound.",
+            "minimum": 0
+          }
+        }
+      },
+      "ScanState": {
+        "type": "string",
+        "description": "Where one version stands in scanning (RFC 0044 §4.2), derived by\n`services::scan_status::derive` and nowhere else.",
+        "enum": [
+          "not_scanned",
+          "queued",
+          "scanning",
+          "failed",
+          "scanned"
+        ]
+      },
+      "ScanStatusDto": {
+        "type": "object",
+        "description": "Where a version stands in scanning, as one caller may see it (RFC 0044\n§4.2): `state` and `verdict` with `quarantine:read`, `detail` with\n`findings:read` too, nothing at all without.\n\nThe fields are private and the only constructor is private to this module,\nso a status reaches a response through [`scan_status_for`] or not at all.\nThere is no `Deserialize`: it cannot arrive from outside either.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScanDetail",
+                "description": "Present only with `findings:read`. `last_error` redacted and cut to\n200 characters."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScanState"
+          },
+          "verdict": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerdictState",
+                "description": "Present only when `state` is `scanned`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ScanView": {
+        "type": "object",
+        "description": "Scanning on this registry. Counts are absent without `quarantine:read`\nhere: a count of held versions is a hold disclosure (T16's reasoning).",
+        "required": [
+          "enabled",
+          "sbom_recheck_enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "queued": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "sbom_recheck": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SbomRecheckView",
+                "description": "Absent when `[vulnerability_scan]` is off or never covered this registry."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sbom_recheck_enabled": {
+            "type": "boolean",
+            "description": "Whether `[vulnerability_scan]` is enabled at all."
+          },
+          "scanning": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SecurityView": {
+        "type": "object",
+        "description": "`[registries.security]`, the keys the page shows.",
+        "required": [
+          "mode",
+          "scanners",
+          "max_severity"
+        ],
+        "properties": {
+          "max_severity": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "`block` or `warn`."
+          },
+          "rescan_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absent: versions are never rescanned on a clock.",
+            "minimum": 0
+          },
+          "scanners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -29062,6 +30010,13 @@
           "aggregate": {
             "$ref": "#/components/schemas/AggregateStats"
           },
+          "monitoring_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`[stats] dashboard_url`; only with `system:read` (RFC 0044 §4.2)."
+          },
           "per_registry": {
             "type": "array",
             "items": {
@@ -29157,6 +30112,35 @@
             "description": "True when the limit truncated the answer, so a field can say \"keep\ntyping\" rather than implying it has shown everything."
           }
         }
+      },
+      "Suggestion": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/SuggestionCode"
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many versions, for `scan_failures`.",
+            "minimum": 0
+          }
+        }
+      },
+      "SuggestionCode": {
+        "type": "string",
+        "description": "One piece of advice on the registry page (RFC 0044 §4.2), a closed list.",
+        "enum": [
+          "degraded_without_stale",
+          "security_without_rescan",
+          "scan_failures"
+        ]
       },
       "TeamNamespaceDto": {
         "type": "object",
@@ -29857,6 +30841,17 @@
                 "type": "boolean",
                 "description": "Whether `findings` was withheld for lack of `findings:read`, so a\nclient can tell \"no findings\" from \"not allowed to see them\"."
               },
+              "next_rescan": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/NextRescan",
+                    "description": "When the version is looked at again; only with `quarantine:read` at\nthe instance tier, the verb RFC 0042 gives the security reads (RFC 0044\n§7.2)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "ref_kind": {
                 "type": [
                   "string",
@@ -29874,6 +30869,17 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "scan_status": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScanStatusDto",
+                    "description": "Where the version stands in scanning, at the caller's tier (RFC 0044\n§4.2). The same field the lists carry."
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             }

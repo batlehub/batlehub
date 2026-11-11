@@ -10,8 +10,10 @@ name: inkdex
 # `report` on push and schedule (code scanning, high and up). The daily run is
 # what catches a dependency advisory published after the last commit.
 #
-# Needs the `INKDEX_TOKEN` secret. Without it the action exits 2 ("could not
-# run") and the job is red: a scan that never happened is not a clean one. A
+# Needs the `INKDEX_TOKEN` secret. The action does not check its `token`
+# input (a composite action does not enforce `required`), so the step before
+# it does: without the secret the job is red, because a scan that never
+# happened is not a clean one. A
 # fork's pull request gets no secrets, so it is red by construction, as with
 # postmortem; a maintainer re-runs it from a branch of this repository.
 #
@@ -78,6 +80,14 @@ jobs:
         with:
           fetch-depth: 0 # `since:` needs the base commit
           persist-credentials: false
+      - name: The token is set
+        env:
+          INKDEX_TOKEN: ${{ secrets.INKDEX_TOKEN }}
+        run: |
+          if [ -z "$INKDEX_TOKEN" ]; then
+            echo "::error::INKDEX_TOKEN is not set: a scan that never ran is not a clean one"
+            exit 1
+          fi
       - uses: mlab-sh/inkdex-action@d9c96b6515dcdee2c5fb3966d48da2e92a535f08 # v1.1.2
         with:
           token: ${{ secrets.INKDEX_TOKEN }}

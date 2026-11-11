@@ -6,6 +6,7 @@ import { ArrowLeft } from "@lucide/vue";
 import type { ExploreVersionDto, FirewallDto } from "@/client/types.gen";
 import { rowState, STATE_LABEL_KEYS } from "@/composables/usePackageVersions";
 import { Resolution } from "@/components/ui/resolution";
+import ScanBadge from "@/components/package/ScanBadge.vue";
 
 /** The sticky trail at the top of the package page: catalog, registry, package,
     and the selected version with its state. */
@@ -13,6 +14,8 @@ const props = defineProps<{
   registry: string;
   name: string;
   selectedRow: ExploreVersionDto | null;
+  /** RFC 0044: the detail's scan-status batch failed. */
+  scanUnavailable?: boolean;
 }>();
 
 const { t } = useI18n();
@@ -53,7 +56,7 @@ function goBack() {
     router.back();
     return;
   }
-  router.push({ path: "/packages", query: { registry: props.registry } });
+  void router.push({ path: "/packages", query: { registry: props.registry } });
 }
 
 /**
@@ -145,6 +148,9 @@ function onCrumbToCatalog(event: MouseEvent) {
         <li class="font-mono text-foreground">{{ selectedRow.version }}</li>
         <li>
           <Resolution :state="rowState(selectedRow)" :label="stateLabel(selectedRow)" />
+        </li>
+        <li>
+          <ScanBadge :status="selectedRow.scan_status" :unavailable="scanUnavailable === true" />
         </li>
       </template>
     </ol>

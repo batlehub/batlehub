@@ -218,7 +218,11 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
           <CardHeader class="pb-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <CardTitle class="min-w-0 font-mono">
-                {{ reg.registry }}
+                <RouterLink
+                  :to="`/admin/observability/registries/${encodeURIComponent(reg.registry)}`"
+                  class="hover:underline underline-offset-[3px]"
+                  >{{ reg.registry }}</RouterLink
+                >
               </CardTitle>
               <div class="flex flex-wrap items-center gap-2">
                 <Badge

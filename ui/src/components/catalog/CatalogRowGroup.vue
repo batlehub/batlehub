@@ -15,6 +15,7 @@ import {
   type UpstreamRow,
 } from "@/lib/catalogRow";
 import { Resolution } from "@/components/ui/resolution";
+import ScanBadge from "@/components/package/ScanBadge.vue";
 import { Button } from "@/components/ui/button";
 import { RuleNote } from "@/components/ui/rule-note";
 import { TableRow, TableCell } from "@/components/ui/table";
@@ -28,6 +29,8 @@ defineProps<{
   /** Which row is being fetched, and what came of the last attempt. */
   fetching: string | null;
   fetchResult: Record<string, string>;
+  /** RFC 0044: the page's scan-status batch failed; rows draw "—". */
+  scanUnavailable?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -62,6 +65,15 @@ function canFetch(row: ExploreRow): boolean {
   <TableRow :class="['align-baseline', noteKey(row) ? 'border-b-0' : '']">
     <TableCell class="pl-0 pr-3 py-3 align-baseline">
       <Resolution :state="rowState(row)" :label="t(STATE_LABEL_KEYS[rowState(row)])" />
+      <!-- RFC 0044: under the State badge, in the same cell, so the
+           390px layout keeps its columns. -->
+      <div v-if="row.kind === 'cached'" class="mt-1">
+        <ScanBadge
+          :status="row.scan_status"
+          :unavailable="scanUnavailable === true && !!row.newest_version"
+          in-list
+        />
+      </div>
     </TableCell>
     <!-- `aria-describedby` is what ties a denial to the package it is
        about. Without it the note below is a paragraph a screen

@@ -999,6 +999,11 @@ async fn main() -> Result<()> {
     // Seed the warning store from the config we booted with (this also logs each
     // one). Reloads refresh it themselves.
     reload_svc.set_warnings(config.warnings());
+    reload_svc
+        .registry_views()
+        .replace(batlehub_web::handlers::back_office::registries::project(
+            &config,
+        ));
 
     // Report the config in force, so the console can say when the replicas
     // disagree (`config.replica-drift`). The pod name under Kubernetes.
@@ -1188,6 +1193,11 @@ async fn main() -> Result<()> {
                 .iter()
                 .filter(|r| r.sbom.is_some())
                 .count() as u64,
+            sbom_recheck_interval: config
+                .vulnerability_scan
+                .as_ref()
+                .filter(|v| v.enabled)
+                .map(|v| std::time::Duration::from_secs(v.interval_secs)),
         },
         ip_blocking_cfg,
         proxy_trust,

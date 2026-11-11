@@ -17,7 +17,8 @@ import {
   bulkBlockPackages,
   bulkUnblockPackages,
 } from "@/client/sdk.gen";
-import type { RegistryInfo } from "@/client/types.gen";
+import type { RegistryInfo, ScanStatusDto } from "@/client/types.gen";
+import ScanBadge from "@/components/package/ScanBadge.vue";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { useAuth } from "@/composables/useAuth";
@@ -62,6 +63,8 @@ interface AdminPackageSummary {
   last_accessed: string | null;
   last_accessed_by: string | null;
   access_count: number;
+  /** RFC 0044: absent without `[security]` or without quarantine:read. */
+  scan_status?: ScanStatusDto | null;
 }
 
 const { token } = useAuth();
@@ -72,6 +75,7 @@ interface AdminPackageListResponse {
   total: number;
   page: number;
   per_page: number;
+  scan_status_unavailable?: boolean;
 }
 
 /**
@@ -695,6 +699,11 @@ async function runPending(): Promise<void> {
                     <p v-if="pkg.status.status === 'blocked'" class="text-xs text-muted-foreground">
                       {{ pkg.status.reason }}
                     </p>
+                    <ScanBadge
+                      :status="pkg.scan_status"
+                      :unavailable="packagesResponse?.scan_status_unavailable === true"
+                      in-list
+                    />
                   </div>
                 </TableCell>
                 <TableCell class="text-xs tabular-nums whitespace-nowrap">

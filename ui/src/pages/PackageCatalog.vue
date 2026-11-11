@@ -31,6 +31,7 @@ const {
   search,
   searchIn,
   readmeSearchEnabled,
+  scanUnavailable,
   searchTruncated,
   sort,
   page,
@@ -289,6 +290,7 @@ const tableCaption = computed(() =>
               :selected-registry="selectedRegistry"
               :fetching="fetching"
               :fetch-result="fetchResult"
+              :scan-unavailable="scanUnavailable"
               @fetch="onFetchRow"
             />
 

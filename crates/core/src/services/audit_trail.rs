@@ -437,6 +437,9 @@ impl AuditTrailService {
         if let Err(e) = self.events.record_access(event).await {
             tracing::warn!(error = %e, "audit trail: recording its own event failed");
         }
+        // Access events are batched (TD-0004 §2); the record of a purge must be
+        // in the table before the response says the purge happened.
+        self.events.flush_access_events().await;
     }
 
     /// The manual purge: **access-class** rows older than `before`, and nothing

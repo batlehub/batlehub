@@ -42,8 +42,14 @@ impl Rule for ReleaseAgeGateRule {
         "release_age_gate"
     }
 
-    fn listing_min_age(&self, identity: &crate::entities::Identity) -> Option<Duration> {
-        (!identity.role.clears_bypass(&self.bypass_roles)).then_some(self.min_age)
+    fn listing_age_gate(
+        &self,
+        identity: &crate::entities::Identity,
+    ) -> Option<super::ListingAgeGate> {
+        (!identity.role.clears_bypass(&self.bypass_roles)).then_some(super::ListingAgeGate {
+            min_age: self.min_age,
+            deny_missing_timestamp: self.deny_missing_timestamp,
+        })
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision {

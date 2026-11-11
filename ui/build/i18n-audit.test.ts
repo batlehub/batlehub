@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 // @ts-expect-error — plain ESM build script, no type declarations by design.
-import { scanSource } from "./i18n-audit.mjs";
+import { scanSource, withoutScriptTags } from "./i18n-audit.mjs";
 
 const scan = (source: string, isVue = true): string[] => scanSource(source, isVue) as string[];
 
@@ -225,3 +225,20 @@ describe("i18n audit", () => {
     });
   });
 });
+
+describe("withoutScriptTags", () => {
+  const strip = (s: string): string => withoutScriptTags(s) as string;
+
+  it("removes the tag whatever its case, and keeps the code after it", () => {
+    expect(strip('<SCRIPT setup lang="ts">const a = 1')).toBe("const a = 1");
+  });
+
+  it("does not end the tag at a `>` inside a quoted attribute", () => {
+    expect(strip('<script setup generic="T extends Record<string, number>">x')).toBe("x");
+  });
+
+  it("removes a tag re-formed by removing another", () => {
+    expect(strip("<scr<script>ipt>x")).toBe("x");
+  });
+});
+

@@ -2,8 +2,25 @@
   "title": "BatleHub — Production",
   "uid": "batlehub-production",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "registry",
+        "label": "Registry",
+        "type": "query",
+        "query": "label_values(batlehub_requests_total, registry)",
+        "definition": "label_values(batlehub_requests_total, registry)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "refresh": 1,
+        "sort": 1
+      }
+    ]
+  },
   "time": { "from": "now-24h", "to": "now" },
   "timepicker": {
     "refresh_intervals": ["1m", "5m", "15m", "1h"],
@@ -131,7 +148,7 @@
       "gridPos": { "x": 0, "y": 18, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "sum(rate(batlehub_artifact_cache_hits_total[5m])) by (registry) / (sum(rate(batlehub_artifact_cache_hits_total[5m])) by (registry) + sum(rate(batlehub_artifact_cache_misses_total[5m])) by (registry))",
+          "expr": "sum(rate(batlehub_artifact_cache_hits_total{registry=~\"$registry\"}[5m])) by (registry) / (sum(rate(batlehub_artifact_cache_hits_total{registry=~\"$registry\"}[5m])) by (registry) + sum(rate(batlehub_artifact_cache_misses_total{registry=~\"$registry\"}[5m])) by (registry))",
           "legendFormat": "{{registry}}"
         }
       ],
@@ -144,7 +161,7 @@
       "gridPos": { "x": 12, "y": 18, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "sum(rate(batlehub_cached_bytes_total[5m])) by (registry)",
+          "expr": "sum(rate(batlehub_cached_bytes_total{registry=~\"$registry\"}[5m])) by (registry)",
           "legendFormat": "{{registry}}"
         }
       ],
@@ -170,7 +187,7 @@
       "gridPos": { "x": 12, "y": 26, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "1 - (sum(increase(batlehub_artifact_cache_hits_total[7d])) by (registry) / (sum(increase(batlehub_artifact_cache_hits_total[7d])) by (registry) + sum(increase(batlehub_artifact_cache_misses_total[7d])) by (registry)))",
+          "expr": "1 - (sum(increase(batlehub_artifact_cache_hits_total{registry=~\"$registry\"}[7d])) by (registry) / (sum(increase(batlehub_artifact_cache_hits_total{registry=~\"$registry\"}[7d])) by (registry) + sum(increase(batlehub_artifact_cache_misses_total{registry=~\"$registry\"}[7d])) by (registry)))",
           "legendFormat": "{{registry}}"
         }
       ],
@@ -250,7 +267,7 @@
       "gridPos": { "x": 0, "y": 44, "w": 8, "h": 8 },
       "targets": [
         {
-          "expr": "sum(increase(batlehub_requests_total[24h])) by (registry)",
+          "expr": "sum(increase(batlehub_requests_total{registry=~\"$registry\"}[24h])) by (registry)",
           "legendFormat": "{{registry}}"
         }
       ]
@@ -262,7 +279,7 @@
       "gridPos": { "x": 8, "y": 44, "w": 16, "h": 8 },
       "targets": [
         {
-          "expr": "sum(increase(batlehub_artifact_cache_hits_total[1h])) by (registry)",
+          "expr": "sum(increase(batlehub_artifact_cache_hits_total{registry=~\"$registry\"}[1h])) by (registry)",
           "legendFormat": "{{registry}}"
         }
       ],
@@ -330,7 +347,7 @@
       "gridPos": { "x": 0, "y": 62, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(batlehub_upstream_request_duration_seconds_bucket[5m])) by (le, registry))",
+          "expr": "histogram_quantile(0.95, sum(rate(batlehub_upstream_request_duration_seconds_bucket{registry=~\"$registry\"}[5m])) by (le, registry))",
           "legendFormat": "{{registry}}"
         }
       ],

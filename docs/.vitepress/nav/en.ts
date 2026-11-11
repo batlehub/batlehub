@@ -396,6 +396,10 @@ export const sidebar = {
           text: "0043 — mise versions host",
           link: "/rfc/0043-mise-versions-host",
         },
+        {
+          text: "0044 — Scan visibility and admin views",
+          link: "/rfc/0044-scan-visibility-and-admin-views",
+        },
       ],
     },
     {

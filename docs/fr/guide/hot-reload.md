@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 9e8ff267c2df7cfd
+sourceHash: 5296a399ff3c80a2
 ---
 
 # Rechargement à chaud et configuration dynamique
@@ -40,6 +40,8 @@ précise l'emporte : `registries[npm].cache.metadata_ttl_secs` relève de
 | `search.readmes` | hot | l'interrupteur de recherche dans les README |
 | `server.signed_urls` | hot | le signataire des URL de téléchargement |
 | `server.trusted_proxies` | hot | la politique de confiance des proxys, basculée avec la table de routage par hôte |
+| `stats.dashboard_url` | hot | le lien de monitoring du tableau de bord |
+| `stats.registry_dashboard_url` | hot | les liens de monitoring des pages de registre |
 | `subdomain_routing` | hot | la table de routage hôte → registre |
 | `air_gap` | partial | l'enveloppe air-gap des clients de registre ; le préchauffage et les imports gardent les clients du démarrage |
 | `limits.max_artifact_size_bytes` | partial | le chemin des requêtes ; le worker d'analyse garde la limite du démarrage |
@@ -189,6 +191,7 @@ d'administration du rechargement affiche les deux.
 | `proxy-trust.deprecated-key-only` | La confiance envers les proxys vient du `[ip_blocking].trusted_proxies` déprécié |
 | `proxy-trust.invalid-deprecated-entry` | Une entrée du `[ip_blocking].trusted_proxies` déprécié n'est ni une IP ni une plage CIDR, et a été retirée |
 | `proxy-trust.shadowed-deprecated-key` | Les deux clés sont définies ; `[server]` gagne et la liste dépréciée est entièrement ignorée |
+| `stats.monitoring-url-http` | Un lien de monitoring de `[stats]` utilise `http` ; le navigateur le suit en clair |
 | `subdomain.invalid-dns-label` | `[subdomain_routing]` est actif mais un nom de registre ne peut pas être une étiquette DNS : aucun hôte générique n'en est dérivé |
 | `vsx-signing.proxy-mode` | `[registries.vsx_signing]` sur un registre en mode `proxy` : rien n'y est publié, donc la clé ne signe rien ; la signature de l'amont est relayée quoi qu'il arrive |
 

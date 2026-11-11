@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { ref, computed, watch } from "vue";
-import { useRoute } from "vue-router";
-import { listRegistries, packageDetail } from "@/client/sdk.gen";
-import type { PackageDetailResponse, RegistryInfo } from "@/client/types.gen";
+import { RouterLink, useRoute, useRouter } from "vue-router";
+import { listRegistries } from "@/client/sdk.gen";
+import type { RegistryInfo } from "@/client/types.gen";
 import { useAuth } from "@/composables/useAuth";
-import PackageVersionsTable from "@/components/admin/PackageVersionsTable.vue";
-import PackageBetaChannel from "@/components/admin/PackageBetaChannel.vue";
-import PackageVisibility from "@/components/admin/PackageVisibility.vue";
-import PackageGrants from "@/components/admin/PackageGrants.vue";
-import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 import ReadmePanel from "@/components/package/ReadmePanel.vue";
-import VerdictPanel from "@/components/package/VerdictPanel.vue";
+import ScanBadge from "@/components/package/ScanBadge.vue";
+import BlockNotes from "@/components/package/BlockNotes.vue";
+import ArtifactDownloads from "@/components/package/ArtifactDownloads.vue";
+import SecurityTab from "@/components/package/tabs/SecurityTab.vue";
+import AdminTab from "@/components/package/tabs/AdminTab.vue";
+import { usePoll } from "@/composables/usePoll";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import VersionsTable from "@/components/package/VersionsTable.vue";
 import PackageBreadcrumb from "@/components/package/PackageBreadcrumb.vue";
@@ -33,8 +34,12 @@ const { token, can } = useAuth();
 const canAdminister = computed(() => can("packages:read"));
 const canReadUpstream = computed(() => can("system:read", registry.value));
 const canRescan = computed(() => can("gates:exempt", registry.value));
+// RFC 0044 §4.5: an absent scan status means "scans nothing" only to a caller
+// who could have seen a withheld one.
+const canReadQuarantine = computed(() => can("quarantine:read"));
 const { authFetch } = useAuthFetch();
 const route = useRoute();
+const router = useRouter();
 
 const registry = computed(() => String(route.params.registry ?? ""));
 const name = computed(() => String(route.params.name ?? ""));
@@ -71,6 +76,7 @@ const {
   fetchResult,
   onFetchVersion,
   fetchDetail,
+  pollDetail,
 } = usePackageVersions(registry, name);
 
 // ── Per-artifact SBOM download ─────────────────────────────────────────────
@@ -229,21 +235,48 @@ async function loadRefShas() {
 }
 watch([registry, name, registryType], loadRefShas, { immediate: true });
 
-const {
-  data: adminData,
-  error: adminError,
-  reload: reloadAdmin,
-} = useApi<PackageDetailResponse>(
-  () =>
-    canAdminister.value
-      ? (packageDetail({
-          query: { registry: registry.value, name: name.value },
-        }) as Promise<{
-          data?: unknown;
-          error?: unknown;
-        }>)
-      : Promise.resolve({ data: undefined }),
-  [token, registry, name],
+// ── Tabs (RFC 0044 §4.2) ─────────────────────────────────────────────────────
+
+const TABS = ["overview", "versions", "security", "admin"] as const;
+type Tab = (typeof TABS)[number];
+/** The three anchors the page had before tabs, mapped to the tab holding them. */
+const ANCHOR_TABS: Record<string, Tab> = {
+  "#subject-heading": "overview",
+  "#versions-heading": "versions",
+  "#admin-heading": "admin",
+};
+
+/**
+ * `?tab=`, read back off the URL. An unknown or forbidden value is Overview,
+ * without an error; with no `tab`, a link into the versions index (`q`,
+ * `page`) or one of the old anchors keeps landing where it used to.
+ */
+const activeTab = computed<Tab>({
+  get() {
+    const one = (v: unknown) => (Array.isArray(v) ? v[0] : v);
+    const asked = one(route.query.tab);
+    const allowed = (tab: Tab | undefined) => !!tab && (tab !== "admin" || canAdminister.value);
+    if (asked !== undefined) {
+      return allowed(asked as Tab) && TABS.includes(asked as Tab) ? (asked as Tab) : "overview";
+    }
+    if (one(route.query.q) !== undefined || one(route.query.page) !== undefined) return "versions";
+    const anchored = ANCHOR_TABS[route.hash ?? ""];
+    return allowed(anchored) ? anchored! : "overview";
+  },
+  set(tab) {
+    // `replace`: tabs are not destinations, and must not stack in history.
+    void router.replace({ path: route.path, query: { ...route.query, tab } });
+  },
+});
+
+// ── The bounded poll (RFC 0044 §4.2) ─────────────────────────────────────────
+
+const scanTransient = computed(() =>
+  ["queued", "scanning"].includes(selectedRow.value?.scan_status?.state ?? ""),
+);
+const { stopped: pollStopped, restart: restartPoll } = usePoll(
+  pollDetail,
+  computed(() => activeTab.value === "security" && scanTransient.value),
 );
 </script>
 
@@ -267,7 +300,12 @@ const {
        paragraph do not want the same width, which is exactly what one cap on
        the page was giving them. -->
   <div class="space-y-6">
-    <PackageBreadcrumb :registry="registry" :name="name" :selected-row="selectedRow" />
+    <PackageBreadcrumb
+      :registry="registry"
+      :name="name"
+      :selected-row="selectedRow"
+      :scan-unavailable="data?.scan_status_unavailable === true"
+    />
 
     <!-- Loading and error are *panels*, which is the only bounded box this
          system has besides the settings popover — 1px rule, 40/24 padding, a
@@ -307,100 +345,131 @@ const {
     <template v-else-if="data">
       <PackageMasthead :data="data" :unfiltered-total="unfilteredTotal" @refresh="fetchDetail()" />
 
-      <VersionSubject
-        v-if="selectedRow"
-        :registry="registry"
-        :name="name"
-        :registry-type="registryType"
-        :selected-version="selectedVersion"
-        :selected-row="selectedRow"
-        :fetch-offer="data.fetch"
-        :upstream-status="upstreamStatus"
-        :sbom-formats="sbomFormats"
-        :sbom-state="sbomState"
-        :sbom-loading="sbomLoading"
-        :sbom-error="sbomError[artifactKey(selectedRow.version)]"
-        :fetching="fetching"
-        :fetch-result="fetchResult"
-        @download-sbom="downloadSbom"
-        @fetch-version="onFetchVersion"
-      />
+      <!-- RFC 0044: four tabs, linkable with `?tab=`. Every panel stays
+           mounted (`force-mount`), so the README, SBOM and vulnerability
+           blocks still load on mount and a tab switch costs no request. -->
+      <Tabs v-model="activeTab">
+        <TabsList :aria-label="t('packageDetailPage.tabs.label')" class="flex-wrap h-auto">
+          <TabsTrigger value="overview">{{ t("packageDetailPage.tabs.overview") }}</TabsTrigger>
+          <TabsTrigger value="versions">{{ t("packageDetailPage.tabs.versions") }}</TabsTrigger>
+          <TabsTrigger value="security">{{ t("packageDetailPage.tabs.security") }}</TabsTrigger>
+          <TabsTrigger v-if="canAdminister" value="admin">{{
+            t("packageDetailPage.tabs.admin")
+          }}</TabsTrigger>
+        </TabsList>
 
-      <!-- README, below the subject and above the index, bound to the selected
-           version. Fetched separately from the detail response so the catalogue
-           cache's TTL never holds a stale document and the detail payload does
-           not grow by a megabyte per package (RFC 0007 §5.4). -->
-      <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
+        <TabsContent value="overview" force-mount class="space-y-6">
+          <VersionSubject
+            v-if="selectedRow"
+            :registry="registry"
+            :name="name"
+            :registry-type="registryType"
+            :selected-version="selectedVersion"
+            :selected-row="selectedRow"
+            :fetch-offer="data.fetch"
+            :upstream-status="upstreamStatus"
+            :sbom-formats="sbomFormats"
+            :sbom-state="sbomState"
+            :sbom-loading="sbomLoading"
+            :sbom-error="sbomError[artifactKey(selectedRow.version)]"
+            :fetching="fetching"
+            :fetch-result="fetchResult"
+            @download-sbom="downloadSbom"
+            @fetch-version="onFetchVersion"
+          />
 
-      <!-- The selected version's supply-chain verdict (RFC 0018), when the
-           registry has one: what it is held or warned for, and the findings
-           for a reader who may see them. Silent otherwise. -->
-      <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
-      <MovingRefsPanel :registry="registry" :name="name" />
-      <VerdictPanel
-        :registry="registry"
-        :name="name"
-        :version="selectedVersion"
-        :can-rescan="canRescan"
-      />
+          <!-- README, below the subject and above the index, bound to the selected
+               version. Fetched separately from the detail response so the catalogue
+               cache's TTL never holds a stale document and the detail payload does
+               not grow by a megabyte per package (RFC 0007 §5.4). -->
+          <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
 
-      <VersionsTable
-        :name="name"
-        :upstream="data.upstream"
-        :paged-versions="pagedVersions"
-        :selected-version="selectedVersion"
-        :show-prereleases="showPrereleases"
-        :prerelease-count="prereleaseCount"
-        :hidden-prerelease-count="hiddenPrereleaseCount"
-        :upstream-version-count="upstreamVersionCount"
-        :version-filter="versionFilter"
-        :filter-pending="filterPending"
-        :filtered-total="filteredTotal"
-        :unfiltered-total="unfilteredTotal"
-        :version-page="versionPage"
-        :version-total-pages="versionTotalPages"
-        :ref-shas="refShas"
-        @toggle-prereleases="togglePrereleases()"
-        @filter="filterVersions"
-        @turn-page="turnToPage"
-      />
+          <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
+          <MovingRefsPanel :registry="registry" :name="name" />
+          <!-- The verdict moved to Security; one line here says where. -->
+          <p
+            v-if="selectedRow?.scan_status || data.scan_status_unavailable"
+            class="flex flex-wrap items-center gap-2 text-sm"
+            data-testid="security-summary"
+          >
+            <ScanBadge
+              :status="selectedRow?.scan_status"
+              :unavailable="data.scan_status_unavailable === true"
+            />
+            <RouterLink
+              :to="{ path: route.path, query: { ...route.query, tab: 'security' } }"
+              replace
+              class="text-primary underline underline-offset-[3px]"
+              >{{ t("packageDetailPage.securitySummary") }}</RouterLink
+            >
+          </p>
+        </TabsContent>
+
+        <TabsContent value="versions" force-mount>
+          <VersionsTable
+            :name="name"
+            :upstream="data.upstream"
+            :paged-versions="pagedVersions"
+            :selected-version="selectedVersion"
+            :show-prereleases="showPrereleases"
+            :prerelease-count="prereleaseCount"
+            :hidden-prerelease-count="hiddenPrereleaseCount"
+            :upstream-version-count="upstreamVersionCount"
+            :version-filter="versionFilter"
+            :filter-pending="filterPending"
+            :filtered-total="filteredTotal"
+            :unfiltered-total="unfilteredTotal"
+            :version-page="versionPage"
+            :version-total-pages="versionTotalPages"
+            :ref-shas="refShas"
+            :scan-unavailable="data.scan_status_unavailable === true"
+            @toggle-prereleases="togglePrereleases()"
+            @filter="filterVersions"
+            @turn-page="turnToPage"
+          />
+        </TabsContent>
+
+        <TabsContent value="security" force-mount>
+          <SecurityTab
+            :registry="registry"
+            :name="name"
+            :version="selectedVersion"
+            :status="selectedRow?.scan_status"
+            :unavailable="data.scan_status_unavailable === true"
+            :can-rescan="canRescan"
+            :can-read-quarantine="canReadQuarantine"
+            :poll-stopped="pollStopped"
+            @refresh="restartPoll"
+          >
+            <section v-if="selectedRow" class="border-t border-rule-soft pt-6">
+              <BlockNotes
+                :registry="registry"
+                :name="name"
+                :selected-row="selectedRow"
+                part="vulnerabilities"
+              />
+              <ArtifactDownloads
+                part="sbom"
+                :registry="registry"
+                :name="name"
+                :registry-type="registryType"
+                :selected-row="selectedRow"
+                :sbom-formats="sbomFormats"
+                :sbom-state="sbomState"
+                :sbom-loading="sbomLoading"
+                :sbom-error="sbomError[artifactKey(selectedRow.version)]"
+                @download-sbom="downloadSbom"
+              />
+            </section>
+          </SecurityTab>
+        </TabsContent>
+
+        <!-- Everything AdminPackageDetail used to be, on the verb its
+             endpoint asks for (RFC 0042 §4.3). -->
+        <TabsContent v-if="canAdminister" value="admin" force-mount>
+          <AdminTab :registry="registry" :name="name" />
+        </TabsContent>
+      </Tabs>
     </template>
   </div>
-
-  <!-- ── Administration ──────────────────────────────────────────────────
-         Everything AdminPackageDetail used to be, in place. Same gate as the
-         public sheet above: it rendered under a loading or failed page too. -->
-  <template v-if="canAdminister && !loading && !error && data">
-    <!-- A full-width hairline, which is how this world separates two regions —
-         `Separator` with a 24px margin either side is the same line drawn by a
-         component that also carries a `my-6`; the region's own `pt-6` is the
-         rhythm, on the scale. -->
-    <section class="mt-6 space-y-4 border-t border-rule-soft pt-6" aria-labelledby="admin-heading">
-      <!-- Not copper. Copper means *waiting or held* in this world — a stale
-           entry, a quota approaching its limit — and it was painting a section
-           label, which is neither. Dim ink is what every other label on the page
-           is set in. -->
-      <h2
-        id="admin-heading"
-        class="font-mono font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground"
-      >
-        {{ t("common.administration") }}
-      </h2>
-
-      <p v-if="adminError" class="text-sm text-destructive">{{ adminError }}</p>
-
-      <template v-else-if="adminData">
-        <PackageVersionsTable
-          :registry="registry"
-          :name="name"
-          :versions="adminData.versions"
-          @reload="reloadAdmin"
-        />
-        <PackageBetaChannel :registry="registry" />
-        <PackageVisibility :registry="registry" :name="name" />
-        <PackageGrants :registry="registry" :name="name" />
-        <PackageEventsTable :events="adminData.recent_events" />
-      </template>
-    </section>
-  </template>
 </template>

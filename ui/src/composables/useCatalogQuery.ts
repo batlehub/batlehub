@@ -46,6 +46,8 @@ interface PageResult {
       a truncated prose search followed by a cached name search left the
       "showing the first N matches" note under a list it was not about. */
   truncated: boolean;
+  /** RFC 0044 §10.2: the status batch failed for this answer. */
+  scanUnavailable: boolean;
 }
 
 /**
@@ -67,6 +69,8 @@ export function useCatalogQuery() {
   const searchIn = ref<SearchScope>("name");
   /** `[search] readmes` on this instance, as the last response reported it. */
   const readmeSearchEnabled = ref(false);
+  /** RFC 0044: the page's scan-status batch failed; rows draw "—". */
+  const scanUnavailable = ref(false);
   /** The prose search hit its cap; there may be more than is shown. */
   const searchTruncated = ref(false);
 
@@ -238,6 +242,7 @@ export function useCatalogQuery() {
       perPage.value = cached.perPage;
       readmeSearchEnabled.value = cached.readmeSearchEnabled;
       searchTruncated.value = cached.truncated;
+      scanUnavailable.value = cached.scanUnavailable;
       // Cleared here rather than left to the `finally`: this call already bumped
       // `packagesSeq`, so a request still in flight skips its own `finally` and
       // would leave the skeleton row on screen.
@@ -286,6 +291,7 @@ export function useCatalogQuery() {
           perPage: applied,
           readmeSearchEnabled: prose,
           truncated: cut,
+          scanUnavailable: body.scan_status_unavailable === true,
         },
         scope,
       );
@@ -295,6 +301,7 @@ export function useCatalogQuery() {
       perPage.value = applied;
       readmeSearchEnabled.value = prose;
       searchTruncated.value = cut;
+      scanUnavailable.value = body.scan_status_unavailable === true;
     } catch (e) {
       // A failed revalidation leaves the copy already on screen alone.
       if (seq === packagesSeq && !cached) error.value = extractMessage(e);
@@ -590,6 +597,7 @@ export function useCatalogQuery() {
     search,
     searchIn,
     readmeSearchEnabled,
+    scanUnavailable,
     searchTruncated,
     sort,
     page,

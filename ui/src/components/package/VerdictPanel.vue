@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { severityVariant } from "@/lib/badge-variants";
 import { SEVERITY_KEYS } from "@/config/severity";
-import { formatDay } from "@/lib/format";
+import { formatDate, formatDay } from "@/lib/format";
 import { reasonCodeDocsUrl } from "@/config";
 
 /**
@@ -125,6 +125,47 @@ const explanation = computed(() => {
   }
 });
 
+/** An interval in its largest whole unit — the four keys spelled out for the catalogue test. */
+function every(secs: number): string {
+  if (secs % 86_400 === 0) return t("verdictPanel.nextRescanEveryDays", { n: secs / 86_400 });
+  if (secs % 3600 === 0) return t("verdictPanel.nextRescanEveryHours", { n: secs / 3600 });
+  if (secs % 60 === 0) return t("verdictPanel.nextRescanEveryMinutes", { n: secs / 60 });
+  return t("verdictPanel.nextRescanEverySeconds", { n: secs });
+}
+
+/**
+ * The two "Next rescan" lines (RFC 0044 §4.2). `next_rescan` is present only
+ * for a `system:read` holder — the server decides, the panel only draws.
+ */
+const nextRescan = computed<string[] | null>(() => {
+  const n = verdict.value?.next_rescan;
+  if (!n) return null;
+  let first: string;
+  if (!n.verdict_at || n.verdict_interval_secs == null) {
+    first = t("verdictPanel.nextRescanNever");
+  } else if (new Date(n.verdict_at).getTime() <= Date.now()) {
+    // The scheduler ticks every minute: a past date is due, not late.
+    first = t("verdictPanel.nextRescanDue", { every: every(n.verdict_interval_secs) });
+  } else {
+    first = t("verdictPanel.nextRescanVerdict", {
+      when: formatDate(n.verdict_at),
+      every: every(n.verdict_interval_secs),
+    });
+  }
+  let second: string;
+  if (n.sbom_interval_secs == null) {
+    second = t("verdictPanel.nextRescanSbomDisabled");
+  } else if (!n.sbom_at) {
+    second = t("verdictPanel.nextRescanSbomNotYet", { every: every(n.sbom_interval_secs) });
+  } else {
+    second = t("verdictPanel.nextRescanSbom", {
+      when: formatDate(n.sbom_at),
+      every: every(n.sbom_interval_secs),
+    });
+  }
+  return [first, second];
+});
+
 async function rescan() {
   if (!props.version) return;
   rescanning.value = true;
@@ -197,6 +238,13 @@ async function rescan() {
       <dd>
         {{ verdict.last_scanned_at ? formatDay(verdict.last_scanned_at) : t("verdictPanel.never") }}
       </dd>
+      <template v-if="nextRescan">
+        <dt>{{ t("verdictPanel.nextRescan") }}</dt>
+        <dd data-testid="verdict-next-rescan">
+          <span class="block">{{ nextRescan[0] }}</span>
+          <span class="block">{{ nextRescan[1] }}</span>
+        </dd>
+      </template>
     </dl>
 
     <!-- The findings, when the reader may see them. A withheld list is said

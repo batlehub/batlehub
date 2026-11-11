@@ -9,7 +9,10 @@ use chrono::{DateTime, Duration, Utc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use batlehub_core::entities::{PackageId, ScanJob, ScanTrigger, Verdict, VerdictState};
+use batlehub_core::entities::{
+    FindingRow, FindingsFilter, PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict,
+    VerdictState, EXHAUSTED_PREFIX,
+};
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 
@@ -83,6 +86,72 @@ impl VerdictRepository for InMemoryVerdictRepository {
         Ok(Some(counts.into_iter().collect()))
     }
 
+    /// Mirrors the Postgres order: by reference first when asked, then most
+    /// severe, reference, coordinate, scanner.
+    async fn list_findings(
+        &self,
+        filter: &FindingsFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<FindingRow>, u64), CoreError> {
+        let rows = self.rows.read().await;
+        let mut out: Vec<FindingRow> = rows
+            .values()
+            .filter(|v| filter.registries.contains(&v.package.registry))
+            .filter(|v| filter.verdict.is_none_or(|s| s == v.state))
+            .flat_map(|v| {
+                v.findings.iter().map(|f| FindingRow {
+                    package: v.package.clone(),
+                    finding: batlehub_core::entities::Finding {
+                        raw: serde_json::Value::Null,
+                        ..f.clone()
+                    },
+                    verdict: v.state,
+                })
+            })
+            .filter(|r| filter.min_severity.is_none_or(|m| r.finding.severity >= m))
+            .filter(|r| {
+                filter
+                    .scanner
+                    .as_ref()
+                    .is_none_or(|s| *s == r.finding.scanner)
+            })
+            .filter(|r| {
+                filter.reference_prefix.as_ref().is_none_or(|p| {
+                    r.finding
+                        .reference
+                        .as_ref()
+                        .is_some_and(|x| x.starts_with(p.as_str()))
+                })
+            })
+            .collect();
+        // `None` sorts last, as `NULLS LAST` does.
+        let reference =
+            |r: &FindingRow| (r.finding.reference.is_none(), r.finding.reference.clone());
+        out.sort_by(|a, b| {
+            let first = if filter.by_reference {
+                reference(a).cmp(&reference(b))
+            } else {
+                std::cmp::Ordering::Equal
+            };
+            first
+                .then(b.finding.severity.cmp(&a.finding.severity))
+                .then(reference(a).cmp(&reference(b)))
+                .then(a.package.registry.cmp(&b.package.registry))
+                .then(a.package.name.cmp(&b.package.name))
+                .then(a.package.version.cmp(&b.package.version))
+                .then(a.finding.scanner.cmp(&b.finding.scanner))
+        });
+        let total = out.len() as u64;
+        Ok((
+            out.into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect(),
+            total,
+        ))
+    }
+
     async fn count_by_registry_and_state(
         &self,
     ) -> Result<Vec<(String, VerdictState, u64)>, CoreError> {
@@ -117,9 +186,7 @@ impl VerdictRepository for InMemoryVerdictRepository {
 #[derive(Debug, Clone)]
 struct Row {
     job: ScanJob,
-    leased_by: Option<String>,
     completed: bool,
-    last_error: Option<String>,
 }
 
 /// Pick up to `n` of `sorted` (already in priority-then-age order): `n - 1`
@@ -198,7 +265,7 @@ impl InMemoryScanQueue {
             .await
             .iter()
             .find(|r| r.job.id == id)
-            .and_then(|r| r.last_error.clone())
+            .and_then(|r| r.job.last_error.clone())
     }
 }
 
@@ -219,7 +286,7 @@ impl ScanQueue for InMemoryScanQueue {
             // running lease is left alone) — RFC 0041 decision 44.
             if trigger.priority() < open.job.trigger.priority() {
                 open.job.trigger = trigger;
-                if open.leased_by.is_none() {
+                if open.job.leased_by.is_none() {
                     open.job.leased_until = None;
                 }
             }
@@ -236,10 +303,11 @@ impl ScanQueue for InMemoryScanQueue {
                 leased_until: None,
                 created_at: Utc::now(),
                 deferred_since: None,
+                leased_by: None,
+                last_error: None,
+                completed_at: None,
             },
-            leased_by: None,
             completed: false,
-            last_error: None,
         });
         Ok(true)
     }
@@ -281,7 +349,7 @@ impl ScanQueue for InMemoryScanQueue {
             let r = &mut rows[i];
             r.job.attempts += 1;
             r.job.leased_until = Some(now + Duration::seconds(lease_secs as i64));
-            r.leased_by = Some(worker_id.to_owned());
+            r.job.leased_by = Some(worker_id.to_owned());
             out.push(r.job.clone());
         }
         Ok(out)
@@ -298,23 +366,114 @@ impl ScanQueue for InMemoryScanQueue {
     async fn complete(&self, job_id: Uuid, worker: Option<&str>) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
         if let Some(r) = rows.iter_mut().find(|r| {
-            r.job.id == job_id && worker.is_none_or(|w| r.leased_by.as_deref() == Some(w))
+            r.job.id == job_id && worker.is_none_or(|w| r.job.leased_by.as_deref() == Some(w))
         }) {
             r.completed = true;
             r.job.leased_until = None;
+            r.job.completed_at = Some(Utc::now());
         }
         Ok(())
     }
 
+    async fn complete_exhausted(&self, job_id: Uuid, last_error: &str) -> Result<(), CoreError> {
+        let mut rows = self.rows.write().await;
+        if let Some(r) = rows.iter_mut().find(|r| r.job.id == job_id && !r.completed) {
+            r.completed = true;
+            r.job.leased_until = None;
+            r.job.completed_at = Some(Utc::now());
+            r.job.last_error = Some(last_error.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Rows are kept in creation order and one coordinate has at most one
+    /// open job, so the last closed row met is the latest closed.
+    async fn jobs_for(
+        &self,
+        coords: &[PackageId],
+    ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
+        let rows = self.rows.read().await;
+        Ok(coords
+            .iter()
+            .map(|c| {
+                let same = |r: &&Row| {
+                    r.job.package.registry == c.registry
+                        && r.job.package.name == c.name
+                        && r.job.package.version == c.version
+                };
+                let open = rows.iter().filter(same).find(|r| !r.completed);
+                let closed = rows.iter().rev().filter(same).find(|r| r.completed);
+                (open.map(|r| r.job.clone()), closed.map(|r| r.job.clone()))
+            })
+            .collect())
+    }
+
+    async fn list_jobs(
+        &self,
+        registries: &[String],
+        filter: ScanJobFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        let now = Utc::now();
+        let rows = self.rows.read().await;
+        let scanning =
+            |j: &ScanJob| j.leased_by.is_some() && j.leased_until.is_some_and(|u| u > now);
+        let mut hits: Vec<&ScanJob> = match filter {
+            ScanJobFilter::Failed => {
+                // The latest closed row per coordinate, rows being in creation
+                // order; a coordinate with an open job is not failed.
+                let mut latest: Vec<&ScanJob> = Vec::new();
+                for r in rows.iter().filter(|r| r.completed) {
+                    latest.retain(|j| j.package != r.job.package);
+                    latest.push(&r.job);
+                }
+                latest.retain(|j| {
+                    j.last_error
+                        .as_deref()
+                        .is_some_and(|e| e.starts_with(EXHAUSTED_PREFIX))
+                        && !rows
+                            .iter()
+                            .any(|o| !o.completed && o.job.package == j.package)
+                });
+                latest.sort_by_key(|j| std::cmp::Reverse(j.completed_at));
+                latest
+            }
+            _ => {
+                let mut open: Vec<&ScanJob> = rows
+                    .iter()
+                    .filter(|r| !r.completed)
+                    .map(|r| &r.job)
+                    .filter(|j| match filter {
+                        ScanJobFilter::Queued => !scanning(j),
+                        ScanJobFilter::Scanning => scanning(j),
+                        _ => true,
+                    })
+                    .collect();
+                open.sort_by_key(|j| (!scanning(j), j.created_at));
+                open
+            }
+        };
+        hits.retain(|j| registries.contains(&j.package.registry));
+        let total = hits.len() as u64;
+        Ok((
+            hits.into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .cloned()
+                .collect(),
+            total,
+        ))
+    }
+
     async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows
-            .iter_mut()
-            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
-        {
+        if let Some(r) = rows.iter_mut().find(|r| {
+            r.job.id == job_id && !r.completed && r.job.leased_by.as_deref() == Some(worker)
+        }) {
             r.job.leased_until = None;
-            r.leased_by = None;
-            r.last_error = Some(error.to_owned());
+            r.job.leased_by = None;
+            r.job.last_error = Some(error.to_owned());
         }
         Ok(())
     }
@@ -326,15 +485,14 @@ impl ScanQueue for InMemoryScanQueue {
         not_before: DateTime<Utc>,
     ) -> Result<(), CoreError> {
         let mut rows = self.rows.write().await;
-        if let Some(r) = rows
-            .iter_mut()
-            .find(|r| r.job.id == job_id && !r.completed && r.leased_by.as_deref() == Some(worker))
-        {
+        if let Some(r) = rows.iter_mut().find(|r| {
+            r.job.id == job_id && !r.completed && r.job.leased_by.as_deref() == Some(worker)
+        }) {
             r.job.leased_until = Some(not_before);
-            r.leased_by = None;
+            r.job.leased_by = None;
             r.job.attempts = r.job.attempts.saturating_sub(1);
             r.job.deferred_since.get_or_insert_with(Utc::now);
-            r.last_error = Some(format!(
+            r.job.last_error = Some(format!(
                 "deferred since {}",
                 r.job.deferred_since.unwrap_or_else(Utc::now).to_rfc3339()
             ));
@@ -374,7 +532,7 @@ impl ScanQueue for InMemoryScanQueue {
             match r.job.leased_until {
                 None => e.0 += 1,
                 Some(u) if u < now => e.0 += 1,
-                Some(_) if r.leased_by.is_none() => e.1 += 1,
+                Some(_) if r.job.leased_by.is_none() => e.1 += 1,
                 Some(_) => {}
             }
         }

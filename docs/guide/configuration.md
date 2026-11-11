@@ -2425,6 +2425,9 @@ even though the halves differ: `metrics_enabled` is about **exposure**,
 history_enabled        = true   # default
 history_retention_days = 30     # default; 0 disables pruning, not history
 metrics_enabled        = true   # default: pre-RFC-0004 behaviour
+# Monitoring links (both absent by default: no button)
+dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
+registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batlehub?var-registry={registry}&from=now-24h&to=now"
 ```
 
 | Field | Type | Default | Notes |
@@ -2432,6 +2435,8 @@ metrics_enabled        = true   # default: pre-RFC-0004 behaviour
 | `history_enabled` | bool | `true` | Record the hourly cache rollup behind the admin dashboard's trend. `false` restores the pre-RFC-0004 dashboard, which shows only counters since the current process started |
 | `history_retention_days` | u32 | `30` | Delete rollup rows older than this. `0` keeps every row — it disables *pruning*, not history |
 | `metrics_enabled` | bool | `true` | Install the Prometheus recorder and serve `/metrics`. `false` makes `/metrics` answer `503 metrics not configured` |
+| `dashboard_url` | string | — | The [Monitoring ↗] link on *Admin → Dashboard*. No placeholder |
+| `registry_dashboard_url` | string | — | The [Monitoring ↗] link on each registry page. `{registry}` is its only placeholder and is required; it is replaced percent-encoded, so the template should put it in the query |
 
 **`metrics_enabled` is a security control, not a preference.** `/metrics` is
 unauthenticated and, before this block existed, unconditional: it publishes
@@ -2455,6 +2460,18 @@ histories. One row per registry per hour is under 9 000 rows a year.
 
 The table holds no principal and no coordinate — registry, window, counters — so
 its retention is an operational choice rather than a privacy one.
+
+**The monitoring links.** The server builds both URLs, and serves them only to
+holders of `system:read`, because a link can name an internal monitoring host.
+Each is checked at load: it must parse, use `http` or `https` (a `javascript:`
+link rendered as an `href` would run in the console), carry no `user:password`,
+and not be empty; `dashboard_url` takes no `{`, and `{registry}` must not sit in
+the host. A load or a reload that breaks one of these is refused with the field
+and the rule, and an `http` link loads with a warning. Both keys reload without
+a restart. The shipped `deploy/grafana/batlehub-production.json` has a
+`registry` variable, so `?var-registry={registry}` filters it. An older release
+refuses a config that sets either key (`[stats]` rejects unknown keys): remove
+them before rolling back.
 
 ---
 

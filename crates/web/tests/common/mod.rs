@@ -1395,6 +1395,10 @@ pub fn rbac_policy_deny_anonymous(
     (policy, rbac_policy_deny_anonymous_perms())
 }
 pub struct ConfigureAppDefaults {
+    /// The registry pages' projected config (RFC 0044 §5.3). Empty by default,
+    /// so `/admin/registries/{name}` answers `404`; a test seeds it with
+    /// `RegistryViews::from_config`.
+    pub registry_views: batlehub_web::RegistryViews,
     pub upstream_map: batlehub_web::UpstreamMap,
     pub proxy_metrics: Arc<ProxyMetrics>,
     pub sbom_svc: Option<Arc<SbomService>>,
@@ -1473,6 +1477,7 @@ impl Default for ConfigureAppDefaults {
             advisory_repo: None,
             flag_sources: batlehub_web::FlagSources::default(),
             rate_limit: None,
+            registry_views: batlehub_web::RegistryViews::default(),
         }
     }
 }
@@ -1547,6 +1552,7 @@ pub async fn finish_test_app(
             )
         });
     let flag_sources = defaults.flag_sources.clone();
+    let registry_views = defaults.registry_views.clone();
     let flag_svc = Arc::new(batlehub_core::services::FlagService::new(
         Arc::clone(&advisory_repo),
         local_svc.hot.clone(),
@@ -1627,7 +1633,8 @@ pub async fn finish_test_app(
         .app_data(actix_web::web::Data::new(flag_sources))
         .app_data(actix_web::web::Data::new(
             batlehub_web::ExposureConfig::default(),
-        ));
+        ))
+        .app_data(actix_web::web::Data::new(registry_views.clone()));
 
     init_service(
         app.wrap(
@@ -1671,6 +1678,7 @@ pub async fn finish_test_app_with_extra<E: 'static>(
             )
         });
     let flag_sources = defaults.flag_sources.clone();
+    let registry_views = defaults.registry_views.clone();
     let flag_svc = Arc::new(batlehub_core::services::FlagService::new(
         Arc::clone(&advisory_repo),
         local_svc.hot.clone(),
@@ -1733,6 +1741,7 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .app_data(actix_web::web::Data::new(
             batlehub_web::ExposureConfig::default(),
         ))
+        .app_data(actix_web::web::Data::new(registry_views))
         .app_data(actix_web::web::Data::new(extra));
 
     init_service(

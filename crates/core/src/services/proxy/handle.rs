@@ -1244,15 +1244,15 @@ impl ProxyService {
         // for the gate to fire on, so the too-young versions are hidden from the
         // list instead (RFC 0043 §11, decision 2).
         if kind == crate::entities::RegistryKind::MiseVersions {
-            let min_age = prelude.policy.as_ref().and_then(|p| {
+            let gate = prelude.policy.as_ref().and_then(|p| {
                 p.rules
                     .iter()
-                    .find_map(|r| r.listing_min_age(&req.identity))
+                    .find_map(|r| r.listing_age_gate(&req.identity))
             });
-            if let (Some(min_age), Some(body)) = (min_age, doc.body.as_text()) {
+            if let (Some(gate), Some(body)) = (gate, doc.body.as_text()) {
                 blocked.extend(crate::services::mise_versions::younger_than(
                     body,
-                    min_age,
+                    gate,
                     chrono::Utc::now(),
                 ));
             }

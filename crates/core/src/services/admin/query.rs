@@ -40,6 +40,8 @@ impl AdminService {
 
         self.record_account_action(AccessAction::AuditPurge, by_identity, net)
             .await;
+        // Batched (TD-0004 §2): the purge's own row lands before the response.
+        self.repo.flush_access_events().await;
 
         tracing::info!(
             user_id = by_identity.user_id.as_deref().unwrap_or(""),

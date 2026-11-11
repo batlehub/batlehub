@@ -1625,6 +1625,94 @@ describe("PackageDetailPage SBOM downloads", () => {
   });
 });
 
+/**
+ * RFC 0044 §4.2: four tabs, linkable with `?tab=`; the scan status in the
+ * sticky header; the Security tab's bounded poll of the explore detail.
+ */
+describe("tabs and scan status (RFC 0044)", () => {
+  beforeEach(() => {
+    explorePackageDetailMock.mockReset().mockImplementation(serve());
+    listRegistriesMock.mockReset().mockResolvedValue({ data: [] });
+    packageDetailMock.mockReset().mockResolvedValue({ data: null });
+    authFetchMock.mockReset().mockResolvedValue({ ok: false, status: 503 });
+    replaceMock.mockReset();
+    authState.token = "t";
+    authState.isAdmin = false;
+    routeState.query = {};
+  });
+  afterEach(() => {
+    routeState.query = {};
+    authState.isAdmin = false;
+    vi.useRealTimers();
+  });
+
+  const active = (w: VueWrapper) => w.find('[role="tab"][data-state="active"]').text();
+
+  it.each([
+    [{}, "Overview"],
+    [{ tab: "security" }, "Security"],
+    [{ tab: "versions" }, "Versions"],
+    [{ tab: "bogus" }, "Overview"],
+    [{ tab: "admin" }, "Overview"], // forbidden without the admin verbs
+    [{ q: "4" }, "Versions"], // an old link into the versions index
+    [{ page: "2" }, "Versions"],
+  ])("opens %o on %s", async (query, tab) => {
+    routeState.query = query as Record<string, string>;
+    const w = (await mountPage()) as VueWrapper;
+    expect(active(w)).toBe(tab);
+  });
+
+  it("renders the Administration tab only for an administrator", async () => {
+    const reader = (await mountPage()) as VueWrapper;
+    expect(reader.findAll('[role="tab"]').map((t) => t.text())).not.toContain("Administration");
+    authState.isAdmin = true;
+    routeState.query = { tab: "admin" };
+    const admin = (await mountPage()) as VueWrapper;
+    expect(active(admin)).toBe("Administration");
+  });
+
+  it("writes the tab with replace, so tabs do not stack in history", async () => {
+    const w = (await mountPage()) as VueWrapper;
+    const security = w.findAll('[role="tab"]').find((t) => t.text() === "Security")!;
+    await security.trigger("mousedown", { button: 0 });
+    await flushPromises();
+    expect(replaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ tab: "security" }) }),
+    );
+  });
+
+  it("shows the selected version's scan status in the sticky header", async () => {
+    explorePackageDetailMock
+      .mockReset()
+      .mockImplementation(
+        serve({ versions: [version({ scan_status: { state: "scanned", verdict: "warned" } })] }),
+      );
+    const w = (await mountPage()) as VueWrapper;
+    expect(w.find("nav").find('[data-testid="scan-badge"]').text()).toBe("scanned · warned");
+  });
+
+  it("polls the explore detail every 5 s on Security while the version is scanning", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    routeState.query = { tab: "security" };
+    explorePackageDetailMock
+      .mockReset()
+      .mockImplementation(serve({ versions: [version({ scan_status: { state: "scanning" } })] }));
+    const w = (await mountPage()) as VueWrapper;
+    const before = explorePackageDetailMock.mock.calls.length;
+    expect(w.text()).toContain("Updates automatically.");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(explorePackageDetailMock.mock.calls.length).toBe(before + 1);
+    // Done: the poll stops by itself.
+    explorePackageDetailMock.mockImplementation(
+      serve({ versions: [version({ scan_status: { state: "scanned", verdict: "allowed" } })] }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    const after = explorePackageDetailMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(explorePackageDetailMock.mock.calls.length).toBe(after);
+  });
+});
+
 describe("PackageDetailPage administration section", () => {
   beforeEach(() => {
     listRegistriesMock.mockReset().mockResolvedValue({ data: [{ name: "npm1", type: "npm" }] });

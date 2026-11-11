@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: f1ccd9e4feb980f2
+sourceHash: 5abdb425918a6199
 ---
 
 # Contrôles de sécurité
@@ -572,6 +572,112 @@ Préférez les champs du profil lui-même.
 
 Le côté utilisateur, avec ce qu'affiche chaque gestionnaire de paquets, est sur
 [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads).
+
+---
+
+## Lire le statut d'analyse {#scan-status}
+
+Sur un registre `[security]`, le catalogue, la liste d'administration des
+paquets et chaque version d'une page de paquet portent un **statut d'analyse**
+à côté du badge d'état existant. Une seule fonction, côté serveur, le dérive ;
+la première ligne qui s'applique l'emporte :
+
+| Statut | Quand |
+| --- | --- |
+| *(aucun)* | le registre n'a pas de `[registries.security]` |
+| `analyse en cours` | une tâche ouverte est tenue par un worker dont le bail court encore |
+| `en file` | une tâche ouverte que personne ne tient : jamais louée, bail expiré, ou différée pendant une panne de la base d'avis |
+| `non analysé` | aucun verdict n'a été enregistré pour la version |
+| `analyse échouée` | la dernière tâche close a épuisé ses tentatives, ou le verdict porte `SCANNER_ERROR` |
+| `en file` | le verdict porte `SCAN_PENDING` |
+| `analysé · <verdict>` | sinon, avec `autorisé`, `averti`, `en quarantaine` ou `refusé` |
+
+**Qui le voit** suit les verbes qui décident déjà qui peut apprendre qu'une
+version est retenue :
+
+- sans `quarantine:read`, rien : la ligne se lit exactement comme sur un
+  registre qui n'analyse pas, si bien qu'un visiteur anonyme ne peut ni
+  distinguer les deux ni apprendre qu'une version est retenue ;
+- avec `quarantine:read` (les rôles `user` et `admin` par défaut), le statut et
+  le verdict ;
+- avec `findings:read` en plus (`admin` par défaut), l'heure de la dernière
+  analyse, les tentatives et la dernière erreur du worker, dont toute URL est
+  privée de ses identifiants et de sa requête, coupée à 200 caractères.
+
+Une liste en décide par registre, d'après les permissions configurées, et
+**ignore un `dry_run` actif** : pendant un essai à blanc, une liste peut en
+montrer moins que le point d'accès du verdict d'une version, jamais plus.
+
+**Une liste montre le verdict tel qu'il a été enregistré.**
+`GET /api/v1/verdicts/…` le rejuge selon la politique et l'horloge du moment ;
+les listes lisent la ligne stockée et ne déclenchent jamais d'analyse. Les deux
+peuvent différer pendant les quelques minutes qui suivent la levée d'une
+fenêtre d'âge ou un changement de politique.
+
+Quand le statut n'a pas pu être lu en 500 ms, la liste est servie sans lui et
+porte `scan_status_unavailable: true` ; la console affiche alors « — » à la
+place de chaque badge.
+
+**L'endpoint de verdict porte le même état**, dans `scan_status`, et pour un
+détenteur de `quarantine:read` au niveau instance un bloc `next_rescan` : quand le verdict sera
+réanalysé (`last_scanned_at` plus `[registries.security.rescan]
+interval_secs` ; absent sans intervalle, et une date passée signifie « dû ») et
+quand la revérification SBOM du registre aura lieu (sa dernière exécution plus
+`[vulnerability_scan] interval_secs` ; absente quand la revérification est
+désactivée ou n'a jamais couvert le registre). L'onglet Sécurité de la page du
+paquet affiche les deux sous *Prochaine réanalyse*.
+
+### La page Scans {#scans-page}
+
+*Admin → Sécurité et accès → Scans* suit la file d'analyse
+(`GET /api/v1/admin/scans`) :
+
+- **File d'attente** : chaque tâche ouverte, celles qu'un worker tient en
+  premier, avec le déclencheur, l'heure de mise en file, le worker et les
+  tentatives. Une tâche différée indique quand son report a commencé.
+- **Échecs** : chaque version dont la dernière tâche d'analyse a épuisé ses
+  tentatives et qui n'a aucune tâche ouverte, avec la dernière erreur du
+  worker. [Relancer l'analyse] crée une nouvelle tâche
+  (`POST /api/v1/verdicts/…/rescan`) et la ligne passe dans la file.
+- **Verdicts par état** : les verdicts d'un registre, depuis
+  `GET /api/v1/admin/verdicts`.
+
+Ouvrir la page demande `quarantine:read` au niveau instance, le verbe avec
+lequel lit la console sécurité (RFC 0042) ; le `quarantine:read` de niveau
+registre que détient tout utilisateur ne suffit pas. Les lignes ne viennent
+ensuite que des registres où vous détenez `quarantine:read`, moins les paquets
+sous un scellé de namespace, et la dernière erreur seulement là où vous
+détenez `findings:read`. [Relancer l'analyse] apparaît là où les droits
+configurés vous donnent `gates:exempt` sur le registre — personne ne le détient
+par défaut — et l'endpoint de relance le vérifie à nouveau. `per_page` vaut au
+plus 200.
+
+Une tâche close avant cette version ne porte pas de marqueur d'échec : un échec
+antérieur à la mise à jour n'apparaît donc pas sous Échecs ; son verdict
+affiche toujours `SCANNER_ERROR` dans *Verdicts par état*.
+
+### La page Constats {#findings-page}
+
+*Admin → Sécurité et accès → Constats* liste ce que les scanners ont trouvé,
+tous registres confondus (`GET /api/v1/admin/findings`). Chaque ligne nomme la
+version, la sévérité, le scanner, l'identifiant de l'avis et l'état du verdict
+que le constat a produit. Les filtres portent sur le registre, une sévérité
+minimale, le scanner, l'état du verdict et un préfixe d'identifiant d'avis (pris
+littéralement, 128 caractères au plus). *Par référence* regroupe les versions
+de chaque avis, pour répondre à « quelles versions cette CVE touche-t-elle ? ».
+[Exempter…] lève le verdict d'une version retenue : il demande un motif et une
+échéance, et écrit une exemption `security_verdict`
+([Garde-fous par namespace et exemptions](#namespaces)).
+
+Les constats nomment des avis qui peuvent être sous embargo : la liste demande
+donc `findings:read`, vérifié registre par registre. Vous voyez les registres où
+vous le détenez, et la page est refusée si vous ne le détenez nulle part.
+Nommer un autre registre dans le filtre renvoie une page vide, pas un refus. Un
+namespace scellé qui vous exclut retire ses lignes, comme il le fait pour le
+verdict de la version. [Exempter…] apparaît là où les droits configurés vous
+donnent `gates:exempt` et où le verdict retient la version ; l'endpoint
+d'exemption le vérifie à nouveau. `per_page` vaut au plus 200 ; à cause des
+namespaces scellés, une page peut contenir moins de lignes que demandé.
 
 ---
 

@@ -10,8 +10,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use batlehub_core::entities::{
-    Finding, FindingKind, PackageId, ReasonCode, ScanJob, ScanTrigger, Severity, Verdict,
-    VerdictState,
+    Finding, FindingKind, FindingRow, FindingsFilter, PackageId, ReasonCode, ScanJob,
+    ScanJobFilter, ScanTrigger, Severity, Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{LeaderLock, QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
@@ -54,6 +54,39 @@ pub(crate) async fn count_under_lock(
             .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
             .collect(),
     ))
+}
+
+/// Three parallel arrays for an `UNNEST` batch.
+fn unzip_coords(coords: &[PackageId]) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
+    let mut out = (
+        Vec::with_capacity(coords.len()),
+        Vec::with_capacity(coords.len()),
+        Vec::with_capacity(coords.len()),
+    );
+    for c in coords {
+        out.0.push(c.registry.as_str());
+        out.1.push(c.name.as_str());
+        out.2.push(c.version.as_str());
+    }
+    out
+}
+
+/// Registry, name and version — not the `artifact` a caller's id may carry.
+fn same_coordinate(a: &PackageId, b: &PackageId) -> bool {
+    a.registry == b.registry && a.name == b.name && a.version == b.version
+}
+
+/// `prefix` as a `LIKE … ESCAPE '\'` pattern that matches it literally.
+fn like_prefix(prefix: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
 }
 
 /// `artifact_verdicts` + `artifact_findings` (migrations 049, 050).
@@ -217,6 +250,40 @@ impl VerdictRepository for PgVerdictRepository {
         Ok(Some(Self::row_to_verdict(&row, findings)?))
     }
 
+    /// Findings are not loaded: a status reads the state and the codes.
+    async fn get_many(&self, coords: &[PackageId]) -> Result<Vec<Option<Verdict>>, CoreError> {
+        if coords.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (regs, names, vers) = unzip_coords(coords);
+        let rows = sqlx::query(
+            "SELECT v.registry, v.package_name, v.version, v.state, v.reason_codes, v.policy_ref,
+                    v.available_at, v.evaluated_at, v.last_scanned_at, v.scanners_done
+             FROM (SELECT DISTINCT * FROM UNNEST($1::text[], $2::text[], $3::text[])) AS c(r, n, v2)
+             JOIN artifact_verdicts v
+               ON v.registry = c.r AND v.package_name = c.n AND v.version = c.v2",
+        )
+        .bind(&regs)
+        .bind(&names)
+        .bind(&vers)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        let found = rows
+            .iter()
+            .map(|r| Self::row_to_verdict(r, Vec::new()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(coords
+            .iter()
+            .map(|c| {
+                found
+                    .iter()
+                    .find(|v| same_coordinate(c, &v.package))
+                    .cloned()
+            })
+            .collect())
+    }
+
     /// Findings are not loaded: the listing filter reads states and clocks.
     async fn list_for_package(
         &self,
@@ -278,6 +345,91 @@ impl VerdictRepository for PgVerdictRepository {
              FROM artifact_findings WHERE severity = 'unknown' GROUP BY registry",
         )
         .await
+    }
+
+    /// One statement: the page and, through `COUNT(*) OVER ()`, the total.
+    /// `severity` is `TEXT`, so it is ranked by a `CASE` that reads a value
+    /// it does not know as critical, as `Severity::parse_stored` does.
+    async fn list_findings(
+        &self,
+        filter: &FindingsFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<FindingRow>, u64), CoreError> {
+        if filter.registries.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let rows = sqlx::query(
+            r"WITH f AS (
+                SELECT f.registry, f.package_name, f.version, f.scanner, f.kind, f.code,
+                       f.severity, f.reference, f.summary, f.confidence, f.available_at,
+                       f.id, v.state,
+                       CASE lower(f.severity)
+                           WHEN 'unknown' THEN 0 WHEN 'low' THEN 1
+                           WHEN 'medium' THEN 2 WHEN 'moderate' THEN 2
+                           WHEN 'high' THEN 3 ELSE 4 END AS rank
+                FROM artifact_findings f
+                JOIN artifact_verdicts v
+                  ON v.registry = f.registry AND v.package_name = f.package_name
+                 AND v.version = f.version
+                WHERE f.registry = ANY($1)
+                  AND ($3::text IS NULL OR f.scanner = $3)
+                  AND ($4::text IS NULL OR f.reference LIKE $4 ESCAPE '\')
+                  AND ($5::text IS NULL OR v.state = $5)
+              )
+              SELECT *, COUNT(*) OVER () AS total FROM f
+              WHERE ($2::int IS NULL OR rank >= $2)
+              ORDER BY CASE WHEN $6::bool THEN reference END NULLS LAST, rank DESC,
+                       reference NULLS LAST, registry, package_name, version, scanner, id
+              LIMIT $7 OFFSET $8",
+        )
+        .bind(&filter.registries)
+        // `Severity` is declared unknown → critical, the ranks of the `CASE`.
+        .bind(filter.min_severity.map(|s| s as i32))
+        .bind(filter.scanner.as_deref())
+        .bind(filter.reference_prefix.as_deref().map(like_prefix))
+        .bind(filter.verdict.map(|v| v.as_str()))
+        .bind(filter.by_reference)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        let total = rows.first().map_or(0, |r| r.get::<i64, _>("total") as u64);
+        let items = rows
+            .iter()
+            .map(|r| {
+                let kind: String = r.get("kind");
+                let code: String = r.get("code");
+                let severity: String = r.get("severity");
+                let state: String = r.get("state");
+                Ok(FindingRow {
+                    package: PackageId::new(
+                        r.get::<String, _>("registry"),
+                        r.get::<String, _>("package_name"),
+                        r.get::<String, _>("version"),
+                    ),
+                    finding: Finding {
+                        scanner: r.get("scanner"),
+                        kind: kind
+                            .parse::<FindingKind>()
+                            .map_err(|e| parse_err("artifact_findings.kind", e))?,
+                        code: ReasonCode::parse_stored(&code),
+                        severity: Severity::parse_stored(&severity),
+                        reference: r.try_get("reference").ok(),
+                        summary: r.get("summary"),
+                        confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
+                        available_at: r.try_get("available_at").ok(),
+                        raw: serde_json::Value::Null,
+                        judged_as: None,
+                    },
+                    verdict: state
+                        .parse()
+                        .map_err(|e| parse_err("artifact_verdicts.state", e))?,
+                })
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
+        Ok((items, total))
     }
 
     async fn count_by_registry_and_state(
@@ -382,6 +534,12 @@ impl PgScanQueue {
                 .ok()
                 .flatten()
                 .and_then(|e| deferred_since(&e)),
+            leased_by: r.try_get::<Option<String>, _>("leased_by").ok().flatten(),
+            last_error: r.try_get::<Option<String>, _>("last_error").ok().flatten(),
+            completed_at: r
+                .try_get::<Option<DateTime<Utc>>, _>("completed_at")
+                .ok()
+                .flatten(),
         })
     }
 }
@@ -396,7 +554,7 @@ fn deferred_since(last_error: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
-const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, created_at, last_error";
+const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, leased_by, created_at, last_error, completed_at";
 
 impl PgScanQueue {
     /// One lease pick: up to `n` open, unleased, unexhausted jobs in
@@ -568,6 +726,137 @@ impl ScanQueue for PgScanQueue {
         .await
         .db_err()?;
         Ok(())
+    }
+
+    async fn complete_exhausted(&self, job_id: Uuid, last_error: &str) -> Result<(), CoreError> {
+        sqlx::query(
+            "UPDATE scan_jobs SET completed_at = NOW(), leased_until = NULL, last_error = $2
+             WHERE id = $1 AND completed_at IS NULL",
+        )
+        .bind(job_id)
+        .bind(last_error)
+        .execute(&self.pool)
+        .await
+        .db_err()?;
+        Ok(())
+    }
+
+    /// One statement for the page: the open job on
+    /// `scan_jobs_open_coordinate_idx`, the latest closed one on
+    /// `scan_jobs_closed_coordinate_idx` (migration 068). `ord` keeps the
+    /// answer in the caller's order and maps duplicates back.
+    async fn jobs_for(
+        &self,
+        coords: &[PackageId],
+    ) -> Result<Vec<(Option<ScanJob>, Option<ScanJob>)>, CoreError> {
+        let mut out = vec![(None, None); coords.len()];
+        if coords.is_empty() {
+            return Ok(out);
+        }
+        let (regs, names, vers) = unzip_coords(coords);
+        let cols = JOB_COLUMNS
+            .split(", ")
+            .map(|c| format!("j.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "WITH c(r, n, v) AS (SELECT DISTINCT * FROM UNNEST($1::text[], $2::text[], $3::text[]))
+             SELECT TRUE AS open, {cols} FROM c
+               JOIN scan_jobs j ON j.registry = c.r AND j.package_name = c.n AND j.version = c.v
+              WHERE j.completed_at IS NULL
+             UNION ALL
+             SELECT FALSE AS open, {cols} FROM c
+               CROSS JOIN LATERAL (
+                 SELECT * FROM scan_jobs j
+                  WHERE j.registry = c.r AND j.package_name = c.n AND j.version = c.v
+                    AND j.completed_at IS NOT NULL
+                  ORDER BY j.completed_at DESC
+                  LIMIT 1
+               ) j"
+        )))
+        .bind(&regs)
+        .bind(&names)
+        .bind(&vers)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        for r in &rows {
+            let job = Self::row_to_job(r)?;
+            let open: bool = r.get("open");
+            for (i, c) in coords.iter().enumerate() {
+                if same_coordinate(c, &job.package) {
+                    if open {
+                        out[i].0 = Some(job.clone());
+                    } else {
+                        out[i].1 = Some(job.clone());
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Open rows on the open-job partial indexes; `failed` takes the latest
+    /// closed row per coordinate of `registries` (`DISTINCT ON`, on
+    /// `scan_jobs_closed_coordinate_idx`) and keeps the exhausted ones with no
+    /// open job. `COUNT(*) OVER ()` carries the total in the same statement.
+    async fn list_jobs(
+        &self,
+        registries: &[String],
+        filter: ScanJobFilter,
+        limit: u64,
+        offset: u64,
+    ) -> Result<(Vec<ScanJob>, u64), CoreError> {
+        if registries.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let live = "(leased_by IS NOT NULL AND leased_until > NOW())";
+        let sql = match filter {
+            ScanJobFilter::Failed => format!(
+                "WITH last AS (
+                   SELECT DISTINCT ON (registry, package_name, version) {JOB_COLUMNS}
+                     FROM scan_jobs
+                    WHERE completed_at IS NOT NULL AND registry = ANY($1)
+                    ORDER BY registry, package_name, version, completed_at DESC)
+                 SELECT *, COUNT(*) OVER () AS total FROM last l
+                  WHERE left(l.last_error, length($4)) = $4
+                    AND NOT EXISTS (
+                      SELECT 1 FROM scan_jobs o
+                       WHERE o.completed_at IS NULL AND o.registry = l.registry
+                         AND o.package_name = l.package_name AND o.version = l.version)
+                  ORDER BY l.completed_at DESC, l.id
+                  LIMIT $2 OFFSET $3"
+            ),
+            open => {
+                let state = match open {
+                    ScanJobFilter::Queued => format!("AND NOT {live}"),
+                    ScanJobFilter::Scanning => format!("AND {live}"),
+                    _ => String::new(),
+                };
+                format!(
+                    "SELECT {JOB_COLUMNS}, COUNT(*) OVER () AS total FROM scan_jobs
+                      WHERE completed_at IS NULL AND registry = ANY($1)
+                        {state}
+                      ORDER BY {live} DESC, created_at, id
+                      LIMIT $2 OFFSET $3"
+                )
+            }
+        };
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(registries)
+            .bind(limit as i64)
+            .bind(offset as i64);
+        if filter == ScanJobFilter::Failed {
+            q = q.bind(EXHAUSTED_PREFIX);
+        }
+        let rows = q.fetch_all(&self.pool).await.db_err()?;
+        let total = rows.first().map_or(0, |r| r.get::<i64, _>("total") as u64);
+        Ok((
+            rows.iter()
+                .map(Self::row_to_job)
+                .collect::<Result<_, _>>()?,
+            total,
+        ))
     }
 
     async fn fail(&self, job_id: Uuid, worker: &str, error: &str) -> Result<(), CoreError> {
