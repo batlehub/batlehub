@@ -25,7 +25,7 @@ security (7 vulnerabilities). Companion to
 ## Code smells
 
 Fixed: `rust:S1612` ×4, `typescript:` S7755 ×3, S6594 ×3, S5906 ×8, S7773,
-S7722, S6582, S3358; `shell:S7688` ×5, `S131` ×5, `S1481`;
+S6582, S3358; `shell:S7688` ×5, `S131` ×5, `S1481`;
 `python:` S1481, S5713 ×2, S5864 ×3, S7632.
 
 Left open (refactors that move no gate condition): `S3776` cognitive
@@ -34,4 +34,5 @@ parameters, `S1192` literal duplication (including the migration, which is
 append-only), `Web:S6819` role suggestions, `typescript:S4782` on the cva
 variant props, `rust:S1612` on `extract.rs`'s `is::<ZipError>`,
 `githubactions:S7677` (`::error` workflow commands go to stdout),
-`javascript:S7761`, `python:S5778`.
+`javascript:S7761`, `python:S5778`, and `typescript:S7722` (`usePackageVersions` — a
+message there is a bare literal throw, which `system-rules.test.ts` freezes).

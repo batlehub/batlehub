@@ -461,7 +461,7 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
       query: versionQuery(),
     });
     if (apiErr || !res)
-      throw Object.assign(new Error("package detail request failed"), { response });
+      throw Object.assign(new Error(), { response });
     if (seq === versionSeq) data.value = res as ExplorePackageDetailResponse;
   }
 
