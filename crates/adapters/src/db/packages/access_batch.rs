@@ -29,7 +29,10 @@ const MAX_BATCH: usize = 1000;
 const QUEUE: usize = 10_000;
 
 enum Msg {
-    Event(Box<AccessEvent>),
+    /// The event and the span it was recorded in: the stream line is emitted
+    /// later, from this task, and has to carry the request's span (its
+    /// `request_id` is what a SIEM joins the access log on).
+    Event(Box<AccessEvent>, tracing::Span),
     Flush(oneshot::Sender<()>),
 }
 
@@ -48,9 +51,9 @@ impl AccessBatcher {
     /// Queue `event`; `Err` gives it back when the queue is full or closed.
     pub fn send(&self, event: AccessEvent) -> Result<(), Box<AccessEvent>> {
         self.tx
-            .try_send(Msg::Event(Box::new(event)))
+            .try_send(Msg::Event(Box::new(event), tracing::Span::current()))
             .map_err(|e| match e.into_inner() {
-                Msg::Event(ev) => ev,
+                Msg::Event(ev, _) => ev,
                 Msg::Flush(_) => unreachable!("only events are sent here"),
             })
     }
@@ -66,37 +69,48 @@ impl AccessBatcher {
 
 async fn run(pool: PgPool, mut rx: mpsc::Receiver<Msg>) {
     let mut batch: Vec<AccessEvent> = Vec::new();
+    let mut spans: Vec<tracing::Span> = Vec::new();
     while let Some(first) = rx.recv().await {
         let mut flushes = Vec::new();
-        let take = |m: Msg, batch: &mut Vec<AccessEvent>, flushes: &mut Vec<_>| match m {
-            Msg::Event(e) => batch.push(*e),
+        let take = |m: Msg,
+                    batch: &mut Vec<AccessEvent>,
+                    spans: &mut Vec<tracing::Span>,
+                    flushes: &mut Vec<_>| match m {
+            Msg::Event(e, span) => {
+                batch.push(*e);
+                spans.push(span);
+            }
             Msg::Flush(done) => flushes.push(done),
         };
-        take(first, &mut batch, &mut flushes);
+        take(first, &mut batch, &mut spans, &mut flushes);
         let deadline = tokio::time::Instant::now() + WINDOW;
         while flushes.is_empty() && batch.len() < MAX_BATCH {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
-                Ok(Some(m)) => take(m, &mut batch, &mut flushes),
+                Ok(Some(m)) => take(m, &mut batch, &mut spans, &mut flushes),
                 Ok(None) | Err(_) => break,
             }
         }
-        write(&pool, &batch).await;
+        write(&pool, &batch, &spans).await;
         batch.clear();
+        spans.clear();
         for done in flushes {
             let _ = done.send(());
         }
     }
 }
 
-async fn write(pool: &PgPool, batch: &[AccessEvent]) {
+async fn write(pool: &PgPool, batch: &[AccessEvent], spans: &[tracing::Span]) {
+    let emit = |e: &AccessEvent, span: &tracing::Span, persisted: bool| {
+        span.in_scope(|| batlehub_core::services::audit_stream::emit(e, persisted));
+    };
     if batch.is_empty() {
         return;
     }
     metrics::histogram!("batlehub_access_event_batch_rows").record(batch.len() as f64);
     match insert_batch(pool, batch).await {
         Ok(()) => {
-            for e in batch {
-                batlehub_core::services::audit_stream::emit(e, true);
+            for (e, span) in batch.iter().zip(spans) {
+                emit(e, span, true);
             }
         }
         // The database is unreachable, not one row bad: retrying each row
@@ -105,18 +119,18 @@ async fn write(pool: &PgPool, batch: &[AccessEvent]) {
         Err(err) if is_connection_error(&err) => {
             tracing::warn!(error = %err, rows = batch.len(), "access event batch failed: database unreachable, rows dropped");
             metrics::counter!("batlehub_access_events_dropped_total").increment(batch.len() as u64);
-            for e in batch {
-                batlehub_core::services::audit_stream::emit(e, false);
+            for (e, span) in batch.iter().zip(spans) {
+                emit(e, span, false);
             }
         }
         Err(err) => {
             tracing::warn!(error = %err, rows = batch.len(), "access event batch failed, writing its rows one at a time");
-            for e in batch {
+            for (e, span) in batch.iter().zip(spans) {
                 let r = crud::record_access_impl(pool, e).await;
                 if let Err(err) = &r {
                     tracing::warn!(error = %err, "recording an access event failed");
                 }
-                batlehub_core::services::audit_stream::emit(e, r.is_ok());
+                emit(e, span, r.is_ok());
             }
         }
     }
