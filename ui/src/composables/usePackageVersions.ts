@@ -460,8 +460,7 @@ export function usePackageVersions(registry: Ref<string>, name: Ref<string>) {
       path: { registry: registry.value, name: name.value },
       query: versionQuery(),
     });
-    if (apiErr || !res)
-      throw Object.assign(new Error(), { response });
+    if (apiErr || !res) throw Object.assign(new Error(), { response });
     if (seq === versionSeq) data.value = res as ExplorePackageDetailResponse;
   }
 
