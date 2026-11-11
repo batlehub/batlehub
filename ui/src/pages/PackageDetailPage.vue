@@ -126,7 +126,7 @@ async function downloadSbom(version: string, fmt: "spdx" | "cyclonedx") {
     if (resp.ok) sbomMissing.value = withoutKey(sbomMissing.value, formatKey(version, fmt));
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const disposition = resp.headers.get("Content-Disposition") ?? "";
-    const match = disposition.match(/filename="([^"]+)"/);
+    const match = /filename="([^"]+)"/.exec(disposition);
     const filename = match?.[1] ?? `${name.value}-${version}.${ext}`;
     const blob = await resp.blob();
     const a = Object.assign(document.createElement("a"), {

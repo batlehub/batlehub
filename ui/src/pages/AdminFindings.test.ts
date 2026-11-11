@@ -243,7 +243,7 @@ describe("AdminFindings", () => {
       body: { reason: "false positive, reviewed", exempt_until: "2999-01-01T23:59:59Z" },
     });
     expect(document.querySelector('[data-testid="exempt-form"]')).toBeNull();
-    expect(listFindingsMock.mock.calls.length).toBe(calls + 1);
+    expect(listFindingsMock.mock.calls).toHaveLength(calls + 1);
   });
 
   it("keeps the dialog open with the server's message on failure", async () => {

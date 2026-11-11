@@ -64,7 +64,7 @@ function severityVariant(severity: string): "default" | "destructive" | "seconda
 function viewArtifact(v: PackageVersionDetail) {
   /* One canonical package URL; the version and artifact stay as query, since
      they select *within* a package rather than name a different one. */
-  router.push({
+  void router.push({
     path: packagePath(props.registry, props.name),
     query: {
       version: v.version,

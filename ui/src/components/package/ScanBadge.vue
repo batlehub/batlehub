@@ -47,6 +47,14 @@ function verdictLabel(verdict: string): string {
   }
 }
 
+function failedHelp(d: ScanStatusDto["detail"]): string {
+  if (d == null) return "";
+  const attempts = d.attempts ?? "?";
+  return d.last_error
+    ? t("scanBadge.failedHelp", { attempts, error: d.last_error })
+    : t("scanBadge.failedNoError", { attempts });
+}
+
 const view = computed(() => {
   const s = props.status;
   if (!s) {
@@ -88,12 +96,7 @@ const view = computed(() => {
     case "failed":
       return {
         label: t("scanBadge.failed"),
-        help:
-          d == null
-            ? ""
-            : d.last_error
-              ? t("scanBadge.failedHelp", { attempts: d.attempts ?? "?", error: d.last_error })
-              : t("scanBadge.failedNoError", { attempts: d.attempts ?? "?" }),
+        help: failedHelp(d),
         variant: "destructive" as BadgeVariant,
         icon: CircleX,
       };

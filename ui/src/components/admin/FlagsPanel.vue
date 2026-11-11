@@ -64,7 +64,7 @@ async function load() {
 function toggleDead(v: boolean) {
   includeDead.value = v;
   page.value = 0;
-  load();
+  void load();
 }
 
 function state(f: PackageFlag): string {

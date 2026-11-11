@@ -188,7 +188,7 @@ const groups = computed(() => {
   const out: { reference: string; rows: FindingListRow[] }[] = [];
   for (const row of result.value?.items ?? []) {
     const ref = row.reference ?? "";
-    const last = out[out.length - 1];
+    const last = out.at(-1);
     if (last && last.reference === ref) last.rows.push(row);
     else out.push({ reference: ref, rows: [row] });
   }

@@ -132,7 +132,6 @@ def report(out: Path) -> str:
         "| --- | " + " | ".join("---:" for _ in levels) + " |",
     ]
     for op in arms:
-        base = runs["none"][op]
         cells = []
         for lv in levels:
             a = runs[lv].get(op)

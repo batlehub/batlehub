@@ -28,9 +28,9 @@ const GRID_COLS: Record<number, string> = { 2: "sm:grid-cols-2", 3: "sm:grid-col
 const rows = computed<PathFieldDef[][]>(() => {
   const result: PathFieldDef[][] = [];
   for (const field of props.typeDef.fields) {
-    const last = result[result.length - 1]?.[0];
+    const last = result.at(-1)?.[0];
     if (field.row !== undefined && last?.row === field.row) {
-      result[result.length - 1].push(field);
+      result.at(-1)?.push(field);
     } else {
       result.push([field]);
     }

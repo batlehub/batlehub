@@ -124,7 +124,7 @@ runs:
         # a pull request is judged on what the change adds (`diff --online`
         # below). The Security tab's whole-tree reputation comes from `main`.
         online_tree=(--online)
-        case "$EVENT" in pull_request*) online_tree=() ;; esac
+        case "$EVENT" in pull_request*) online_tree=() ;; *) ;; esac
         timeout 900 "$PM" tree "$ROOT" "${online_tree[@]}" --vulns --sarif --no-progress -o "$OUT/tree.sarif"
         if [ "$DIFF" = true ]; then
           # Offline: which packages the change adds or changes. Their

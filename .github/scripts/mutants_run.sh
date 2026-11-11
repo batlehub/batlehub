@@ -15,7 +15,7 @@
 # down) — and 1 otherwise: a red baseline (cargo-mutants' 4), a usage error.
 # No errexit: a missed mutant's exit 2 must not skip the second invocation.
 set -uo pipefail
-if [ $# -lt 3 ]; then
+if [[ $# -lt 3 ]]; then
   echo "usage: $0 <cargo-mutants> <config> <out-dir> [cargo-mutants args…]" >&2
   exit 1
 fi
@@ -29,11 +29,11 @@ mkdir -p "$out" # cargo-mutants does not create the parent of -o
 # so a mutant only crates/web's suites kill reads MISSED here; the nightly
 # runs the workspace. At most MUTANTS_PR_MAX mutants (an even spread, by
 # --shard), and whatever the budget leaves unexamined is reported, not failed.
-if [ -n "${MUTANTS_PR_BUDGET:-}" ]; then
+if [[ -n "${MUTANTS_PR_BUDGET:-}" ]]; then
   max=${MUTANTS_PR_MAX:-40}
   n=$("$cm" mutants --config "$cfg" "$@" --list 2>/dev/null | grep -c . || true)
   shard=()
-  if [ "$n" -gt "$max" ]; then
+  if [[ "$n" -gt "$max" ]]; then
     k=$(((n + max - 1) / max))
     shard=(--shard "0/$k")
     echo "::warning::$n mutants on the changed lines; examining 1 in $k (MUTANTS_PR_MAX=$max), the nightly covers the rest"
@@ -43,7 +43,7 @@ if [ -n "${MUTANTS_PR_BUDGET:-}" ]; then
   timeout --signal=INT --kill-after=60 "$((MUTANTS_PR_BUDGET * 60))" \
     "$cm" mutants --config "$cfg" "$@" "${shard[@]}" --test-workspace=false -o "$out/pr" || rc=$?
   missed=$(cat "$out"/pr/mutants.out/missed.txt 2>/dev/null || true)
-  if [ -n "$missed" ]; then
+  if [[ -n "$missed" ]]; then
     echo "MISSED — no test noticed these changes:"
     printf '%s\n' "$missed"
   fi
@@ -77,7 +77,7 @@ rest=0
 echo "exit codes: core=$core rest=$rest"
 
 missed=$(cat "$out"/*/mutants.out/missed.txt 2>/dev/null || true)
-if [ -n "$missed" ]; then
+if [[ -n "$missed" ]]; then
   echo "MISSED — no test noticed these changes:"
   printf '%s\n' "$missed"
 fi

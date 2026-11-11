@@ -1701,7 +1701,7 @@ describe("tabs and scan status (RFC 0044)", () => {
     const before = explorePackageDetailMock.mock.calls.length;
     expect(w.text()).toContain("Updates automatically.");
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(explorePackageDetailMock.mock.calls.length).toBe(before + 1);
+    expect(explorePackageDetailMock.mock.calls).toHaveLength(before + 1);
     // Done: the poll stops by itself.
     explorePackageDetailMock.mockImplementation(
       serve({ versions: [version({ scan_status: { state: "scanned", verdict: "allowed" } })] }),
@@ -1709,7 +1709,7 @@ describe("tabs and scan status (RFC 0044)", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const after = explorePackageDetailMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(explorePackageDetailMock.mock.calls.length).toBe(after);
+    expect(explorePackageDetailMock.mock.calls).toHaveLength(after);
   });
 });
 

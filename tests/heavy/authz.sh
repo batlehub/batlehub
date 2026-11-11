@@ -3390,7 +3390,7 @@ EOF
 # `[a-zA-Z0-9:;_. -]` — base64's `+`, `/` and `=` padding included — so a
 # `Basic` credential reached the server undecodable and the reader was refused.
 live_run_nodedist() {
-  local suffix="$1" login="$2" token="$3"
+  local suffix="$1" token="$3"
   local dir="$HEAVY_WORK/live-nvm-$suffix" src sh
   src="$(heavy_cached_dir "nvm-$LIVE_NVM_VERSION" \
     "https://github.com/nvm-sh/nvm/archive/refs/tags/v$LIVE_NVM_VERSION.tar.gz")"

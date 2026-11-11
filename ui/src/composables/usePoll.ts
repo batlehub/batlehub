@@ -12,7 +12,7 @@ export type PollStop = "timeout" | "failed";
 /** A failed tick's `Retry-After`, in seconds, when the error carries a response. */
 function retryAfterMs(e: unknown): number {
   const header = (e as { response?: Response })?.response?.headers?.get?.("Retry-After");
-  const secs = header ? Number(header) : NaN;
+  const secs = header ? Number(header) : Number.NaN;
   return Number.isFinite(secs) && secs > 0 ? secs * 1000 : 0;
 }
 
