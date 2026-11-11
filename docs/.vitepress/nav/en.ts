@@ -388,6 +388,10 @@ export const sidebar = {
           link: "/rfc/0041-test-depth-and-security-gate-scale",
         },
         {
+          text: "0045 — mise auto-wire",
+          link: "/rfc/0045-mise-auto-wire",
+        },
+        {
           text: "0046 — Admin red paths",
           link: "/rfc/0046-admin-red-paths",
         },
@@ -411,10 +415,6 @@ export const sidebar = {
         {
           text: "0044 — Scan visibility and admin views",
           link: "/rfc/0044-scan-visibility-and-admin-views",
-        },
-        {
-          text: "0045 — mise auto-wire",
-          link: "/rfc/0045-mise-auto-wire",
         },
       ],
     },

@@ -13,7 +13,7 @@ reference: true
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `ui` (`config/adminSections.ts`, `config/navigation.ts`, `layouts/AdminLayout.vue`, `components/admin/SectionTabs.vue`, `components/app/AppHeader.vue`, a new `components/app/CommandPalette.vue` and `config/redPaths.ts`, `router/index.ts`, `pages/AdminRegistry.vue`, `pages/AdminConfigReload.vue` and the registry-scoped pages of §6.3, `locales/{en,fr}.json`, `build/design-routes.mjs`), `tests/heavy` (`console_security.mjs`, `console_fetch.sh`), docs (`guide/administration*.md`, `use/package-explorer-cache.md`) |
+| Touches     | `ui` (`config/adminSections.ts`, `config/navigation.ts`, `layouts/AdminLayout.vue`, `components/admin/SectionTabs.vue`, `components/admin/ConfigEditorCard.vue`, `components/admin/ConfigReadOnlyView.vue`, `components/app/AppHeader.vue`, a new `components/app/CommandPalette.vue` and `config/redPaths.ts`, the listbox extracted from `components/ui/combobox/Combobox.vue`, `router/index.ts`, `pages/AdminRegistry.vue`, `pages/AdminConfigReload.vue`, `pages/AdminFindings.vue` and the registry-scoped pages of §6.3, the pages holding hard-coded admin links (§6.4), `locales/{en,fr}.json`, `build/design-routes.mjs`, `build/fixtures/captured.json`), `sonar-project.properties`, `tests/heavy` (`console_security.mjs`, `console_fetch.sh`), docs (every `Admin →` and `/admin/` path in `docs/` and `docs/fr/`, §11) |
 | Risk        | low — §7 (the palette lists destinations, and must list no more than the router already lets the viewer open) |
 
 ---
@@ -124,15 +124,18 @@ guesses are, and §2.2 is why they are worse than the column suggests.
    section has been guessed. RFC 0003 §4.2 kept the seven groups because
    "the sidebar is the right pattern for 17 destinations"; there are now 23
    routes (22 in `ADMIN_PAGE_VERBS` plus `observability/registries/:name`),
-   and Operations alone holds seven tabs. Falsifiable: count the `to:` in
-   `adminSections.ts`.
+   and Operations alone holds seven tabs. Falsifiable: `ADMIN_PAGE_VERBS`
+   has 22 keys, the router adds `observability/registries/:name`, and
+   `ADMIN_SIDEBAR` has seven entries (the 28 `to:` in `adminSections.ts`
+   count the sidebar and the tabs together).
 2. **One registry's incident spans three sections and loses the registry on
    every hop** (RP-2, RP-3). The registry page (`AdminRegistry.vue`, RFC 0044
    §6.4) shows status but no action: the upstream recheck is on
    `operations/upstream`, warming on `operations/warming`, the explorer
    flush on `observability/health`. Of the registry-scoped pages, only
-   `AdminScans.vue` reads `?registry=`; the others make the operator pick the
-   registry again.
+   `AdminScans.vue` and `AdminAccessCheck.vue` (`:107-110`, with `name`,
+   `version` and `user_id`) read `?registry=`; upstream, warming, imports,
+   health and findings make the operator pick the registry again.
 3. **A promised hop is dead.** RFC 0044 §4.5 specifies that *Edit
    configuration* opens `AdminConfigReload` with `?registry=` and "puts the
    caret on the first line of the matching `[[registries]]` block". The link
@@ -221,47 +224,74 @@ closed side to default to, because nothing here grants or widens access.
 **Palette (phase 2).**
 
 - Opened by `Ctrl+K` / `⌘K`, or by the *Go to…* button in the header (every
-  viewer who is signed in) and at the top of the admin sidebar. The shortcut
-  does nothing while focus is in a `textarea`, a `contenteditable` or an
-  `input` other than the palette's own — the configuration editor is a
-  `textarea` an operator types into for minutes.
-- Entries come from four sources, filtered **before** they are shown:
+  viewer who is signed in) and at the top of the admin sidebar. The button
+  shows the platform's chord: `⌘K` on macOS, `Ctrl K` elsewhere. The
+  shortcut works from a single-line `input` (the catalog search included,
+  where the browser's own `Ctrl+K` would otherwise move focus to the address
+  bar) and does nothing while focus is in a `textarea` or a
+  `contenteditable` — the configuration editor is a `textarea` an operator
+  types into for minutes.
+- Entries come from four sources, filtered **before** they are shown, every
+  admin check at the **instance tier the guard uses** — `can(verb)` with no
+  registry argument (`router/index.ts:168`). The per-registry form
+  `can(verb, name)` (`useAuth.ts:214-218`) is never used for a link: a viewer
+  holding `system:read` on one registry only would be shown a hub the guard
+  then bounces.
   1. *Pages*: `ADMIN_PAGE_VERBS` where `can(verb)`, plus `/security` when
      `canAny(SECURITY_VERBS)`, `/me/*`, `/tools/*` and `/setup`.
   2. *Registries*: `GET /api/v1/registries` (`useRegistryOptions`), which
      `accessible_registries_for` already filters. A registry links to its
-     hub when `can("system:read", name)` holds, otherwise to
+     hub when `can("system:read")` holds, otherwise to
      `/packages?registry=<name>`.
   3. *Red-path actions*: `config/redPaths.ts`, one entry per row of §2.1
      with keywords in both locales ("unblock", "débloquer", "CVE", "rescan",
      "bannière", …), each pointing at a page that is itself filtered by
      rule 1. An action whose page the viewer cannot open is not listed.
-  4. *Search packages for "…"*: always the last row when the query is
-     non-empty and the viewer has registry access; it routes to
-     `/packages?q=<query>` (`useCatalogQuery.applyQuery` reads `q`).
+     RP-6 (block one version) needs a package, so its row hands off to the
+     catalog search with the query, like rule 4, instead of a fixed page.
+  4. *Search packages for "…"*: the last row when the query is non-empty and
+     the viewer has registry access; it routes to `/packages?q=<query>`
+     (`useCatalogQuery.applyQuery` reads `q`). It is **not offered** when the
+     query looks like a credential (one word, 32 characters or more, no
+     space): RP-8 is "a leaked token", and the operator who pastes it would
+     write it into the browser history (§7.3).
 - Matching is client-side: case- and accent-insensitive, every query word
   must prefix a word of the label or a keyword; ranked page > action >
   registry, then shorter label first. With an empty query the palette shows
-  the red-path actions the viewer can open, in §2.1 order.
-- `Enter` navigates; `Ctrl+Enter` / `⌘Enter` opens in a new tab; `Esc`
-  closes and returns focus to whatever had it. Nothing is remembered between
-  openings (§15 question 4).
+  the red-path actions the viewer can open, in §2.1 order, under "Common
+  tasks"; a heading with no row under it is not drawn.
+- Each row is an `<a href>` built from `router.resolve`, and the active row
+  is tracked with `aria-activedescendant` on the input. `Enter` calls
+  `router.push` on the same location; `Ctrl+Enter` / `⌘Enter` and a
+  middle-click open the `href` in a new tab, because the row is a link.
+  `Esc` closes and returns focus to whatever had it. Nothing is remembered
+  between openings (§15 question 4).
+- The palette is a lazily imported chunk. If the chunk fails to load (hashes
+  rotated by a redeploy under a long-lived tab), the button and the shortcut
+  show "The console was updated — reload the page." as a `role=status`
+  notice instead of doing nothing (`defineAsyncComponent`'s
+  `errorComponent`, §10.2).
 - The uninteresting case: a viewer with no admin verb opens the palette and
   sees their own pages, `/setup`, the registries they read and the package
-  search — no admin entry, no empty "Admin" group.
+  search — no admin entry, no empty "Admin" group (§4.5 M2 states).
 
 **Section tree (phase 3).**
 
 - Six sections, named by task (§4.5 M3). Every moved path gains a
   `LEGACY_REDIRECTS` entry; query and hash are preserved, as
   `handleLegacyPath` already does.
-- The registry hub is `observability/registries/:name` moved to
-  `/admin/registries/:name`. It gains an *Actions* strip whose links carry
-  `?registry=<name>`; each link is drawn only when the viewer holds the
-  target page's verb for that registry (`can(verb, name)`).
-- Each registry-scoped page reads `?registry=` on mount and preselects it
-  (§6.3); a name it does not list is ignored with the page's normal
-  "choose a registry" state, never an error.
+- The registry hub is `observability/registries/:name` moved into the
+  *Registries* section (`/admin/registry/:name` in the §15 question 8
+  proposal). It gains an *Actions* strip whose links carry
+  `?registry=<name>`; each link is drawn only when `can(verb)` holds for the
+  target page's verb — the guard's instance tier, as for the palette.
+- Each registry-scoped page reads `?registry=` and **holds** it until its own
+  list (or, for the configuration editor, its content) first settles, then
+  preselects it (§6.3). Read on mount against a list still loading, the name
+  would be dropped, and the slower the API the likelier — during an incident.
+  A name the settled list does not contain is dropped with the page's normal
+  "choose a registry" state, never an error; a list that fails to load keeps
+  the value and shows the page's error.
 
 ### 4.3 Validation
 
@@ -285,9 +315,17 @@ other page behaves today.
 
 No API change. The palette reads `GET /api/v1/me` (verbs, already loaded by
 `useAuth`) and `GET /api/v1/registries` (already called through
-`useRegistryOptions` by five pages). No new call is made per keystroke:
-the registry list is fetched once when the palette first opens and reused for
-the session's identity.
+`useRegistryOptions` by seven consumers). No new call is made per keystroke.
+`useRegistryOptions` builds a fresh `useApi` per call and refetches when the
+token changes (`useRegistryOptions.ts:24-28`), so nothing is shared today:
+the palette calls it once when it first opens and keeps **no module-level
+copy** — a sign-out and sign-in as someone else on a shared machine refetches
+with the new token, and the previous viewer's registries are never shown.
+Only a successful result is kept; opening the palette after a failed load
+refetches (the composable gains `useApi`'s `reload`, which it drops
+today). A registry
+added or removed by a config hot reload appears in the palette after a page
+reload, as in every other registry picker.
 
 ### 4.5 Mocks
 
@@ -296,35 +334,35 @@ the session's identity.
 ```text
 ┌──────────────────────────┐
 │ ⛨ ADMIN                  │
-│ [ Go to…        Ctrl K ] │
 │                          │
 │ ▦ Dashboard              │
 │ PACKAGES                 │
-│   All packages           │
-│   Bulk block             │
+│   All Packages           │
+│   Bulk Block             │
 │ SECURITY & ACCESS        │
 │   Blocks                 │
-│ ┃ Access check           │  ← current: ink + 1px crimson edge
+│ ┃ Access Check           │  ← current: ink + 1px crimson edge
 │   Authorization          │
 │   Scans                  │
 │   Findings               │
 │ NAMESPACES & CHANNELS    │
-│   Team namespaces        │
-│   Beta channel           │
+│   Team Namespaces        │
+│   Beta Channel           │
 │ OPERATIONS               │
 │   Upstream  … (7 rows)   │
 │ OBSERVABILITY            │
 │   Health · Registries ·  │
-│   Audit log              │
+│   Audit Log              │
 │ NOTIFICATIONS            │
 │   Subscriptions ·        │
 │   Inbound events         │
 └──────────────────────────┘
 ```
 
-It decides that phase 1 changes only visibility: same labels, same order,
-same URLs, so it can ship before anyone agrees on M3. The section headings
-are small caps text, not links.
+It decides that phase 1 changes only visibility: the labels of `en.json`'s
+`adminNav`, the same order, the same URLs, so it can ship before anyone
+agrees on M3. The section headings are small caps text, not links. The
+*Go to…* button above *Dashboard* arrives with the palette in phase 2.
 
 **M1′ — the same, for a security group holding only `quarantine:read` and
 `findings:read`.**
@@ -332,7 +370,6 @@ are small caps text, not links.
 ```text
 ┌──────────────────────────┐
 │ ⛨ ADMIN                  │
-│ [ Go to…        Ctrl K ] │
 │ SECURITY & ACCESS        │
 │ ┃ Scans                  │
 │   Findings               │
@@ -342,6 +379,46 @@ are small caps text, not links.
 It decides that a section shows only the pages the viewer holds, never a
 greyed-out row: a disabled entry still announces a page exists, and RFC 0042
 §4.3 already chose "absent" over "disabled".
+
+**M1″ — phone, 390 px, phase 1 (proposal; §15 question 11).**
+
+```text
+┌──────────────────────────────────────┐
+│ ☰ Admin · Security & Access   ▾      │  ← trigger names the section
+├──────────────────────────────────────┤
+│ (open) Dashboard                     │
+│        Packages                      │
+│      ┃ Security & Access             │
+│        Namespaces & Channels         │
+│        Operations                    │
+│        Observability                 │
+│        Notifications                 │
+└──────────────────────────────────────┘
+  [ Blocks | Access Check | Authorization | Scans | Findings ]  ← SectionTabs
+```
+
+It decides that the expansion is desktop-only. `AdminLayout.vue` draws the
+sidebar and the phone menu from one template (`DefineSectionLinks`), and the
+phone menu exists because a long link list pushed the page down; expanding
+both would undo that. On a phone the pages stay one tap away in
+`SectionTabs`, and the palette is the fast route.
+
+**M1 labels in French at `w-52` (208 px).** Labels wrap onto a second line,
+never truncate: a truncated label hides the word the operator scans for.
+
+```text
+SÉCURITÉ ET ACCÈS          SYSTÈME (M3)
+  Blocages                   Rechargement de config
+  Vérification d'accès       Bandeau global
+  Autorisation               Santé et cache
+  Analyses                   Journal d'audit
+  Constats                   Abonnements aux
+                             notifications
+```
+
+The left column is `fr.json`'s `adminNav` today; on the right, *Santé et
+cache* and *Abonnements aux notifications* are proposals for M3's renames,
+named from behaviour, and become new catalogue keys (§11).
 
 **M2 — palette, nominal (admin, query `npm`).**
 
@@ -364,8 +441,15 @@ greyed-out row: a disabled entry still announces a page exists, and RFC 0042
 **M2 states.**
 
 ```text
-empty query      → "Common tasks": the 12 red paths the viewer may open
+empty query      → "Common tasks": the red paths the viewer may open
+empty query,     → no "Common tasks" heading at all; the list shows the
+ no admin verb      viewer's own pages (Profile, Tokens, Setup) and a hint
+                   "Type a package or registry name."
 no match         → "Nothing matches “zzz”." + the Search packages row
+credential-like  → no Search packages row; "Nothing matches." only — the
+ query              pasted token is not turned into a URL
+chunk failed     → no dialog; a role=status notice under the header:
+                   "The console was updated — reload the page."
 registries load  → pages and actions shown at once; REGISTRIES group shows
                    a one-line skeleton, never blocks typing
 registries fail  → REGISTRIES group: "Registries could not be loaded." (text,
@@ -397,7 +481,7 @@ what is wrong with it (a package, a vulnerability), who is affected
 (access), or the instance itself (system). Renames in M3 remove both
 collisions of §2.2(4).
 
-**M4 — registry hub, phase 3 (`/admin/registries/npm`).**
+**M4 — registry hub, phase 3 (`/admin/registry/npm`, §15 question 8).**
 
 ```text
 ← All registries
@@ -415,22 +499,38 @@ preselected, not forms embedded in the hub: one implementation per control.
 An action the viewer lacks the verb for is not drawn. With every action
 hidden, the strip is absent, not empty.
 
-**M5 — configuration editor reached from the hub.**
+**M5 — configuration editor reached from the hub.** The editor is the plain
+`textarea` of `ConfigEditorCard.vue:142`, with no line gutter.
 
 ```text
-Configuration                                  npm · line 214
-  212 │
-  213 │ [[registries]]
-▏ 214 │ name = "npm"          ← caret here, line scrolled to the top third
-  215 │ type = "npm"
+Configuration
+┌──────────────────────────────────────────────────────────────┐
+│ [[registries]]                                               │
+│ name = "npm"▏         ← caret here, line scrolled into the   │
+│ type = "npm"             top third of the textarea           │
+│ mode = "proxy"                                               │
+└──────────────────────────────────────────────────────────────┘
+ⓘ Jumped to registry “npm”.                         (role=status)
 ```
 
-States: a reload is staged → the staged diff opens and the notice reads "A
-reload is staged; review or discard it first." (RFC 0044 §4.5, unchanged);
-the name is not found → the caret stays at line 1 and the notice reads "No
-`[[registries]]` block named “npm” in the first layer." — the layered case of
-`load_layered`, where the block lives in a layer the editor does not edit;
-read-only mount → the same jump, in `ConfigReadOnlyView`.
+States:
+
+- **A reload is staged.** The editor is collapsed behind the staged diff
+  (`editorOpen` / `hasPending`, `ConfigEditorCard.vue:131-140`); the jump is
+  not applied, and the notice reads "A reload is staged — review or discard
+  it, then *Edit configuration* again from the registry." No caret is set on
+  a hidden textarea.
+- **Defined in another layer.** No `name = "npm"` line in the first layer
+  (the only one the editor reads, `load_layered`): the caret stays at the
+  start and the notice reads "Registry “npm” is defined in another config
+  layer; this editor changes only the first file. See *Layered config
+  files* in the configuration guide." with the link.
+- **Read-only mount.** `ConfigReadOnlyView.vue:35` is a `CodeBlock`, with no
+  caret: the block's first line is scrolled into view and highlighted for
+  two seconds, and the same `role=status` notice is announced.
+
+All three notices are new catalogue strings in `en.json` and `fr.json`
+(RFC 0044 §4.5 specified the staged one but it was never added).
 
 ---
 
@@ -473,8 +573,10 @@ sequenceDiagram
 ```
 
 The palette filter is a convenience; the guard is the control. Both read the
-same table and the same `can`, so the palette cannot offer what the guard
-refuses — and if it did, the guard would still refuse it.
+same table and make the same call — `can(verb)` at the instance tier, never
+the per-registry `can(verb, name)` the guard does not use — so the palette
+cannot offer what the guard refuses, and if it did, the guard would still
+refuse it.
 
 ---
 
@@ -484,8 +586,8 @@ refuses — and if it did, the guard would still refuse it.
 
 - `ADMIN_SECTIONS` as in §5. `ADMIN_PAGE_VERBS`, `ADMIN_SIDEBAR`,
   `firstAdminPage` and the `*_TABS` exports become derived values with the
-  same names and shapes, so the 26 files listed by
-  `grep -rl adminSections ui/src` keep compiling in phase 1.
+  same names and shapes, so every file `grep -rl adminSections ui/src`
+  lists (29 at `234b095c`) keeps compiling in phase 1.
 - Each page gains `keywords: { en: string[]; fr: string[] }` for the palette.
   Keywords are data, not i18n catalogue entries: they are never displayed,
   so the catalogue gate (`i18n-audit.mjs`) has nothing to check.
@@ -497,7 +599,10 @@ refuses — and if it did, the guard would still refuse it.
   `components/ui/combobox/Combobox.vue` implements: an `input role=combobox`
   with `aria-activedescendant` over a `listbox`. Not a second combobox
   implementation: the list rendering is extracted from `Combobox.vue` if it
-  does not already expose it (§15 question 5).
+  does not already expose it (§15 question 5). The extracted file needs its
+  own entry beside `comboboxRoles` in `sonar-project.properties:191-192`,
+  whose `resourceKey` names `Combobox.vue` alone; it lands under
+  `components/ui/`, where `vue/no-v-html` is off (§7.1 T4).
 - Mounted once in `App.vue` beside `AppHeader`; the shortcut listener is a
   single `keydown` on `window`, removed on unmount.
 - `redPaths.ts`: `{ id: "RP-1", label, keywords, to, query? }[]`, one per
@@ -513,32 +618,77 @@ refuses — and if it did, the guard would still refuse it.
 | `AdminWarming.vue` | registry field | preselect |
 | `AdminImports.vue` | registry list | filter to it |
 | `AdminHealth.vue` | per-registry clear | scroll to and focus that registry's row |
+| `AdminFindings.vue` | registry `<Select>` (`:297`), RP-4 | preselect |
 | `AdminScans.vue` | reads it | unchanged |
+| `AdminAccessCheck.vue` | reads it (`:107-110`) | unchanged |
 
-The value is matched against the page's own list; it is never interpolated
-into a request it would not otherwise make.
+The value is held until the page's list (the content, for the
+configuration editor) first settles, then matched against it (§4.2); it is
+never interpolated into a request the page would not otherwise make. The
+configuration editor's three non-nominal cases — staged reload, block in
+another layer, read-only mount — are M5's states.
 
 ### 6.4 `ui/src/router/index.ts` and `config/navigation.ts`
 
 Phase 3 moves the routes to M3's paths and adds one `LEGACY_REDIRECTS` entry
-per old path — 22 entries, plus the old `observability/registries/:name`
-pattern, which needs a function in `handleLegacyPath` because the table is
-keyed by exact path. `SECTION_INDEXES` gains the six new section roots. The
-existing redirects that point at moved pages are rewritten to point at the
-final target directly, so no chain is two hops.
+per old path that changes. The count follows from the path table of §15
+question 8 — the moved pages, the four old section roots that disappear
+(`/admin/operations`, `/admin/observability`, `/admin/namespaces`,
+`/admin/notifications`, today `SECTION_INDEXES` keys,
+`navigation.ts:126-141`), moved from `SECTION_INDEXES` to
+`LEGACY_REDIRECTS` (the two stay disjoint, `navigation.test.ts:105`), and
+`/admin/security`, whose landing changes. The old
+`observability/registries/:name` pattern needs a function in
+`handleLegacyPath` because the table is keyed by exact path; it re-encodes
+the name with `encodeURIComponent` and returns a path-only location, never
+a full URL, so `%2F..%2F` or `//evil.example` in the address bar cannot
+become a path elsewhere or an origin. `SECTION_INDEXES` gains the six new
+section roots. The existing redirects that point at moved pages are
+rewritten to point at the final target directly, so no chain is two hops.
+
+**Hard-coded links.** A `RouterLink` to a path that becomes a
+`LEGACY_REDIRECTS` key resolves its `href` statically to "No match found"
+(the failure `router/index.ts:304-313` documents): middle-click, new tab and
+copy-link break although a plain click redirects. About twenty such links
+exist and move with phase 3: `AdminDashboard.vue`, `HomePage.vue`,
+`SetupGuide.vue`, `SecurityDashboard.vue`, `AdminHealth.vue`,
+`AdminAccessCheck.vue`, `AdminAuthorization.vue`, `AdminPackages.vue`,
+`AdminRegistries.vue`, `AdminRegistry.vue`. They take their paths from
+`ADMIN_SECTIONS` where they can, and a unit test fails on any `to=` or
+`path:` string literal in `ui/src` that is a `LEGACY_REDIRECTS` key.
 
 ### 6.5 `ui/build/design-routes.mjs`
 
 `design-routes.mjs` is a plain Node script and cannot import the `.ts` table
-(it pulls `@lucide/vue`). `ADMIN_ROUTES` therefore stays a literal, gains the
-eight pages of §2.2(6) plus one concrete registry hub, and a unit test in
+(it pulls `@lucide/vue`). `ADMIN_ROUTES` therefore stays a literal and
+gains the eight pages of §2.2(6) — one of which is a concrete registry
+page, so the hub is not counted twice — and a unit test in
 `adminSections.test.ts` reads the file and fails when the literal and the
-derived list differ — the copy is kept, its drift is not.
+derived list differ: the copy is kept, its drift is not.
+`EXPECTED_COMBINATIONS` (`design-routes.mjs:262`, 31 today) moves in the
+same commit.
+
+The gate runs against `ui/build/stub-server.mjs`, which answers 404 for any
+path missing from `ui/build/fixtures/captured.json`. The eight new pages'
+endpoints (scans, findings, authorization, `admin/registries` and one
+registry, upstream, air gap, banner) have no fixture there, so phase 1
+captures them from a real backend in the same commit; without that the gate
+would measure each page in its error state.
 
 ### 6.6 `tests/heavy/console_security.mjs`
 
 Gains the palette measurements of §6.P: open with `Ctrl+K`, type, read the
 listed rows' `href`s; one run per token `console_fetch.sh` already provisions.
+It also records the API paths the page requests with Puppeteer's
+`page.on("request")`, which is the "requests made" source of observations 2
+and 4: `console_fetch.sh` keeps `$HEAVY_WORK/server.log` but does not parse
+request paths from it, and the browser's own list is per session.
+
+`console_fetch.sh:234` asserts the security group lands on
+`/admin/security/scans`. That landing is the first entry of
+`ADMIN_PAGE_VERBS` the group holds (`firstAdminPage`,
+`adminSections.ts:59-65`), which M3 reorders, so phase 3 updates the
+assertion, and `adminSections.test.ts` pins the landing page per verb set.
 
 ### 6.P Proof against a real client
 
@@ -551,23 +701,31 @@ token. The observations to produce, none of them run yet:
 1. **Admin, sidebar.** `/admin/dashboard` at 1440 px: the sidebar's `a`
    elements are exactly the derived `ADMIN_PAGE_VERBS` keys plus the hub
    list, in M1 order; one carries `aria-current="page"`.
-2. **Admin, palette success.** `Ctrl+K`, type `rescan`: the first row's
-   `href` is the scans page with `tab=failures`; `Enter` lands there, and
-   the server log shows `GET /api/v1/admin/scans` and no other new path.
-3. **Admin, carried registry.** From `/admin/registries/npm`, *Edit
-   configuration*: `document.activeElement` is the editor `textarea` and
-   its `selectionStart` is the offset of `name = "npm"` in the served
-   config.
+2. **Admin, palette success.** `Ctrl+K`, type `rescan`: the first row is an
+   `a` whose `href` is the scans page with `tab=failures`; `Enter` lands
+   there, and the page's recorded requests (§6.6) show
+   `GET /api/v1/admin/scans` and no other new path.
+3. **Admin, carried registry.** The heavy config's registry is
+   `npm-${HEAVY_RUN}` (`config.console-fetch.toml:60`). From its hub, *Edit
+   configuration*: `document.activeElement` is the editor `textarea` and its
+   `selectionStart` is the offset of its `name = "npm-…"` line in the served
+   config. The same run with the registries response delayed by two seconds
+   still lands the caret (the held value of §4.2).
 4. **Refusal.** The security-group token opens the palette and types
    `config`: zero rows but *Search packages*; then `page.goto` on the
    configuration path ends on the first security page it holds, and the
-   server log shows **no** `GET /api/v1/admin/config*` from that session —
-   the refused page never fetched its data.
+   recorded requests show **no** `GET /api/v1/admin/config*` from that
+   session — the refused page never fetched its data.
 5. **Shortcut inside the editor.** Focus in the configuration `textarea`,
    `Ctrl+K`: the palette does not open and the textarea receives no
    character.
-6. **Bookmarks.** Each of the 22 phase-1 paths loaded directly after phase 3
-   ends on its M3 path with the query string intact.
+6. **Bookmarks.** Each old path of the §15 question 8 table, loaded
+   directly after phase 3, ends on its M3 path with the query string
+   intact.
+7. **Unsaved edit.** With an edit typed in the configuration `textarea`,
+   `Ctrl+K` from the header button then `Enter` on another page: a
+   confirmation appears, and *Stay* leaves the edit in place (§15
+   question 9).
 
 ---
 
@@ -603,10 +761,10 @@ data.
 | # | STRIDE | Threat | Mitigation and enforcement | Residual |
 | --- | --- | --- | --- | --- |
 | T1 | Information disclosure | Palette lists a registry the viewer may not read | Registries only from `GET /api/v1/registries`, filtered by `accessible_registries_for` (`front_office/registries.rs:90`); the palette adds none | Namespace-only grants are invisible to that list (known, `legacy-access-vs-grants`): a registry is *missing*, never extra. Accepted by the author. |
-| T2 | Information disclosure | Palette or sidebar lists an admin page above the viewer's verbs | Same `ADMIN_SECTIONS` + `can()` as the guard (`checkMetaGuards`); a unit test asserts the palette's admin rows equal `firstAdminPage`'s candidates for three verb sets | The page *names* ship in the JS bundle anyway; nothing new is learned. |
-| T3 | Elevation of privilege | A palette row or hub action reaches a page the guard would refuse | The guard is unchanged and fails closed (a page missing from the table is refused); the palette only calls `router.push` | None. |
-| T4 | Tampering / XSS | A registry name rendered as markup | Rendered with `{{ }}` text interpolation only; the palette has no `v-html`. `vue/no-v-html` is **off** in `ui/eslint.config.js:56`, so the guard is a unit test with a markup-shaped registry name (§14), not lint | A later edit adding `v-html` to the palette is caught by that test only. |
-| T5 | Tampering | A registry name or query string builds a path elsewhere | Hub links use `encodeURIComponent` (the `packagePath` pattern); `?registry=` is matched against the page's own list and otherwise ignored (§6.3) | None. |
+| T2 | Information disclosure | Palette or sidebar lists an admin page above the viewer's verbs | Same `ADMIN_SECTIONS` + instance-tier `can(verb)` as the guard (`checkMetaGuards`); a unit test asserts the palette's admin rows equal `Object.entries(ADMIN_PAGE_VERBS).filter(([, v]) => can(v))` for four verb sets: admin, security group, plain user, and a viewer holding `system:read` on one registry only (no instance verb) | The page *names* ship in the JS bundle anyway; nothing new is learned. |
+| T3 | Elevation of privilege | A palette row or hub action reaches a page the guard would refuse | The guard is unchanged and fails closed (a page missing from the table is refused); every row and hub action is gated by the guard's own call, `can(verb)` at the instance tier, never `can(verb, name)`; a row is an `<a href>` from `router.resolve`, so it can only name a route the router knows | A link the guard would bounce is a UI defect, not an access: the server still answers 403. The registry-only test of T2 is what catches it. |
+| T4 | Tampering / XSS | A registry name rendered as markup | Rendered with `{{ }}` text interpolation only; the palette has no `v-html`. The `vue/no-v-html` override in `ui/eslint.config.js:52-56` turns the rule off only for `src/components/ui/**` — exactly where the listbox extracted from `Combobox.vue` lands (§6.2) — so the guard is a unit test that renders the **extracted listbox** with a markup-shaped registry name (§14), not lint | A later edit adding `v-html` to the listbox is caught by that test only. |
+| T5 | Tampering | A registry name or query string builds a path elsewhere | Hub links use `encodeURIComponent` (the `packagePath` pattern); `?registry=` is matched against the page's own list and otherwise ignored (§6.3); the legacy `observability/registries/:name` redirect re-encodes the segment and returns a path-only location (§6.4) | None. |
 | T6 | Spoofing (UI) | A keyboard shortcut steals input in the config editor, causing a mistyped config | Shortcut suppressed in `textarea`/`contenteditable`/foreign inputs (§4.2); §6.P obs. 5 | A browser extension may claim the same chord; then the button still works. |
 
 ### 7.2 Authentication and authorisation
@@ -620,7 +778,14 @@ lose its gate.
 ### 7.3 Input handling and injection
 
 The palette's query never leaves the browser except as `/packages?q=`, which
-the catalog already accepts from any URL. `?registry=` is compared with
+the catalog already accepts from any URL. That URL **persists in the browser
+history** (and in a new tab's address with `Ctrl+Enter`), so a credential
+pasted into the palette would be kept there; the search row is therefore not
+offered for a credential-shaped query (§4.2), and a unit test covers it.
+Server-side, a logged request target drops the query string
+(`server/src/server_factory.rs:85`) and `Referrer-Policy: no-referrer` is
+set (`crates/web/src/middleware/security_headers.rs:19`), so the query
+reaches neither a log nor a third party. `?registry=` is compared with
 values the page fetched itself.
 
 ### 7.4 Secrets and cryptography
@@ -630,8 +795,9 @@ reaches `localStorage`.
 
 ### 7.5 Abuse and resource exhaustion
 
-One `GET /api/v1/registries` per session identity, on first open. Matching
-runs over at most a few hundred entries per keystroke in memory.
+One `GET /api/v1/registries` per token, on first open, and again only after
+a failure (§4.4). Matching runs over at most a few hundred entries per
+keystroke in memory.
 
 ### 7.6 Existing defences that still hold
 
@@ -675,7 +841,10 @@ pages already fetch.
 
 | Failure | Detected by | Behaviour | Recovery |
 | --- | --- | --- | --- |
-| `GET /api/v1/registries` fails | the palette | pages and actions still listed; the REGISTRIES group says so (M2) | reopen the palette |
+| `GET /api/v1/registries` fails | the palette | pages and actions still listed; the REGISTRIES group says so (M2); the failure is not cached | reopen the palette: it refetches |
+| `GET /api/v1/registries` slow | the registry-scoped page | `?registry=` is held until the list settles (§4.2) | automatic |
+| Palette chunk fails to load (redeploy under an open tab) | `defineAsyncComponent`'s `errorComponent` | "The console was updated — reload the page." (M2 states) | reload |
+| Navigation away from an unsaved config edit | dirty flag + leave guard (§15 question 9) | confirmation before leaving | *Stay* keeps the edit |
 | `/me` not loaded yet | `useAuth.identityReady` | palette shows nothing admin until it resolves — fails closed | automatic |
 | A moved page's old URL | `handleLegacyPath` | redirect, query kept | none needed |
 | A page added without a section | unit test (§4.3) | build red | add it to `ADMIN_SECTIONS` |
@@ -705,10 +874,15 @@ rendered gate's existing budgets at four viewports.
   rule).
 - **Compliance**: no control touched; RFC 0036's audit trail is unchanged.
 - **Licensing**: unchanged.
-- **Documentation**: phase 1 corrects `docs/use/package-explorer-cache.md`'s
-  "Admin → Explore Cache"; phase 3 rewrites every "Admin → …" path in
-  `docs/guide/administration*.md` and `configuration.md`'s *Admin →
-  Dashboard*; `guide/administration.md` gains a "Red paths" table — §2.1 as
+- **Documentation**: phase 1 corrects "Admin → Explore Cache" in
+  `docs/use/package-explorer-cache.md:44` and its French mirror
+  `docs/fr/use/package-explorer-cache.md:59`. Phase 3 rewrites **every**
+  `Admin →` path and `/admin/` UI path in `docs/` and `docs/fr/` — among
+  them `guide/administration*.md`, `configuration.md`'s *Admin → Dashboard*,
+  `guide/security-gates.md`, `guide/admin-storage-health.md` and
+  `guide/access-control.md` — enforced by a check that greps the docs for
+  any `LEGACY_REDIRECTS` key, so a list cannot go stale.
+  `guide/administration.md` gains a "Red paths" table — §2.1 as
   instructions.
 
 ---
@@ -720,10 +894,10 @@ rendered gate's existing budgets at four viewports.
 | Do nothing | Every new page deepens §2.2(1); RFC 0044 alone added five, and three of them were never rendered-gated. |
 | Only the palette (point 3 alone) | Fixes the operator who knows the word; leaves the one who browses with seven opaque categories, and leaves RP-3's dead hop. |
 | Only regroup (point 2 alone) | A better tree still hides 21 pages behind six headings, and a URL migration with nothing shipped first makes the whole RFC wait on M3's naming argument. |
-| A top-bar mega-menu | Duplicates the sidebar on desktop and has no good phone form; the mobile admin menu RFC 0003 built is a list, which M1 already is. |
+| A top-bar mega-menu | Duplicates the sidebar on desktop and has no good phone form; the mobile admin menu RFC 0003 built is a list of sections, which M1″ keeps. |
 | A "quick actions" tile grid on the dashboard | Reachable only from the dashboard; the red paths start wherever the operator is. |
-| Server-side search endpoint | A new enumeration surface (§7) to search fewer than 300 static entries. |
-| `fuse.js` or a `cmdk` port | ~6–20 kB for fuzzy ranking that prefix matching over keywords covers; a dependency to audit for a feature whose index is hand-written. |
+| Server-side search endpoint | A new enumeration surface (§7) to search a static index of about 22 pages and 12 actions plus the viewer's registries. |
+| `fuse.js` or a `cmdk` port | Several kilobytes (not measured here) for fuzzy ranking that prefix matching over keywords covers; a dependency to audit for a feature whose index is hand-written. |
 | Fold `/security` into the admin | Undoes RFC 0042's reason for it: a delegated group without admin verbs. |
 
 ---
@@ -732,17 +906,18 @@ rendered gate's existing budgets at four viewports.
 
 - **Default behaviour**: all three changes are on with the release that
   ships them; there is no flag, because no change alters what anyone may do.
-- **Migration**: phase 3 only, and only URLs: 22 legacy redirects plus the
-  registry pattern. No schema, config or data.
+- **Migration**: phase 3 only, and only URLs: the legacy redirects of the
+  §15 question 8 table plus the registry pattern. No schema, config or data.
 - **Operator prerequisites**: none. Runbooks quoting admin URLs keep working
   through the redirects; the docs are updated in the same change.
 - **Rollback**: phases 1 and 2 roll back by reverting the front. Phase 3
   rolled back after release leaves *new* URLs that the old build does not
   know. The router has no catch-all route, so a bookmark made in between
-  renders the admin layout with an empty content area — no data is fetched,
-  nothing is exposed, but nothing tells the operator either. A rollback of
-  phase 3 should therefore ship the inverse redirects. No risk of §7
-  reopens.
+  matches no route at all: no `adminArea` meta, so neither the admin layout
+  nor any page renders — no data is fetched, nothing is exposed, but nothing
+  tells the operator either. Phase 3 is therefore **rolled forward**, not
+  back; see §15 question 10 for the reverse table that makes a revert safe
+  if one is still needed. No risk of §7 reopens.
 - **Staged**: the phases are the stages (§16); phase 1 alone is useful.
 
 ---
@@ -751,26 +926,41 @@ rendered gate's existing budgets at four viewports.
 
 - **Unit** (`ui/src/config/adminSections.test.ts`, new): every `/admin`
   route has a verb; every page is in exactly one section; derived
-  `ADMIN_PAGE_VERBS` equals the router's admin children; `redPaths.ts`
-  targets all resolve; every `LEGACY_REDIRECTS` target is a route.
-- **Unit** (`CommandPalette.test.ts`): filtering for three verb sets
-  (admin, security group, plain user); prefix and accent matching in `fr`;
-  the shortcut is ignored in a `textarea`; `Esc` restores focus; the
-  registries-failed state.
+  `ADMIN_PAGE_VERBS` equals the router's admin **component** routes that
+  carry no `meta.verb` (the empty-path and section-root redirects and
+  `observability/registries/:name` are excluded); `redPaths.ts` targets all
+  resolve; every `LEGACY_REDIRECTS` target is a route; the landing page per
+  verb set is pinned; no `to=` / `path:` literal in `ui/src` is a
+  `LEGACY_REDIRECTS` key (§6.4).
+- **Unit** (`CommandPalette.test.ts`): filtering for four verb sets (T2);
+  prefix and accent matching in `fr`; the shortcut is ignored in a
+  `textarea` and works in a single-line `input`; `Esc` restores focus; rows
+  are `a` elements with a resolved `href`; the registries-failed state and
+  the refetch on reopen; sign-out then sign-in as another user shows only
+  the new viewer's registries; a credential-shaped query offers no search
+  row; the empty query of a viewer with no admin verb draws no heading.
 - **Unit** (`AdminConfigReload.test.ts`): `?registry=` puts `selectionStart`
-  on the block; not found shows the notice; a staged reload ignores it.
-- **Integration**: `AdminLayout.test.ts` renders M1 and M1′.
-- **Proof**: §6.P, observations 1–6.
+  on the block, including when the content resolves after mount; a block
+  in another layer shows that notice; a staged reload sets no caret;
+  `ConfigReadOnlyView` scrolls to and highlights the block.
+- **Unit** (router): `handleLegacyPath` on
+  `observability/registries/%2F..%2Fx` and `…/registries///evil.example`
+  returns a path-only location under `/admin/registries/`.
+- **Integration**: `AdminLayout.test.ts` renders M1, M1′ and M1″.
+- **Proof**: §6.P, observations 1–7.
 - **Security**: T1 — palette shows exactly `useRegistryOptions`' list
-  (unit); T2 — admin rows equal guard candidates (unit, three verb sets);
-  T3 — §6.P obs. 4 (heavy); T4 — a registry named `<img src=x onerror=…>` in
-  the fixture renders as text (unit); T5 — `?registry=../x` preselects
-  nothing (unit, per page of §6.3); T6 — §6.P obs. 5 (heavy).
+  (unit); T2 — admin rows equal the guard's set (unit, four verb sets, one
+  registry-only); T3 — §6.P obs. 4 (heavy) and the registry-only case
+  (unit); T4 — a registry named `<img src=x onerror=…>` renders as text in
+  the extracted listbox (unit); T5 — `?registry=../x` preselects nothing
+  (unit, per page of §6.3) and the legacy redirect case above; T6 — §6.P
+  obs. 5 (heavy).
 - **Audit**: `task security` unchanged.
 - **Existing suites** that must pass unchanged: `ui:test` (the router guard
   tests prove the fail-closed redirect still holds), `ui:design:routes`
-  (now over 23 admin routes), `docs:audience` and `docs:structure`,
-  `console_fetch.sh` (RFC 0042's nav and refusal cases).
+  (now over 23 admin routes, with the fixtures of §6.5), `docs:audience` and
+  `docs:structure`. **Changed in phase 3**: `console_fetch.sh:234`, whose
+  landing page moves with M3 (§6.6).
 
 ---
 
@@ -803,8 +993,12 @@ rendered gate's existing budgets at four viewports.
    (per-viewer, survives sign-out on a shared machine). Recommendation: no,
    until someone asks; the empty query already shows the red paths.
 5. **Reusing `Combobox.vue`.** Its list is internal; extracting it touches
-   a component with its own Sonar exception (`comboboxRoles`).
-   Recommendation: extract the listbox, keep one ARIA implementation.
+   a component with its own Sonar exception (`comboboxRoles`,
+   `sonar-project.properties:191-192`, keyed to `Combobox.vue` alone).
+   Recommendation: extract the listbox, keep one ARIA implementation, and
+   add a sibling multicriteria entry whose `resourceKey` names the extracted
+   file. To be decided before phase 2 starts, since it sets phase 2's file
+   list.
 6. **`SectionTabs` on desktop** once the sidebar lists every page.
    Recommendation: keep them in phase 1, decide after M1 is used for a
    release.
@@ -813,6 +1007,65 @@ rendered gate's existing budgets at four viewports.
    changed in the config last week" beyond `ConfigChangeHistory`.
    Recommendation: list them in the administration guide's red-path table as
    gaps and leave them to their own RFCs.
+8. **The phase-3 path table.** M3 names sections but not URLs, and the
+   redirect count, observation 6 and `console_fetch.sh:234` all depend on
+   them. Proposal, to confirm (22 pages at `234b095c`):
+
+   | Today | M3 |
+   | --- | --- |
+   | `/admin/dashboard` | unchanged |
+   | `/admin/observability/registries` | `/admin/registries` |
+   | `/admin/observability/registries/:name` | `/admin/registry/:name` |
+   | `/admin/operations/upstream` | `/admin/registries/upstream` |
+   | `/admin/operations/warming` | `/admin/registries/warming` |
+   | `/admin/operations/imports` | `/admin/registries/imports` |
+   | `/admin/operations/air-gap` | `/admin/registries/air-gap` |
+   | `/admin/packages/all`, `/admin/packages/bulk` | unchanged |
+   | `/admin/operations/sbom` | `/admin/packages/sbom` |
+   | `/admin/security/scans`, `/admin/security/findings` | unchanged |
+   | `/admin/security/access-check` | `/admin/access/check` |
+   | `/admin/security/authorization` | `/admin/access/authorization` |
+   | `/admin/security/blocks` | `/admin/access/blocks` |
+   | `/admin/namespaces/team-namespaces` | `/admin/access/team-namespaces` |
+   | `/admin/namespaces/beta-channel` | `/admin/access/beta-channel` |
+   | `/admin/operations/config-reload` | `/admin/system/configuration` |
+   | `/admin/operations/banner` | `/admin/system/banner` |
+   | `/admin/observability/health` | `/admin/system/health` |
+   | `/admin/observability/audit-log` | `/admin/system/audit-log` |
+   | `/admin/notifications/subscriptions` | `/admin/system/notifications` |
+   | `/admin/notifications/inbound` | `/admin/system/inbound-events` |
+   | root `/admin/operations` | → `/admin/registries/upstream` |
+   | root `/admin/observability` | → `/admin/system/health` |
+   | root `/admin/namespaces` | → `/admin/access/team-namespaces` |
+   | root `/admin/notifications` | → `/admin/system/notifications` |
+   | root `/admin/security` | stays a section root; lands on Scans, not Blocks |
+
+   That is 17 moved pages, four retired roots and the `:name` pattern: 21
+   `LEGACY_REDIRECTS` entries plus one `handleLegacyPath` function. The hub
+   is singular `/admin/registry/:name` because a registry may be named
+   `upstream` or `warming`, and a static sibling route would shadow its hub.
+   An old `/admin/security` bookmark therefore opens Scans; Blocks is one row
+   further, under Access. Recommendation: this table.
+9. **An unsaved configuration edit is lost on navigation.** The palette, the
+   expanded sidebar and the hub's actions make leaving the editor one key
+   away, and nothing warns: `ui/src` has no `onBeforeRouteLeave` and no
+   `beforeunload` handler, and `ConfigEditorCard` keeps no dirty state. The
+   loss exists today; this RFC makes it likelier. Recommendation: in phase 1,
+   a dirty flag on `ConfigEditorCard` (content differs from the loaded
+   text), an `onBeforeRouteLeave` confirmation and a `beforeunload` handler
+   while dirty; §6.P observation 7 proves it.
+10. **Phase-3 rollback.** A revert after phase 3 leaves new-path bookmarks
+    that match nothing (§13). Recommendation: roll forward; and ship the
+    reverse table (each M3 path → its old path) **one release before**
+    phase 3, inert until the old paths stop being routes, so that a revert
+    of phase 3 alone is still a pure revert. The reverse table passes the
+    same no-chain test (`navigation.test.ts:94`).
+11. **The phone menu.** `AdminLayout.vue` draws the desktop sidebar and the
+    phone menu from one template (`DefineSectionLinks`), so expanding the
+    sidebar would expand the phone menu to ~23 rows — the length the
+    section menu was built to avoid. Recommendation: M1″ — expansion on
+    desktop only; on a phone the menu stays a list of sections, the trigger
+    names the section, and `SectionTabs` plus the palette reach the pages.
 
 ---
 
@@ -820,9 +1073,10 @@ rendered gate's existing budgets at four viewports.
 
 | Phase | Content | Useful alone |
 | --- | --- | --- |
-| 1 | `ADMIN_SECTIONS` as the single table; expanded sidebar (M1, M1′); the four §4.3 unit tests; `design-routes.mjs` gains the eight missing pages, checked against the table (§6.5); `?registry=` caret in the configuration editor (RP-3, RFC 0044's promise); `docs/use/package-explorer-cache.md` corrected | yes — visibility, the dead hop and the gate gap are fixed with no URL changed |
-| 2 | `CommandPalette` + `redPaths.ts` (M2, every state); header and sidebar buttons; `console_security.mjs` observations 2, 4, 5 | yes — zero-guess red paths over the old tree |
-| 3 | M3 routes, renames and `LEGACY_REDIRECTS`; registry hub actions strip (M4) and `?registry=` on the §6.3 pages; docs paths rewritten; administration guide's red-path table; observation 6 | completes the regrouping |
+| 1 | `ADMIN_SECTIONS` as the single table; expanded sidebar on desktop (M1, M1′, M1″); the four §4.3 unit tests; `design-routes.mjs` gains the eight missing pages, checked against the table, with their captured fixtures and `EXPECTED_COMBINATIONS` (§6.5); `?registry=` caret in the configuration editor with M5's states (RP-3, RFC 0044's promise); the unsaved-edit guard (§15 question 9); `docs/use/package-explorer-cache.md` and its French mirror corrected | yes — visibility, the dead hop and the gate gap are fixed with no URL changed |
+| 2 | `CommandPalette` + `redPaths.ts` (M2, every state, the chunk-failure notice); the extracted listbox and its Sonar entry (§15 question 5); header and sidebar buttons; `console_security.mjs` observations 2, 4, 5, 7 | yes — zero-guess red paths over the old tree |
+| 2½ | The reverse redirect table (§15 question 10), inert | makes a phase-3 revert safe |
+| 3 | M3 routes, renames and `LEGACY_REDIRECTS` per the §15 question 8 table; hard-coded admin links moved and their unit test (§6.4); registry hub actions strip (M4) and `?registry=` on the §6.3 pages; `console_fetch.sh:234` updated; docs paths rewritten in `docs/` and `docs/fr/` with the grep check; administration guide's red-path table; observation 6 | completes the regrouping |
 
 The security-relevant property — the palette lists no more than the guard
 allows — lands in phase 2 with the palette, tested by the same commit; the

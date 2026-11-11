@@ -3586,7 +3586,8 @@ mod tests {
                 "npm" => Some("https://registry.npmjs.org".to_owned()),
                 "cargo" => Some("https://crates.io".to_owned()),
                 "openvsx" => Some("https://open-vsx.org".to_owned()),
-                "conda" => Some("https://conda.anaconda.org/conda-forge".to_owned()),
+                // The bare host (`server/src/builders.rs`): no channel named.
+                "conda" => Some("https://conda.anaconda.org".to_owned()),
                 _ => None,
             },
             installable: None,
@@ -3628,11 +3629,9 @@ mod tests {
     fn conda_gets_a_mise_rule_only_for_the_conda_forge_channel() {
         let dir = TempDir::new().unwrap();
         let env = env_in(dir.path(), &[ClientId::Mise]);
-        let p = find(
-            &plan(&[reg("cf", "conda", "proxy")], &opts(), &env).unwrap(),
-            TargetId::Mise,
-        )
-        .clone();
+        let mut cf = reg("cf", "conda", "proxy");
+        cf.upstream = Some("https://conda.anaconda.org/conda-forge/".to_owned());
+        let p = find(&plan(&[cf], &opts(), &env).unwrap(), TargetId::Mise).clone();
         let next = p.next.clone().unwrap();
         assert!(
             next.contains("conda\\\\.anaconda\\\\.org/conda-forge/"),
@@ -3649,6 +3648,15 @@ mod tests {
             detail.contains("proxies https://conda.anaconda.org/bioconda"),
             "{detail}"
         );
+
+        // Left on the server's default — the bare host, no channel — it is
+        // not conda-forge's registry either, so it gets no rule.
+        let p = find(
+            &plan(&[reg("dflt", "conda", "proxy")], &opts(), &env).unwrap(),
+            TargetId::Mise,
+        )
+        .clone();
+        assert!(!p.writes(), "{:?}", p.state);
     }
 
     /// Every generic mirror gets a rule per upstream, after the typed rules;
