@@ -387,6 +387,10 @@ export const sidebar = {
           text: "0041 — Test depth and gate scale",
           link: "/rfc/0041-test-depth-and-security-gate-scale",
         },
+        {
+          text: "0046 — Admin red paths",
+          link: "/rfc/0046-admin-red-paths",
+        },
       ],
     },
     {
