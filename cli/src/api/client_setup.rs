@@ -1198,6 +1198,23 @@ fn check_upstream(u: &str) -> std::result::Result<&str, String> {
 /// `git.corp.example` would otherwise take over every codeberg.org download.
 /// An unknown upstream (an older server) is not assumed public.
 fn foreign_upstream(ty: &str, r: &RegistryInfo) -> Option<String> {
+    // A conda registry is one *channel*, and the rule is conda-forge's: the
+    // host alone would let a bioconda mirror take over every conda-forge read.
+    if ty == "conda" {
+        const CONDA_FORGE: &str = "https://conda.anaconda.org/conda-forge";
+        return match r.upstream.as_deref().map(|u| u.trim_end_matches('/')) {
+            Some(CONDA_FORGE) => None,
+            Some(u) => Some(format!(
+                "conda registry {} (it proxies {u}, not {CONDA_FORGE})",
+                r.name
+            )),
+            None => Some(format!(
+                "conda registry {} (the server does not say what it proxies: that needs \
+                 `upstreams:read` granted to `*` on it)",
+                r.name
+            )),
+        };
+    }
     let public = match ty {
         "github" => "api.github.com",
         "forgejo" => "codeberg.org",
@@ -1516,7 +1533,7 @@ const ALL_TARGETS: [TargetId; 19] = [
 /// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules.
-const MISE_TYPES: [&str; 9] = [
+const MISE_TYPES: [&str; 10] = [
     "mise-versions",
     "github",
     "forgejo",
@@ -1524,6 +1541,7 @@ const MISE_TYPES: [&str; 9] = [
     "npm",
     "cargo",
     "openvsx",
+    "conda",
     "nodedist",
     "generic",
 ];
@@ -3568,6 +3586,7 @@ mod tests {
                 "npm" => Some("https://registry.npmjs.org".to_owned()),
                 "cargo" => Some("https://crates.io".to_owned()),
                 "openvsx" => Some("https://open-vsx.org".to_owned()),
+                "conda" => Some("https://conda.anaconda.org/conda-forge".to_owned()),
                 _ => None,
             },
             installable: None,
@@ -3600,6 +3619,36 @@ mod tests {
         only.upstream = Some("https://git.corp.example".to_owned());
         let p = find(&plan(&[only], &opts(), &env).unwrap(), TargetId::Mise).clone();
         assert!(!p.writes(), "{:?}", p.state);
+    }
+
+    /// mise's `conda:` backend reads conda-forge: only a registry of that
+    /// channel gets the rule, and one of another channel on the same host is
+    /// refused rather than allowed to answer every conda-forge read.
+    #[test]
+    fn conda_gets_a_mise_rule_only_for_the_conda_forge_channel() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let p = find(
+            &plan(&[reg("cf", "conda", "proxy")], &opts(), &env).unwrap(),
+            TargetId::Mise,
+        )
+        .clone();
+        let next = p.next.clone().unwrap();
+        assert!(
+            next.contains("conda\\\\.anaconda\\\\.org/conda-forge/"),
+            "{next}"
+        );
+        assert!(next.contains("/proxy/cf/$1"), "{next}");
+
+        let mut bio = reg("bio", "conda", "proxy");
+        bio.upstream = Some("https://conda.anaconda.org/bioconda".to_owned());
+        let p = find(&plan(&[bio], &opts(), &env).unwrap(), TargetId::Mise).clone();
+        assert!(!p.writes(), "{:?}", p.state);
+        let detail = p.detail.unwrap();
+        assert!(
+            detail.contains("proxies https://conda.anaconda.org/bioconda"),
+            "{detail}"
+        );
     }
 
     /// Every generic mirror gets a rule per upstream, after the typed rules;

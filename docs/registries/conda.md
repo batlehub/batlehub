@@ -81,6 +81,7 @@ password <your-token>
 
 - Version listings are synthesised: BatleHub scans `repodata.json` across the standard platforms (`noarch`, `linux-64`, `osx-64`, `osx-arm64`, `win-64`) to assemble the set of available versions.
 - The release-age gate keys off the package's `timestamp` field in `repodata.json`. Packages whose upstream metadata omits a timestamp cannot be age-gated, so the gate is skipped for them.
+- mise's `conda:` backend (ffmpeg, postgres, ghc, …) comes through a registry whose upstream is `https://conda.anaconda.org/conda-forge`: `batlehub-cli registry suggest --mise` writes the `url_replacements` rule for it. A tool given another channel (`channel = "bioconda"`, or `conda.channel` set globally) is not rewritten and goes direct. See [Pointing mise at BatleHub](/use/mise).
 
 ## See also
 

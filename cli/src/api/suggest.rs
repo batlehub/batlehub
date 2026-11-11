@@ -315,6 +315,8 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     ("npm:", "npm", "npm"),
     ("go:", "goproxy", "go"),
     ("gem:", "rubygems", "rubygems"),
+    // mise drives rattler in-process, so this one needs the URL rule below too.
+    ("conda:", "conda", "conda"),
     // aqua and ubi both resolve to GitHub release assets.
     ("aqua:", "github", "github"),
     ("ubi:", "github", "github"),
@@ -1316,6 +1318,16 @@ pub(crate) fn typed_url_replacements(
             r"^https://open-vsx\.org/api/([^/]+)/([^/]+)/([^/]+)/file/.+\.vsix$",
             "{proxy}/$1.$2/$3/vsix",
         )],
+        // mise's `conda:` backend: rattler fetches repodata and packages from
+        // `conda.channel` (default `conda-forge`) and sends every request
+        // through `url_replacements`. A registry is one channel, so the rule
+        // is anchored on conda-forge's root and the subdir path carries over.
+        // shortcut: only the default channel is routed; a `channel = "bioconda"`
+        // tool goes direct until the rule is derived from the registry's upstream.
+        "conda" => &[(
+            r"^https://conda\.anaconda\.org/conda-forge/(.+)",
+            "{proxy}/$1",
+        )],
         _ => &[],
     }
 }
@@ -1815,6 +1827,8 @@ mod tests {
         assert_eq!(reg.registry_type, "pypi");
         let reg = registry_for_backend("aqua:owner/tool", "mise.lock: tool").unwrap();
         assert_eq!(reg.registry_type, "github");
+        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg").unwrap();
+        assert_eq!(reg.registry_type, "conda");
         // core:rust ships no platform URL in the lock, so the backend must carry it.
         let reg = registry_for_backend("core:rust", "mise.lock: rust").unwrap();
         assert_eq!(reg.name, "rust-dist");
@@ -2514,6 +2528,40 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             "https://hub.example.com/proxy/forgejo/attachments/$1"
         );
         assert_eq!(rules.len(), 3);
+    }
+
+    /// mise's `conda:` backend runs rattler in-process, so unlike `pipx:` it
+    /// needs a rewrite rule, and the plan and the rule agree on the path.
+    #[test]
+    fn conda_backend_is_supported_and_routes_the_conda_forge_channel() {
+        assert_eq!(unsupported_backend_reason("conda:ffmpeg"), None);
+        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg").unwrap();
+        let rules = reg.mise_url_replacements("https://hub.example.com");
+        assert_eq!(
+            rules,
+            [(
+                r"^https://conda\.anaconda\.org/conda-forge/(.+)".to_owned(),
+                "https://hub.example.com/proxy/conda/$1".to_owned()
+            )]
+        );
+        assert_eq!(
+            proxy_path_for(
+                "https://conda.anaconda.org/conda-forge/linux-64/ffmpeg-7.1.1-h0_0.conda",
+                "conda",
+                "conda"
+            )
+            .as_deref(),
+            Some("/proxy/conda/linux-64/ffmpeg-7.1.1-h0_0.conda")
+        );
+        // Another channel on the same host is not conda-forge's registry.
+        assert_eq!(
+            proxy_path_for(
+                "https://conda.anaconda.org/bioconda/noarch/x-1-0.tar.bz2",
+                "conda",
+                "conda"
+            ),
+            None
+        );
     }
 
     #[test]
