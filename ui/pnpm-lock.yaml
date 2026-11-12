@@ -18,8 +18,8 @@ importers:
   .:
     dependencies:
       '@lucide/vue':
-        specifier: ^1.68.0
-        version: 1.68.0(vue@3.5.44(typescript@6.0.3))
+        specifier: ^1.69.0
+        version: 1.69.0(vue@3.5.44(typescript@6.0.3))
       '@shikijs/langs':
         specifier: ^4.6.0
         version: 4.6.0
@@ -487,8 +487,8 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@lucide/vue@1.68.0':
-    resolution: {integrity: sha512-ywFT0JLQC89yjvOD2XXwwT0s+T9ydharRZBgFEIAbk6YyvrNv5MWjkRfzW+hlcxWJJujyzXqofeLjyJC4au4tQ==}
+  '@lucide/vue@1.69.0':
+    resolution: {integrity: sha512-uxR2FtureNe37HOQk/e92CZjlTjXVuNiYlD60Mgns0rmbs0wqDnHDgZPUooP6nvmFn/v7Ie6dKRKPzgR6HW5Tw==}
     peerDependencies:
       vue: '>=3.0.1'
 
@@ -2751,6 +2751,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@7.4.19:
     resolution: {integrity: sha512-48dH6aSpQnpbzDUc4vIQZ1VjB8tkK+e8c1yx05/SZK+rkssgjEOlxDd/yU8/a4vGYQ9vRgJr9dwMq9TJ0b3X2Q==}
@@ -3622,7 +3623,7 @@ snapshots:
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.12
 
-  '@lucide/vue@1.68.0(vue@3.5.44(typescript@6.0.3))':
+  '@lucide/vue@1.69.0(vue@3.5.44(typescript@6.0.3))':
     dependencies:
       vue: 3.5.44(typescript@6.0.3)
 

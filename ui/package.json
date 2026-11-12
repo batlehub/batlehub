@@ -24,7 +24,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@lucide/vue": "^1.68.0",
+    "@lucide/vue": "^1.69.0",
     "@shikijs/langs": "^4.6.0",
     "@shikijs/themes": "^4.6.0",
     "@vueuse/core": "^15.0.0",
