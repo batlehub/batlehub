@@ -109,6 +109,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
                     request_id = %request_id,
                     exception.message = tracing::field::Empty,
                     exception.details = tracing::field::Empty,
+                    mise.wire.host = tracing::field::Empty,
                 )
             };
         }
@@ -116,10 +117,19 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
         // `field::display` and `field::Empty` are both `Value`s, so one arm
         // covers each case — the upstream macro duplicates its whole field list
         // instead, because `%tid` is not an expression.
-        match otel_trace_id {
+        let span = match otel_trace_id {
             Some(tid) => request_span!(tracing::field::display(tid)),
             None => request_span!(tracing::field::Empty),
+        };
+        // RFC 0045 §6.3: the host mise asked for, beside the route that served it.
+        use actix_web::HttpMessage as _;
+        if let Some(from) = request
+            .extensions()
+            .get::<batlehub_web::mise_wire::WiredFrom>()
+        {
+            span.record("mise.wire.host", from.0.as_str());
         }
+        span
     }
 
     fn on_request_end<B: actix_web::body::MessageBody>(

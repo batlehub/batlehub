@@ -154,6 +154,7 @@ GET /api/v1/me/downloads	skip: no arm yet
 GET /api/v1/me/namespaces	skip: no arm yet
 GET /api/v1/me/namespaces/{registry}/{prefix}/packages	skip: no arm yet
 GET /api/v1/me/quota	skip: no arm yet
+GET /api/v1/mise/auto-wire	skip: no arm yet
 GET /api/v1/packages	profiled
 GET /api/v1/packages/access	profiled
 POST /api/v1/packages/access/batch	profiled
@@ -279,6 +280,8 @@ GET /proxy/{registry}/mise-versions/data/github/{tail}	skip: always 503, nothing
 GET /proxy/{registry}/mise-versions/data/{file}	profiled
 GET /proxy/{registry}/mise-versions/t	profiled
 GET /proxy/{registry}/mise-versions/tools/{file}	skip: the same handler as data/{file}, which is profiled
+GET /proxy/{registry}/mise-versions/_registry/latest.tar.zst	skip: no arm yet — an upstream archive fixture is phase 4's soak arm (RFC 0045 §6.6)
+GET /proxy/{registry}/mise-versions/_wire-answer/{outcome}	skip: reached only as a rewrite, 404 without one
 POST /proxy/{registry}/mise-versions/api/tools/{tool}	skip: the same 204 as the GET beacon, which is profiled
 POST /proxy/{registry}/mise-versions/api/track	skip: the same 204 as the GET beacon, which is profiled
 GET /proxy/{registry}/nodedist/index.json	profiled

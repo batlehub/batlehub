@@ -48,6 +48,8 @@ pub const RELOAD_KEYS: &[(&str, Tier, &str)] = &[
     ("registries[*].rules", Tier::Hot, "the registry's rule chain"),
     ("registries[*].hosts", Tier::Hot, "the host → registry routing table"),
     ("registries[*].path_routing", Tier::Hot, "the host → registry routing table"),
+    ("registries[*].auto_wire", Tier::Hot, "the mise wire table and overlay (RFC 0045), rebuilt with the routing table"),
+    ("registries[*].auto_wire.registry_upstream", Tier::Partial, "the overlay's archive upstream; a held copy under the old URL is not reused"),
     ("registries[*].cache.metadata_ttl_secs", Tier::Partial, "the registry's metadata policy; warming keeps the startup client"),
     ("registries[*].cache.serve_stale", Tier::Hot, "the registry's metadata policy"),
     ("registries[*].cache.artifact_ttl_secs", Tier::Partial, "the registry's download policy; eviction keeps the startup TTL"),

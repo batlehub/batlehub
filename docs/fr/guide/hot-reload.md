@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 63c2032caff33481
+sourceHash: a07c085e6d7d8661
 ---
 
 # Rechargement à chaud et configuration dynamique
@@ -30,6 +30,7 @@ précise l'emporte : `registries[npm].cache.metadata_ttl_secs` relève de
 | `ip_blocking.trusted_proxies` | hot | la politique de confiance des proxys, comme repli déprécié de `server.trusted_proxies` |
 | `limits.packages_per_page` | hot | la pagination des listes |
 | `limits.versions_per_page` | hot | la pagination des listes |
+| `registries[*].auto_wire` | hot | la table du câblage mise et l'overlay (RFC 0045), reconstruits avec la table de routage |
 | `registries[*].cache.serve_stale` | hot | la politique de métadonnées du registre |
 | `registries[*].grants` | hot | la hiérarchie de droits du registre |
 | `registries[*].hosts` | hot | la table de routage hôte → registre |
@@ -47,6 +48,7 @@ précise l'emporte : `registries[npm].cache.metadata_ttl_secs` relève de
 | `limits.max_artifact_size_bytes` | partial | le chemin des requêtes ; le worker d'analyse garde la limite du démarrage |
 | `proxy` | partial | les clients de registre et l'index cargo ; le récupérateur de README et le préchauffage gardent le proxy du démarrage |
 | `registries[*]` | partial | les clients, politiques et tables des registres ; le préchauffage et les imports gardent le client du démarrage |
+| `registries[*].auto_wire.registry_upstream` | partial | l'amont de l'archive de l'overlay ; une copie détenue sous l'ancienne URL n'est pas réutilisée |
 | `registries[*].cache.artifact_ttl_secs` | partial | la politique de téléchargement du registre ; l'éviction garde la durée du démarrage |
 | `registries[*].cache.metadata_ttl_secs` | partial | la politique de métadonnées du registre ; le préchauffage garde le client du démarrage |
 | `registries[*].cache` | restart | les services de préchauffage et d'éviction, construits une fois |

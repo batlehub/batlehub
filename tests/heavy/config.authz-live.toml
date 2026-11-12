@@ -107,6 +107,11 @@ type = "mise-versions"
 name = "live-mise-versions-${HEAVY_RUN}"
 mode = "proxy"
 
+# RFC 0045: the wire, for `live:mise-auto-wire`. Only its own `_wire/` path is
+# rewritten, so `live:mise-versions` is unaffected.
+[registries.auto_wire]
+enabled = true
+
 [registries.rbac]
 anonymous = []
 user = []

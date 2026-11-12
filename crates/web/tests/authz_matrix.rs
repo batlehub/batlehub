@@ -1190,6 +1190,8 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/mise-versions/t", Coverage::NoRow("the install beacon: reads nothing, discloses nothing, answers 204 (RFC 0043 §7); `mise_versions.rs` asserts the refusal on a closed registry")),
     ("/proxy/{registry}/mise-versions/api/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/data/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
+    ("/proxy/{registry}/mise-versions/_registry/latest.tar.zst", Coverage::NoRow("mise's registry archive with the overlay merged, no package read (RFC 0045, proxy-only kind); `mise_auto_wire.rs` asserts it")),
+    ("/proxy/{registry}/mise-versions/_wire-answer/{outcome}", Coverage::NoRow("the wire's own answer, reached only as a rewrite and 404 without one (RFC 0045); `mise_auto_wire.rs` asserts the refusals and `wire_answer_without_extension_is_404`")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),

@@ -19,6 +19,9 @@ tracing.workspace = true
 metrics.workspace = true
 utoipa.workspace = true
 regex.workspace = true
+# `services::mise_wire` checks an upstream exactly as the CLI always has
+# (`url::Url`, which `reqwest::Url` re-exports): already in the lock via config.
+url.workspace = true
 semver.workspace = true
 # `maven-metadata.xml` is the one listing document this proxy has to *rewrite*
 # rather than read, so the blocking filters need a real parser rather than the

@@ -3,6 +3,7 @@ pub mod audit;
 pub mod auth;
 pub mod flag_sources;
 pub mod forge;
+pub mod mise_auto_wire;
 pub mod network;
 pub mod notifications;
 pub mod registry;
@@ -737,6 +738,17 @@ impl AppConfig {
     /// grepping logs.
     pub fn warnings(&self) -> Vec<ConfigWarning> {
         let mut out = Vec::new();
+        for (i, r) in self.registries.iter().enumerate() {
+            if let Some(aw) = &r.auto_wire {
+                if aw.overlay && !aw.enabled {
+                    out.push(ConfigWarning::new(
+                        warnings::MISE_OVERLAY_INERT,
+                        format!("registries[{i}].auto_wire.overlay"),
+                        "overlay = true has no effect while enabled = false: the archive is reached only through the wire",
+                    ));
+                }
+            }
+        }
         self.proxy_trust_warnings(&mut out);
         self.subdomain_warnings(&mut out);
         self.cors_warnings(&mut out);
@@ -2429,9 +2441,42 @@ impl AppConfig {
         self.validate_security_globals(env)?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
+        self.validate_mise_auto_wire()?;
         self.validate_stats_urls()?;
         if let Some(audit) = &self.audit {
             audit.validate()?;
+        }
+        Ok(())
+    }
+
+    /// RFC 0045 §4.3: the `auto_wire` table of each registry, and at most one
+    /// enabled wire per instance.
+    fn validate_mise_auto_wire(&self) -> Result<()> {
+        let source_kind = |name: &str| {
+            self.registries
+                .iter()
+                .find(|r| r.name == name)
+                .map(|r| (r.registry_type.clone(), r.upstreams.first().cloned()))
+        };
+        let mut enabled: Option<&str> = None;
+        for (i, r) in self.registries.iter().enumerate() {
+            let Some(aw) = &r.auto_wire else { continue };
+            mise_auto_wire::validate(
+                &format!("registries[{i}].auto_wire"),
+                &r.registry_type,
+                aw,
+                &source_kind,
+            )?;
+            if aw.enabled {
+                if let Some(first) = enabled {
+                    bail!(
+                        "registries[{i}].auto_wire: {:?} enables a second wire ({first:?} has one); \
+                         a second rule claiming every host would be unusable",
+                        r.name
+                    );
+                }
+                enabled = Some(r.name.as_str());
+            }
         }
         Ok(())
     }

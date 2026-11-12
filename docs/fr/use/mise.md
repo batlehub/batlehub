@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 26c0af30016ff22d
+sourceHash: f507cb1c7c66142d
 ---
 
 # Faire pointer mise vers BatleHub
@@ -56,6 +56,69 @@ part. Le générateur écrit sa règle en premier quand l'instance a un tel
 registre. Coupée du réseau, la liste répond `404` aussitôt, et mise se replie
 sur la liste du backend — celle que le §2 compose à partir de ce que le bundle
 détenait.
+
+### 1.2 Auto-wire : une règle pour tous les hôtes {#auto-wire}
+
+Les règles ci-dessus vont par hôte et par forme d'URL, et elles vieillissent
+dès que l'instance met un nouvel hôte en miroir. Avec l'auto-wire
+([RFC 0045](/rfc/0045-mise-auto-wire)), le client porte **une seule** règle qui
+envoie chaque hôte en miroir vers l'instance, et le serveur décide où va chaque
+requête. Elle s'active sur le registre `mise-versions` :
+
+```toml
+[[registries]]
+name = "mise-versions"
+type = "mise-versions"
+  [registries.auto_wire]
+  enabled = true      # false par défaut
+  overlay = false     # true pour servir vos propres outils par nom court (plus bas)
+```
+
+Affichez ensuite le bloc de votre compte et placez-le dans **un seul** fichier
+de configuration mise :
+
+```bash
+batlehub-cli registry suggest --mise --auto-wire                    # connecté
+batlehub-cli registry suggest --mise --auto-wire --mise-catch-all   # coupé du réseau
+```
+
+mise ne fusionne pas `url_replacements` d'un fichier à l'autre : un
+`mise.toml` de projet qui porte encore les règles classiques remplace ce bloc
+en entier. Retirez le bloc classique de chaque `mise.toml` versionné
+(`grep -rl url_replacements`) avant de compter sur l'auto-wire, et gardez une
+règle `mise-versions.jdx.dev` dans tout bloc qui reste, pour que les listes
+d'outils passent toujours par l'instance.
+
+**Vos propres outils par nom court.** Avec `overlay = true`, chaque entrée
+`[[registries.auto_wire.tools]]` (une `source` sur un registre `github` ou
+`forgejo` de cette instance, ou des `backends` explicites) est ajoutée à
+l'archive de registre que mise fait flotter, et le bloc active
+`registry_floating`. Un nom qui existe aussi en amont est retiré des deux côtés
+par défaut (`on_collision = "drop"`) et listé sur la page de configuration. Un
+binaire sans forge derrière lui peut déjà être servi comme backend `http:`
+dont l'`url` pointe vers un registre `generic` ; il n'a ni publication ni liste
+de blocage par version.
+
+**Quand une installation échoue.** mise affiche l'URL demandée. Interrogez-la
+avec `curl` et votre jeton pour lire la raison :
+
+```bash
+curl -s -H "Authorization: Bearer $BATLEHUB_TOKEN" '<l URL de l erreur>'
+```
+
+- `404` avec `"code":"not_wired"` : l'hôte ou le chemin n'est pas en miroir
+  pour vous — régénérez le bloc, ou demandez l'accès en lecture au registre
+  qui le sert.
+- un nom de l'overlay que mise ne trouve pas : vérifiez `mise --version`
+  (2026.8.0 ou plus récent), `ls ~/.cache/mise/mise-registry/` (l'archive a
+  bien été récupérée), et la liste des collisions sur la page de
+  configuration.
+
+**Le désactiver.** Couper `overlay` laisse la route de l'archive branchée :
+les clients reprennent le registre public à leur prochain rafraîchissement.
+Les noms que vous cessez de servir vont dans `retired`, qui continue d'y
+répondre ici ; un client abandonne son archive en cache avec
+`rm -rf ~/.cache/mise/mise-registry`.
 
 ## 2. Ce qu'exige une coupure réseau
 

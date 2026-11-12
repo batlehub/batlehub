@@ -928,6 +928,42 @@ MISE_ASKED="$(awk -v mark="### mise-synth" 'index($0, mark) == 1 { seen = 1; nex
 measure "mise | install $TOOL@$TOOL_VERSION, no lock, synthesis on | asked:$MISE_ASKED| exit 0 after ${CLIENT_SECS}s | $MISE_INSTALLED"
 heavy_log "MISE-SYNTH-OK ($MISE_INSTALLED, with no lock and no route off the host)"
 
+# RFC 0045 §6.P (air gap): the same install through `--mise-catch-all`'s one
+# rule, every host to the wire. The project file carries the rule, so it
+# replaces the global block whole, as mise does. A host nothing mirrors is
+# the sink's `501` and lands in the missing list under its host.
+heavy_mark "mise-auto-wire"
+AW_REG="mise-versions-$HEAVY_RUN"
+AWTOOL="$HEAVY_WORK/mise-auto-wire"
+mkdir -p "$AWTOOL"
+cat > "$AWTOOL/mise.toml" <<EOF
+[settings]
+github_attestations = false
+
+[settings.url_replacements]
+"regex:^https?://([^/]+)/(.*)" = "$HEAVY_TAP_BASE/proxy/$AW_REG/mise-versions/_wire/\$1/\$2"
+
+[tools]
+"$TOOL" = { version = "$TOOL_VERSION", exe = "gh" }
+EOF
+heavy_log "mise install $TOOL@$TOOL_VERSION through the auto-wire catch-all, against the disconnected instance"
+run_client "mise install (auto-wire)" "$HEAVY_WORK/mise-auto-wire.txt" \
+  bash -c "cd '$AWTOOL' && MISE_TRUSTED_CONFIG_PATHS='$AWTOOL' MISE_DATA_DIR='$AWTOOL/data' \
+    MISE_CACHE_DIR='$AWTOOL/cache' MISE_STATE_DIR='$AWTOOL/state' ${MISE[*]} install"
+[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/mise-auto-wire.txt" >&2; heavy_fail "mise install through the auto-wire catch-all failed against the disconnected instance"; }
+heavy_log "mise said:"
+sed 's/^/    /' "$HEAVY_WORK/mise-auto-wire.txt" | tail -15
+heavy_wire_re_after "mise-auto-wire" "GET /proxy/$AW_REG/mise-versions/_wire/api[.]github[.]com/repos/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 200" \
+  "the release did not go through the wire"
+AW_CODE="$(curl -sS -o "$HEAVY_WORK/aw-sink.json" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/proxy/$AW_REG/mise-versions/_wire/unmirrored.example.com/tool.tgz")"
+[[ "$AW_CODE" == 501 ]] || { cat "$HEAVY_WORK/aw-sink.json" >&2; heavy_fail "an unwired host through the wire answered $AW_CODE, not the sink's 501"; }
+curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/api/v1/admin/air-gap/missing?kind=unmirrored_host&per_page=100" >"$HEAVY_WORK/aw-missing.json"
+grep -q 'unmirrored.example.com' "$HEAVY_WORK/aw-missing.json" \
+  || { cat "$HEAVY_WORK/aw-missing.json" >&2; heavy_fail "the wired sink did not record unmirrored.example.com"; }
+heavy_log "MISE-AUTO-WIRE-AIRGAP-OK (one rule; an unmirrored host recorded under its name)"
+
 # A tag the instance does not hold (RFC 0008-bis §4.4, phase 2): the release
 # by tag is a 503 filed as a *document* miss that names the tag asked for and
 # the tags held — the next plan's diff — and `air-gap missing` prints

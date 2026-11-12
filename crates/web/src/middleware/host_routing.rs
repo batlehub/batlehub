@@ -34,8 +34,11 @@ use actix_web::{
 };
 use futures::future::LocalBoxFuture;
 
+use batlehub_core::services::mise_wire::WireOutcome;
+
 use super::extract_registry_from_path;
 use super::proxy_trust::{routing_host, ProxyTrust};
+use crate::mise_wire::{MiseWire, WireAnswer, WiredFrom};
 use crate::RegistryHostMap;
 
 /// Request extension marking a request that arrived on a registry host, holding
@@ -141,7 +144,12 @@ fn rewrite_uri(req: &mut ServiceRequest, registry: &str) -> bool {
     // `path_and_query` always starts with '/', so "/" becomes "/proxy/{reg}/"
     // (with its trailing slash) and "/x?y=1" becomes "/proxy/{reg}/x?y=1".
     let rewritten = format!("/proxy/{registry}{original}");
+    set_path_and_query(req, &rewritten)
+}
 
+/// Point `req` at `rewritten` (a path and query), for routing and for
+/// handlers alike.
+fn set_path_and_query(req: &mut ServiceRequest, rewritten: &str) -> bool {
     let Ok(path_and_query) = rewritten.parse::<PathAndQuery>() else {
         return false;
     };
@@ -181,9 +189,11 @@ where
 
         let service = self.service.clone();
 
-        // Nothing bound: the feature is off, so skip the host lookup entirely and
-        // leave the request byte-identical to what it was before this RFC.
-        if self.map.is_empty() {
+        // Nothing bound and no mise wire: the feature is off, so skip the host
+        // lookup entirely and leave the request byte-identical to what it was
+        // before this RFC.
+        let wire = self.map.wire();
+        if self.map.is_empty() && wire.is_none() {
             return Box::pin(async move { Ok(service.call(req).await?.map_into_left_body()) });
         }
 
@@ -207,6 +217,40 @@ where
                 req.extensions_mut().insert(HostRoutedRegistry(registry));
             }
             None => {
+                // RFC 0045: the wire is a main-host ingress, rewritten before
+                // the opt-out check below so that check runs on its output.
+                let wired = wire.as_deref().and_then(|w| {
+                    wire_request(&mut req, w, &host).map(|from| (w.registry.clone(), from))
+                });
+                if let Some((wire_registry, from_host)) = wired {
+                    let host_only = extract_registry_from_path(req.match_info().unprocessed())
+                        .is_some_and(|registry| self.map.is_host_only(registry));
+                    if host_only {
+                        let response = HttpResponse::NotFound()
+                            .content_type("application/json")
+                            .body(r#"{"error":"Not Found","message":"unknown registry"}"#);
+                        return Box::pin(async move {
+                            Ok(req.into_response(response).map_into_right_body())
+                        });
+                    }
+                    // §15 Q15: a rewrite whose target the caller cannot read
+                    // answers exactly as an unwired host would.
+                    return Box::pin(async move {
+                        let resp = service.call(req).await?;
+                        let status = resp.status().as_u16();
+                        if status != 401 && status != 403 {
+                            return Ok(resp.map_into_left_body());
+                        }
+                        let request = resp.request().clone();
+                        let answer = crate::handlers::proxy::mise_versions::wire_refusal(
+                            &request,
+                            &wire_registry,
+                            &from_host,
+                        )
+                        .await;
+                        Ok(resp.into_response(answer).map_into_right_body())
+                    });
+                }
                 // Not a registry host — the main host, a bare IP, a probe. The
                 // only thing to enforce here is the §4.6 opt-out, because this is
                 // the one place that knows the request was *not* host-routed.
@@ -234,6 +278,52 @@ where
 
         Box::pin(async move { Ok(service.call(req).await?.map_into_left_body()) })
     }
+}
+
+/// Apply the mise wire to a main-host request under its `_wire/` path.
+///
+/// Returns the host mise asked for when the request was rewritten to a target
+/// route; `None` when it was not under the wire, or was turned into a
+/// `_wire-answer` (which needs no post-processing). Never answers itself:
+/// every outcome is a rewrite, so it passes the IP block, auth, rate limit and
+/// span like any request (§5.1).
+fn wire_request(req: &mut ServiceRequest, wire: &MiseWire, request_host: &str) -> Option<String> {
+    let prefix = wire.wire_prefix();
+    let tail = req.uri().path().strip_prefix(prefix.as_str())?.to_owned();
+    let (host, rest) = tail.split_once('/').unwrap_or((tail.as_str(), ""));
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    let answer = match wire.table.target_on(request_host, host, rest, wire.air_gap) {
+        WireOutcome::Rewrite(path) => {
+            if set_path_and_query(req, &format!("{path}{query}")) {
+                metrics::counter!("batlehub_mise_wire_requests_total", "outcome" => "rewritten")
+                    .increment(1);
+                req.extensions_mut().insert(WiredFrom(host.to_owned()));
+                return Some(host.to_owned());
+            }
+            WireAnswer::Malformed
+        }
+        WireOutcome::Bounce(url) => WireAnswer::Bounce(format!("{url}{query}")),
+        WireOutcome::Sink(path) => WireAnswer::Sink(
+            path.strip_prefix("/_air-gap/unmirrored/")
+                .unwrap_or(&path)
+                .to_owned(),
+        ),
+        WireOutcome::NotWired => WireAnswer::NotWired(host.to_owned()),
+        WireOutcome::Malformed => WireAnswer::Malformed,
+    };
+    metrics::counter!("batlehub_mise_wire_requests_total", "outcome" => answer.outcome())
+        .increment(1);
+    tracing::debug!(outcome = answer.outcome(), %host, "mise wire");
+    // Built from a validated registry name: it always parses.
+    if set_path_and_query(req, &wire.answer_path(&answer)) {
+        req.extensions_mut().insert(WiredFrom(host.to_owned()));
+        req.extensions_mut().insert(answer);
+    }
+    None
 }
 
 #[cfg(test)]

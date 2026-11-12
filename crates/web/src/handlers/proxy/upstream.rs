@@ -43,7 +43,7 @@ const DEFAULT_PASSTHROUGH_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// The registry's metadata TTL, or [`DEFAULT_PASSTHROUGH_TTL`].
-async fn passthrough_ttl(svc: &ProxyService, registry: &str) -> Duration {
+pub(crate) async fn passthrough_ttl(svc: &ProxyService, registry: &str) -> Duration {
     let hot = svc.hot.read().await;
     hot.policies
         .get(registry)
@@ -188,4 +188,42 @@ pub async fn cached_forward_with(
         // from a live one.
         .insert_header(("X-BatleHub-Cache", result.freshness.header_value()))
         .body(result.bytes.body))
+}
+
+/// A `GET` with its own total `timeout`, the body capped at `cap` bytes, and
+/// any non-2xx an error — for a caller that runs its own
+/// `ProxyService::cached_passthrough` closure (RFC 0045's registry archive),
+/// where an upstream "no" must be served from the held copy, not forwarded.
+pub(crate) async fn get_bounded(
+    http: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+    cap: usize,
+) -> Result<Vec<u8>, CoreError> {
+    let mut resp = http
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| CoreError::Registry(format!("upstream unreachable: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(CoreError::Registry(format!(
+            "upstream answered {}",
+            resp.status()
+        )));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| CoreError::Registry(format!("upstream body: {e}")))?
+    {
+        if body.len() + chunk.len() > cap {
+            return Err(CoreError::Registry(format!(
+                "upstream body over {cap} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }

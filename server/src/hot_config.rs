@@ -1098,6 +1098,7 @@ pub(super) fn make_hot_builder(
         }
         let repo_signer_map = crate::builders::build_repo_signer_map(cfg)?;
         let apk_signer_map = crate::builders::build_apk_signer_map(cfg)?;
+        let mise_wire = batlehub_web::mise_wire::MiseWire::build(cfg, &um)?;
         Ok(batlehub_web::services::BuiltHotState {
             hot,
             access,
@@ -1110,7 +1111,7 @@ pub(super) fn make_hot_builder(
             apk_signer_map,
             vuln_db_map: vuln_db,
             sumdb_map: sumdb,
-            registry_host_map: RegistryHostMap::from_app_config(cfg),
+            registry_host_map: RegistryHostMap::from_app_config(cfg).with_wire(mise_wire),
             text_config_owed: cfg.search.text_config != text_config.in_force(),
         })
     })
@@ -1694,6 +1695,23 @@ scanners = ["osv"]
                 "+hosts = [\"npm.pkg.example\"]\n",
                 "+hosts = [\"npm.pkg.example\"]\npath_routing = false\n",
                 |b| b.registry_host_map.is_host_only("npm").to_string(),
+            ),
+            (
+                "registries[*].auto_wire",
+                "[[registries]]\ntype = \"mise-versions\"\nname = \"mv\"\n",
+                "[[registries]]\ntype = \"mise-versions\"\nname = \"mv\"\n[registries.auto_wire]\nenabled = true\n",
+                |b| b.registry_host_map.wire().is_some().to_string(),
+            ),
+            (
+                "registries[*].auto_wire.registry_upstream",
+                "[[registries]]\ntype = \"mise-versions\"\nname = \"mv\"\n[registries.auto_wire]\nenabled = true\n",
+                "[[registries]]\ntype = \"mise-versions\"\nname = \"mv\"\n[registries.auto_wire]\nenabled = true\nregistry_upstream = \"https://mirror.example\"\n",
+                |b| {
+                    b.registry_host_map
+                        .wire()
+                        .map(|w| w.auto_wire.registry_upstream().to_owned())
+                        .unwrap_or_default()
+                },
             ),
             (
                 "registries[*].cache.serve_stale",

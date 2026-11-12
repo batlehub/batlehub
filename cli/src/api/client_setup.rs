@@ -26,7 +26,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 use crate::api::registry::RegistryInfo;
-use crate::api::suggest::{push_replacement, regex_escape, typed_url_replacements};
+use crate::api::suggest::push_replacement;
+use batlehub_core::services::mise_wire::{
+    self, is_plain_http_url, select, url_host, Mode, WireRegistry,
+};
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -1155,87 +1158,16 @@ fn resolve<'a>(
     })
 }
 
-/// Host of `url`, when it parses.
-fn url_host(url: &str) -> Option<String> {
-    reqwest::Url::parse(url)
-        .ok()?
-        .host_str()
-        .map(str::to_ascii_lowercase)
-}
-
-/// The one shape of URL setup writes into a file or prints for `eval`: ASCII,
-/// no control, space or quoting character, scheme `http` or `https`, no
-/// credentials, query or fragment. The string itself is checked, not only what
-/// a URL parser makes of it — a parser drops a `\n` that `~/.npmrc` would read
-/// as a second setting.
-fn is_plain_http_url(u: &str) -> bool {
-    u.is_ascii()
-        && !u
-            .chars()
-            .any(|c| c.is_control() || c.is_whitespace() || UNSAFE.contains(c))
-        && reqwest::Url::parse(u).is_ok_and(|p| {
-            matches!(p.scheme(), "http" | "https")
-                && p.username().is_empty()
-                && p.password().is_none()
-                && p.query().is_none()
-                && p.fragment().is_none()
-        })
-}
-
-/// A generic registry's upstream, as it goes into a rule: a plain http(s) URL
-/// with nothing a TOML key or a regex could misread, without its final `/`.
-fn check_upstream(u: &str) -> std::result::Result<&str, String> {
-    if is_plain_http_url(u) {
-        Ok(u.trim_end_matches('/'))
-    } else {
-        Err(format!("its upstream {u:?} is not a plain http(s) URL"))
-    }
-}
-
-/// Why `r`'s mise rules must not be written: they rewrite a fixed public host
-/// (`codeberg.org`, `api.github.com`, …) onto the registry, which is only
-/// right when the registry proxies that host. A forgejo registry in front of
-/// `git.corp.example` would otherwise take over every codeberg.org download.
-/// An unknown upstream (an older server) is not assumed public.
-fn foreign_upstream(ty: &str, r: &RegistryInfo) -> Option<String> {
-    // A conda registry is one *channel*, and the rule is conda-forge's: the
-    // host alone would let a bioconda mirror take over every conda-forge read.
-    if ty == "conda" {
-        const CONDA_FORGE: &str = "https://conda.anaconda.org/conda-forge";
-        return match r.upstream.as_deref().map(|u| u.trim_end_matches('/')) {
-            Some(CONDA_FORGE) => None,
-            Some(u) => Some(format!(
-                "conda registry {} (it proxies {u}, not {CONDA_FORGE})",
-                r.name
-            )),
-            None => Some(format!(
-                "conda registry {} (the server does not say what it proxies: that needs \
-                 `upstreams:read` granted to `*` on it)",
-                r.name
-            )),
-        };
-    }
-    let public = match ty {
-        "github" => "api.github.com",
-        "forgejo" => "codeberg.org",
-        "gitlab" => "gitlab.com",
-        "npm" => "registry.npmjs.org",
-        "cargo" => "crates.io",
-        "openvsx" => "open-vsx.org",
-        _ => return None,
-    };
-    match r.upstream.as_deref().and_then(url_host) {
-        Some(h) if h == public => None,
-        Some(h) => Some(format!(
-            "{ty} registry {} (it proxies {h}, not {public})",
-            r.name
-        )),
-        None => Some(format!(
-            "{ty} registry {} (the server does not say what it proxies: that needs \
-             `upstreams:read` granted to `*` on it)",
-            r.name
-        )),
-    }
+/// A registry as the shared mise selection reads it (RFC 0045 §6.1), or
+/// `None` for a type this CLI's core does not know.
+fn wire_registry<'a>(ty: &str, r: &'a RegistryInfo) -> Option<WireRegistry<'a>> {
+    Some(WireRegistry {
+        name: &r.name,
+        kind: ty.parse().ok()?,
+        upstream: r.upstream.as_deref(),
+        upstreams: &r.upstreams,
+        path_routing: true,
+    })
 }
 
 /// `url` is a registry URL of the instance at `server`: same scheme and port,
@@ -1328,12 +1260,6 @@ fn base_url(r: &RegistryInfo, opts: &Options) -> Result<String> {
     // `HTTP:`, `a/../b`).
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
-
-/// Characters no URL `apply` writes may hold: quoting and substitution for
-/// the shell, TOML, YAML and XML; `,` and `|`, which separate proxies in
-/// GOPROXY (a URL parser reads `https://hub/p,https://evil` as one URL on
-/// `hub`, go as two).
-const UNSAFE: &str = "\"'\\<>`$;|&{}^,";
 
 /// Refuse a plain-HTTP server outside loopback: the registry list is the only
 /// thing `apply` trusts, and over HTTP anyone on the path rewrites it.
@@ -1545,16 +1471,6 @@ const MISE_TYPES: [&str; 10] = [
     "nodedist",
     "generic",
 ];
-
-/// mise's `gitlab:` backend, sent at the typed `{project}/-/releases` route,
-/// whose document repoints every asset at the instance — not at the `api/v4`
-/// passthrough, which relays gitlab.com's own URLs (the closed-world suite's
-/// `phase_gitlab` rule). The backend percent-encodes the project, so `$1` is
-/// one segment.
-const GITLAB_MISE_RULES: &[(&str, &str)] = &[(
-    r"^https://gitlab\.com/api/v4/projects/([^/]+)/releases(.*)",
-    "{proxy}/$1/-/releases$2",
-)];
 
 /// The plan for every file, from the registry list and the machine. Fails only
 /// on a `--pick` the server does not list (used or not): everything else that goes
@@ -2075,12 +1991,9 @@ impl<'a> PlanCtx<'a> {
             }
             TargetId::Mise if chosen.is_empty() => Ok(None),
             TargetId::Mise => {
-                let mut rules = String::new();
                 let mut node = None;
-                let mut skipped = Vec::new();
-                // Generic pattern → the mirror it went to: a second mirror of
-                // the same upstream would repeat the TOML key.
-                let mut mirrored: BTreeMap<String, &str> = BTreeMap::new();
+                let mut bases: BTreeMap<&str, String> = BTreeMap::new();
+                let mut wired = Vec::new();
                 for (ty, r) in chosen {
                     let base = self.base(r)?;
                     if *ty == "nodedist" {
@@ -2088,57 +2001,25 @@ impl<'a> PlanCtx<'a> {
                         // segment is dropped.
                         node = Some(format!("{base}/nodedist/"));
                     }
-                    if *ty == "generic" {
-                        if r.upstreams.is_empty() {
-                            skipped.push(format!(
-                                "generic registry {} (the server does not say what it mirrors: \
-                                 that needs `upstreams:read` granted to `*` on it)",
-                                r.name
-                            ));
-                        }
-                        // A 1:1 path mirror: each upstream maps onto it.
-                        for upstream in &r.upstreams {
-                            match check_upstream(upstream) {
-                                Ok(u) => {
-                                    let pattern = format!("^{}/(.+)", regex_escape(u));
-                                    if let Some(first) = mirrored.get(&pattern) {
-                                        skipped.push(format!(
-                                            "generic registry {} on {u} (registry {first} has it; \
-                                             --pick generic={} to swap)",
-                                            r.name, r.name
-                                        ));
-                                        continue;
-                                    }
-                                    push_replacement(
-                                        &mut rules,
-                                        &pattern,
-                                        &format!("{base}/generic/$1"),
-                                    );
-                                    mirrored.insert(pattern, &r.name);
-                                }
-                                Err(why) => {
-                                    skipped.push(format!("generic registry {} ({why})", r.name))
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    if let Some(why) = foreign_upstream(ty, r) {
-                        skipped.push(why);
-                        continue;
-                    }
-                    let typed = match *ty {
-                        "gitlab" => GITLAB_MISE_RULES,
-                        _ => typed_url_replacements(ty),
-                    };
-                    for (pattern, replacement) in typed {
-                        push_replacement(
-                            &mut rules,
-                            pattern,
-                            &replacement.replace("{proxy}", &base),
-                        );
-                    }
+                    wired.extend(wire_registry(ty, r));
+                    bases.insert(&r.name, base);
                 }
+                // The same selection the server's wire makes (RFC 0045 §6.1).
+                let selection = select(&wired, Mode::Classic);
+                let mut rules = String::new();
+                for rule in &selection.rules {
+                    let base = bases.get(rule.registry.as_str()).map_or("", String::as_str);
+                    let proxy = match mise_wire::proxy_segment(rule.kind) {
+                        Some(seg) => format!("{base}/{seg}"),
+                        None => base.to_owned(),
+                    };
+                    push_replacement(
+                        &mut rules,
+                        &rule.pattern,
+                        &rule.replacement.replace("{proxy}", &proxy),
+                    );
+                }
+                let skipped = selection.skipped;
                 let mut body = String::new();
                 if !rules.is_empty() {
                     body.push_str("[settings.url_replacements]\n");
@@ -3694,6 +3575,61 @@ mod tests {
             .detail
             .unwrap()
             .contains("generic registry hc is no longer listed"));
+    }
+
+    /// RFC 0045 §6.1: the block `setup` writes and the server's wire table,
+    /// built from one registry list, wire the same `(host, prefix)` pairs.
+    #[test]
+    fn mise_block_and_wire_table_wire_the_same_prefixes() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let mut gen = reg("gen", "generic", "proxy");
+        gen.upstreams = vec![
+            "https://storage.googleapis.com/acme-bucket/".to_owned(),
+            "https://dl.k8s.io".to_owned(),
+        ];
+        let mut cf = reg("cf", "conda", "proxy");
+        cf.upstream = Some("https://conda.anaconda.org/conda-forge".to_owned());
+        let mut npm = reg("npm", "npm", "proxy");
+        npm.upstream = Some("https://npm.corp.example".to_owned());
+        let mut gl = reg("gl", "gitlab", "proxy");
+        gl.upstream = Some("https://gitlab.com".to_owned());
+        let regs = vec![
+            reg("mv", "mise-versions", "proxy"),
+            reg("gh", "github", "proxy"),
+            reg("fj", "forgejo", "proxy"),
+            gl,
+            npm,
+            reg("cargo", "cargo", "proxy"),
+            reg("ovsx", "openvsx", "proxy"),
+            cf,
+            gen,
+        ];
+
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).clone();
+        let next = p.next.unwrap();
+        let parsed: toml::Table = toml::from_str(&next).unwrap();
+        let block: BTreeSet<(String, String)> = parsed["settings"]["url_replacements"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .map(|k| mise_wire::wired_prefix(k.strip_prefix("regex:").unwrap()).unwrap())
+            .collect();
+
+        let wired: Vec<_> = regs
+            .iter()
+            .filter_map(|r| wire_registry(&r.registry_type, r))
+            .collect();
+        let (table, _) = mise_wire::WireTable::build(&wired, None);
+        let wire: BTreeSet<(String, String)> = table
+            .pairs()
+            .map(|(h, p)| (h.to_owned(), p.to_owned()))
+            .collect();
+
+        assert_eq!(block, wire);
+        // The foreign npm registry is in neither.
+        assert!(!block.iter().any(|(h, _)| h == "registry.npmjs.org"));
+        assert!(block.contains(&("gitlab.com".to_owned(), "api/v4/projects/".to_owned())));
     }
 
     /// Two mirrors of one upstream: one rule (a repeated TOML key would not

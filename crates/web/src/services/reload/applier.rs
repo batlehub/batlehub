@@ -376,6 +376,9 @@ impl ConfigReloadService {
         // removes a `hosts` entry takes effect without a process restart.
         self.registry_host_map
             .replace_from(&pending.new_registry_host_map);
+        // RFC 0045 §10.1: the overlay collision alert discounts a rise that
+        // follows a reload.
+        metrics::counter!("batlehub_config_reloads_total").increment(1);
         // Refresh (and re-log) the config warnings so the admin endpoint describes
         // the config that is now in force, not the one it replaced.
         self.config_warnings.replace(pending.warnings.clone());
