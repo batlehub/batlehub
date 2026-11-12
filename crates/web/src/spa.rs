@@ -294,10 +294,7 @@ fn is_console_route(path: &str) -> bool {
     // deeper: `/packages/npm/lodash.merge` is a package whose name has a dot in
     // it, and it is exactly the link this fallback exists to make work.
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    if segments.len() == 1 && segments[0].contains('.') {
-        return false;
-    }
-    true
+    !(segments.len() == 1 && segments[0].contains('.'))
 }
 
 /// Everything `actix_files` could not resolve.
