@@ -982,3 +982,111 @@ mod terraform_facts_tests {
         assert!(!notes[0].contains("/shasums —"), "{}", notes[0]);
     }
 }
+
+#[cfg(test)]
+mod mise_registry_export_tests {
+    use super::*;
+    use sha2::Digest;
+
+    async fn server_with(regs: serde_json::Value) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/v1/registries")
+            .with_header("content-type", "application/json")
+            .with_body(regs.to_string())
+            .create_async()
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn carries_the_raw_archive_under_the_reported_key() {
+        let mut server = server_with(serde_json::json!([
+            { "name": "mv", "type": "mise-versions", "mode": "proxy" },
+            { "name": "npm", "type": "npm", "mode": "proxy" }
+        ]))
+        .await;
+        server
+            .mock("GET", "/proxy/mv/mise-versions/_registry/latest.tar.zst")
+            .match_query(mockito::Matcher::UrlEncoded("raw".into(), "1".into()))
+            .with_header(
+                "X-BatleHub-Storage-Key",
+                "artifact:mv/_registry/raw/latest.tar.zst",
+            )
+            .with_body(b"raw-archive")
+            .create_async()
+            .await;
+        let client = BatleHubClient::new(&server.url(), Some("t")).unwrap();
+        let mut skipped = Vec::new();
+
+        let out = export_mise_registries(&client, &mut skipped).await;
+
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(out.len(), 1);
+        let (entry, bytes) = &out[0];
+        assert_eq!(entry.registry, "mv");
+        assert_eq!(entry.key, "mv/_registry/raw/latest.tar.zst");
+        assert_eq!(bytes.as_slice(), b"raw-archive");
+        assert_eq!(entry.size, 11);
+        assert_eq!(
+            entry.digest,
+            hex::encode(sha2::Sha256::digest(b"raw-archive"))
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_an_archive_without_a_storage_key() {
+        let mut server = server_with(serde_json::json!([
+            { "name": "mv", "type": "mise-versions", "mode": "proxy" }
+        ]))
+        .await;
+        server
+            .mock("GET", "/proxy/mv/mise-versions/_registry/latest.tar.zst")
+            .match_query(mockito::Matcher::Any)
+            .with_body(b"raw-archive")
+            .create_async()
+            .await;
+        let client = BatleHubClient::new(&server.url(), Some("t")).unwrap();
+        let mut skipped = Vec::new();
+
+        let out = export_mise_registries(&client, &mut skipped).await;
+
+        assert!(out.is_empty());
+        assert!(skipped[0].contains("no storage key"), "{skipped:?}");
+    }
+
+    #[tokio::test]
+    async fn says_so_when_no_mise_versions_registry_exists() {
+        let server = server_with(serde_json::json!([
+            { "name": "npm", "type": "npm", "mode": "proxy" }
+        ]))
+        .await;
+        let client = BatleHubClient::new(&server.url(), Some("t")).unwrap();
+        let mut skipped = Vec::new();
+
+        assert!(export_mise_registries(&client, &mut skipped)
+            .await
+            .is_empty());
+        assert!(
+            skipped[0].contains("no mise-versions registry"),
+            "{skipped:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_listing_is_a_skipped_line() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/v1/registries")
+            .with_status(500)
+            .create_async()
+            .await;
+        let client = BatleHubClient::new(&server.url(), Some("t")).unwrap();
+        let mut skipped = Vec::new();
+
+        assert!(export_mise_registries(&client, &mut skipped)
+            .await
+            .is_empty());
+        assert!(skipped[0].contains("listing registries"), "{skipped:?}");
+    }
+}
