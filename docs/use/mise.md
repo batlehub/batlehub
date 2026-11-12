@@ -85,7 +85,13 @@ any block that stays, so tool listings keep going through the instance.
 registry of this instance, or explicit `backends`) is added to the registry
 archive mise floats, and the block turns `registry_floating` on. A name that
 also exists upstream is left out on both sides by default
-(`on_collision = "drop"`) and listed on the configuration page. A binary with no
+(`on_collision = "drop"`) and listed on the configuration page.
+`registry_floating` also makes mise fetch the current aqua registry, from
+`api.github.com/repos/aquaproj/aqua-registry/contents/registry.yaml`. The
+`github` kind has no `contents/` route, so that request answers `404`: mise
+warns once (`failed to load floating aqua registry`) and keeps the aqua registry
+baked into its release, the one that release was tested with. An aqua package
+newer than your mise is not found until mise is upgraded. A binary with no
 forge behind it can be served today as an `http:` backend whose `url` points at
 a `generic` registry; it has no publish step and no per-version block list.
 
@@ -100,7 +106,10 @@ curl -s -H "Authorization: Bearer $BATLEHUB_TOKEN" '<the URL from the error>'
   regenerate the block, or ask for read access on the registry behind it.
 - an overlay name that mise does not find: check `mise --version` (2026.8.0 or
   later), `ls ~/.cache/mise/mise-registry/` (the archive was fetched), and the
-  collision list on the configuration page.
+  collision list on the configuration page. On an empty cache, the first
+  command that names an overlay tool fails this way even when everything is
+  right: mise reads the tool name before it fetches the archive. Run it again,
+  or run `mise registry` first.
 
 **Turning it off.** Switching `overlay` off keeps the archive route wired, so
 clients pick up the public registry at their next refresh. Names you stop
@@ -224,7 +233,10 @@ serves it while nothing fresher is cached, so `mise install acme-deploy` works
 with no egress. The air-gap block that `registry suggest --mise --auto-wire
 --mise-catch-all` prints turns `registry_floating` on when the overlay is on.
 Without a carried archive, or with one that fails the check, the archive route
-answers `503` and mise keeps the registry it has.
+answers `503` and mise keeps the registry it has. To refresh the archive,
+export the same plan again: without `--bundle-id`, the carried archives'
+digests are part of the bundle id, so a newer archive is a new bundle that the
+import does not skip as already seen.
 
 ## 3. Turning the air gap on
 

@@ -358,8 +358,13 @@ def kind_of(start, end):
     return None
 
 
+def loopback(start, end):
+    """A forge fixture the suite serves itself: no forge's token goes there."""
+    return any(l.strip().startswith("upstreams") and "127.0.0.1" in l for l in lines[start:end])
+
+
 forges = [(s, e, kind_of(s, e)) for s, e in bounds]
-forges = [(s, e, k) for s, e, k in forges if k in TOKEN_VAR]
+forges = [(s, e, k) for s, e, k in forges if k in TOKEN_VAR and not loopback(s, e)]
 if not forges:
     sys.exit(f"{src} declares no github/gitlab/forgejo registry to authenticate")
 

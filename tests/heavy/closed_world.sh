@@ -98,6 +98,8 @@ MAVEN_VERSION="${HEAVY_CW_MAVEN:-3.9.16}"
 DOTNET_VERSION="${HEAVY_CW_DOTNET:-10.0}"
 TERRAFORM_VERSION="${HEAVY_CW_TERRAFORM:-1.16.2}"
 MISE_TOOL="${HEAVY_CW_MISE_TOOL:-github:cli/cli}"
+# The mise `heavy_runner_for` falls back to when none is on PATH.
+readonly CW_MISE='mise@latest'
 MISE_TOOL_VERSION="${HEAVY_CW_MISE_TOOL_VERSION:-2.60.0}"
 PHP_VERSION="${HEAVY_CW_PHP:-8.3.28}"
 COMPOSER_VERSION="${HEAVY_CW_COMPOSER:-2.10.2}"
@@ -195,6 +197,93 @@ MV_GATED_REG="mise-versions-gated-$HEAVY_RUN"
 # registries mirror, read by the server from its own environment.
 export HEAVY_CW_FILES_PORT="${HEAVY_CW_FILES_PORT:-8189}"
 
+# RFC 0045 §6.P cases 3–6, 8 and 10: one loopback origin (`aw_fixture.py`)
+# plays mise's registry archive host, the overlay tool's Forgejo and the origin
+# a bounce lands on. Built and started before the server, which builds its
+# overlay archive at startup and would otherwise remember a failure for 60 s.
+export HEAVY_CW_AW_PORT="${HEAVY_CW_AW_PORT:-8188}"
+AW_ROOT="$HEAVY_WORK/aw-origin"
+AW_LOG="$HEAVY_WORK/aw-origin.log"
+AW_VERSION="2.4.0"
+AW_UUID="5e1c0a2e-0045-4a7e-9f00-acme0deploy0"
+AW_ASSET="acme-deploy-$AW_VERSION-linux-x86_64.tar.gz"
+
+# aw_pack <dir> <out> — `dir/registry/*.toml` as mise's `latest.tar.zst`. tar
+# with the zstd binary when there is one, else Python ≥ 3.14's own zstd.
+aw_pack() {
+  local dir="$1" out="$2"
+  mkdir -p "$(dirname "$out")"
+  if command -v zstd >/dev/null 2>&1; then
+    tar -C "$dir" --zstd -cf "$out" registry
+    return $?
+  fi
+  python3 -c 'import sys, tarfile
+with tarfile.open(sys.argv[2], "w:zst") as t:
+    t.add(sys.argv[1] + "/registry", "registry")' "$dir" "$out"
+  return $?
+}
+
+# aw_release — the Forgejo release document of acme/deploy, as mise reads it
+# (`src/forgejo.rs`: id, tag_name, draft, prerelease, created_at, assets with
+# uuid and browser_download_url, all required).
+aw_release() {
+  local origin="http://127.0.0.1:$HEAVY_CW_AW_PORT"
+  printf '{"id":45,"tag_name":"v%s","name":"v%s","draft":false,"prerelease":false,' "$AW_VERSION" "$AW_VERSION"
+  printf '"created_at":"2026-01-01T00:00:00Z","published_at":"2026-01-01T00:00:00Z",'
+  printf '"assets":[{"id":4501,"name":"%s","size":%s,"uuid":"%s",' "$AW_ASSET" "$(stat -c %s "$AW_ROOT/attachments/$AW_UUID")" "$AW_UUID"
+  printf '"browser_download_url":"%s/acme/deploy/releases/download/v%s/%s"}]}' "$origin" "$AW_VERSION" "$AW_ASSET"
+}
+
+aw_fixture_build() {
+  local src="$HEAVY_WORK/aw-src" pkg="$HEAVY_WORK/aw-pkg"
+  local repo="$AW_ROOT/api/v1/repos/acme/deploy/releases"
+  mkdir -p "$src/public/registry" "$src/colliding/registry" "$pkg/bin" "$AW_ROOT/attachments" \
+    "$repo/tags" "$AW_ROOT/acme/deploy/raw"
+  # The public archive: jq as mise's own registry spells it.
+  printf '%s\n' 'backends = ["aqua:jqlang/jq", "asdf:mise-plugins/asdf-jq"]' \
+    'description = "Command-line JSON processor"' 'version_order = "source"' \
+    >"$src/public/registry/jq.toml"
+  # The same, after upstream took the overlay's name (case 6).
+  cp "$src/public/registry/jq.toml" "$src/colliding/registry/"
+  printf '%s\n' 'backends = ["github:evil-corp/acme-deploy"]' 'version_order = "semver"' \
+    >"$src/colliding/registry/acme-deploy.toml"
+  aw_pack "$src/public" "$AW_ROOT/registry/latest.tar.zst" \
+    || heavy_fail "mise-auto-wire: could not pack the fixture registry archive (no zstd, and Python < 3.14)"
+  aw_pack "$src/colliding" "$AW_ROOT/colliding/registry/latest.tar.zst" \
+    || heavy_fail "mise-auto-wire: could not pack the colliding registry archive"
+  # The overlay tool, and the file the bounce case fetches.
+  printf '#!/bin/sh\necho "CLOSED-WORLD-RAN acme-deploy %s"\n' "$AW_VERSION" >"$pkg/acme-deploy"
+  printf '#!/bin/sh\necho CLOSED-WORLD-RAN aw-bounce\n' >"$pkg/bin/aw-bounce"
+  chmod +x "$pkg/acme-deploy" "$pkg/bin/aw-bounce"
+  tar -C "$pkg" -czf "$AW_ROOT/attachments/$AW_UUID" acme-deploy
+  # The server fetches an attachment by the release's own download URL.
+  mkdir -p "$AW_ROOT/acme/deploy/releases/download/v$AW_VERSION"
+  cp "$AW_ROOT/attachments/$AW_UUID" "$AW_ROOT/acme/deploy/releases/download/v$AW_VERSION/$AW_ASSET"
+  tar -C "$pkg" -czf "$AW_ROOT/acme/deploy/raw/aw-bounce-1.0.0.tar.gz" bin
+  aw_release >"$repo/tags/v$AW_VERSION"
+  # The tag the server resolves a release's version through (RFC 0019): a
+  # Forgejo tag object, under either spelling mise asks for.
+  local tags="$AW_ROOT/api/v1/repos/acme/deploy/tags"
+  mkdir -p "$tags"
+  printf '{"name":"v%s","commit":{"sha":"%s","created":"2026-01-01T00:00:00Z"}}' \
+    "$AW_VERSION" "0045004500450045004500450045004500450045" >"$tags/v$AW_VERSION"
+  cp "$tags/v$AW_VERSION" "$tags/$AW_VERSION"
+  cp "$repo/tags/v$AW_VERSION" "$repo/tags/$AW_VERSION"
+  cp "$repo/tags/v$AW_VERSION" "$repo/latest"
+  { printf '['; cat "$repo/latest"; printf ']'; } >"$repo/_"
+  return 0
+}
+
+aw_fixture_build
+: >"$AW_LOG"
+python3 tests/heavy/aw_fixture.py "$HEAVY_CW_AW_PORT" "$AW_ROOT" "$AW_LOG" \
+  >"$HEAVY_WORK/aw-origin.err" 2>&1 &
+HEAVY_EXTRA_PIDS+=("$!")
+for _ in $(seq 1 50); do
+  curl -s -o /dev/null "http://127.0.0.1:$HEAVY_CW_AW_PORT/" && break
+  sleep 0.1
+done
+
 # The two newest stable jq versions on mise's versions host, and an age gate
 # one day older than the newest — read here, before the server starts, because
 # the gate is part of `config.closed-world.toml` (RFC 0043 §6.8, case 7). The
@@ -212,7 +301,12 @@ print(newest, prev, int(age.total_seconds()) + 86400)
 export HEAVY_MV_MIN_AGE
 
 heavy_forge_auth_config tests/heavy/config.closed-world.toml
-heavy_start_server "$HEAVY_CONFIG"
+# RFC 0045 §6.P cases 6 and 8 reload the server, so it runs on a copy with the
+# run id written in: merge_layers refuses a placeholder in a registry's name,
+# and every diff would then be a restart (RFC 0037 §4.5, as reload.sh found).
+CW_CONFIG="$HEAVY_WORK/cw-config.toml"
+sed "s/\${HEAVY_RUN}/$HEAVY_RUN/g" "$HEAVY_CONFIG" >"$CW_CONFIG"
+heavy_start_server "$CW_CONFIG"
 heavy_start_tap
 
 # The client-side egress denial, as in mise.sh §4 and airgap.sh: a proxy on a
@@ -1083,7 +1177,7 @@ EOF
 # running mise behind a proxy has to make the same choice.
 
 phase_mise() {
-  heavy_runner_for mise "mise@latest"
+  heavy_runner_for mise "$CW_MISE"
   local mise=("${HEAVY_RUNNER[@]}" mise)
   local out proxy="$HEAVY_TAP_BASE/proxy/$GITHUB_REG"
   out="$(cw_out mise)"
@@ -1151,25 +1245,98 @@ EOF
 # ── §10b. mise auto-wire (RFC 0045 §6.P) ─────────────────────────────────────
 #
 # The client config is exactly what `registry suggest --mise --auto-wire`
-# prints — one rule, no hand-written line — and the claim is on the tap: every
-# request mise built from a public URL arrives under `_wire/`, and each reaches
-# its own kind. Cases 1, 2 and 7 of §6.P; the overlay cases (3, 4, 6, 8) and
-# the two-prefix case 9 need fixtures this suite does not have yet. Run as the
-# last section of the `mise-versions` phase: the wire is that kind's route,
-# and `registry_kind_coverage.rs` keeps one phase per kind.
+# prints — one rule and `registry_floating`, no hand-written line — and the
+# claim is on the tap: every request mise built from a public URL arrives under
+# `_wire/`, and each reaches its own kind. The overlay tool `acme-deploy` comes
+# from `aw-forge`, a Forgejo on the loopback fixture `aw_fixture.py`, which also
+# serves the upstream registry archive; nothing the overlay cases fetch is on
+# the internet. Run as the last section of the `mise-versions` phase: the wire
+# is that kind's route, and `registry_kind_coverage.rs` keeps one phase per kind.
+
+AW_FORGE_REG="aw-forge-$HEAVY_RUN"
+AW_DENIED_TOKEN="cw-aw-denied-token"
+# Case 8's archive upstream: nothing listens on port 1.
+AW_CLOSED_URL="http://127.0.0.1:1"
+
+# aw_netrc <file> <login> <token> — mise's credential for the instance.
+aw_netrc() {
+  printf 'machine 127.0.0.1\nlogin %s\npassword %s\n' "$2" "$3" >"$1"
+  chmod 600 "$1"
+  return 0
+}
+
+# aw_api <method> <path> — the admin API, failing on a 4xx/5xx.
+aw_api() {
+  curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE$2"
+  return $?
+}
+
+# aw_reload <sed-expression> — edit the running config as an editor's atomic
+# save would, wait for the watcher to stage it, apply it.
+aw_reload() {
+  local expr="$1" pending="$HEAVY_WORK/aw-pending.json"
+  sed "$expr" "$CW_CONFIG" >"$CW_CONFIG.next"
+  cmp -s "$CW_CONFIG" "$CW_CONFIG.next" && heavy_fail "mise-auto-wire: '$expr' changed nothing in the config"
+  mv "$CW_CONFIG.next" "$CW_CONFIG"
+  for _ in $(seq 1 30); do
+    aw_api GET /api/v1/admin/config/pending >"$pending" 2>/dev/null && grep -q '"id"' "$pending" && break
+    sleep 1
+  done
+  grep -q '"id"' "$pending" || { cat "$pending" >&2; heavy_fail "mise-auto-wire: no reload staged for '$expr'"; }
+  aw_api POST /api/v1/admin/config/pending/apply >"$HEAVY_WORK/aw-applied.json" \
+    || { cat "$HEAVY_WORK/aw-applied.json" >&2; heavy_fail "mise-auto-wire: the reload for '$expr' did not apply"; }
+  return 0
+}
+
+# aw_warning <code> — wait for the config page to list `code`; the rows on
+# stdout. The † rows come from the eager build a reload spawns.
+aw_warning() {
+  local code="$1" rows="$HEAVY_WORK/aw-warnings.json"
+  for _ in $(seq 1 60); do
+    aw_api GET /api/v1/admin/config/warnings >"$rows" 2>/dev/null && grep -qF "\"$code\"" "$rows" && break
+    sleep 0.5
+  done
+  grep -qF "\"$code\"" "$rows" || { cat "$rows" >&2; heavy_fail "mise-auto-wire: the config page never listed $code"; }
+  python3 -c 'import json, sys
+print("\n".join(json.dumps(w) for w in json.load(open(sys.argv[1]))["warnings"] if w["code"] == sys.argv[2]))' "$rows" "$code"
+  return 0
+}
 
 mise_auto_wire_cases() {
-  heavy_runner_for mise "mise@latest"
+  heavy_runner_for mise "$CW_MISE"
   local mise=("${HEAVY_RUNNER[@]}" mise)
   local out base="$HEAVY_WORK/mise-auto-wire" bh
   out="$(cw_out mise-auto-wire)"
-  local conf="$base/config"
-  mkdir -p "$conf" "$base/data" "$base/cache" "$base/state" "$base/home"
+  local conf="$base/config" admin_netrc="$base/netrc.admin" denied_netrc="$base/netrc.denied"
+  local aw_host="127.0.0.1:$HEAVY_CW_AW_PORT" aw_re="127[.]0[.]0[.]1:$HEAVY_CW_AW_PORT"
+  local wire_re="GET /proxy/$MV_REG/mise-versions/_wire"
+  local archive_re="$wire_re/mise[.]jdx[.]dev/registry/latest[.]tar[.]zst"
+  local upstream_line="registry_upstream = \"http://127.0.0.1:\${HEAVY_CW_AW_PORT}\""
+  mkdir -p "$conf" "$base/home"
+  aw_netrc "$admin_netrc" ci-admin "$ADMIN_TOKEN"
+  aw_netrc "$denied_netrc" cw-aw-denied "$AW_DENIED_TOKEN"
+  # aw_fresh — a client with nothing cached: no registry archive, no versions.
+  aw_fresh() {
+    rm -rf "$base/data" "$base/cache" "$base/state"
+    mkdir -p "$base/data" "$base/cache" "$base/state"
+  }
+  aw_fresh
   local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
-                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1
+                 MISE_NETRC_FILE="$admin_netrc")
   cargo build -p batlehub-cli >"$base/cli-build.log" 2>&1 \
     || { cat "$base/cli-build.log" >&2; heavy_fail "mise-auto-wire: batlehub-cli did not build"; }
   bh="$HEAVY_ROOT/target/debug/batlehub-cli"
+  # aw_warm [VAR=value…] — float the registry archive into an emptied cache.
+  # mise 2026.9.5 resolves a tool argument against its registry while it
+  # parses the command line, before it refreshes the floating archive, so the
+  # first command that names an overlay tool on an empty cache answers "not
+  # found in mise tool registry" — measured here, RFC 0045 §17.
+  aw_warm() {
+    cw_step "$out.warm" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "$@" "${mise[@]}" registry jq \
+      || { cat "$out.warm" >&2; heavy_fail "mise-auto-wire: mise could not float its registry archive"; }
+    return 0
+  }
 
   # 1. The block, as the CLI prints it, written as-is.
   heavy_log "mise-auto-wire §1: registry suggest --mise --auto-wire"
@@ -1180,6 +1347,10 @@ mise_auto_wire_cases() {
     || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the block is not exactly one rule"; }
   grep -q '_wire/\$1/\$2' "$conf/config.toml" \
     || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the rule does not target the wire"; }
+  grep -qE '^registry_floating *= *true' "$conf/config.toml" \
+    || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the overlay is on and the block does not float the registry"; }
+  grep -qE "1:$HEAVY_CW_AW_PORT[|)]" "$conf/config.toml" \
+    || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the block does not wire the forge $aw_host"; }
 
   # 2. A registry tool, through the one rule: the list from the versions host,
   # the release and its asset from the github kind, all under `_wire/`.
@@ -1192,25 +1363,93 @@ mise_auto_wire_cases() {
   grep -q "jq-$MV_PREV" "$out.run" \
     || { cat "$out.run" >&2; heavy_fail "mise-auto-wire: the installed jq is not $MV_PREV"; }
   heavy_wire_re_after aw-install \
-    "GET /proxy/$MV_REG/mise-versions/_wire/mise-versions[.]jdx[.]dev/(data|tools)/jq[.]toml[^ ]* -> 200" \
+    "$wire_re/mise-versions[.]jdx[.]dev/(data|tools)/jq[.]toml[^ ]* -> 200" \
     "mise-auto-wire: the version list did not go through the wire"
   heavy_wire_re_after aw-install \
-    "GET /proxy/$MV_REG/mise-versions/_wire/api[.]github[.]com/repos/jqlang/jq/[^ ]* -> 200" \
+    "$wire_re/api[.]github[.]com/repos/jqlang/jq/[^ ]* -> 200" \
     "mise-auto-wire: the release did not go through the wire to the github kind"
+
+  # 3. The floated registry: the overlay name resolves to the backend the
+  # server wrote, the public entries survive the merge, and the aqua registry
+  # mise floats with it is asked of the github kind.
+  heavy_log "mise-auto-wire §3: mise registry acme-deploy / jq, from the floated archive"
+  heavy_wire_re_after aw-install "$archive_re -> 200" \
+    "mise-auto-wire: mise did not float its registry archive through the wire"
+  cw_step "$out.reg" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" registry acme-deploy \
+    || { cat "$out.reg" >&2; heavy_fail "mise-auto-wire: mise registry acme-deploy failed"; }
+  heavy_client_must_say "$out.reg" "forgejo:acme/deploy" \
+    "mise-auto-wire: the overlay name does not resolve to the backend the server wrote"
+  cw_step "$out.reg" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" registry jq \
+    || { cat "$out.reg" >&2; heavy_fail "mise-auto-wire: mise registry jq failed"; }
+  heavy_client_must_say "$out.reg" "aqua:jqlang/jq" \
+    "mise-auto-wire: the upstream entries did not survive the merge"
+  # mise 2026.9.5 reads the floated aqua registry through the contents API,
+  # not raw.githubusercontent.com as RFC 0045 §4.1 expected. The github kind
+  # serves no `contents/` route, so it answers 404 and mise keeps the aqua
+  # registry baked into it (`fallback_on_error`): jq above installed anyway.
+  # Asserted as observed, so a change on either side shows up here (§17).
+  heavy_wire_re_after aw-install \
+    "$wire_re/api[.]github[.]com/repos/aquaproj/aqua-registry/contents/registry[.]ya?ml -> 404" \
+    "mise-auto-wire: the floated aqua registry request did not reach the github kind through the wire"
+
+  # 4. The overlay tool from emptied caches: its listing is answered here and
+  # never forwarded, and the backend's release comes from the forge, wired by
+  # its own host.
+  heavy_log "mise-auto-wire §4: mise install acme-deploy@latest, from emptied caches"
+  aw_fresh; aw_warm
+  heavy_mark aw-overlay
+  local aw_before
+  aw_before="$(wc -l <"$AW_LOG")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install acme-deploy@latest \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: the overlay tool did not install"; }
+  cw_step "$out.run" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" exec acme-deploy@latest -- acme-deploy \
+    || { cat "$out.run" >&2; heavy_fail "mise-auto-wire: the overlay tool did not run"; }
+  cw_ran mise-auto-wire "$out.run" "acme-deploy $AW_VERSION"
+  heavy_wire_re_after aw-overlay "$wire_re/$aw_re/api/v1/repos/acme/deploy/releases[^ ]* -> 200" \
+    "mise-auto-wire: the overlay backend's listing did not go through the wire to the forge"
+  heavy_wire_re_after aw-overlay "$wire_re/$aw_re/attachments/$AW_UUID -> 200" \
+    "mise-auto-wire: the overlay tool's asset did not go through the wire"
+  tail -n +"$((aw_before + 1))" "$AW_LOG" | grep -q "^GET /api/v1/repos/acme/deploy/releases" \
+    || { cat "$AW_LOG" >&2; heavy_fail "mise-auto-wire: the forge never served the listing — the rewrite did not reach aw-forge"; }
+  if heavy_wire_re_seen_after aw-overlay "/mise-versions[.]jdx[.]dev/(data|tools)/acme-deploy[.]toml"; then
+    heavy_wire_re_after aw-overlay "$wire_re/mise-versions[.]jdx[.]dev/(data|tools)/acme-deploy[.]toml[^ ]* -> 404" \
+      "mise-auto-wire: the overlay name's listing was not answered 404"
+  fi
+  local code
+  code="$(curl -sS -o "$out.nw" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions/data/acme-deploy.toml")"
+  [[ "$code" == 404 ]] && grep -q '"overlay_tool"' "$out.nw" \
+    || { cat "$out.nw" >&2; heavy_fail "mise-auto-wire: data/acme-deploy.toml answered $code, not the local 404 overlay_tool"; }
+
+  # 5. The credential boundary: a reader of the wire who may not read the forge
+  # gets the wire's own 404, and the forge sees nothing.
+  heavy_log "mise-auto-wire §5: acme-deploy with a token that cannot read $AW_FORGE_REG"
+  aw_fresh; aw_warm MISE_NETRC_FILE="$denied_netrc"
+  heavy_mark aw-denied
+  aw_before="$(wc -l <"$AW_LOG")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" MISE_NETRC_FILE="$denied_netrc" \
+    "${mise[@]}" install "acme-deploy@$AW_VERSION" \
+    && { cat "$out" >&2; heavy_fail "mise-auto-wire: a caller without read on $AW_FORGE_REG installed its tool"; }
+  heavy_client_must_say "$out" "404" "mise-auto-wire: the refusal is not the wire's 404"
+  heavy_client_must_say "$out" "_wire/$aw_re/api/v1/" "mise-auto-wire: the refusal does not name the wired forge URL"
+  heavy_wire_re_after aw-denied "$wire_re/$aw_re/api/v1/repos/acme/deploy/[^ ]* -> 404" \
+    "mise-auto-wire: the denied listing was not the wire's 404"
+  tail -n +"$((aw_before + 1))" "$AW_LOG" | grep -q "acme/deploy" \
+    && { cat "$AW_LOG" >&2; heavy_fail "mise-auto-wire: the forge was asked for acme/deploy on behalf of a caller who may not read it"; }
 
   # 7. A host the server does not wire: `404 not_wired`, readable by curl.
   heavy_log "mise-auto-wire §7: an unwired host answers not_wired"
-  local code
   code="$(curl -sS -o "$out.nw" -w '%{http_code}' \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions/_wire/nowhere.example.com/x")"
   [[ "$code" == 404 ]] && grep -q '"not_wired"' "$out.nw" \
     || { cat "$out.nw" >&2; heavy_fail "mise-auto-wire: an unwired host answered $code, not 404 not_wired"; }
+
   # 9. §15 Q10's proof: two prefixes of one host, each to its own registry,
   # and a third prefix of that host wired by none.
   heavy_log "mise-auto-wire §9: /a/ and /b/ of one host, two registries"
   local port="$HEAVY_CW_FILES_PORT" files="$base/files" flog="$base/files.log" d
-  mkdir -p "$files/a" "$files/b" "$files/c" "$base/pkg/bin" "$base/case9"
+  mkdir -p "$files/a" "$files/b" "$files/c" "$base/pkg/bin" "$base/case9" "$base/case10"
   printf '#!/bin/sh\necho CLOSED-WORLD-RAN aw-tool\n' >"$base/pkg/bin/aw-tool"
   chmod +x "$base/pkg/bin/aw-tool"
   for d in a b c; do tar -C "$base/pkg" -czf "$files/$d/aw-$d-1.0.0.tar.gz" bin; done
@@ -1230,7 +1469,7 @@ EOF
     || { cat "$out" >&2; heavy_fail "mise-auto-wire: the two http: tools did not install through the wire"; }
   for d in a b; do
     heavy_wire_re_after aw-prefix \
-      "GET /proxy/$MV_REG/mise-versions/_wire/127[.]0[.]0[.]1:$port/$d/aw-$d-1[.]0[.]0[.]tar[.]gz -> 200" \
+      "$wire_re/127[.]0[.]0[.]1:$port/$d/aw-$d-1[.]0[.]0[.]tar[.]gz -> 200" \
       "mise-auto-wire: /$d/ did not go through the wire"
     # The server fetched it from the registry that mirrors /$d/, by that path.
     grep -q "\"GET /$d/aw-$d-1.0.0.tar.gz" "$flog" \
@@ -1242,7 +1481,77 @@ EOF
     || { cat "$out.c" >&2; heavy_fail "mise-auto-wire: /c/ answered $code, not 404 not_wired"; }
   grep -q '"GET /c/' "$flog" \
     && heavy_fail "mise-auto-wire: /c/ reached the file host though no registry wires it"
-  heavy_log "CLOSED-WORLD-MISE-AUTO-WIRE-OK (jq-$MV_PREV through one rule)"
+
+  # 10. The bounce carries no credential. A generic prefix rewrites every path
+  # under it, so the untyped path is under the forge's own root: wired, not an
+  # API prefix, matching no typed rule — a `307` to the origin.
+  heavy_log "mise-auto-wire §10: a bounce to the origin, without the instance's credential"
+  local bounce="acme/deploy/raw/aw-bounce-1.0.0.tar.gz"
+  cat >"$base/case10/mise.toml" <<EOF
+[tools]
+"http:aw-bounce" = { version = "1.0.0", url = "http://$aw_host/acme/deploy/raw/aw-bounce-{{version}}.tar.gz", bin_path = "bin" }
+EOF
+  heavy_mark aw-bounce
+  cw_step "$out" "$base/case10" "${DENY[@]}" "${miseenv[@]}" MISE_TRUSTED_CONFIG_PATHS="$base/case10" \
+    "${mise[@]}" install \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: the bounced http: tool did not install"; }
+  heavy_wire_re_after aw-bounce "$wire_re/$aw_re/acme/deploy/raw/aw-bounce-1[.]0[.]0[.]tar[.]gz -> 307[^|]*[|] Authorization: Basic" \
+    "mise-auto-wire: mise did not send its credential to the wire, or the wire did not bounce"
+  grep -qx "GET /$bounce auth=no" "$AW_LOG" \
+    || { cat "$AW_LOG" >&2; heavy_fail "mise-auto-wire: the origin never received the bounced request"; }
+  grep -q "^GET /$bounce auth=yes" "$AW_LOG" \
+    && { cat "$AW_LOG" >&2; heavy_fail "mise-auto-wire: the bounce carried a credential to the origin"; }
+
+  # 6. Upstream takes the overlay's name. A reload points the archive at the
+  # colliding copy; the eager build reports the collision before any client
+  # asks, and the default drops both entries.
+  heavy_log "mise-auto-wire §6: the upstream archive gains acme-deploy"
+  heavy_mark aw-collide
+  aw_reload "s|^$upstream_line\$|registry_upstream = \"http://127.0.0.1:\${HEAVY_CW_AW_PORT}/colliding\"|"
+  aw_warning mise.overlay.collision >"$out.warn"
+  heavy_wire_re_seen_after aw-collide "_registry/|registry/latest[.]tar[.]zst" \
+    && heavy_fail "mise-auto-wire: a client fetched the archive before the warning — it did not come from the eager build"
+  aw_fresh; aw_warm
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install acme-deploy@latest \
+    && { cat "$out" >&2; heavy_fail "mise-auto-wire: acme-deploy installed though upstream took its name"; }
+  heavy_log "mise-auto-wire: with the name dropped, mise said:"
+  heavy_client_said "$out" 'not found|acme-deploy' 3
+  curl -sS "$HEAVY_BASE/metrics" | grep -qE '^batlehub_mise_overlay_collisions[{]resolution="drop"[}] 1$' \
+    || heavy_fail "mise-auto-wire: batlehub_mise_overlay_collisions{resolution=\"drop\"} is not 1"
+  heavy_wire_seen_after aw-collide "evil-corp" \
+    && heavy_fail "mise-auto-wire: a request named the upstream entry's repository"
+  heavy_log "mise-auto-wire §6: on_collision = \"overlay\", by reload"
+  aw_reload 's|^on_collision = "drop"$|on_collision = "overlay"|'
+  aw_warning mise.overlay.forced-shadow | grep -q '"dismissible": false' \
+    || heavy_fail "mise-auto-wire: the forced shadow is listed as dismissible"
+  aw_fresh; aw_warm
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install acme-deploy@latest \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: on_collision = overlay did not install from the overlay backend"; }
+  heavy_wire_seen_after aw-collide "evil-corp" \
+    && heavy_fail "mise-auto-wire: the forced overlay still reached the upstream entry's repository"
+
+  # 8. The archive upstream is down and nothing is cached server-side (a new
+  # `registry_upstream` is a new cache key). A client holding an archive keeps
+  # it; one holding nothing falls back to its baked registry. Both archive
+  # requests are 503s, and the origin is never dialled: the eager build's
+  # failure is the negative entry the clients meet.
+  heavy_log "mise-auto-wire §8: registry_upstream on a closed port"
+  aw_reload "s|^registry_upstream = .*\$|registry_upstream = \"$AW_CLOSED_URL\"|"
+  heavy_mark aw-down
+  rm -rf "$base/data" "$base/state"
+  mkdir -p "$base/data" "$base/state"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" MISE_REGISTRY_CACHE_TTL=0s \
+    "${mise[@]}" install acme-deploy@latest \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: a client holding an archive could not install acme-deploy"; }
+  heavy_client_must_say "$out" "failed to refresh floating mise registry" \
+    "mise-auto-wire: mise did not report the failed refresh"
+  aw_fresh
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "jq@$MV_PREV" \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: a client with no archive did not fall back to its baked registry"; }
+  [[ "$(heavy_wire_count_after aw-down "$archive_re -> 503")" -ge 2 ]] \
+    || heavy_fail "mise-auto-wire: the two archive requests were not both 503"
+  aw_reload "s|^registry_upstream = .*\$|$upstream_line|;s|^on_collision = \"overlay\"\$|on_collision = \"drop\"|"
+  heavy_log "CLOSED-WORLD-MISE-AUTO-WIRE-OK (jq-$MV_PREV and acme-deploy-$AW_VERSION through one rule)"
 }
 
 # ── §11. nvm ─────────────────────────────────────────────────────────────────
@@ -1769,7 +2078,7 @@ EOF
 phase_forgejo() {
   local out proxy="$HEAVY_TAP_BASE/proxy/$FORGEJO_REG"
   out="$(cw_out forgejo)"
-  heavy_runner_for mise "mise@latest"
+  heavy_runner_for mise "$CW_MISE"
   local mise=("${HEAVY_RUNNER[@]}" mise)
   local root="$HEAVY_WORK/forgejo-mise"
   mkdir -p "$root"/{data,cache,config,state}
@@ -1834,7 +2143,7 @@ EOF
 phase_gitlab() {
   local out proxy="$HEAVY_TAP_BASE/proxy/$GITLAB_REG"
   out="$(cw_out gitlab)"
-  heavy_runner_for mise "mise@latest"
+  heavy_runner_for mise "$CW_MISE"
   local mise=("${HEAVY_RUNNER[@]}" mise)
   local root="$HEAVY_WORK/gitlab-mise"
   mkdir -p "$root"/{data,cache,config,state}
@@ -2373,7 +2682,7 @@ phase_devfile() {
 # a version that a future jq release turns into the wrong one.
 
 phase_mise-versions() {
-  heavy_runner_for mise "mise@latest"
+  heavy_runner_for mise "$CW_MISE"
   local mise=("${HEAVY_RUNNER[@]}" mise)
   local out base="$HEAVY_WORK/mise-versions"
   out="$(cw_out mise-versions)"

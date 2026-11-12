@@ -117,7 +117,9 @@ content-addressed, so an artifact reachable at two addresses ships once.
 **An estate that serves its own tools by short name** (mise auto-wire with
 `overlay = true`) adds `--include-mise-registry`: the bundle then carries
 mise's registry archive, raw, and the disconnected instance merges its own
-overlay into it, so overlay names resolve with no egress. See
+overlay into it, so overlay names resolve with no egress. The archives'
+digests are part of the default bundle id, so re-exporting the same plan
+after the archive changed is a new bundle, not one the import skips. See
 [mise § Overlay names across the gap](/use/mise#_2-3-export-carry-import).
 
 ## 4. Carry and import

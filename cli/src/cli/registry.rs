@@ -258,10 +258,13 @@ pub fn render_auto_wire(
             );
             out.push_str("# (`batlehub-cli mise export --include-mise-registry`).\n");
         }
+        // mise 2026.9.5 fetches the aqua registry from the GitHub contents API
+        // (src/aqua/aqua_registry_wrapper.rs), a route the github kind does not serve.
         out.push_str(
-            "# Also floats mise's aqua registry: aqua tools resolve against the current\n",
+            "# mise also asks for the current aqua registry (api.github.com .../contents/);\n",
         );
-        out.push_str("# aqua registry (served by this instance), not the copy baked into mise.\n");
+        out.push_str("# this instance does not serve it, so mise warns once and keeps the aqua\n");
+        out.push_str("# registry baked into its release, the one that release was tested with.\n");
         out.push_str("registry_floating = true\n");
     }
     let key = if catch_all {
@@ -540,6 +543,9 @@ mod auto_wire_tests {
             Some("https://hub.example.com/proxy/mv/mise-versions/_wire/$1/$2")
         );
         assert!(out.contains("acme-deploy (alias deploy)"));
+        // The aqua registry is not proxied: the block must not claim it is.
+        assert!(out.contains("keeps the aqua"));
+        assert!(!out.contains("served by this instance"));
     }
 
     #[test]

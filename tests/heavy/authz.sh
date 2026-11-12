@@ -78,6 +78,11 @@
 
 TARGET="${1:-matrix}"
 
+# The proxy an egress-denied client is pointed at: nothing listens on port 1.
+readonly AUTHZ_NO_EGRESS='http://127.0.0.1:1'
+# The mise `heavy_runner_for` falls back to when none is on PATH.
+readonly AUTHZ_MISE='mise@latest'
+
 # Terraform refuses a plain-`http:` registry host outright (RFC 0009 §12.3), so
 # its tap terminates TLS on a port that looks like one. Set before `heavy_init`,
 # which is what reads the default.
@@ -3537,8 +3542,8 @@ EOF
   HOME="$root/home" \
   MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
   MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
-  HTTPS_PROXY="http://127.0.0.1:1" HTTP_PROXY="http://127.0.0.1:1" \
-  https_proxy="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  HTTPS_PROXY="$AUTHZ_NO_EGRESS" HTTP_PROXY="$AUTHZ_NO_EGRESS" \
+  https_proxy="$AUTHZ_NO_EGRESS" http_proxy="$AUTHZ_NO_EGRESS" \
   NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
     bash -c 'set -o pipefail; mise ls-remote jq | tee /dev/stderr | grep -qE "^1[.][0-9]"'
   return $?
@@ -3567,8 +3572,8 @@ EOF
   HOME="$root/home" \
   MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
   MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
-  HTTPS_PROXY="http://127.0.0.1:1" HTTP_PROXY="http://127.0.0.1:1" \
-  https_proxy="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  HTTPS_PROXY="$AUTHZ_NO_EGRESS" HTTP_PROXY="$AUTHZ_NO_EGRESS" \
+  https_proxy="$AUTHZ_NO_EGRESS" http_proxy="$AUTHZ_NO_EGRESS" \
   NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
     bash -c 'cd "$1" && mise install "$2"' _ "$root" "github:$LIVE_MISE_TOOL@$LIVE_MISE_VERSION"
   return $?
@@ -3742,13 +3747,13 @@ phase_live() {
     sdkman)
       authz_live_pair sdkman "sdk install java, credential in the API URLs" live_run_sdkman ;;
     github)
-      heavy_runner_for mise "mise@latest"
+      heavy_runner_for mise "$AUTHZ_MISE"
       authz_live_pair github "mise install github:…, credential in ~/.netrc" live_run_github ;;
     forgejo)
-      heavy_runner_for mise "mise@latest"
+      heavy_runner_for mise "$AUTHZ_MISE"
       authz_live_pair forgejo "mise install forgejo:…, credential in ~/.netrc" live_run_forgejo ;;
     gitlab)
-      heavy_runner_for mise "mise@latest"
+      heavy_runner_for mise "$AUTHZ_MISE"
       authz_live_pair gitlab "mise install gitlab:…, credential in ~/.netrc" live_run_gitlab ;;
     generic)
       heavy_need curl "curl"
@@ -3769,11 +3774,11 @@ phase_live() {
         || heavy_fail "pacman: could not pull $LIVE_PACMAN_IMAGE"
       authz_live_pair pacman "pacman -Sy, credential in XferCommand" live_run_pacman ;;
     mise-versions)
-      heavy_runner_for mise "mise@latest"
+      heavy_runner_for mise "$AUTHZ_MISE"
       authz_live_pair mise-versions "mise ls-remote of a registry tool, credential in ~/.netrc" \
         live_run_mise_versions ;;
     mise-auto-wire)
-      heavy_runner_for mise "mise@latest"
+      heavy_runner_for mise "$AUTHZ_MISE"
       authz_live_pair mise-auto-wire "mise install github:… through one auto-wire rule, credential in ~/.netrc" \
         live_run_mise_auto_wire ;;
     rustup)

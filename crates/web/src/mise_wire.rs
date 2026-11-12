@@ -35,6 +35,9 @@ pub struct MiseWire {
     pub indices: std::collections::HashMap<String, usize>,
     /// What the table left out, for the config page.
     pub warnings: Vec<WireWarning>,
+    /// The last archive build under this config (the † rows of §4.3). On the
+    /// wire, not process-wide, so a reload starts from its own build.
+    pub last_build: std::sync::Mutex<crate::handlers::proxy::mise_versions::OverlayBuild>,
 }
 
 /// Request extension: the host mise asked for, on a request the wire
@@ -215,6 +218,7 @@ impl MiseWire {
                 .map(|(i, r)| (r.name.clone(), i))
                 .collect(),
             warnings,
+            last_build: std::sync::Mutex::default(),
         }))
     }
 

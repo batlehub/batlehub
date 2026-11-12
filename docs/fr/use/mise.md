@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 31889779fe55cac6
+sourceHash: 2cf7959df236a094
 ---
 
 # Faire pointer mise vers BatleHub
@@ -94,7 +94,14 @@ d'outils passent toujours par l'instance.
 `forgejo` de cette instance, ou des `backends` explicites) est ajoutée à
 l'archive de registre que mise fait flotter, et le bloc active
 `registry_floating`. Un nom qui existe aussi en amont est retiré des deux côtés
-par défaut (`on_collision = "drop"`) et listé sur la page de configuration. Un
+par défaut (`on_collision = "drop"`) et listé sur la page de configuration.
+`registry_floating` fait aussi télécharger à mise le registre aqua courant,
+depuis `api.github.com/repos/aquaproj/aqua-registry/contents/registry.yaml`. Le
+type `github` n'a pas de route `contents/` : cette requête répond `404`, mise
+avertit une fois (`failed to load floating aqua registry`) et garde le registre
+aqua embarqué dans sa version, celui avec lequel cette version a été testée. Un
+paquet aqua plus récent que votre mise reste introuvable tant que vous ne mettez
+pas mise à jour. Un
 binaire sans forge derrière lui peut déjà être servi comme backend `http:`
 dont l'`url` pointe vers un registre `generic` ; il n'a ni publication ni liste
 de blocage par version.
@@ -112,7 +119,10 @@ curl -s -H "Authorization: Bearer $BATLEHUB_TOKEN" '<l URL de l erreur>'
 - un nom de l'overlay que mise ne trouve pas : vérifiez `mise --version`
   (2026.8.0 ou plus récent), `ls ~/.cache/mise/mise-registry/` (l'archive a
   bien été récupérée), et la liste des collisions sur la page de
-  configuration.
+  configuration. Sur un cache vide, la première commande qui nomme un outil de
+  l'overlay échoue ainsi même quand tout est en ordre : mise lit le nom de
+  l'outil avant de récupérer l'archive. Relancez-la, ou exécutez d'abord
+  `mise registry`.
 
 **Le désactiver.** Couper `overlay` laisse la route de l'archive branchée :
 les clients reprennent le registre public à leur prochain rafraîchissement.
@@ -245,7 +255,11 @@ de plus récent n'est en cache : `mise install acme-deploy` fonctionne alors
 sans aucune sortie réseau. Le bloc que `registry suggest --mise --auto-wire
 --mise-catch-all` affiche active `registry_floating` quand l'overlay est actif.
 Sans archive transportée, ou avec une archive qui échoue au contrôle, la route
-de l'archive répond `503` et mise garde le registre qu'il possède.
+de l'archive répond `503` et mise garde le registre qu'il possède. Pour
+rafraîchir l'archive, exportez de nouveau le même plan : sans `--bundle-id`,
+les empreintes des archives transportées entrent dans l'identifiant du lot, si
+bien qu'une archive plus récente forme un nouveau lot que l'import n'écarte pas
+comme déjà vu.
 
 ## 3. Activer la coupure réseau
 
