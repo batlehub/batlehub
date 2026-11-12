@@ -10,11 +10,12 @@
  */
 import { useI18n } from "vue-i18n";
 import { ref, computed, onMounted, watch } from "vue";
+import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Select } from "@/components/ui/select";
@@ -79,6 +80,14 @@ const notRunning = ref(false);
 
 const registryFilter = ref("");
 const stateFilter = ref<"" | "missing" | "disappeared">("");
+// RFC 0046 ยง6.3: `?registry=` preselects the filter once the list is in.
+usePreselectRegistry(
+  () => data.value?.registries ?? [],
+  () => data.value !== null && !loading.value,
+  (name) => {
+    registryFilter.value = name;
+  },
+);
 const page = ref(0);
 
 const rechecking = ref<string | null>(null);
@@ -179,7 +188,7 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "โ€
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader
       :title="t('adminUpstream.title')"
       :description="t('adminUpstream.description')"

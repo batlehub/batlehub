@@ -26,7 +26,7 @@ import { ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SECURITY_TABS } from "@/config/adminSections";
+import { ACCESS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import AuthzShadowPanel from "@/components/admin/authorization/AuthzShadowPanel.vue";
 import AuthzExemptionsPanel from "@/components/admin/authorization/AuthzExemptionsPanel.vue";
@@ -46,7 +46,7 @@ const registry = ref("");
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SECURITY_TABS" />
+    <SectionTabs :tabs="ACCESS_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminAuthorization.title')"

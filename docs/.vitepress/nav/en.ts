@@ -392,10 +392,6 @@ export const sidebar = {
           link: "/rfc/0045-mise-auto-wire",
         },
         {
-          text: "0046 — Admin red paths",
-          link: "/rfc/0046-admin-red-paths",
-        },
-        {
           text: "0047 — mise backends coverage",
           link: "/rfc/0047-mise-backends-coverage",
         },
@@ -415,6 +411,10 @@ export const sidebar = {
         {
           text: "0044 — Scan visibility and admin views",
           link: "/rfc/0044-scan-visibility-and-admin-views",
+        },
+        {
+          text: "0046 — Admin red paths",
+          link: "/rfc/0046-admin-red-paths",
         },
       ],
     },

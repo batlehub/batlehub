@@ -129,22 +129,38 @@ const proofDisplayFor = (width) => PROOF_DISPLAY_STEPS.find(([min]) => width >= 
 const VIEWPORTS = [1440, 1024, 768, 390];
 const DISPLAY_FACE = "Silkscreen";
 
+/*
+ * Every admin page of `ui/src/config/adminSections.ts`, plus one concrete
+ * registry page. A literal because this script cannot import the `.ts` table;
+ * `adminSections.test.ts` fails when the two differ. RFC 0046 §6.5 added the
+ * eight pages the copy had drifted away from — scans, findings, authorization,
+ * upstream, banner, air gap, registries and one registry — none of which any
+ * gate had ever rendered.
+ */
 const ADMIN_ROUTES = [
   "/admin/dashboard",
+  "/admin/registries",
+  "/admin/registry/npm",
+  "/admin/registries/upstream",
+  "/admin/registries/warming",
+  "/admin/registries/imports",
+  "/admin/registries/air-gap",
   "/admin/packages/all",
   "/admin/packages/bulk",
-  "/admin/security/blocks",
-  "/admin/security/access-check",
-  "/admin/namespaces/team-namespaces",
-  "/admin/namespaces/beta-channel",
-  "/admin/operations/config-reload",
-  "/admin/operations/warming",
-  "/admin/operations/imports",
-  "/admin/observability/health",
-  "/admin/operations/sbom",
-  "/admin/observability/audit-log",
-  "/admin/notifications/subscriptions",
-  "/admin/notifications/inbound",
+  "/admin/packages/sbom",
+  "/admin/security/scans",
+  "/admin/security/findings",
+  "/admin/access/check",
+  "/admin/access/authorization",
+  "/admin/access/blocks",
+  "/admin/access/team-namespaces",
+  "/admin/access/beta-channel",
+  "/admin/system/configuration",
+  "/admin/system/banner",
+  "/admin/system/health",
+  "/admin/system/audit-log",
+  "/admin/system/notifications",
+  "/admin/system/inbound-events",
 ];
 
 // `/me/tokens` is OIDC-only: the plan seeds `OIDC_PROVIDER_KEY` beside the
@@ -243,23 +259,24 @@ const EXPECTED_FAIL = {};
 // RFC 0004 Phase 5 moved this twice, both deliberately: -1 for the removed
 // `/admin/operations/explore-cache` (its control went to the health page),
 // then +2 for the notifications split. RFC 0004-bis §4.4 moves it once more,
-// +6, for the public routes this gate now also measures:
+// +6, for the public routes this gate now also measures. RFC 0046 §6.5 moves
+// it +8 for the admin pages the list had drifted away from:
 //
-//   admin  14 admin + 5 user = 19
+//   admin  23 admin + 5 user = 28
 //   user                       5
 //   anonymous                  7
 //                             ──
-//                             31
+//                             40
 //
 // The number tracks real coverage, which is the point — it may only change in
 // the commit that changes the routes.
 //
 // It counts route/role pairs, NOT scans: every pair is measured at all four
 // viewports, so the summary line at the end of a run reports four times this
-// figure (31 pairs → "124 route/role/viewport combination(s) scanned"). Two
+// figure (40 pairs → "160 route/role/viewport combination(s) scanned"). Two
 // numbers 4× apart in one run's output invite someone to "fix" the wrong one,
 // so: this is the coverage floor, that is the work done.
-const EXPECTED_COMBINATIONS = publicOnly ? PUBLIC_ROUTES.length : 31;
+const EXPECTED_COMBINATIONS = publicOnly ? PUBLIC_ROUTES.length : 40;
 const planned = plans.reduce((n, p) => n + p.routes.length, 0);
 if (planned < EXPECTED_COMBINATIONS) {
   console.error(

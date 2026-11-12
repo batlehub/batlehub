@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/sbom.md
-sourceHash: c4d131494919d380
+sourceHash: 69ef6a840514d09b
 ---
 
 # SBOM {#overview}
@@ -172,7 +172,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 ## La console d'administration {#admin-ui}
 
-Le panneau d'administration, sur **`/admin/sbom`**, offre une interface
+Le panneau d'administration, sur **`/admin/packages/sbom`**, offre une interface
 graphique pour l'export au niveau de l'organisation :
 
 - **Registre** — filtre textuel facultatif (laisser vide pour tout) ;

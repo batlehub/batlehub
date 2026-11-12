@@ -231,7 +231,7 @@ different origin than the API.
 >
 > To keep the pre-1.1.0 behaviour verbatim, set `cors_allowed_origins = ["*"]`.
 > The server will start and log a `cors.any-origin` warning, visible at
-> `GET /api/v1/admin/config/warnings` and on the Config Reload admin page.
+> `GET /api/v1/admin/config/warnings` and on the Configuration admin page.
 
 #### Proxy trust
 
@@ -2583,7 +2583,7 @@ path; an upstream that fails to answer is *inconclusive* and counts on neither
 side of the ratio. A miss inserts or increments a row; a successful probe
 deletes it outright, never decrements it. A confirmed row is logged at `WARN`
 with the coordinate and the misses, appears in the `batlehub_upstream_*`
-gauges and in the console's *Operations → Upstream* table, and is sent to
+gauges and in the console's *Registries → Upstream* table, and is sent to
 every subscription on `package_disappeared_upstream`; a reappearance clears
 the row, logs it and sends `package_reappeared_upstream`; a void sweep sends
 `upstream_unreachable` for the registry. `POST
@@ -2773,7 +2773,7 @@ Rejected at startup and on every reload:
 | host routing with neither `[server].trusted_proxies` nor `[ip_blocking].trusted_proxies` | routing would depend on an ungoverned header |
 
 Warned about, but accepted — see `GET /api/v1/admin/config/warnings` and the
-Config Reload admin page:
+Configuration admin page:
 
 | Condition | Behaviour |
 |---|---|

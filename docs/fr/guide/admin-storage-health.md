@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: 48b8bab8fc5b1f47
+sourceHash: 255ffad1895e7b1c
 ---
 
 # Stockage et santé
@@ -93,7 +93,7 @@ curl -X POST \
 
 ### La page d'un registre {#registry-page}
 
-*Admin → Observabilité → Registres* liste chaque registre ; chaque nom ouvre sa
+*Admin → Registres → Tous les registres* liste chaque registre ; chaque nom ouvre sa
 page (`GET /api/v1/admin/registries/{name}`). Un bandeau en haut porte les cinq
 signaux pour lesquels on l'ouvre — amont, cache, analyse, file et conseils — et
 quatre onglets (`?tab=overview|activity|scan|config`) portent le détail :

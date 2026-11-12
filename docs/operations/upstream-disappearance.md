@@ -67,7 +67,7 @@ bulk is one filtered selection.
 
 - **Health** — the card names the active policy and, per registry, how many
   packages are `missing` (seen once) and `disappeared` (confirmed).
-- **Operations → Upstream** — the table: every row, filterable by registry
+- **Registries → Upstream** — the table: every row, filterable by registry
   and state, with the first miss, the last check and the confirmation time.
   *Recheck* probes one package now, through the same ladder and state
   machine as the sweep. It is a probe, not an override: it cannot confirm

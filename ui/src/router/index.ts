@@ -8,11 +8,14 @@ import {
 import { useAuth, storeTokens } from "@/composables/useAuth";
 import {
   LEGACY_REDIRECTS,
+  LEGACY_REGISTRY_HUB,
   packagePath,
+  REVERSE_REDIRECTS,
+  REVERSE_REGISTRY_HUB,
   SECTION_INDEXES,
   SECURITY_VERBS,
 } from "@/config/navigation";
-import { ADMIN_PAGE_VERBS, firstAdminPage } from "@/config/adminSections";
+import { ADMIN_PAGE_VERBS, ADMIN_SECTIONS, firstAdminPage } from "@/config/adminSections";
 
 const OIDC_STATE_KEY = "oidc_state";
 
@@ -168,7 +171,9 @@ function checkMetaGuards(
     const verb = (to.meta.verb as string | undefined) ?? ADMIN_PAGE_VERBS[to.path];
     if (!verb || !can(verb)) {
       if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
-      const section = to.path.split("/").slice(0, 3).join("/") + "/";
+      // One registry's page (`/admin/registry/…`) belongs to the Registries section.
+      const owner = ADMIN_SECTIONS.find((s) => s.also && to.path.startsWith(s.also));
+      const section = owner?.to ?? to.path.split("/").slice(0, 3).join("/") + "/";
       return { path: firstAdminPage(can, section) ?? firstAdminPage(can) ?? "/" };
     }
   }
@@ -181,9 +186,50 @@ function checkMetaGuards(
  * hash are preserved: a bookmark with `?registry=npm1` keeps it (RFC 0003 §9).
  */
 function handleLegacyPath(to: RouteLocationNormalized): RouteLocationRaw | null {
-  const target = LEGACY_REDIRECTS[to.path] ?? SECTION_INDEXES[to.path];
+  const target =
+    LEGACY_REDIRECTS[to.path] ??
+    SECTION_INDEXES[to.path] ??
+    legacyRegistryHub(to.path) ??
+    reverseRedirect(to);
   if (!target) return null;
   return { path: target, query: to.query, hash: to.hash };
+}
+
+/**
+ * A path segment taken from the address bar, decoded once and re-encoded, so
+ * `%2F..%2F` stays one segment and `//evil.example` never becomes an origin.
+ * `null` for a segment that does not decode.
+ */
+export function reencodeSegment(segment: string): string | null {
+  try {
+    return encodeURIComponent(decodeURIComponent(segment));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One registry's old page (RFC 0044), `observability/registries/:name`, to its
+ * new one. The table is keyed by exact path, so the pattern needs this; the
+ * segment is re-encoded and the result is a path, never a full URL (§6.4).
+ */
+function legacyRegistryHub(path: string): string | undefined {
+  const segment = LEGACY_REGISTRY_HUB.exec(path)?.[1];
+  const encoded = segment === undefined ? null : reencodeSegment(segment);
+  return encoded === null ? undefined : `/admin/registry/${encoded}`;
+}
+
+/**
+ * RFC 0046 §15 Q10: a path no route matches, from the section tree, back to
+ * the page it was before. Inert for any path that is a route.
+ */
+function reverseRedirect(to: RouteLocationNormalized): string | undefined {
+  if (to.matched.length > 0) return undefined;
+  const direct = REVERSE_REDIRECTS[to.path];
+  if (direct) return direct;
+  const hub = REVERSE_REGISTRY_HUB.from.exec(to.path);
+  const name = hub?.[1] === undefined ? null : reencodeSegment(hub[1]);
+  return name === null ? undefined : REVERSE_REGISTRY_HUB.to(name);
 }
 
 /**
@@ -319,55 +365,58 @@ export const router = createRouter({
           .map(([from, to]) => ({ path: from.slice("/admin/".length), redirect: to })),
 
         { path: "dashboard", component: () => import("@/pages/AdminDashboard.vue") },
-        { path: "packages/all", component: () => import("@/pages/AdminPackages.vue") },
-        { path: "packages/bulk", component: () => import("@/pages/AdminBulk.vue") },
-        { path: "security/blocks", component: () => import("@/pages/AdminBlocks.vue") },
-        // RFC 0044 phase 2: the scan queue and its failures.
-        { path: "security/scans", component: () => import("@/pages/AdminScans.vue") },
-        // RFC 0044 phase 3: findings across the registries the caller reads them on.
-        { path: "security/findings", component: () => import("@/pages/AdminFindings.vue") },
-        { path: "security/access-check", component: () => import("@/pages/AdminAccessCheck.vue") },
-        {
-          path: "security/authorization",
-          component: () => import("@/pages/AdminAuthorization.vue"),
-        },
-        {
-          path: "namespaces/team-namespaces",
-          component: () => import("@/pages/AdminTeamNamespaces.vue"),
-        },
-        {
-          path: "namespaces/beta-channel",
-          component: () => import("@/pages/AdminBetaChannel.vue"),
-        },
-        {
-          path: "operations/config-reload",
-          component: () => import("@/pages/AdminConfigReload.vue"),
-        },
-        { path: "operations/warming", component: () => import("@/pages/AdminWarming.vue") },
-        { path: "operations/imports", component: () => import("@/pages/AdminImports.vue") },
-        { path: "observability/health", component: () => import("@/pages/AdminHealth.vue") },
+
+        // ── Registries (RFC 0046 M3): what is wrong with a registry ──────────
         // RFC 0044 phase 5: every registry, and one registry's config and health.
+        { path: "registries", component: () => import("@/pages/AdminRegistries.vue") },
         {
-          path: "observability/registries",
-          component: () => import("@/pages/AdminRegistries.vue"),
-        },
-        {
-          path: "observability/registries/:name",
+          // Singular: a registry named `upstream` must not be shadowed by a page.
+          path: "registry/:name",
           component: () => import("@/pages/AdminRegistry.vue"),
           // GET /admin/registries/{name} asks system:read.
           meta: { verb: "system:read" },
         },
-        { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
-        { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },
-        { path: "operations/upstream", component: () => import("@/pages/AdminUpstream.vue") },
-        { path: "operations/banner", component: () => import("@/pages/AdminBanner.vue") },
-        { path: "observability/audit-log", component: () => import("@/pages/AuditLog.vue") },
+        { path: "registries/upstream", component: () => import("@/pages/AdminUpstream.vue") },
+        { path: "registries/warming", component: () => import("@/pages/AdminWarming.vue") },
+        { path: "registries/imports", component: () => import("@/pages/AdminImports.vue") },
+        { path: "registries/air-gap", component: () => import("@/pages/AdminAirGap.vue") },
+
+        // ── Packages ─────────────────────────────────────────────────────────
+        { path: "packages/all", component: () => import("@/pages/AdminPackages.vue") },
+        { path: "packages/bulk", component: () => import("@/pages/AdminBulk.vue") },
+        { path: "packages/sbom", component: () => import("@/pages/AdminSbom.vue") },
+
+        // ── Security: the scan queue and what it found (RFC 0044) ────────────
+        { path: "security/scans", component: () => import("@/pages/AdminScans.vue") },
+        { path: "security/findings", component: () => import("@/pages/AdminFindings.vue") },
+
+        // ── Access: who may, and who may not ─────────────────────────────────
+        { path: "access/check", component: () => import("@/pages/AdminAccessCheck.vue") },
         {
-          path: "notifications/subscriptions",
+          path: "access/authorization",
+          component: () => import("@/pages/AdminAuthorization.vue"),
+        },
+        { path: "access/blocks", component: () => import("@/pages/AdminBlocks.vue") },
+        {
+          path: "access/team-namespaces",
+          component: () => import("@/pages/AdminTeamNamespaces.vue"),
+        },
+        { path: "access/beta-channel", component: () => import("@/pages/AdminBetaChannel.vue") },
+
+        // ── System: the instance itself ──────────────────────────────────────
+        {
+          path: "system/configuration",
+          component: () => import("@/pages/AdminConfigReload.vue"),
+        },
+        { path: "system/banner", component: () => import("@/pages/AdminBanner.vue") },
+        { path: "system/health", component: () => import("@/pages/AdminHealth.vue") },
+        { path: "system/audit-log", component: () => import("@/pages/AuditLog.vue") },
+        {
+          path: "system/notifications",
           component: () => import("@/pages/AdminNotificationSubscriptions.vue"),
         },
         {
-          path: "notifications/inbound",
+          path: "system/inbound-events",
           component: () => import("@/pages/AdminInboundEvents.vue"),
         },
       ],

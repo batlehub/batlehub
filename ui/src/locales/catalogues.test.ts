@@ -3,13 +3,12 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 import fr from "./fr.json";
 import {
+  ACCESS_TABS,
   ADMIN_SIDEBAR,
-  NAMESPACES_TABS,
-  NOTIFICATIONS_TABS,
-  OBSERVABILITY_TABS,
-  OPERATIONS_TABS,
   PACKAGES_TABS,
+  REGISTRIES_TABS,
   SECURITY_TABS,
+  SYSTEM_TABS,
 } from "@/config/adminSections";
 import { TOOLS_TABS, accountTabs, primaryNav } from "@/config/navigation";
 import { VISIBILITY_OPTIONS } from "@/config/visibility";
@@ -108,12 +107,11 @@ describe("locale catalogues", () => {
     ];
     const labels = [
       ...ADMIN_SIDEBAR,
+      ...REGISTRIES_TABS,
       ...PACKAGES_TABS,
       ...SECURITY_TABS,
-      ...NAMESPACES_TABS,
-      ...OPERATIONS_TABS,
-      ...NOTIFICATIONS_TABS,
-      ...OBSERVABILITY_TABS,
+      ...ACCESS_TABS,
+      ...SYSTEM_TABS,
       ...TOOLS_TABS,
       ...VISIBILITY_OPTIONS,
       ...accountTabs({ isOidc: true }),

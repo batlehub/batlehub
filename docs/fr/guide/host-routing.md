@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/host-routing.md
-sourceHash: da2cd38eb33cdf18
+sourceHash: d91aeb78f3b7631d
 ---
 
 # Routage des registres par hôte
@@ -272,8 +272,8 @@ Rejeté au démarrage et à chaque rechargement :
 | le routage par hôte sans politique de confiance envers les proxys | le routage dépendrait d'un en-tête non gouverné |
 
 Signalé mais accepté, et exposé sur
-`GET /api/v1/admin/config/warnings` ainsi que sur la page d'administration du
-rechargement :
+`GET /api/v1/admin/config/warnings` ainsi que sur la page d'administration
+**Configuration** :
 
 | Condition | Comportement |
 | --- | --- |

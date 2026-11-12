@@ -19,6 +19,20 @@ vi.mock("@/client/sdk.gen", () => ({
   listConfigChanges: sdk.listConfigChangesMock,
 }));
 
+/**
+ * The page reads `?registry=` and registers a leave guard; both are driven
+ * from here rather than through a real router.
+ */
+const nav = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
+  leaveGuards: [] as (() => boolean | Promise<boolean>)[],
+}));
+vi.mock("vue-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("vue-router")>()),
+  useRoute: () => ({ query: nav.query }),
+  onBeforeRouteLeave: (guard: () => boolean | Promise<boolean>) => nav.leaveGuards.push(guard),
+}));
+
 import AdminConfigReload from "./AdminConfigReload.vue";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 
@@ -174,6 +188,8 @@ function stubBanner(body: unknown) {
 describe("AdminConfigReload", () => {
   beforeEach(() => {
     authFetchMock.mockReset();
+    nav.query = {};
+    nav.leaveGuards.length = 0;
     stubBanner(null);
     sdk.applyPendingReloadMock
       .mockReset()
@@ -625,5 +641,162 @@ describe("AdminConfigReload", () => {
     await button(wrapper, "Reload Now")!.trigger("click");
     await confirmDialog(wrapper, "Force Reload Now");
     expect(wrapper.text()).toContain("Configuration warnings (1)");
+  });
+
+  // ── RFC 0046 §6.3 / M5: the `?registry=` caret ──────────────────────────────
+
+  describe("?registry= jump", () => {
+    const CONTENT = '[server]\nport = 8080\n\n[[registries]]\nname = "npm"\ntype = "npm"\n';
+    const editor = (w: Page) => w.get("textarea").element as HTMLTextAreaElement;
+    const notice = (w: Page) => w.find('[data-testid="jump-notice"]');
+
+    it("puts the caret on the registry's name line", async () => {
+      nav.query = { registry: "npm" };
+      routes(null, { "/config/content": { json: { content: CONTENT, is_readonly: false } } });
+      const w = await mountPage();
+      await flushPromises();
+      expect(editor(w).selectionStart).toBe(CONTENT.indexOf('name = "npm"') + 12);
+      expect(notice(w).attributes("role")).toBe("status");
+      expect(notice(w).text()).toBe("Jumped to registry “npm”.");
+    });
+
+    /** Read on mount, the name would meet an empty editor and be dropped. */
+    it("holds the name until content that loads late has settled", async () => {
+      nav.query = { registry: "npm" };
+      let release!: () => void;
+      routes(null);
+      const base = authFetchMock.getMockImplementation()!;
+      authFetchMock.mockImplementation((url: string) =>
+        url.includes("/config/content")
+          ? new Promise((resolve) => {
+              release = () =>
+                resolve({
+                  ok: true,
+                  status: 200,
+                  json: async () => ({ content: CONTENT, is_readonly: false }),
+                });
+            })
+          : base(url),
+      );
+      const w = await mountPage();
+      expect(w.find("textarea").exists()).toBe(false);
+      release();
+      await flushPromises();
+      await flushPromises();
+      expect(editor(w).selectionStart).toBe(CONTENT.indexOf('name = "npm"') + 12);
+    });
+
+    it("says the registry is in another layer when the first file does not define it", async () => {
+      nav.query = { registry: "pypi" };
+      routes(null, { "/config/content": { json: { content: CONTENT, is_readonly: false } } });
+      const w = await mountPage();
+      await flushPromises();
+      expect(notice(w).text()).toContain("defined in another config layer");
+      expect(notice(w).get("a").attributes("href")).toMatch(
+        /guide\/configuration#layered-config-files$/,
+      );
+    });
+
+    /** T5: a name is matched against the text, never turned into a path. */
+    it("preselects nothing for a traversal-shaped name", async () => {
+      nav.query = { registry: "../x" };
+      routes(null, { "/config/content": { json: { content: CONTENT, is_readonly: false } } });
+      const w = await mountPage();
+      await flushPromises();
+      expect(document.activeElement).not.toBe(editor(w));
+      expect(notice(w).text()).toContain("defined in another config layer");
+      expect(authFetchMock.mock.calls.some(([url]) => String(url).includes(".."))).toBe(false);
+    });
+
+    it("sets no caret while a reload is staged, and says why", async () => {
+      nav.query = { registry: "npm" };
+      routes(pending(), { "/config/content": { json: { content: CONTENT, is_readonly: false } } });
+      const w = await mountPage();
+      await flushPromises();
+      expect(w.find("textarea").exists()).toBe(false);
+      expect(notice(w).text()).toContain("A reload is staged");
+    });
+  });
+
+  // ── RFC 0046 §15 question 9: an unsaved edit is not lost on navigation ──────
+
+  describe("unsaved edit", () => {
+    const leave = () => {
+      const guard = nav.leaveGuards.at(-1);
+      expect(guard, "the page registered no leave guard").toBeTruthy();
+      return guard!();
+    };
+    const unloadPrevented = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const edit = async (w: Page, text: string) => {
+      await w.get("textarea").setValue(text);
+      await flushPromises();
+    };
+    const leaveDialog = (w: Page) => dialogFor(w, "Discard");
+
+    it("lets the page go freely before anything is edited", async () => {
+      routes(null);
+      await mountPage();
+      expect(await leave()).toBe(true);
+      expect(unloadPrevented()).toBe(false);
+    });
+
+    it("asks before leaving an edited editor, and stays on cancel", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+
+      const decision = leave();
+      await flushPromises();
+      expect(leaveDialog(w).props("open")).toBe(true);
+      leaveDialog(w).vm.$emit("update:open", false);
+      expect(await decision).toBe(false);
+    });
+
+    it("leaves once the discard is confirmed", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+
+      const decision = leave();
+      await flushPromises();
+      confirmButton("Discard").click();
+      expect(await decision).toBe(true);
+    });
+
+    it("is clean again once the edit is reverted", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+      expect(unloadPrevented()).toBe(true);
+      await edit(w, "[server]\nport = 8080\n");
+      expect(await leave()).toBe(true);
+      expect(unloadPrevented()).toBe(false);
+    });
+
+    it("is clean once the edit is staged as a pending reload", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+      await button(w, "Validate")!.trigger("click");
+      await flushPromises();
+      await button(w, "Create Pending Reload")!.trigger("click");
+      await flushPromises();
+      expect(await leave()).toBe(true);
+      expect(unloadPrevented()).toBe(false);
+    });
+
+    it("drops the tab-close prompt when the page goes away", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+      expect(unloadPrevented()).toBe(true);
+      w.unmount();
+      mounted.splice(mounted.indexOf(w), 1);
+      expect(unloadPrevented()).toBe(false);
+    });
   });
 });

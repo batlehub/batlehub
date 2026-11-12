@@ -22,6 +22,7 @@ vi.mock("@/client/client.gen", () => ({
 import { router, generateOidcState } from "./index";
 import { initAuth, useAuth } from "@/composables/useAuth";
 import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
+import { REVERSE_REDIRECTS } from "@/config/navigation";
 
 // `useAuth` no longer initializes itself at import time (see `initAuth`'s doc
 // comment) — call it once here, mirroring what `clientInit.ts` does in the app,
@@ -177,12 +178,12 @@ describe("router navigation guards (integration)", () => {
 
   it("sends a signed-in caller holding no admin verb home, not to sign in again", async () => {
     await setAuth(USER, "tok");
-    expect(await go("/admin/observability/health")).toBe("/");
+    expect(await go("/admin/system/health")).toBe("/");
   });
 
   it("sends an anonymous caller to sign in", async () => {
     await setAuth(ANON, "");
-    expect(await go("/admin/observability/health")).toBe("/login");
+    expect(await go("/admin/system/health")).toBe("/login");
   });
 
   it("opens the security console to a security verb, and to nobody else", async () => {
@@ -195,28 +196,24 @@ describe("router navigation guards (integration)", () => {
 
   it("lets a delegate reach the page of their verb, and only that page", async () => {
     await setAuth(AUDITOR, "tok");
-    expect(await go("/admin/observability/audit-log")).toBe("/admin/observability/audit-log");
+    expect(await go("/admin/system/audit-log")).toBe("/admin/system/audit-log");
     // Same section first, so the health tab falls back to the audit log.
-    expect(await go("/admin/observability/health")).toBe("/admin/observability/audit-log");
-    expect(await go("/admin/operations/config-reload")).toBe("/admin/observability/audit-log");
-    expect(await go("/admin")).toBe("/admin/observability/audit-log");
+    expect(await go("/admin/system/health")).toBe("/admin/system/audit-log");
+    expect(await go("/admin/system/configuration")).toBe("/admin/system/audit-log");
+    expect(await go("/admin")).toBe("/admin/system/audit-log");
   });
 
   it("gates one registry's page, a dynamic path, on its meta verb (RFC 0044)", async () => {
     await setAuth({ ...USER, verbs: ["stats:read"] }, "tok");
-    expect(await go("/admin/observability/registries")).toBe("/admin/observability/registries");
-    expect(await go("/admin/observability/registries/npm1")).toBe(
-      "/admin/observability/registries",
-    );
+    expect(await go("/admin/registries")).toBe("/admin/registries");
+    expect(await go("/admin/registry/npm1")).toBe("/admin/registries");
     await setAuth({ ...USER, verbs: ["system:read"] }, "tok");
-    expect(await go("/admin/observability/registries/npm1")).toBe(
-      "/admin/observability/registries/npm1",
-    );
+    expect(await go("/admin/registry/npm1")).toBe("/admin/registry/npm1");
   });
 
   it("lets an admin reach an admin route", async () => {
     await setAuth(ADMIN, "tok");
-    expect(await go("/admin/observability/health")).toBe("/admin/observability/health");
+    expect(await go("/admin/system/health")).toBe("/admin/system/health");
   });
 
   // ── Admin nav regrouping: old flat paths redirect to their new section ─────
@@ -225,24 +222,24 @@ describe("router navigation guards (integration)", () => {
     ["/admin/packages", "/admin/packages/all"],
     ["/admin/bulk", "/admin/packages/bulk"],
     // RFC 0004 Phase 5 (*merge*): one route answers "who is blocked, and why".
-    ["/admin/users", "/admin/security/blocks"],
-    ["/admin/ip-blocks", "/admin/security/blocks"],
-    ["/admin/security/users", "/admin/security/blocks"],
-    ["/admin/security/ip-blocks", "/admin/security/blocks"],
-    ["/admin/access-check", "/admin/security/access-check"],
-    ["/admin/team-namespaces", "/admin/namespaces/team-namespaces"],
-    ["/admin/beta-channel", "/admin/namespaces/beta-channel"],
-    ["/admin/config-reload", "/admin/operations/config-reload"],
-    ["/admin/warming", "/admin/operations/warming"],
+    ["/admin/users", "/admin/access/blocks"],
+    ["/admin/ip-blocks", "/admin/access/blocks"],
+    ["/admin/security/users", "/admin/access/blocks"],
+    ["/admin/security/ip-blocks", "/admin/access/blocks"],
+    ["/admin/access-check", "/admin/access/check"],
+    ["/admin/team-namespaces", "/admin/access/team-namespaces"],
+    ["/admin/beta-channel", "/admin/access/beta-channel"],
+    ["/admin/config-reload", "/admin/system/configuration"],
+    ["/admin/warming", "/admin/registries/warming"],
     // RFC 0004 Phase 5 (*remove*): the explore-cache page is gone and its
     // control lives on the health page, so both former paths land there.
-    ["/admin/explore-cache", "/admin/observability/health"],
-    ["/admin/operations/explore-cache", "/admin/observability/health"],
-    ["/admin/health", "/admin/observability/health"],
+    ["/admin/explore-cache", "/admin/system/health"],
+    ["/admin/operations/explore-cache", "/admin/system/health"],
+    ["/admin/health", "/admin/system/health"],
     // RFC 0004 Phase 5: SBOM moved to Operations — it performs, it does not observe.
-    ["/admin/sbom", "/admin/operations/sbom"],
-    ["/admin/observability/sbom", "/admin/operations/sbom"],
-    ["/admin/audit-log", "/admin/observability/audit-log"],
+    ["/admin/sbom", "/admin/packages/sbom"],
+    ["/admin/observability/sbom", "/admin/packages/sbom"],
+    ["/admin/audit-log", "/admin/system/audit-log"],
   ])("redirects the old admin path %s to %s", async (oldPath, newPath) => {
     await setAuth(ADMIN, "tok");
     expect(await go(oldPath)).toBe(newPath);
@@ -250,10 +247,14 @@ describe("router navigation guards (integration)", () => {
 
   it.each([
     ["/admin", "/admin/dashboard"],
-    ["/admin/security", "/admin/security/blocks"],
-    ["/admin/namespaces", "/admin/namespaces/team-namespaces"],
-    ["/admin/operations", "/admin/operations/upstream"],
-    ["/admin/observability", "/admin/observability/health"],
+    // RFC 0046 §15 Q8: Security is the scans now; Blocks moved to Access.
+    ["/admin/security", "/admin/security/scans"],
+    ["/admin/access", "/admin/access/check"],
+    ["/admin/system", "/admin/system/health"],
+    // Retired section roots (RFC 0046 phase 3) still land in their section.
+    ["/admin/namespaces", "/admin/access/team-namespaces"],
+    ["/admin/operations", "/admin/registries/upstream"],
+    ["/admin/observability", "/admin/system/health"],
   ])("redirects the section base path %s to its first tab %s", async (basePath, firstTab) => {
     await setAuth(ADMIN, "tok");
     expect(await go(basePath)).toBe(firstTab);
@@ -379,21 +380,27 @@ describe("router navigation guards (integration)", () => {
       "/me/namespace",
       "/me/cli",
       "/admin/dashboard",
+      "/admin/registries",
+      "/admin/registries/upstream",
+      "/admin/registries/warming",
+      "/admin/registries/imports",
+      "/admin/registries/air-gap",
       "/admin/packages/all",
       "/admin/packages/bulk",
-      "/admin/security/blocks",
-      "/admin/security/access-check",
-      "/admin/namespaces/team-namespaces",
-      "/admin/namespaces/beta-channel",
-      "/admin/operations/config-reload",
-      "/admin/operations/banner",
-      "/admin/operations/warming",
-      "/admin/operations/imports",
-      "/admin/observability/health",
-      "/admin/operations/sbom",
-      "/admin/observability/audit-log",
-      "/admin/notifications/subscriptions",
-      "/admin/notifications/inbound",
+      "/admin/packages/sbom",
+      "/admin/security/scans",
+      "/admin/security/findings",
+      "/admin/access/check",
+      "/admin/access/authorization",
+      "/admin/access/blocks",
+      "/admin/access/team-namespaces",
+      "/admin/access/beta-channel",
+      "/admin/system/configuration",
+      "/admin/system/banner",
+      "/admin/system/health",
+      "/admin/system/audit-log",
+      "/admin/system/notifications",
+      "/admin/system/inbound-events",
     ];
 
     for (const p of paths) {
@@ -440,21 +447,21 @@ describe("information architecture", () => {
 
     const ADMIN_ALIASES: [string, string][] = [
       ["/admin/bulk", "/admin/packages/bulk"],
-      ["/admin/users", "/admin/security/blocks"],
-      ["/admin/ip-blocks", "/admin/security/blocks"],
-      ["/admin/security/users", "/admin/security/blocks"],
-      ["/admin/security/ip-blocks", "/admin/security/blocks"],
-      ["/admin/access-check", "/admin/security/access-check"],
-      ["/admin/team-namespaces", "/admin/namespaces/team-namespaces"],
-      ["/admin/beta-channel", "/admin/namespaces/beta-channel"],
-      ["/admin/config-reload", "/admin/operations/config-reload"],
-      ["/admin/warming", "/admin/operations/warming"],
-      ["/admin/explore-cache", "/admin/observability/health"],
-      ["/admin/operations/explore-cache", "/admin/observability/health"],
-      ["/admin/health", "/admin/observability/health"],
-      ["/admin/sbom", "/admin/operations/sbom"],
-      ["/admin/observability/sbom", "/admin/operations/sbom"],
-      ["/admin/audit-log", "/admin/observability/audit-log"],
+      ["/admin/users", "/admin/access/blocks"],
+      ["/admin/ip-blocks", "/admin/access/blocks"],
+      ["/admin/security/users", "/admin/access/blocks"],
+      ["/admin/security/ip-blocks", "/admin/access/blocks"],
+      ["/admin/access-check", "/admin/access/check"],
+      ["/admin/team-namespaces", "/admin/access/team-namespaces"],
+      ["/admin/beta-channel", "/admin/access/beta-channel"],
+      ["/admin/config-reload", "/admin/system/configuration"],
+      ["/admin/warming", "/admin/registries/warming"],
+      ["/admin/explore-cache", "/admin/system/health"],
+      ["/admin/operations/explore-cache", "/admin/system/health"],
+      ["/admin/health", "/admin/system/health"],
+      ["/admin/sbom", "/admin/packages/sbom"],
+      ["/admin/observability/sbom", "/admin/packages/sbom"],
+      ["/admin/audit-log", "/admin/system/audit-log"],
     ];
 
     it.each(ADMIN_ALIASES)("%s lands on %s", async (from, to) => {
@@ -477,8 +484,37 @@ describe("information architecture", () => {
       await setAuth(ADMIN, "tok");
       await router.push("/admin/warming?registry=npm1");
       await router.isReady();
-      expect(router.currentRoute.value.path).toBe("/admin/operations/warming");
+      expect(router.currentRoute.value.path).toBe("/admin/registries/warming");
       expect(router.currentRoute.value.query.registry).toBe("npm1");
+    });
+
+    /**
+     * RFC 0046 §6.P obs. 6, as a unit: each old path of the §15 Q8 table lands
+     * on its new page with the query string intact. The reverse table names
+     * every one of them, and is inert now that each new path is a route.
+     */
+    it.each(Object.entries(REVERSE_REDIRECTS))(
+      "the old path behind %s (%s) lands on its section-tree page",
+      async (newPath, oldPath) => {
+        await setAuth(ADMIN, "tok");
+        expect(router.resolve(newPath).matched, newPath).not.toHaveLength(0);
+        await router.push(`${oldPath}?registry=npm`);
+        expect(router.currentRoute.value.path.startsWith(newPath)).toBe(true);
+        expect(router.currentRoute.value.query.registry).toBe("npm");
+      },
+    );
+
+    it("moves one registry's old page to the new one, segment re-encoded (T5)", async () => {
+      await setAuth(ADMIN, "tok");
+      expect(await go("/admin/observability/registries/npm")).toBe("/admin/registry/npm");
+      await router.push("/admin/observability/registries/%2F..%2Fx?tab=scan");
+      expect(router.currentRoute.value.fullPath).toBe("/admin/registry/%2F..%2Fx?tab=scan");
+      // Several slashes match no pattern: never a path elsewhere, never an origin.
+      await router.push("/admin/observability/registries///evil.example");
+      expect(router.currentRoute.value.path.startsWith("//")).toBe(false);
+      expect(router.currentRoute.value.path.includes("evil.example")).toBe(
+        router.currentRoute.value.path.startsWith("/admin/observability/registries/"),
+      );
     });
 
     const SECTIONS: [string, string][] = [
@@ -486,14 +522,22 @@ describe("information architecture", () => {
       ["/tools", "/tools/access-check"],
       ["/admin", "/admin/dashboard"],
       ["/admin/packages", "/admin/packages/all"],
-      ["/admin/security", "/admin/security/blocks"],
-      ["/admin/namespaces", "/admin/namespaces/team-namespaces"],
-      ["/admin/operations", "/admin/operations/upstream"],
-      ["/admin/observability", "/admin/observability/health"],
-      // RFC 0004 Phase 5 (*split*): the sidebar still points here, and it lands
-      // on the first tab like every other section root.
-      ["/admin/notifications", "/admin/notifications/subscriptions"],
+      // RFC 0046 §15 Q8: the section roots of the regrouped tree.
+      ["/admin/security", "/admin/security/scans"],
+      ["/admin/access", "/admin/access/check"],
+      ["/admin/system", "/admin/system/health"],
     ];
+
+    /** RFC 0046 phase 3: the four retired section roots still land in their section. */
+    it.each([
+      ["/admin/namespaces", "/admin/access/team-namespaces"],
+      ["/admin/operations", "/admin/registries/upstream"],
+      ["/admin/observability", "/admin/system/health"],
+      ["/admin/notifications", "/admin/system/notifications"],
+    ])("retired root %s lands on %s", async (from, to) => {
+      await setAuth(ADMIN, "tok");
+      expect(await go(from)).toBe(to);
+    });
 
     it.each(SECTIONS)("section index %s lands on %s", async (from, to) => {
       await setAuth(ADMIN, "tok");

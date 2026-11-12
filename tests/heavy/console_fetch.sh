@@ -215,28 +215,57 @@ heavy_log "  after the click: $FETCHED_NAME $FETCHED_VERSION held, and downloada
 # and is turned away from /security. Presentation only — authz.sh's matrix
 # asserts the server refuses the same caller.
 heavy_mark "security-console"
-for who in secops user; do
+# RFC 0046 §6.P: the palette for secops (obs. 4, a refusal) and for the admin
+# (obs. 2, a success), and the admin's configuration editor (obs. 5 and 7).
+for who in secops user admin; do
   token="heavy-$who-token"
-  if node tests/heavy/console_security.mjs --base "$CONSOLE" --token "$token" \
+  extra=()
+  case "$who" in
+    secops) extra=(--palette config) ;;
+    admin) extra=(--palette rescan --enter 1 --bookmarks 1 --editor 1) ;;
+  esac
+  if node tests/heavy/console_security.mjs --base "$CONSOLE" --token "$token" "${extra[@]}" \
     "${BROWSER_ARGS[@]}" >"$HEAVY_WORK/security-$who.jsonl" 2>"$HEAVY_WORK/security-$who.err"; then RC=0; else RC=$?; fi
   [[ $RC -eq 0 ]] || { cat "$HEAVY_WORK/security-$who.jsonl" "$HEAVY_WORK/security-$who.err" >&2; heavy_fail "the security console driver failed for $who (exit $RC)"; }
   cat "$HEAVY_WORK/security-$who.jsonl"
 done
-python3 - "$HEAVY_WORK/security-secops.jsonl" "$HEAVY_WORK/security-user.jsonl" <<'PY' || heavy_fail "the console did not follow the caller's verbs"
+python3 - "$HEAVY_WORK/security-secops.jsonl" "$HEAVY_WORK/security-user.jsonl" "$HEAVY_WORK/security-admin.jsonl" <<'PY' || heavy_fail "the console did not follow the caller's verbs"
 import json, sys
-secops, user = (json.loads(open(p).read().splitlines()[-1]) for p in sys.argv[1:3])
-# `/admin` too: its first page this caller holds is Scans (`quarantine:read`,
-# RFC 0044 §18), so the guard lands there; the audit log (`audit:read`) is
-# reachable too, but comes later in the menu.
+secops, user, admin = (json.loads(open(p).read().splitlines()[-1]) for p in sys.argv[1:4])
+# `/admin` too. The configuration page (RFC 0046 M3: System) is refused to
+# this caller, and the guard lands on the first page of the *same section* it
+# holds — the audit log (`audit:read`), not a page elsewhere.
 assert "/security" in secops["links"] and "/admin" in secops["links"], secops
 assert secops["securityLanded"] == "/security", secops
 assert {"holds-panel", "flags-panel", "exposure-panel"} <= set(secops["panels"]), secops
-assert secops["adminLanded"] == "/admin/security/scans", secops
+assert secops["adminLanded"] == "/admin/system/audit-log", secops
 assert "/security" not in user["links"] and "/admin" not in user["links"], user
 assert user["securityLanded"] == "/", user
 assert user["adminLanded"] == "/", user
-print("secops:", secops["links"], secops["panels"], "| user:", user["links"])
+# RFC 0046 obs. 4: the refusal looks like an absence. "config" lists nothing
+# but the catalog hand-off, and the configuration page the guard turned the
+# caller away from never fetched its data.
+assert secops["palette"]["opened"], secops
+assert secops["palette"]["rows"] == ["/packages?q=config"], secops["palette"]
+assert secops["adminRequests"] == [], secops["adminRequests"]
+# Obs. 2: "rescan" leads to the scans page's failures, and that page fetched
+# its own data and nothing of another admin page.
+p = admin["palette"]
+assert p["opened"] and p["rows"][0] == "/admin/security/scans?tab=failures", p
+assert p["landed"] == "/admin/security/scans?tab=failures", p
+assert "/api/v1/admin/scans" in p["requests"], p
+assert all(r.startswith(("/api/v1/admin/scans", "/api/v1/admin/verdicts")) for r in p["requests"]), p
+# Obs. 6: every old path of §15 Q8 lands on its section-tree page, query kept.
+wrong = [b for b in admin["bookmarks"] if b["landed"] != b["want"]]
+assert len(admin["bookmarks"]) == 17 and not wrong, wrong
+# Obs. 5 and 7: Ctrl+K inside the editor opens nothing and types nothing; an
+# unsaved edit asks before the sidebar, the palette and the tab take it away.
+e = admin["editor"]
+assert e["shortcutInEditorOpened"] is False and e["textareaUnchangedByShortcut"], e
+assert e["sidebarAsked"] and e["keptAfterSidebar"] and e["paletteAsked"] and e["editKept"], e
+assert e["unloadPrompt"], e
+print("secops:", secops["links"], secops["panels"], "| user:", user["links"], "| admin palette:", p["rows"][:3], "| editor:", e)
 PY
-heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and Admin from its Scans page; a user sees neither)"
+heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and is turned from the configuration page to its audit log; a user sees neither; the palette lists no more than the guard opens, and an unsaved config edit asks before it is lost)"
 
 heavy_done CONSOLE-FETCH-HEAVY-OK

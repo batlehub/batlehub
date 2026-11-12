@@ -145,7 +145,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 ## Admin UI {#admin-ui}
 
-The admin panel at **`/admin/sbom`** provides a point-and-click interface for the org-level export:
+The admin panel at **`/admin/packages/sbom`** provides a point-and-click interface for the org-level export:
 
 - **Registry** — optional text filter (leave empty for all)
 - **From / To** — date range pickers

@@ -219,6 +219,14 @@
     "forceReloadNow": "Forcer le rechargement",
     "hideDiff": "Masquer le diff",
     "hotReloadDisabled": "Le rechargement à chaud est désactivé sur cette instance ({flag}). Toute modification de configuration nécessite un redémarrage du serveur.",
+    "jumpOtherLayer": "Le registre « {name} » est défini dans une autre couche de configuration ; cet éditeur ne modifie que le premier fichier. Voir {link} dans le guide de configuration.",
+    "jumpOtherLayerLink": "Configuration en couches",
+    "jumpStaged": "Un rechargement est en attente : examinez-le ou abandonnez-le avant de modifier. Le curseur n'a pas été placé sur le registre « {name} ».",
+    "jumpedTo": "Curseur placé sur le registre « {name} ».",
+    "leaveConsequence": "La modification n'est enregistrée nulle part : quitter cette page l'abandonne.",
+    "leaveDiscard": "Abandonner",
+    "leaveItemNoun": "modification non enregistrée",
+    "leaveScope": "l'éditeur de configuration",
     "limitsChanged": "limites modifiées",
     "maintenanceInProgress": "Maintenance en cours…",
     "noBannerCurrentlySet": "Aucun bandeau défini actuellement.",
@@ -326,7 +334,9 @@
     "scheduled": "Planifié",
     "skipped": "{n} ignorés",
     "tagLabel": "Tag à importer",
-    "tagPlaceholder": "tag (facultatif)"
+    "tagPlaceholder": "tag (facultatif)",
+    "filteredTo": "Seuls les imports vers {registry} sont affichés.",
+    "showAll": "Afficher tous les registres"
   },
   "adminNav": {
     "accessCheck": "Vérification d'accès",
@@ -335,28 +345,27 @@
     "auditLog": "Journal d'audit",
     "authorization": "Autorisation",
     "betaChannel": "Canal bêta",
-    "blocks": "Blocages",
+    "blocks": "Comptes et adresses bloqués",
     "bulkBlock": "Blocage de masse",
-    "configReload": "Rechargement de config",
+    "configReload": "Configuration",
     "dashboard": "Tableau de bord",
     "findings": "Constats",
     "globalBanner": "Bandeau global",
-    "health": "Santé",
+    "health": "Santé et cache",
     "inboundEvents": "Événements entrants",
-    "namespacesChannels": "Namespaces et canaux",
-    "notifications": "Notifications",
-    "observability": "Observabilité",
-    "operations": "Opérations",
     "packages": "Paquets",
     "releaseImports": "Imports de releases",
     "sbomExport": "Export SBOM",
     "scans": "Analyses",
-    "securityAccess": "Sécurité et accès",
-    "subscriptions": "Abonnements",
+    "subscriptions": "Abonnements aux notifications",
     "teamNamespaces": "Namespaces d'équipe",
     "upstream": "Amont",
     "warming": "Préchauffage",
-    "registries": "Registres"
+    "registriesSection": "Registres",
+    "allRegistries": "Tous les registres",
+    "security": "Sécurité",
+    "access": "Accès",
+    "system": "Système"
   },
   "adminFindings": {
     "anySeverity": "Toute sévérité",
@@ -1464,7 +1473,14 @@
     "rules": "Règles",
     "security": "Sécurité",
     "grants": "Droits",
-    "grantsCount": "{subjects} sujets · {namespaces} namespaces"
+    "grantsCount": "{subjects} sujets · {namespaces} namespaces",
+    "actionsLabel": "Actions",
+    "actions": {
+      "upstream": "Revérifier l'amont",
+      "warm": "Préchauffer",
+      "refreshExplorer": "Rafraîchir l'explorateur",
+      "imports": "Imports de releases"
+    }
   },
   "adminRegistries": {
     "title": "Registres",
@@ -1501,5 +1517,42 @@
     "empty": "Aucune version de ce registre n'est dans cet état.",
     "noProfile": "Ce registre n'a pas de profil de sécurité.",
     "loadFailed": "Impossible de charger les verdicts de ce registre."
+  },
+  "palette": {
+    "title": "Aller à…",
+    "button": "Aller à…",
+    "inputLabel": "Rechercher une page, une tâche ou un registre",
+    "placeholder": "Saisissez une page, une tâche ou un registre",
+    "emptyHint": "Saisissez un nom de paquet ou de registre.",
+    "noMatch": "Rien ne correspond à « {query} ».",
+    "noMatchBare": "Rien ne correspond.",
+    "searchPackages": "Chercher « {query} » dans les paquets",
+    "registriesLoading": "Chargement des registres…",
+    "registriesFailed": "Les registres n'ont pas pu être chargés.",
+    "chunkFailed": "La console a été mise à jour : rechargez la page.",
+    "keys": "↑↓ se déplacer · ⏎ ouvrir · Ctrl ⏎ nouvel onglet",
+    "resultCount": "{count} résultat | {count} résultats",
+    "group": {
+      "pages": "Pages",
+      "actions": "Actions",
+      "registries": "Registres",
+      "commonTasks": "Tâches courantes"
+    },
+    "rp": {
+      "accessCheck": "Comprendre pourquoi un téléchargement est refusé",
+      "upstream": "Revérifier un amont",
+      "config": "Modifier la configuration d'un registre",
+      "cve": "Trouver les versions touchées par une CVE",
+      "rescan": "Relancer les analyses en échec",
+      "blockVersion": "Bloquer une version d'un paquet",
+      "bulkBlock": "Bloquer plusieurs versions en masse",
+      "blocks": "Bloquer le compte d'un jeton divulgué ou une adresse abusive",
+      "stale": "Rafraîchir un explorateur de paquets périmé",
+      "audit": "Voir qui a modifié quoi",
+      "banner": "Annoncer une maintenance",
+      "namespace": "Attribuer un namespace à une équipe"
+    },
+    "chordMac": "⌘K",
+    "chordCtrl": "Ctrl K"
   }
 }

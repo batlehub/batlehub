@@ -705,7 +705,7 @@ BatleHub can reload its configuration at runtime — add or remove registries, u
 ### How it works
 
 1. When `config.toml` changes on disk, the built-in file watcher validates the new config, runs connectivity probes against upstream URLs, and stores a **pending reload** in memory.
-2. An administrator reviews the pending diff in the **Config Reload** admin page (`/admin/config-reload`) and clicks **Apply** — or discards it.
+2. An administrator reviews the pending diff in the **Configuration** admin page (`/admin/system/configuration`) and clicks **Apply** — or discards it.
 3. Alternatively, the `POST /api/v1/admin/config/reload` endpoint applies a reload immediately (load + validate + apply atomically), which is useful in CI/CD pipelines.
 
 ```sh
@@ -768,7 +768,7 @@ offending config location verbatim, so you can search for it in the TOML.
 
 `POST /api/v1/admin/config/validate` and `/config/from-content` return the same
 shape inline under `warnings`, describing the **candidate** config — so you see
-them before applying a pending reload rather than after. The Config Reload admin
+them before applying a pending reload rather than after. The Configuration admin
 page renders both, the active ones as a dismissible list.
 
 ### Audit trail
@@ -800,7 +800,7 @@ The banner is automatically set to "Configuration reload in progress…" when a 
 
 ### Set the banner
 
-From the **Config Reload** admin page, fill in the message and select a level (info / warning / error), then click **Set Banner**.
+From the **Global banner** admin page (`/admin/system/banner`), fill in the message and select a level (info / warning / error), then click **Set Banner**.
 
 ```sh
 # Set via API

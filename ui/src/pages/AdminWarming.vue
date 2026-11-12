@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref, onMounted } from "vue";
+import { nextTick, ref, onMounted } from "vue";
+import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,6 +63,17 @@ const announcement = ref("");
 const registries = ref<WarmableRegistry[]>([]);
 const loading = ref(false);
 const loadError = ref<string | null>(null);
+// RFC 0046 §6.3: `?registry=` focuses that registry's warm field once the list is in.
+usePreselectRegistry(
+  () => registries.value.map((r) => r.name),
+  () => !loading.value && registries.value.length > 0,
+  (name) =>
+    void nextTick(() => {
+      const field = document.getElementById(`warm-${name}`);
+      field?.scrollIntoView({ block: "center" });
+      field?.focus();
+    }),
+);
 
 // Per-registry form state
 const packageInputs = ref<Record<string, string>>({});
@@ -156,7 +168,7 @@ onMounted(() => void loadStatus());
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"

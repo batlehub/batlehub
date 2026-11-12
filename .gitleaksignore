@@ -20,3 +20,9 @@
 # `access_token` keyword. Never valid anywhere; the working-tree fixture is now
 # `opaque-access-token-not-a-jwt`.
 c740035920b5f4465dca040fcf5a07e1c9a693ae:crates/web/tests/oidc_sso.rs:generic-api-key:508
+
+# RFC 0046 phase 1 (59c01c34): a captured signer_key in the design-gate fixture,
+# a test-fixture value, never a live credential. `generic-api-key` matches it on
+# entropy; the working-tree value is now `3b1f…c0de`.
+59c01c344cf85ab66cf3bba4c626d6274a864250:ui/build/fixtures/captured.json:generic-api-key:1727
+59c01c344cf85ab66cf3bba4c626d6274a864250:ui/build/fixtures/captured.json:generic-api-key:1738

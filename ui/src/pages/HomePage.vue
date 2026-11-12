@@ -124,9 +124,7 @@ const displayFits = computed(() => greeting.value.length <= 24);
     >
       <template v-if="canConfigure" #action>
         <Button as-child size="sm">
-          <RouterLink to="/admin/operations/config-reload">{{
-            t("homePage.openConfig")
-          }}</RouterLink>
+          <RouterLink to="/admin/system/configuration">{{ t("homePage.openConfig") }}</RouterLink>
         </Button>
         <Button as-child size="sm" variant="outline">
           <a :href="DOCS_URL" target="_blank" rel="noopener noreferrer">{{

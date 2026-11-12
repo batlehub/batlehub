@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 5296a399ff3c80a2
+sourceHash: 63c2032caff33481
 ---
 
 # Rechargement à chaud et configuration dynamique
@@ -183,7 +183,7 @@ peut le rechercher dans le TOML.
 `POST /api/v1/admin/config/from-content` renvoient la même forme, en ligne sous
 `warnings`, à propos de la configuration *candidate* — un administrateur les voit
 donc **avant** d'appliquer un rechargement en attente plutôt qu'après. La page
-d'administration du rechargement affiche les deux.
+d'administration **Configuration** affiche les deux.
 
 | Code | Signification |
 |---|---|

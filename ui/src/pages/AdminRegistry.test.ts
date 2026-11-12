@@ -18,7 +18,7 @@ vi.mock("@/client/sdk.gen", () => ({
 vi.mock("vue-router", async () => {
   const { reactive, defineComponent, h } = await import("vue");
   const route = reactive({
-    path: "/admin/observability/registries/npm-q",
+    path: "/admin/registry/npm-q",
     params: { name: "npm-q" } as Record<string, string>,
     query: {} as Record<string, string>,
   });
@@ -35,6 +35,11 @@ vi.mock("vue-router", async () => {
   });
   return { useRoute: () => route, useRouter: () => ({ replace: replaceMock }), RouterLink };
 });
+
+const held = { verbs: [] as string[] };
+vi.mock("@/composables/useAuth", () => ({
+  useAuth: () => ({ can: (verb: string) => held.verbs.includes(verb) }),
+}));
 
 import { useRoute } from "vue-router";
 import AdminRegistry from "./AdminRegistry.vue";
@@ -137,6 +142,39 @@ describe("AdminRegistry", () => {
     expect(w.find('[data-testid="no-suggestions"]').exists()).toBe(true);
   });
 
+  /**
+   * RFC 0046 M4: the actions are links to the owning pages with the registry
+   * preselected, each drawn only when the guard would open its page — and the
+   * strip is absent, not empty, when none is left.
+   */
+  it("draws the actions the viewer holds, each carrying the registry (M4)", async () => {
+    const actions = (w: Awaited<ReturnType<typeof mountPage>>) =>
+      w.findAll('[data-testid="actions"] a').map((a) => JSON.parse(a.attributes("data-to") ?? ""));
+    try {
+      held.verbs = ["system:read", "cache:warm", "config:read"];
+      const all = actions(await mountPage());
+      expect(all.map((to: { path: string }) => to.path)).toEqual([
+        "/admin/registries/upstream",
+        "/admin/registries/warming",
+        "/admin/system/health",
+        "/admin/registries/imports",
+        "/admin/system/configuration",
+      ]);
+      expect(
+        all.every((to: { query: { registry: string } }) => to.query.registry === "npm-q"),
+      ).toBe(true);
+      held.verbs = ["cache:warm"];
+      expect(actions(await mountPage()).map((to: { path: string }) => to.path)).toEqual([
+        "/admin/registries/warming",
+        "/admin/registries/imports",
+      ]);
+      held.verbs = [];
+      expect((await mountPage()).find('[data-testid="actions"]').exists()).toBe(false);
+    } finally {
+      held.verbs = [];
+    }
+  });
+
   /** T11, UI half: a `javascript:` value forced into the response is never bound. */
   it("binds no monitoring link that is not http(s), and none when absent", async () => {
     getRegistryViewMock.mockResolvedValue({
@@ -221,7 +259,7 @@ describe("AdminRegistry", () => {
     const vm = w.findComponent({ name: "Tabs" });
     vm.vm.$emit("update:modelValue", "scan");
     expect(replaceMock).toHaveBeenCalledWith({
-      path: "/admin/observability/registries/npm-q",
+      path: "/admin/registry/npm-q",
       query: { tab: "scan" },
     });
   });

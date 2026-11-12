@@ -1,7 +1,7 @@
 ---
 title: Disparition d'un amont
 sourcePath: operations/upstream-disappearance.md
-sourceHash: 9a85b44501fc2991
+sourceHash: 6d9c6b3eb01f87a1
 ---
 
 # Disparition d'un amont
@@ -72,7 +72,7 @@ réapparaisse. La table des blocages de la console filtre sur
 
 - **Santé** — la carte nomme la politique active et, par registre, combien de
   paquets sont `missing` (vus une fois) et `disappeared` (confirmés).
-- **Exploitation → Amont** — la table : chaque ligne, filtrable par registre et
+- **Registres → Amont** — la table : chaque ligne, filtrable par registre et
   par état, avec le premier défaut, la dernière vérification et l'heure de
   confirmation. *Revérifier* sonde un paquet maintenant, par la même échelle et
   la même machine à états que la passe. C'est une sonde, pas une dérogation :

@@ -32,6 +32,7 @@
   ],
   "exclude": [
     "src/config/registryTypes.docs.test.ts",
+    "src/config/adminSections.files.test.ts",
     "src/design/composed-contrast.test.ts",
     "src/design/system-rules.test.ts",
     "src/design/tokens.test.ts",

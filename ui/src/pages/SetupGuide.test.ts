@@ -164,14 +164,14 @@ describe("SetupGuide", () => {
     auth.isAuthenticated.value = false;
     const w = await mountPage([]);
     expect(w.text()).toMatch(/nothing to connect to/i);
-    expect(w.find('a[href="/admin/operations/config-reload"]').exists()).toBe(false);
+    expect(w.find('a[href="/admin/system/configuration"]').exists()).toBe(false);
   });
 
   it("offers an admin the config editor from that empty state", async () => {
     auth.isAuthenticated.value = false;
     auth.isAdmin.value = true;
     const w = await mountPage([]);
-    expect(w.find('a[href="/admin/operations/config-reload"]').exists()).toBe(true);
+    expect(w.find('a[href="/admin/system/configuration"]').exists()).toBe(true);
   });
 
   it("narrows a long tool list by name, and says when nothing matches", async () => {

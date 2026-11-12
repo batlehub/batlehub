@@ -31,6 +31,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { cn } from "@/lib/utils";
 import { Announcer } from "@/components/ui/announcer";
+import { Listbox, type ListboxItem } from "@/components/ui/listbox";
 
 export interface ComboboxOption {
   value: string;
@@ -154,12 +155,13 @@ function move(delta: number) {
   void nextTick(scrollActiveIntoView);
 }
 
-const listEl = ref<HTMLElement | null>(null);
+const items = computed<ListboxItem[]>(() =>
+  props.options.map((o) => ({ key: o.value, label: o.label ?? o.value, hint: o.hint })),
+);
+
 function scrollActiveIntoView() {
   if (activeIndex.value < 0) return;
-  listEl.value?.querySelector(`#${CSS.escape(optionId(activeIndex.value))}`)?.scrollIntoView({
-    block: "nearest",
-  });
+  document.getElementById(optionId(activeIndex.value))?.scrollIntoView({ block: "nearest" });
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -258,51 +260,31 @@ function onKeydown(event: KeyboardEvent) {
       the border is `Input`'s, so an open combobox reads as the same object
       grown taller rather than as a panel that arrived.
     -->
-    <div
+    <Listbox
       v-show="open && (loading || hasOptions || showEmpty)"
       :id="listId"
-      ref="listEl"
-      role="listbox"
+      :items="loading || showEmpty ? [] : items"
+      :active-index="activeIndex"
       :aria-label="placeholder || undefined"
       class="absolute z-50 mt-2 max-h-60 w-full overflow-y-auto border border-border bg-ground-sunk"
+      @choose="(i) => choose(i)"
+      @hover="(i) => (activeIndex = i)"
     >
-      <p v-if="loading" class="px-3 py-2 text-xs text-muted-foreground">
-        {{ t("combobox.searching") }}
-      </p>
-
-      <!-- The message that catches the typo. -->
-      <p v-else-if="showEmpty" class="px-3 py-2 text-xs text-muted-foreground">
-        {{ emptyText }}
-      </p>
-
-      <template v-else>
-        <!--
-          `mousedown`, not `click`: `blur` fires first and would close the list
-          out from under the pointer, so a suggestion could be seen and not
-          taken.
-        -->
-        <div
-          v-for="(opt, i) in options"
-          :id="optionId(i)"
-          :key="opt.value"
-          role="option"
-          :aria-selected="i === activeIndex"
-          class="cursor-pointer px-3 py-2 text-sm"
-          :class="
-            i === activeIndex ? 'bg-accent text-foreground underline underline-offset-[3px]' : ''
-          "
-          @mousedown.prevent="choose(i)"
-          @mousemove="activeIndex = i"
-        >
-          <span class="font-mono">{{ opt.label ?? opt.value }}</span>
-          <span v-if="opt.hint" class="ml-2 text-xs text-muted-foreground">{{ opt.hint }}</span>
+      <template #before>
+        <p v-if="loading" class="px-3 py-2 text-xs text-muted-foreground">
+          {{ t("combobox.searching") }}
+        </p>
+        <!-- The message that catches the typo. -->
+        <p v-else-if="showEmpty" class="px-3 py-2 text-xs text-muted-foreground">
+          {{ emptyText }}
+        </p>
+      </template>
+      <!-- Where an opt-in upstream search goes. Never triggered by typing. -->
+      <template v-if="$slots.footer" #after>
+        <div class="border-t border-border px-3 py-2" @mousedown.prevent>
+          <slot name="footer" />
         </div>
       </template>
-
-      <!-- Where an opt-in upstream search goes. Never triggered by typing. -->
-      <div v-if="$slots.footer" class="border-t border-border px-3 py-2" @mousedown.prevent>
-        <slot name="footer" />
-      </div>
-    </div>
+    </Listbox>
   </div>
 </template>

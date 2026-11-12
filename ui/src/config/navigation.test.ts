@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { LEGACY_REDIRECTS, SECTION_INDEXES, accountTabs, primaryNav } from "./navigation";
+import {
+  LEGACY_REDIRECTS,
+  SECTION_INDEXES,
+  accountTabs,
+  primaryNav,
+  REVERSE_REDIRECTS,
+} from "./navigation";
 
 /**
  * The shell follows the viewer (RFC 0003 §4.1).
@@ -105,6 +111,19 @@ describe("the redirect tables", () => {
   it("keeps the two tables disjoint, so one path has one meaning", () => {
     const overlap = Object.keys(LEGACY_REDIRECTS).filter((p) => p in SECTION_INDEXES);
     expect(overlap).toEqual([]);
+  });
+
+  /**
+   * RFC 0046 §15 Q10. After the regrouping the reverse table is inert — each
+   * of its paths is a route or a section root now — and each target is an old
+   * path the legacy table sends straight back into the same section.
+   */
+  it("keeps the reverse table inert and consistent with the legacy one", () => {
+    for (const [from, to] of Object.entries(REVERSE_REDIRECTS)) {
+      const back = LEGACY_REDIRECTS[to];
+      expect(back, `${from} → ${to}: not a legacy path`).toBeDefined();
+      expect(back === from || back?.startsWith(from + "/"), `${to} → ${back} ≠ ${from}`).toBe(true);
+    }
   });
 
   it("uses absolute paths throughout", () => {

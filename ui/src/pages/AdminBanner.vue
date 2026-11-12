@@ -12,7 +12,7 @@ import { setBanner, clearBanner } from "@/client/sdk.gen";
 import { extractMessage } from "@/composables/useApi";
 import { useBanner } from "@/composables/useBanner";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
@@ -70,7 +70,7 @@ async function clearBannerAction() {
 <template>
   <div class="space-y-6">
     <Announcer :message="successMsg ?? ''" />
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminNav.globalBanner')"

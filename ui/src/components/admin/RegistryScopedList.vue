@@ -8,7 +8,7 @@
 import { useI18n } from "vue-i18n";
 import type { AdminCrudList } from "@/composables/useAdminCrudList";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { NAMESPACES_TABS } from "@/config/adminSections";
+import { ACCESS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Button } from "@/components/ui/button";
@@ -67,7 +67,7 @@ function closeAdd() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="NAMESPACES_TABS" />
+    <SectionTabs :tabs="ACCESS_TABS" />
     <PageHeader variant="display" :title="title" :description="description">
       <template #actions>
         <Button size="sm" :disabled="!selectedRegistry" @click="addDialogOpen = true">{{
