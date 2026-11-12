@@ -414,6 +414,9 @@ pub struct ConfigReloadService {
     /// unset on a single server. See `drift.rs`.
     pub(super) cluster:
         std::sync::OnceLock<(Arc<dyn batlehub_core::ports::ClusterStatePort>, String)>,
+    /// What the eager mise overlay build fetches through (RFC 0045 §4.3); unset
+    /// until [`Self::build_mise_overlay_eagerly`], so no reload builds one.
+    pub(super) mise_overlay: std::sync::OnceLock<Arc<batlehub_core::services::ProxyService>>,
 }
 
 /// Everything [`ConfigReloadService::new`] needs, as named fields.
@@ -537,7 +540,27 @@ impl ConfigReloadService {
             startup_document: batlehub_config::merge_layers(&startup_layers)
                 .map_err(|e| format!("{e:#}")),
             cluster: std::sync::OnceLock::new(),
+            mise_overlay: std::sync::OnceLock::new(),
         }
+    }
+
+    /// RFC 0045 §4.3: build the mise overlay archive of the config in force
+    /// now, and again after each applied reload, so its † warnings do not wait
+    /// for the first client. Detached (see
+    /// [`crate::handlers::proxy::mise_versions::spawn_overlay_build`]); the
+    /// handle is for tests. `None` when there is no wire or no overlay.
+    pub fn build_mise_overlay_eagerly(
+        &self,
+        svc: Arc<batlehub_core::services::ProxyService>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let _ = self.mise_overlay.set(svc);
+        self.spawn_mise_overlay_build()
+    }
+
+    pub(super) fn spawn_mise_overlay_build(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let svc = Arc::clone(self.mise_overlay.get()?);
+        let wire = self.registry_host_map.wire()?;
+        crate::handlers::proxy::mise_versions::spawn_overlay_build(svc, wire)
     }
 
     /// The warnings of the config currently in force.

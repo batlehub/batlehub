@@ -53,6 +53,13 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
+# RFC 0045 §6.P case 5: an identity that reads the wire and the versions host,
+# which are anonymous, and not the forge fixture the overlay tool comes from.
+[[auth.tokens]]
+value = "cw-aw-denied-token"
+role = "user"
+user_id = "cw-aw-denied"
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-closed-world-storage"
@@ -185,10 +192,21 @@ type = "mise-versions"
 name = "mise-versions-${HEAVY_RUN}"
 mode = "proxy"
 
-# RFC 0045: the wire, for the `mise-auto-wire` phase. It rewrites only its own
-# `_wire/` path, so the classic `mise-versions` phase is unaffected.
+# RFC 0045: the wire and the overlay, for the auto-wire cases at the end of
+# the `mise-versions` phase. Only its own `_wire/` path is rewritten, so the
+# classic cases before them are unaffected. The archive and the overlay tool's
+# forge are both the loopback fixture `aw_fixture.py`; the phase rewrites the
+# `registry_upstream` and `on_collision` lines on a reload (cases 6 and 8),
+# so keep each on one line as written.
 [registries.auto_wire]
 enabled = true
+overlay = true
+registry_upstream = "http://127.0.0.1:${HEAVY_CW_AW_PORT}"
+
+[[registries.auto_wire.tools]]
+name = "acme-deploy"
+source = { registry = "aw-forge-${HEAVY_RUN}", repo = "acme/deploy" }
+on_collision = "drop"
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
@@ -480,6 +498,23 @@ hosts = ["devfile-local.localhost"]
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── RFC 0045 §6.P cases 3–6, 8 and 10: the overlay tool's forge ──────────────
+#
+# A self-hosted Forgejo on the loopback fixture, so the overlay backend the
+# server writes (`forgejo:acme/deploy` with this `api_url`) is wired by its own
+# host and nothing leaves the machine. Closed to anonymous and plain users:
+# case 5 is a reader of the wire who may not read this.
+[[registries]]
+type = "forgejo"
+name = "aw-forge-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${HEAVY_CW_AW_PORT}"]
+
+[registries.rbac]
+anonymous = []
+user = []
 admin = ["*"]
 
 # ── RFC 0045 §6.P case 9: two prefixes of one host, two registries ────────────

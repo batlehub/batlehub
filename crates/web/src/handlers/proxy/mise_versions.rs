@@ -492,28 +492,25 @@ pub struct OverlayBuild {
     pub upstream_invalid: Option<String>,
 }
 
-/// The last archive build of this process, read by the config page (†).
-pub fn last_overlay_build() -> OverlayBuild {
-    overlay_state()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .last
-        .clone()
-}
-
 /// `(sha256 of the raw archive, overlay hash)`.
 type MemoKey = (Vec<u8>, Vec<u8>);
+type Collisions = Vec<batlehub_adapters::registry::mise_registry_overlay::CollisionReport>;
+type Memo = Option<(MemoKey, Arc<Vec<u8>>, Collisions)>;
 
-#[derive(Default)]
-struct OverlayState {
-    /// `(sha256 of the raw archive, overlay hash)` → merged bytes: one slot.
-    memo: Option<(MemoKey, Arc<Vec<u8>>)>,
-    last: OverlayBuild,
+/// The last merge of this process, `(key, merged bytes, its collisions)`: one
+/// slot, so a merge runs once per key. The build the config page reads is on
+/// the wire itself ([`crate::mise_wire::MiseWire::last_build`]), so a reload
+/// starts from an empty one rather than from the replaced config's.
+fn overlay_memo() -> &'static std::sync::Mutex<Memo> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
+    MEMO.get_or_init(Default::default)
 }
 
-fn overlay_state() -> &'static std::sync::Mutex<OverlayState> {
-    static STATE: std::sync::OnceLock<std::sync::Mutex<OverlayState>> = std::sync::OnceLock::new();
-    STATE.get_or_init(Default::default)
+fn record(wire: &crate::mise_wire::MiseWire, f: impl FnOnce(&mut OverlayBuild)) {
+    f(&mut wire
+        .last_build
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner));
 }
 
 /// Single-flight for the archive fetch and the time of the last failure per
@@ -534,14 +531,15 @@ const ARCHIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 async fn raw_archive(
     svc: &Arc<ProxyService>,
     client: &reqwest::Client,
-    registry: &str,
-    upstream: &str,
+    wire: &crate::mise_wire::MiseWire,
     offline: bool,
 ) -> Result<Vec<u8>, AppError> {
     use batlehub_adapters::registry::mise_registry_overlay as overlay;
     use batlehub_core::error::CoreError;
     use batlehub_core::services::proxy::{FetchOutcome, UpstreamBytes};
 
+    let registry = wire.registry.as_str();
+    let upstream = wire.auto_wire.registry_upstream();
     let key = format!("mise-versions:{registry}:registry-archive:{upstream}");
     let url = format!("{upstream}/registry/latest.tar.zst");
     // Followers wait for the leader, then read what it cached.
@@ -568,12 +566,9 @@ async fn raw_archive(
                 overlay::MAX_COMPRESSED,
             )
             .await?;
-            if let Err(e) = overlay::check(&body) {
-                overlay_state()
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .last
-                    .upstream_invalid = Some(e.to_string());
+            let refused = overlay::check(&body).err().map(|e| e.to_string());
+            record(wire, |b| b.upstream_invalid.clone_from(&refused));
+            if let Some(e) = refused {
                 return Err(CoreError::Registry(format!("archive refused: {e}")));
             }
             Ok(FetchOutcome::Cacheable(UpstreamBytes {
@@ -602,6 +597,109 @@ async fn raw_archive(
             )))
         }
     }
+}
+
+/// The archive mise floats from `raw`: `raw` itself with the overlay off
+/// (§15 Q17), else merged with the overlay. Records the merge's collisions on
+/// `wire`, sets the collision gauge and logs each one (§10.1).
+fn floated_archive(
+    wire: &crate::mise_wire::MiseWire,
+    raw: Vec<u8>,
+) -> Result<Arc<Vec<u8>>, AppError> {
+    use batlehub_adapters::registry::mise_registry_overlay as overlay;
+    use sha2::{Digest, Sha256};
+
+    if !wire.auto_wire.overlay || wire.overlay.is_empty() {
+        return Ok(Arc::new(raw));
+    }
+    let key = (
+        Sha256::digest(&raw).to_vec(),
+        Sha256::digest(format!("{:?}", wire.overlay).as_bytes()).to_vec(),
+    );
+    let memo = overlay_memo()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some((k, bytes, collisions)) = memo {
+        if k == key {
+            record(wire, |b| b.collisions = collisions);
+            return Ok(bytes);
+        }
+    }
+    let checked = overlay::check(&raw).map_err(|e| {
+        AppError::service_unavailable(format!("the held registry archive is invalid: {e}"))
+    })?;
+    let (entries, collisions) = overlay::merge(&checked, &wire.overlay)
+        .map_err(|e| AppError::internal(format!("overlay entry: {e}")))?;
+    let merged = overlay::pack(&entries)
+        .map_err(|e| AppError::internal(format!("repacking the registry archive: {e}")))?;
+    for resolution in [
+        overlay::Collision::Drop,
+        overlay::Collision::Overlay,
+        overlay::Collision::Upstream,
+    ] {
+        let n = collisions
+            .iter()
+            .filter(|c| c.resolution == resolution)
+            .count();
+        metrics::gauge!("batlehub_mise_overlay_collisions", "resolution" => resolution.as_str())
+            .set(n as f64);
+    }
+    for c in &collisions {
+        tracing::warn!(
+            tool = %c.tool,
+            upstream_entry = %c.upstream_entry,
+            on_collision = c.resolution.as_str(),
+            "mise overlay: a tool name collides with the upstream registry"
+        );
+    }
+    let merged = Arc::new(merged);
+    *overlay_memo()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((key, Arc::clone(&merged), collisions.clone()));
+    record(wire, |b| b.collisions = collisions);
+    Ok(merged)
+}
+
+/// The client the eager build fetches with, built as `configure_app` builds
+/// the one the archive route is handed.
+fn archive_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("batlehub/0.1")
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+/// RFC 0045 §4.3: build the overlay archive now, off the request path, so the
+/// † warnings of a config are known from its load or reload rather than from
+/// the first client that floats the registry. Detached, so it never holds up
+/// startup or a reload, and it goes through the same single-flight, 30 s
+/// timeout, negative entry, gauge and logs as an archive request. `None` when
+/// the overlay is off: nothing would be merged.
+pub fn spawn_overlay_build(
+    svc: Arc<ProxyService>,
+    wire: Arc<crate::mise_wire::MiseWire>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !wire.auto_wire.overlay || wire.overlay.is_empty() {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        let offline = air_gapped(&svc).await;
+        let built = match raw_archive(&svc, archive_client(), &wire, offline).await {
+            Ok(raw) => floated_archive(&wire, raw).map(drop),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = built {
+            tracing::warn!(
+                registry = %wire.registry, error = %e,
+                "mise overlay: the eager archive build failed; the next archive request retries"
+            );
+        }
+    }))
 }
 
 /// The storage key a bundle files the raw archive under (§15 Q3): the
@@ -678,9 +776,6 @@ pub async fn mise_versions_registry_archive(
     client: web::Data<reqwest::Client>,
     hosts: Option<web::Data<crate::RegistryHostMap>>,
 ) -> Result<HttpResponse, AppError> {
-    use batlehub_adapters::registry::mise_registry_overlay as overlay;
-    use sha2::{Digest, Sha256};
-
     let registry = path.into_inner();
     require_registry_type(&registry, KIND, &map)?;
     authorize(&svc, &registry, "registry", &identity).await?;
@@ -690,19 +785,7 @@ pub async fn mise_versions_registry_archive(
         ));
     };
     let offline = air_gapped(&svc).await;
-    let raw = raw_archive(
-        &svc,
-        &client,
-        &registry,
-        wire.auto_wire.registry_upstream(),
-        offline,
-    )
-    .await?;
-    let respond = |body: Vec<u8>| {
-        HttpResponse::Ok()
-            .content_type("application/zstd")
-            .body(body)
-    };
+    let raw = raw_archive(&svc, &client, &wire, offline).await?;
     // §15 Q3: the export carries the raw archive and each side merges its own
     // overlay. The header is the key a bundle files it under.
     if query.raw.as_deref() == Some("1") {
@@ -711,61 +794,10 @@ pub async fn mise_versions_registry_archive(
             .insert_header(("X-BatleHub-Storage-Key", held_archive_key(&registry)))
             .body(raw));
     }
-    if !wire.auto_wire.overlay || wire.overlay.is_empty() {
-        return Ok(respond(raw));
-    }
-    let key = (
-        Sha256::digest(&raw).to_vec(),
-        Sha256::digest(format!("{:?}", wire.overlay).as_bytes()).to_vec(),
-    );
-    if let Some((k, bytes)) = &overlay_state()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .memo
-    {
-        if *k == key {
-            return Ok(respond(bytes.as_ref().clone()));
-        }
-    }
-    let checked = overlay::check(&raw).map_err(|e| {
-        AppError::service_unavailable(format!("the held registry archive is invalid: {e}"))
-    })?;
-    let (entries, collisions) = overlay::merge(&checked, &wire.overlay)
-        .map_err(|e| AppError::internal(format!("overlay entry: {e}")))?;
-    let merged = overlay::pack(&entries)
-        .map_err(|e| AppError::internal(format!("repacking the registry archive: {e}")))?;
-    for resolution in [
-        overlay::Collision::Drop,
-        overlay::Collision::Overlay,
-        overlay::Collision::Upstream,
-    ] {
-        let n = collisions
-            .iter()
-            .filter(|c| c.resolution == resolution)
-            .count();
-        metrics::gauge!("batlehub_mise_overlay_collisions", "resolution" => resolution.as_str())
-            .set(n as f64);
-    }
-    for c in &collisions {
-        tracing::warn!(
-            tool = %c.tool,
-            upstream_entry = %c.upstream_entry,
-            on_collision = c.resolution.as_str(),
-            "mise overlay: a tool name collides with the upstream registry"
-        );
-    }
-    let merged = Arc::new(merged);
-    {
-        let mut st = overlay_state()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        st.memo = Some((key, Arc::clone(&merged)));
-        st.last = OverlayBuild {
-            collisions,
-            upstream_invalid: None,
-        };
-    }
-    Ok(respond(merged.as_ref().clone()))
+    let body = floated_archive(&wire, raw)?;
+    Ok(HttpResponse::Ok()
+        .content_type("application/zstd")
+        .body(body.as_ref().clone()))
 }
 
 /// The config page's RFC 0045 rows (§4.3): what the table left out, the
@@ -843,7 +875,11 @@ pub fn mise_wire_warnings(
             }
         }
     }
-    let build = last_overlay_build();
+    let build = wire
+        .last_build
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     for c in &build.collisions {
         let Some(j) = wire.auto_wire.tools.iter().position(|t| t.name == c.tool) else {
             continue;

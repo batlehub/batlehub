@@ -57,7 +57,9 @@ pub struct ExportArgs {
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
     /// A name for this bundle. Defaults to the plan's digest, which makes
-    /// the same plan produce the same id and an import idempotent.
+    /// the same plan produce the same id and an import idempotent; with
+    /// `--include-mise-registry`, the carried archives' digests are folded in,
+    /// so a refreshed archive is a new bundle the import does not skip.
     #[arg(long)]
     pub bundle_id: Option<String>,
     /// Also carry mise's registry archive, raw, from every `mise-versions`
@@ -421,6 +423,25 @@ fn print_export_report(
     Ok(())
 }
 
+/// The id of a bundle exported without `--bundle-id`: the plan's digest, so
+/// the same plan is the same id and a second import is a no-op. The mise
+/// registry archives are not in the plan, so their digests are folded in:
+/// re-exporting the same plan to refresh an archive gives a new id, which the
+/// import does not skip as already seen (RFC 0045 §17).
+fn default_bundle_id(plan_sha256: &str, archive_digests: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    if archive_digests.is_empty() {
+        return plan_sha256.to_owned();
+    }
+    let mut h = Sha256::new();
+    h.update(plan_sha256.as_bytes());
+    for d in archive_digests {
+        h.update(b"\n");
+        h.update(d.as_bytes());
+    }
+    hex::encode(h.finalize())
+}
+
 async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let out = args
         .output
@@ -449,9 +470,11 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
         entries.push(bundle_entry);
         blobs.entry(digest).or_insert(bytes);
     }
+    let mut archive_digests: Vec<String> = Vec::new();
     if args.include_mise_registry {
         for (bundle_entry, bytes) in export_mise_registries(client, &mut skipped).await {
             blobs.entry(bundle_entry.digest.clone()).or_insert(bytes);
+            archive_digests.push(bundle_entry.digest.clone());
             entries.push(bundle_entry);
         }
     }
@@ -472,7 +495,7 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
         bundle_id: args
             .bundle_id
             .clone()
-            .unwrap_or_else(|| plan.generated_from.sha256.clone()),
+            .unwrap_or_else(|| default_bundle_id(&plan.generated_from.sha256, &archive_digests)),
         created_at: chrono::Utc::now(),
         source_plan: Some(plan.generated_from.file.clone()),
         entries,
@@ -1088,5 +1111,28 @@ mod mise_registry_export_tests {
             .await
             .is_empty());
         assert!(skipped[0].contains("listing registries"), "{skipped:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_bundle_id;
+
+    #[test]
+    fn the_default_bundle_id_is_the_plan_digest_without_an_archive() {
+        assert_eq!(default_bundle_id("abc", &[]), "abc");
+    }
+
+    #[test]
+    fn a_refreshed_mise_registry_archive_is_a_new_bundle_id() {
+        let old = default_bundle_id("abc", &["d1".to_owned()]);
+        let refreshed = default_bundle_id("abc", &["d2".to_owned()]);
+        assert_ne!(old, "abc", "the archive is part of the id");
+        assert_ne!(old, refreshed, "a new archive is a new id");
+        assert_eq!(
+            old,
+            default_bundle_id("abc", &["d1".to_owned()]),
+            "and the same archive is the same id"
+        );
     }
 }

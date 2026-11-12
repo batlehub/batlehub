@@ -1001,6 +1001,8 @@ async fn main() -> Result<()> {
     // Seed the warning store from the config we booted with (this also logs each
     // one). Reloads refresh it themselves.
     reload_svc.set_warnings(config.warnings());
+    // RFC 0045 §4.3: the overlay archive and its † warnings, off the startup path.
+    reload_svc.build_mise_overlay_eagerly(Arc::clone(&proxy_svc));
     reload_svc
         .registry_views()
         .replace(batlehub_web::handlers::back_office::registries::project(

@@ -157,6 +157,19 @@ pub fn validate(
     aw: &AutoWireConfig,
     source_kind: SourceLookup<'_>,
 ) -> Result<()> {
+    validate_table(path, registry_type, aw)?;
+    for (i, t) in aw.tools.iter().enumerate() {
+        validate_tool(&format!("{path}.tools[{i}]"), t, source_kind)?;
+    }
+    for (i, r) in aw.retired.iter().enumerate() {
+        claim(r, &format!("{path}.retired[{i}]"))?;
+    }
+    validate_unique(path, aw)
+}
+
+/// The table's own fields: where it sits, the overlay switch, the tool count
+/// and `registry_upstream`.
+fn validate_table(path: &str, registry_type: &str, aw: &AutoWireConfig) -> Result<()> {
     if registry_type != "mise-versions" {
         bail!("{path}: auto_wire is only valid on a mise-versions registry, not {registry_type}");
     }
@@ -173,78 +186,85 @@ pub fn validate(
         );
     }
     if let Some(up) = &aw.registry_upstream {
-        let ok = url::Url::parse(up).is_ok_and(|u| {
-            matches!(u.scheme(), "http" | "https")
-                && u.username().is_empty()
-                && u.password().is_none()
-                && u.query().is_none()
-                && u.fragment().is_none()
-        });
+        let ok = url::Url::parse(up)
+            .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && is_plain(&u));
         if !ok {
             bail!("{path}.registry_upstream: {up:?} is not a plain http(s) URL");
         }
     }
-    let claim = |name: &str, at: String| -> Result<()> {
-        if !valid_tool_name(name) {
-            bail!("{at}: {name:?} must match ^[a-z0-9][a-z0-9-]{{0,63}}$");
+    Ok(())
+}
+
+/// No userinfo, query or fragment: nothing that would be published with it.
+fn is_plain(u: &url::Url) -> bool {
+    u.username().is_empty()
+        && u.password().is_none()
+        && u.query().is_none()
+        && u.fragment().is_none()
+}
+
+/// A name, alias or `retired` name is a file name in the archive.
+fn claim(name: &str, at: &str) -> Result<()> {
+    if !valid_tool_name(name) {
+        bail!("{at}: {name:?} must match ^[a-z0-9][a-z0-9-]{{0,63}}$");
+    }
+    Ok(())
+}
+
+/// One overlay tool, at `at` (`…tools[i]`).
+fn validate_tool(at: &str, t: &MiseToolConfig, source_kind: SourceLookup<'_>) -> Result<()> {
+    claim(&t.name, &format!("{at}.name"))?;
+    for (j, a) in t.aliases.iter().enumerate() {
+        claim(a, &format!("{at}.aliases[{j}]"))?;
+    }
+    match (&t.source, t.backends.is_empty()) {
+        (Some(_), false) => bail!("{at}: set source or backends, not both"),
+        (None, true) => bail!("{at}: set source or backends"),
+        _ => {}
+    }
+    for (j, b) in t.backends.iter().enumerate() {
+        let full = b.full();
+        let known = full
+            .split_once(':')
+            .is_some_and(|(p, rest)| KNOWN_BACKENDS.contains(&p) && !rest.is_empty());
+        if !known {
+            bail!("{at}.backends[{j}]: {full:?} has no backend prefix mise knows");
         }
-        Ok(())
+    }
+    if let Some(src) = &t.source {
+        validate_source(at, src, source_kind)?;
+    }
+    if t.version_order != "semver" && t.version_order != "source" {
+        bail!(
+            "{at}.version_order: version_order must be \"source\" or \"semver\", not {:?}",
+            t.version_order
+        );
+    }
+    Ok(())
+}
+
+/// A tool's `source`: a github or forgejo registry whose first upstream can be
+/// published, and an `owner/name` repository.
+fn validate_source(at: &str, src: &MiseToolSource, source_kind: SourceLookup<'_>) -> Result<()> {
+    let Some((kind, upstream)) = source_kind(&src.registry) else {
+        bail!("{at}.source.registry: no registry named {:?}", src.registry);
     };
-    for (i, t) in aw.tools.iter().enumerate() {
-        let at = format!("{path}.tools[{i}]");
-        claim(&t.name, format!("{at}.name"))?;
-        for (j, a) in t.aliases.iter().enumerate() {
-            claim(a, format!("{at}.aliases[{j}]"))?;
-        }
-        match (&t.source, t.backends.is_empty()) {
-            (Some(_), false) => bail!("{at}: set source or backends, not both"),
-            (None, true) => bail!("{at}: set source or backends"),
-            _ => {}
-        }
-        for (j, b) in t.backends.iter().enumerate() {
-            let full = b.full();
-            let known = full
-                .split_once(':')
-                .is_some_and(|(p, rest)| KNOWN_BACKENDS.contains(&p) && !rest.is_empty());
-            if !known {
-                bail!("{at}.backends[{j}]: {full:?} has no backend prefix mise knows");
-            }
-        }
-        if let Some(src) = &t.source {
-            match source_kind(&src.registry) {
-                None => bail!("{at}.source.registry: no registry named {:?}", src.registry),
-                Some((kind, upstream)) => {
-                    if kind != "github" && kind != "forgejo" {
-                        bail!("{at}.source.registry: {:?} is a {kind} registry; only github and forgejo can be a source", src.registry);
-                    }
-                    if let Some(up) = upstream {
-                        let clean = url::Url::parse(&up).is_ok_and(|u| {
-                            u.username().is_empty()
-                                && u.password().is_none()
-                                && u.query().is_none()
-                                && u.fragment().is_none()
-                        });
-                        if !clean {
-                            bail!("{at}.source.registry: {:?}'s first upstream carries credentials, a query or a fragment, which would be published in the archive", src.registry);
-                        }
-                    }
-                }
-            }
-            if !valid_repo(&src.repo) {
-                bail!("{at}.source.repo: {:?} must be owner/name", src.repo);
-            }
-        }
-        if t.version_order != "semver" && t.version_order != "source" {
-            bail!(
-                "{at}.version_order: version_order must be \"source\" or \"semver\", not {:?}",
-                t.version_order
-            );
+    if kind != "github" && kind != "forgejo" {
+        bail!("{at}.source.registry: {:?} is a {kind} registry; only github and forgejo can be a source", src.registry);
+    }
+    if let Some(up) = upstream {
+        if !url::Url::parse(&up).is_ok_and(|u| is_plain(&u)) {
+            bail!("{at}.source.registry: {:?}'s first upstream carries credentials, a query or a fragment, which would be published in the archive", src.registry);
         }
     }
-    for (i, r) in aw.retired.iter().enumerate() {
-        claim(r, format!("{path}.retired[{i}]"))?;
+    if !valid_repo(&src.repo) {
+        bail!("{at}.source.repo: {:?} must be owner/name", src.repo);
     }
-    // Duplicates across names, aliases and `retired`: the archive would hold one.
+    Ok(())
+}
+
+/// Duplicates across names, aliases and `retired`: the archive would hold one.
+fn validate_unique(path: &str, aw: &AutoWireConfig) -> Result<()> {
     let mut seen: HashSet<&str> = HashSet::new();
     for name in aw
         .tools

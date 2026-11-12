@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — re-accepted 2026-11-11 after the last-review panel; §15 Q15–Q17 decided with the user, Q3 on 2026-11-12, no blocker |
+| Status      | **Implemented** — phases 1–4 landed 2026-11-12 (#321, `860cb2f7`), phase 5 the same day (#323, `2af26484`), the eager overlay build and §6.P cases 3, 4, 5, 6, 8 and 10 with this change (2026-11-12), proven by `tests/heavy/closed_world.sh mise-versions` against mise 2026.9.5; §17 records 21 differences, among them the aqua registry not being floated through the instance |
 | Short       | mise auto-wire                                                |
 | Settles     | One mise rule routes every wired host through BatleHub, and the estate's own tools reach mise by short name through an overlay on the floating registry |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/adapters`, `crates/web`, `crates/config`, `server`, `cli`, `ui`, `tests/heavy`, docs |
+| Touches     | `crates/core`, `crates/adapters`, `crates/web`, `crates/config`, `server`, `cli`, `ui`, `deploy`, `tests/heavy`, docs |
 | Risk        | high (§7)                                                     |
 
 ---
@@ -405,13 +405,9 @@ a prop of the whole list (`ConfigWarningList.vue:11`), and a dismissal only
 hides a row for the browser session (`AdminConfigReload.vue:96-108`). The
 three that are known only at run time (marked †) come from the last archive
 build, which `get_config_warnings` (`handlers/back_office/config.rs:455`)
-appends to the config's own list. That build was meant to run **eagerly** on
-load, on reload and on each archive refresh; **as implemented (2026-11-12) it
-runs on the first archive request of each replica**, so after a restart or a
-reload the † rows are absent until a client floats the registry. Known gap:
-the wire is built where no proxy service or HTTP client exists
-(`MiseWire::build`), and an eager fetch belongs in a startup/reload hook that
-holds both. They are **per replica**: the config page
+appends to the config's own list. That build runs **eagerly**: at startup and
+after each applied reload, detached so it never holds either up, and on each
+archive refresh a client asks for (§17). They are **per replica**: the config page
 shows the replica that answered. The candidate and pending panels
 (`ConfigEditorCard.vue`, `PendingReloadCard.vue`) cannot show a † warning
 before the reload is applied; with the default `"drop"`, a colliding tool
@@ -1540,3 +1536,230 @@ None.
 Phases 2 and 3 depend on RFC 0043 phase 1 (the `mise-versions` kind), which
 is on `main` (`RegistryKind::MiseVersions`,
 `crates/core/src/entities/registry_kind.rs:270`).
+
+---
+
+## 17. Revision against the tree (2026-11-12)
+
+### What shipped
+
+| Phase | Content | Landed |
+| --- | --- | --- |
+| 1 | `crates/core::mise_wire`: the table keyed on `RegistryKind`, the shared selection, `WireTable`, `target`, `source_backend`, the fuzz target | #321, squashed as `860cb2f7` (2026-11-12) |
+| 2 | the wire, `_wire-answer`, `WiredFrom`, `/api/v1/mise/auto-wire`, `registry suggest --auto-wire`, §6.P cases 1, 2, 7, 9 | #321, `860cb2f7` |
+| 3 | the overlay, the archive route, the merge, the warnings, the alert | #321, `860cb2f7` |
+| 4 | `airgap.sh`, `authz.sh live:mise-auto-wire`, docs EN + FR, ROADMAP | #321, `860cb2f7` |
+| 5 | §15 Q3: the bundle carries the raw archive | #323, squashed as `2af26484` (2026-11-12) |
+| — | the eager overlay build, §6.P cases 3, 4, 5, 6, 8 and 10, the `--bundle-id` refresh, this section | this change, uncommitted (2026-11-12) |
+
+### Where the build differs from the text
+
+Each point was checked against the code on 2026-11-12.
+
+1. **The wire lives inside `RegistryHostMap`** (`crates/web/src/lib.rs`), not
+   in a holder of its own, and `replace_from` swaps it last, after the
+   router's `RegistryMap` and the host table, so a rewrite never names a
+   registry the router does not have yet.
+2. **The own host is the request's `Host`**, with no config key:
+   `WireTable::target_on(request_host, …)`; `WireTable::build` is called with
+   `own_host = None`.
+3. **The §4.5 refusal mock and §6.P case 5 are `404 not_wired`**, per Q15
+   (`wire_refusal`): the earlier text's `401`/`403` for a reader of the
+   `mise-versions` registry is superseded. A caller who cannot read the
+   `mise-versions` registry itself gets that registry's own refusal.
+4. **Overlay entries are resolved in the web crate** (`MiseWire::build`,
+   `crates/web/src/mise_wire.rs`) from the config types, not in core.
+5. **Single-flight is its own process-wide `tokio::sync::Mutex` plus a
+   negative-entry map** (`archive_gate`, 60 s) in
+   `handlers/proxy/mise_versions.rs`, not `discovery.rs`.
+6. **`_wire-answer` is GET-only** (a `shortcut:` comment says when to widen
+   it). Its `utoipa::path` declares no `headers(...)` on the `307`, against
+   §4.4: Spectral's `owasp:api8` then demands CORS headers on the response.
+7. **One 30 s total timeout** (`ARCHIVE_TIMEOUT`), no separate connect
+   timeout.
+8. **`mise.overlay.readers-wider` compares anonymous readability only**, and
+   **`mise.overlay.backend-unwired` checks `http:` `url` options and the
+   `github:`/`gitlab:` prefixes** only.
+9. **The client pattern is `^https?://(hosts)/(.*)`**, not `^https://`: a
+   self-hosted forge or file host on plain HTTP is wired too (the closed
+   world's are).
+10. **The auto-wire cases run inside the `mise-versions` closed-world phase**,
+    not a `mise-auto-wire` phase: `registry_kind_coverage.rs` allows one phase
+    per kind.
+11. **A bug the first heavy run found**: a wired `host:port` on the
+    instance's own host name (`127.0.0.1:8189` beside an instance on `:8156`)
+    was taken for the own host. `target_on` now lets a wired pair win
+    (`a_wired_port_on_the_request_host_is_not_the_own_host`).
+12. **Phase 5**: `registry suggest`'s air-gap block prints
+    `registry_floating = true` when the overlay is on;
+    `--include-mise-registry` takes no registry name (it carries every
+    `mise-versions` registry with `auto_wire`); the bundle entry carries no
+    package name or version.
+13. **The eager build (§4.3), this change.** `ConfigReloadService::
+    build_mise_overlay_eagerly` is called once by `server/src/main.rs` with the
+    proxy service, and `apply` calls it again after the host-map swap. Each
+    call spawns `spawn_overlay_build`, which goes through the archive route's
+    own code: the same single-flight, 30 s timeout, negative entry, gauge,
+    `warn` lines and `mise.overlay.upstream-invalid`. It never blocks startup
+    or a reload. It runs only when `overlay = true` with at least one tool,
+    since nothing else would be merged. The † build is now kept **on the
+    wire** (`MiseWire::last_build`), not process-wide, so a reload starts from
+    its own build and never shows the replaced config's collisions; the merge
+    memo stays process-wide. Its client is built as `configure_app` builds the
+    route's.
+14. **The `--bundle-id` refresh, this change.** With
+    `--include-mise-registry` and no `--bundle-id`, the default id is the
+    sha256 of the plan digest and the carried archives' digests
+    (`default_bundle_id`, `cli/src/cli/mise.rs`). Without a carried archive it
+    is still the plan digest, so an unchanged export stays idempotent; a
+    refreshed archive is a new id, which the import does not skip as seen.
+15. **The aqua side effect is not what §4.1, T13 and Q13 describe.** mise
+    2026.9.5 reads the floated aqua registry through
+    `api.github.com/repos/aquaproj/aqua-registry/contents/registry.yaml` (then
+    `.yml`), not `raw.githubusercontent.com`. Through the wire that is the
+    `github` kind's typed route, which serves no `contents/` path: `404`, and
+    mise keeps the aqua registry baked into it (`fallback_on_error`). So with
+    the overlay on, aqua tools still resolve against the release's own copy,
+    the T13 residual risk does not materialise today, and the generated
+    block's comment ("aqua tools resolve against the current aqua registry
+    (served by this instance)") is wrong for this mise. Left as observed: a
+    `contents/` route on the `github` kind is a change of its own.
+16. **mise resolves a tool argument before it floats the archive.** On an
+    emptied cache, the first `mise install acme-deploy@latest` answers
+    `acme-deploy not found in mise tool registry`, and the archive request
+    appears on the wire in the same run: the argument was parsed against the
+    baked registry before `registry::refresh` ran. The next command knows the
+    name. The suite floats the archive with `mise registry jq` before each
+    case that names the overlay tool on an empty cache; the docs' list of
+    causes for "not found" gains this one.
+17. **§6.P case 10 bounces under a forge's root, not a `generic` prefix.** A
+    `generic` registry's rule is `^{upstream}/(.+)`, which rewrites every path
+    under its prefix, so no untyped path exists there and a `generic` prefix
+    never bounces. The case uses the self-hosted Forgejo's root prefix, which
+    is wired, is not an API prefix and has typed rules only for
+    `releases/download/` and `attachments/`.
+18. **§6.P case 4 asserts no metric.** The `batlehub_upstream_request_duration_
+    seconds_count{registry="mise-versions"}` delta was replaced by the
+    fixture origin's own log, which shows exactly what reached the forge, and
+    by the local `404 overlay_tool` of `data/acme-deploy.toml`. mise 2026.9.5's
+    `forgejo:` backend did not ask the versions host for `acme-deploy` at all.
+19. **§6.P case 8's "in under a second" is not timed.** The tap logs no
+    duration, and a closed port refuses at once anyway, so a timing would not
+    tell the negative entry from a fresh failure. The case counts the archive
+    answers instead (eight `503`s), and the fixture origin's log shows the
+    upstream was never dialled after the reload.
+20. **The fixture Forgejo serves what the `forgejo` kind asks for**, which the
+    text did not list: `/api/v1/repos/{o}/{r}/tags/{tag}` (the server resolves
+    a release's version through the tag) and the release's
+    `browser_download_url` (the attachment route fetches the asset by it).
+21. **The closed world runs on a copy of its config** with the run id written
+    in, so cases 6 and 8 can reload it (`merge_layers` refuses a placeholder
+    in a registry name), and `heavy_forge_auth_config` sends no forge token to
+    a registry whose upstream is the loopback.
+
+### What the proof observed
+
+`bash tests/heavy/closed_world.sh mise-versions`, mise 2026.9.5, egress
+denied, ended `CLOSED-WORLD-MISE-AUTO-WIRE-OK (jq-1.8.1 and acme-deploy-2.4.0
+through one rule)` and `CLOSED-WORLD-HEAVY-OK: mise-versions`. Every overlay
+case is served by `tests/heavy/aw_fixture.py` on the loopback: the registry
+archive (jq, plus a colliding `acme-deploy` under `/colliding/`) and a
+Forgejo holding `acme/deploy` v2.4.0. No new case reaches the internet.
+
+1. One `regex:^https?://(…|127\\.0\\.0\\.1:8188|127\\.0\\.0\\.1:8189|mise\\.jdx\\.dev)/(.*)`
+   entry, `registry_floating = true` under `[settings]` with the aqua comment,
+   and `# Overlay tools (mise ≥ 2026.8.0): acme-deploy`.
+2. `jq@1.8.1` installed and ran; `_wire/mise-versions.jdx.dev/data/jq.toml ->
+   200`, `_wire/api.github.com/repos/jqlang/jq/… -> 200`.
+3. `_wire/mise.jdx.dev/registry/latest.tar.zst -> 200`; `mise registry
+   acme-deploy` printed `forgejo:acme/deploy`, `mise registry jq` printed
+   `aqua:jqlang/jq`. The aqua request: point 15 above.
+4. From emptied caches, `acme-deploy@latest` installed and ran. On the wire,
+   under `_wire/127.0.0.1:8188/`: `api/v1/repos/acme/deploy/releases?limit=100
+   -> 200`, `…/releases/tags/v2.4.0 -> 200`, `attachments/{uuid} -> 200`, and
+   `…/releases/latest -> 404` (the `forgejo` kind has no `latest` route; mise
+   falls back to the listing). `data/acme-deploy.toml` answered `404
+   overlay_tool` locally.
+5. With the `cw-aw-denied` token, the install failed; mise's error named
+   `404` and `_wire/127.0.0.1:8188/api/v1/…`; the wire answered `404` twice;
+   the fixture origin received no request for `acme/deploy`.
+6. After a reload pointing `registry_upstream` at the colliding archive, the
+   config page listed `mise.overlay.collision` on
+   `registries[10].auto_wire.tools[0].name` **with no archive request on the
+   wire since the reload**: the eager build's. With emptied caches, mise said
+   `acme-deploy not found in mise tool registry` (the merged archive shrank
+   from 279 to 175 bytes), `batlehub_mise_overlay_collisions{resolution="drop"}`
+   read `1`, and no request named `evil-corp`. After a reload to
+   `on_collision = "overlay"`, `mise.overlay.forced-shadow` was listed with
+   `"dismissible": false` and the install succeeded from the forge.
+7. `_wire/nowhere.example.com/x -> 404`, body code `not_wired`.
+8. After a reload to a closed port: a client holding an archive installed
+   `acme-deploy` and printed `failed to refresh floating mise registry`; a
+   client with an emptied cache installed `jq@1.8.1` from its baked
+   registry; eight archive requests were answered `503`.
+9. `/a/` and `/b/` each reached their own registry and the file host served
+   each by its own path; `/c/` was `404 not_wired` and never reached the host.
+10. `_wire/127.0.0.1:8188/acme/deploy/raw/aw-bounce-1.0.0.tar.gz -> 307` with
+    `Authorization: Basic` on the instance's side; the origin logged
+    `GET /acme/deploy/raw/aw-bounce-1.0.0.tar.gz auth=no` and nothing with a
+    credential.
+
+The air-gap and credential-boundary halves are `tests/heavy/airgap.sh` and
+`tests/heavy/authz.sh live:mise-auto-wire`, rerun on this change with mise
+2026.9.5: `AUTHZ-HEAVY-LIVE-mise-auto-wire-OK`, and `AIRGAP-HEAVY-OK` with
+`MISE-AUTO-WIRE-AIRGAP-OK` and `MISE-AUTO-WIRE-OVERLAY-AIRGAP-OK`.
+
+### §7, threat by threat
+
+| # | Proven by |
+| --- | --- |
+| T1 | `wire_refuses_dot_segments_and_encodings`, `own_host_wire_only_reaches_proxy_paths` (`crates/web/tests/mise_auto_wire.rs`), `malformed_hosts_and_paths_are_refused_before_any_rule` (core), the `fuzz_mise_wire_target` fuzz target |
+| T2 | `anonymous_cannot_tell_wired_from_unwired`; §6.P case 5; `authz.sh live:mise-auto-wire`. The named `wired_request_without_target_grant_is_refused` was not written: Q15 made the answer `404`, which those cover |
+| T3 | `unwired_prefix_is_never_redirected`, `an_untyped_path_under_a_wired_prefix_bounces_but_never_on_a_forge_api`; §6.P cases 9 and 10 |
+| T4 | `overlay_cannot_replace_an_upstream_entry_without_force` (adapters and web); the non-dismissible forced shadow, §6.P case 6 |
+| T5 | §6.P case 6; `the_overlay_warnings_are_known_at_load_and_after_a_reload_without_a_client`; the `BatleHubMiseOverlayCollision` rule |
+| T6 | `the_overlay_is_merged_and_its_names_never_reach_upstream`; §6.P case 4's local `404 overlay_tool` |
+| T7 | `archive_over_each_limit_is_refused`, `only_depth_two_regular_toml_files_count`, `an_unparseable_or_unordered_entry_fails_the_whole_check`, `a_garbage_upstream_is_never_cached`, `raw_archive_refuses_a_garbage_upstream`, `an_eager_build_failure_is_the_upstream_invalid_warning` |
+| T8 | `overlay_description_cannot_inject_toml` |
+| T9 | `auto_wire_hosts_are_filtered_by_visibility`, `anonymous_cannot_tell_wired_from_unwired` |
+| T10 | `request_span_keeps_the_wired_host_for_every_wire_outcome`: `WiredFrom` carries the asked-for host on each outcome — rewrite, bounce `307`, `not_wired` `404`, malformed `400` and, air-gapped, the sink `501` — beside `a_wired_github_request_is_the_typed_request` |
+| T11 | `wire_on_registry_host_is_refused`: a `_wire` path sent on a registry's own host (`gh.acme.io`) is that host's path, routed under `/proxy/gh/`, never wired, never the archive route or the admin API, and the archive upstream (a mock expecting zero calls) is never dialled; `a_wired_rewrite_into_a_host_only_registry_is_refused`: a wired rewrite landing under a `path_routing = false` registry is the middleware's `404 unknown registry`; `wire_respects_host_only` covers the table side (a host-only registry wires no prefix). The test app now builds its host map with `RegistryHostMap::from_app_config`, so the registry-host branch is reached |
+| T12 | `source_backends` (core) and the `leaky` case of `rejects_each_section_4_3_condition` (config) |
+| T13 | §6.P case 3, which observed point 15: the aqua registry is not floated through the instance with mise 2026.9.5 |
+
+### §8, as shipped
+
+No new crate, image, action or tool. `Cargo.lock`: `tar 0.4.46`,
+`zstd 0.14.3`, `toml 1.2.0+spec-1.1.0`, `regex 1.13.1`. The closed world's
+fixture packs its archive with `tar --zstd`, or with Python ≥ 3.14's
+`tarfile` when no `zstd` binary is present. `task security` on 2026-11-12:
+`cargo audit` clean but for the one allowed warning (RUSTSEC-2026-0186,
+`memmap2`, which predates this RFC); `cargo deny` "advisories ok, bans ok,
+licenses ok, sources ok"; `ui/` one moderate (below the `high` gate) and
+`docs/` none. It stopped at `postmortem`, which cannot scan the Rust root's
+667 packages without `VULN_MLAB_TOKEN`; `vex`, `sbom:rust` and
+`openapi:lint` did not run.
+
+### §4.5, mock by mock
+
+- **Nominal**: as drawn, except the pattern's `https?` (point 9), quoted in
+  case 1 above.
+- **Overlay off**: no `[settings]` table, as drawn (`render_auto_wire`).
+- **Filtered**: the line reads `# Filtered for your account: N wired host(s)
+  are hidden from it. Do not commit` — "your account", not the login.
+- **Air gap**: as drawn.
+- **No wire**, **empty**, **older server**: the messages, hints and exit
+  codes `5`, `4`, `5` as drawn (`run_auto_wire`).
+- **Stale rule**: `404`, code `not_wired`, message `{host} is not wired on
+  this instance. Regenerate the rule: batlehub-cli registry suggest --mise
+  --auto-wire` (case 7).
+- **Overlay name not served**: mise prints `Failed to install
+  acme-deploy@latest: acme-deploy not found in mise tool registry` (cases 6
+  and point 16), the mock's text with mise's prefix.
+- **The §6.P refusal**: `404`, and the URL mise names is the listing
+  (`…/releases?limit=100`), not `releases/tags/v2.4.0`.
+- **Console**: not rendered here. The rows' text differs from the mock: the
+  collision reads `"acme-deploy" is in the upstream mise registry too (as
+  "acme-deploy"); settled by on_collision = "drop".`, without the mock's
+  "rename the tool, or set on_collision".
+- **Load refusal**: the messages as drawn (`validate`, `MiseWire::build`).

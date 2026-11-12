@@ -115,15 +115,15 @@ async fn make_app(
     make_app_with(lab, InMemoryStorage::new()).await
 }
 
-/// [`make_app`] over a storage the test can seed, as a bundle import would.
-async fn make_app_with(
-    lab: Lab,
-    storage: Arc<dyn StorageBackend>,
-) -> impl actix_web::dev::Service<
-    actix_http::Request,
-    Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
-    Error = actix_web::Error,
-> {
+/// A lab's proxy service, its repository, and each registry's `(name, kind)`.
+type LabProxy = (
+    Arc<ProxyService>,
+    Arc<dyn PackageRepository>,
+    Vec<(String, String)>,
+);
+
+/// The proxy service of `lab` over `storage`, the registry kinds, and the repo.
+fn proxy_for(lab: &Lab, storage: Arc<dyn StorageBackend>) -> LabProxy {
     let repo_dyn: Arc<dyn PackageRepository> = InMemoryRepo::new();
     let cache: Arc<dyn CacheStore> = Arc::new(InMemoryCacheStore::new());
     let kinds: Vec<(String, String)> = lab
@@ -175,7 +175,6 @@ async fn make_app_with(
         air_gap,
         ..Default::default()
     });
-    let local_svc = make_local_svc(hot.clone(), storage.clone());
     let proxy_svc = Arc::new(ProxyService {
         hot: hot.clone(),
         storage,
@@ -188,9 +187,26 @@ async fn make_app_with(
         discovery: Default::default(),
         explore_cache: None,
     });
+    (proxy_svc, repo_dyn, kinds)
+}
+
+/// [`make_app`] over a storage the test can seed, as a bundle import would.
+async fn make_app_with(
+    lab: Lab,
+    storage: Arc<dyn StorageBackend>,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
+    Error = actix_web::Error,
+> {
+    let (proxy_svc, repo_dyn, kinds) = proxy_for(&lab, storage);
+    let hot = proxy_svc.hot.clone();
+    let local_svc = make_local_svc(hot.clone(), proxy_svc.storage.clone());
     let um = upstreams(&lab.cfg);
     let wire = MiseWire::build(&lab.cfg, &um).expect("the wire builds");
-    let map = RegistryHostMap::new(HashMap::new(), HashMap::new(), HashMap::new()).with_wire(wire);
+    // The config's own host bindings and opt-outs, as the server builds them,
+    // so the middleware's registry-host branch is reachable (T11).
+    let map = RegistryHostMap::from_app_config(&lab.cfg).with_wire(wire);
     let names: Vec<&str> = kinds.iter().map(|(n, _)| n.as_str()).collect();
     let anonymous: Vec<&str> = names
         .iter()
@@ -920,4 +936,371 @@ async fn an_air_gap_refuses_a_corrupt_or_absent_held_archive() {
     )
     .await;
     assert_eq!(absent, 503);
+}
+
+// ── The eager overlay build (§4.3) ───────────────────────────────────────────
+
+/// A tool that does not collide with [`upstream_archive`]'s entries.
+const OVERLAY_LINT: &str = r#"overlay = true
+          [[registries.auto_wire.tools]]
+          name = "acme-lint"
+          backends = ["github:acme/lint"]"#;
+
+/// [`OVERLAY_LINT`] plus `acme-deploy`, which the test's upstream also has.
+const OVERLAY_COLLIDING: &str = r#"overlay = true
+          [[registries.auto_wire.tools]]
+          name = "acme-lint"
+          backends = ["github:acme/lint"]
+          [[registries.auto_wire.tools]]
+          name = "acme-deploy"
+          backends = ["github:acme/deploy"]"#;
+
+/// The full config file text, as [`config`] wraps it.
+fn config_text(extra_mv: &str, upstream: &str) -> String {
+    format!(
+        r#"
+        [database]
+        type = "postgresql"
+        url = "postgresql://localhost/test"
+        [storage]
+        type = "filesystem"
+        path = "/tmp/batlehub-test"
+        [server]
+        host = "127.0.0.1"
+        port = 8080
+        {}
+        "#,
+        base_registries(extra_mv, upstream)
+    )
+}
+
+fn no_access() -> batlehub_web::AccessConfig {
+    batlehub_web::AccessConfig {
+        anonymous: Default::default(),
+        user: Default::default(),
+        admin: Default::default(),
+        groups: Default::default(),
+        explore_anonymous: Default::default(),
+        explore_user: Default::default(),
+        explore_admin: Default::default(),
+    }
+}
+
+/// What the server's hot builder does for the wire: the host map with the
+/// config's wire, everything else empty.
+fn wire_only_builder() -> batlehub_web::services::HotConfigBuilder {
+    Arc::new(|cfg: &AppConfig| {
+        let um = upstreams(cfg);
+        let wire = MiseWire::build(cfg, &um)?;
+        Ok(batlehub_web::services::BuiltHotState {
+            hot: HotConfig::default(),
+            access: no_access(),
+            search_readmes: false,
+            registry_map: batlehub_web::RegistryMap::new(HashMap::new()),
+            registry_mode_map: RegistryModeMap::new(HashMap::new()),
+            upstream_map: um,
+            cargo_index_map: batlehub_web::CargoIndexMap::new(HashMap::new()),
+            repo_signer_map: RepoSignerMap::default(),
+            apk_signer_map: batlehub_web::ApkSignerMap::default(),
+            vuln_db_map: batlehub_web::VulnDbMap::default(),
+            sumdb_map: batlehub_web::SumDbMap::default(),
+            registry_host_map: RegistryHostMap::default().with_wire(wire),
+            text_config_owed: false,
+        })
+    })
+}
+
+fn warning_codes(wire: &MiseWire) -> Vec<(String, String)> {
+    batlehub_web::handlers::proxy::mise_versions::mise_wire_warnings(wire, &|_| true)
+        .into_iter()
+        .map(|w| (w.code, w.path))
+        .collect()
+}
+
+fn collision_rows(map: &RegistryHostMap) -> Vec<String> {
+    warning_codes(&map.wire().expect("the wire is on"))
+        .into_iter()
+        .filter(|(code, _)| code == "mise.overlay.collision")
+        .map(|(_, path)| path)
+        .collect()
+}
+
+fn lab_of(registries: &str) -> Lab {
+    Lab {
+        cfg: config(registries),
+        closed: Vec::new(),
+        air_gap: false,
+    }
+}
+
+#[actix_web::test]
+async fn the_overlay_warnings_are_known_at_load_and_after_a_reload_without_a_client() {
+    use std::io::Write as _;
+
+    let mut up = mockito::Server::new_async().await;
+    // One fetch for both builds: the reload's merge reads the cached archive.
+    let fetch = up
+        .mock(
+            "GET",
+            "/the_overlay_warnings_are_known_at_load/registry/latest.tar.zst",
+        )
+        .with_body(upstream_archive(&[(
+            "acme-deploy",
+            "backends = [\"github:evil/deploy\"]\nversion_order = \"semver\"\n",
+        )]))
+        .expect(1)
+        .create_async()
+        .await;
+    let upstream = format!("{}/the_overlay_warnings_are_known_at_load", up.url());
+    let start = config_text(OVERLAY_LINT, &upstream);
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    file.write_all(start.as_bytes()).expect("written");
+    let regs = base_registries(OVERLAY_LINT, &upstream);
+    let cfg = config(&regs);
+    let (svc, _, _) = proxy_for(&lab_of(&regs), InMemoryStorage::new());
+    let um = upstreams(&cfg);
+    let map = RegistryHostMap::default().with_wire(MiseWire::build(&cfg, &um).expect("builds"));
+    let reload = batlehub_web::services::ConfigReloadService::new(
+        batlehub_web::services::ConfigReloadParams {
+            hot: svc.hot.clone(),
+            access: batlehub_web::new_access_lock(no_access()),
+            search: batlehub_web::new_search_lock(false),
+            registry_map: batlehub_web::RegistryMap::new(HashMap::new()),
+            registry_mode_map: RegistryModeMap::new(HashMap::new()),
+            upstream_map: um,
+            cargo_index_map: batlehub_web::CargoIndexMap::new(HashMap::new()),
+            repo_signer_map: RepoSignerMap::default(),
+            apk_signer_map: batlehub_web::ApkSignerMap::default(),
+            vuln_db_map: batlehub_web::VulnDbMap::default(),
+            sumdb_map: batlehub_web::SumDbMap::default(),
+            registry_host_map: map.clone(),
+            proxy_trust: ProxyTrust::default(),
+            discovery: Default::default(),
+            config_path: file.path().to_str().expect("utf-8").to_owned(),
+            config_overlays: Vec::new(),
+            startup_layers: vec![start],
+            config_change_repo: None,
+            hot_reload_enabled: true,
+            builder: wire_only_builder(),
+            banner: None,
+        },
+    );
+
+    // Load: the build runs with no archive request, and finds no collision.
+    reload
+        .build_mise_overlay_eagerly(Arc::clone(&svc))
+        .expect("the overlay is on")
+        .await
+        .expect("the build task");
+    let wire = map.wire().expect("on");
+    assert!(
+        wire.last_build
+            .lock()
+            .expect("lock")
+            .upstream_invalid
+            .is_none(),
+        "the upstream archive was fetched and passed"
+    );
+    assert!(collision_rows(&map).is_empty());
+
+    // A reload adding a colliding tool: the † row appears, still with no request.
+    reload
+        .load_pending_from_content(&config_text(OVERLAY_COLLIDING, &upstream), "test")
+        .await
+        .expect("staged");
+    reload.apply("test").await.expect("applied");
+    let mut rows = Vec::new();
+    for _ in 0..200 {
+        rows = collision_rows(&map);
+        if !rows.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(rows, ["registries[3].auto_wire.tools[1].name"]);
+    fetch.assert_async().await;
+}
+
+#[actix_web::test]
+async fn an_eager_build_failure_is_the_upstream_invalid_warning() {
+    let mut up = mockito::Server::new_async().await;
+    up.mock("GET", "/an_eager_build_failure/registry/latest.tar.zst")
+        .with_body("not an archive")
+        .create_async()
+        .await;
+    let regs = base_registries(
+        OVERLAY_LINT,
+        &format!("{}/an_eager_build_failure", up.url()),
+    );
+    let cfg = config(&regs);
+    let (svc, _, _) = proxy_for(&lab_of(&regs), InMemoryStorage::new());
+    let wire = Arc::new(
+        MiseWire::build(&cfg, &upstreams(&cfg))
+            .expect("builds")
+            .expect("on"),
+    );
+    batlehub_web::handlers::proxy::mise_versions::spawn_overlay_build(svc, Arc::clone(&wire))
+        .expect("the overlay is on")
+        .await
+        .expect("the build task");
+    let codes = warning_codes(&wire);
+    assert!(
+        codes
+            .iter()
+            .any(|(c, _)| c == "mise.overlay.upstream-invalid"),
+        "{codes:?}"
+    );
+}
+
+#[actix_web::test]
+async fn no_eager_build_without_an_overlay() {
+    let regs = base_registries("", "http://127.0.0.1:9/no_eager_build");
+    let cfg = config(&regs);
+    let (svc, _, _) = proxy_for(&lab_of(&regs), InMemoryStorage::new());
+    let wire = MiseWire::build(&cfg, &upstreams(&cfg))
+        .expect("builds")
+        .expect("on");
+    assert!(
+        batlehub_web::handlers::proxy::mise_versions::spawn_overlay_build(svc, Arc::new(wire))
+            .is_none()
+    );
+}
+
+// ── T10 / T11: the span on every outcome, and the registry-host boundary ─────
+
+use actix_web::HttpMessage as _;
+
+#[actix_web::test]
+async fn request_span_keeps_the_wired_host_for_every_wire_outcome() {
+    let app = make_app(lab("", "http://127.0.0.1:9")).await;
+    // (wired path, status, the host `WiredFrom` must carry)
+    let cases = [
+        // rewrite
+        (
+            "api.github.com/repos/jqlang/jq/releases",
+            None,
+            "api.github.com",
+        ),
+        // bounce
+        (
+            "github.com/jqlang/jq/blob/main/README.md",
+            Some(307),
+            "github.com",
+        ),
+        // not_wired
+        ("nowhere.example.com/x", Some(404), "nowhere.example.com"),
+        // malformed (an empty segment)
+        ("github.com//x", Some(400), "github.com"),
+    ];
+    for (path, status, host) in cases {
+        let resp = call_service(&app, get(&wire(path), Some(ADMIN_TOKEN))).await;
+        if let Some(s) = status {
+            assert_eq!(resp.status(), s, "{path}");
+        }
+        assert_eq!(
+            resp.request().extensions().get::<WiredFrom>(),
+            Some(&WiredFrom(host.into())),
+            "{path}"
+        );
+    }
+    // sink, in an air gap
+    let gapped = make_app(Lab {
+        cfg: config(&gapped(base_registries("", "http://127.0.0.1:9"))),
+        closed: Vec::new(),
+        air_gap: true,
+    })
+    .await;
+    let resp = call_service(
+        &gapped,
+        get(&wire("nowhere.example.com/tool.tgz"), Some(ADMIN_TOKEN)),
+    )
+    .await;
+    assert_eq!(resp.status(), 501);
+    assert_eq!(
+        resp.request().extensions().get::<WiredFrom>(),
+        Some(&WiredFrom("nowhere.example.com".into()))
+    );
+}
+
+/// `get` on a registry's own host rather than the main one.
+fn get_on(host: &str, uri: &str) -> actix_http::Request {
+    TestRequest::get()
+        .uri(uri)
+        .insert_header(("host", host))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request()
+}
+
+#[actix_web::test]
+async fn wire_on_registry_host_is_refused() {
+    // `gh` has its own host. A `_wire` path sent there is that host's path,
+    // routed under `gh` like any other: never rewritten, never the archive
+    // route, never the admin API, and the archive upstream is never dialled.
+    let mut up = mockito::Server::new_async().await;
+    let never = up
+        .mock("GET", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+    let cfg = base_registries("", &format!("{}/wire_on_registry_host", up.url())).replacen(
+        "type = \"github\"",
+        "type = \"github\"\n        hosts = [\"gh.acme.io\"]",
+        1,
+    );
+    let app = make_app(Lab {
+        cfg: config(&cfg),
+        closed: Vec::new(),
+        air_gap: false,
+    })
+    .await;
+    for path in [
+        "mise.jdx.dev/registry/latest.tar.zst",
+        "hub.example.com/api/v1/admin/users",
+        "gh.acme.io/proxy/mv/mise-versions/_registry/latest.tar.zst",
+        "api.github.com/repos/jqlang/jq/releases",
+    ] {
+        let resp = call_service(&app, get_on("gh.acme.io", &wire(path))).await;
+        let routed = resp.request().path().to_owned();
+        assert!(
+            resp.request().extensions().get::<WiredFrom>().is_none(),
+            "{path}: wired on a registry host"
+        );
+        assert!(
+            routed.starts_with("/proxy/gh/proxy/mv/mise-versions/_wire/"),
+            "{path}: routed as {routed}"
+        );
+        assert!(
+            !matches!(resp.status().as_u16(), 200 | 307),
+            "{path}: answered {}",
+            resp.status()
+        );
+    }
+    never.assert_async().await;
+}
+
+#[actix_web::test]
+async fn a_wired_rewrite_into_a_host_only_registry_is_refused() {
+    // `gh` is host-only, so the typed table never wires it; the own-host form
+    // still reaches `/proxy/gh/…`, and the middleware's opt-out refuses it.
+    let cfg = base_registries("", "http://127.0.0.1:9").replacen(
+        "type = \"github\"",
+        "type = \"github\"\n        path_routing = false\n        hosts = [\"gh.acme.io\"]",
+        1,
+    );
+    let app = make_app(Lab {
+        cfg: config(&cfg),
+        closed: Vec::new(),
+        air_gap: false,
+    })
+    .await;
+    let resp = call_service(
+        &app,
+        get(
+            &wire("hub.example.com/proxy/gh/jqlang/jq/releases"),
+            Some(ADMIN_TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
+    assert!(body_of(resp).await.contains("unknown registry"));
 }

@@ -376,6 +376,8 @@ impl ConfigReloadService {
         // removes a `hosts` entry takes effect without a process restart.
         self.registry_host_map
             .replace_from(&pending.new_registry_host_map);
+        // RFC 0045 §4.3: the new wire's overlay, and so its † warnings, now.
+        self.spawn_mise_overlay_build();
         // RFC 0045 §10.1: the overlay collision alert discounts a rise that
         // follows a reload.
         metrics::counter!("batlehub_config_reloads_total").increment(1);
