@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: f507cb1c7c66142d
+sourceHash: 31889779fe55cac6
 ---
 
 # Faire pointer mise vers BatleHub
@@ -233,6 +233,19 @@ processus. Les signatures cosign sont de l'ECDSA sur une identité x509, que ce
 serveur ne sait pas contrôler : il enregistre donc le **verdict** plutôt que la
 signature, et l'étiquette comme une preuve d'un contrôle passé — jamais comme un
 contrôle en direct.
+
+**Les noms de l'overlay de l'autre côté de la coupure.** Ajoutez
+`--include-mise-registry` à l'export quand l'instance coupée du réseau sert ses
+propres outils par nom court (`overlay = true`, §1). Le lot transporte alors
+l'archive de registre de mise de chaque registre `mise-versions` doté
+d'`auto_wire`, **brute** : l'archive publique telle que l'instance connectée
+l'a récupérée et contrôlée, sans son overlay. L'instance coupée du réseau la
+contrôle de nouveau, y fusionne **son propre** overlay et la sert tant que rien
+de plus récent n'est en cache : `mise install acme-deploy` fonctionne alors
+sans aucune sortie réseau. Le bloc que `registry suggest --mise --auto-wire
+--mise-catch-all` affiche active `registry_floating` quand l'overlay est actif.
+Sans archive transportée, ou avec une archive qui échoue au contrôle, la route
+de l'archive répond `503` et mise garde le registre qu'il possède.
 
 ## 3. Activer la coupure réseau
 

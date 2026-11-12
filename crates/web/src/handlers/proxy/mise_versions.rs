@@ -589,6 +589,13 @@ async fn raw_archive(
                 gate.insert(key, std::time::Instant::now());
             }
             drop(gate);
+            // §15 Q3: an air-gapped instance with nothing cached serves the
+            // archive a bundle carried in, checked as an upstream one is.
+            if offline {
+                if let Some(held) = held_archive(svc, registry).await {
+                    return Ok(held);
+                }
+            }
             tracing::warn!(error = %e, "mise registry archive unavailable");
             Err(AppError::service_unavailable(format!(
                 "the mise registry archive is unavailable: {e}"
@@ -597,14 +604,62 @@ async fn raw_archive(
     }
 }
 
+/// The storage key a bundle files the raw archive under (§15 Q3): the
+/// `artifact:` prefix every import writes, under the registry's own name.
+pub fn held_archive_key(registry: &str) -> String {
+    format!("artifact:{registry}/_registry/raw/latest.tar.zst")
+}
+
+/// The raw archive a bundle carried in, if one is stored and passes the same
+/// check an upstream archive must pass. Anything else is `None`, so the route
+/// keeps its `503`.
+async fn held_archive(svc: &ProxyService, registry: &str) -> Option<Vec<u8>> {
+    use batlehub_adapters::registry::mise_registry_overlay as overlay;
+    use futures::StreamExt;
+
+    let stored = match svc.storage.retrieve(&held_archive_key(registry)).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!(error = %e, "reading the held mise registry archive failed");
+            return None;
+        }
+    };
+    let mut body = Vec::new();
+    let mut stream = stored.stream;
+    while let Some(chunk) = stream.next().await {
+        body.extend_from_slice(&chunk.ok()?);
+        if body.len() > overlay::MAX_COMPRESSED {
+            tracing::warn!("the held mise registry archive is over the size bound");
+            return None;
+        }
+    }
+    match overlay::check(&body) {
+        Ok(_) => Some(body),
+        Err(e) => {
+            tracing::warn!(error = %e, "the held mise registry archive is invalid");
+            None
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArchiveQuery {
+    raw: Option<String>,
+}
+
 /// The registry archive mise floats, with this instance's overlay tools
 /// merged in (§4.2). With the overlay off it is the public archive, checked
-/// (§15 Q17).
+/// (§15 Q17). Air-gapped with nothing cached, it is the raw archive a bundle
+/// carried in, merged with this instance's overlay (§15 Q3).
 #[utoipa::path(
     get,
     path = "/proxy/{registry}/mise-versions/_registry/latest.tar.zst",
     tag = "proxy/mise-versions",
-    params(("registry" = String, Path, description = "Registry name")),
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("raw" = Option<String>, Query, description = "`1`: the upstream archive as fetched and checked, without the overlay — what `batlehub-cli mise export --include-mise-registry` carries"),
+    ),
     responses(
         (status = 200, description = "mise's registry archive, the overlay merged in", body = UpstreamDocument, content_type = "application/zstd"),
         (status = 403, description = "Access denied"),
@@ -616,6 +671,7 @@ async fn raw_archive(
 #[get("/proxy/{registry}/mise-versions/_registry/latest.tar.zst")]
 pub async fn mise_versions_registry_archive(
     path: web::Path<String>,
+    query: web::Query<ArchiveQuery>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
@@ -647,6 +703,14 @@ pub async fn mise_versions_registry_archive(
             .content_type("application/zstd")
             .body(body)
     };
+    // §15 Q3: the export carries the raw archive and each side merges its own
+    // overlay. The header is the key a bundle files it under.
+    if query.raw.as_deref() == Some("1") {
+        return Ok(HttpResponse::Ok()
+            .content_type("application/zstd")
+            .insert_header(("X-BatleHub-Storage-Key", held_archive_key(&registry)))
+            .body(raw));
+    }
     if !wire.auto_wire.overlay || wire.overlay.is_empty() {
         return Ok(respond(raw));
     }

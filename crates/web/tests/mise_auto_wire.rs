@@ -112,8 +112,19 @@ async fn make_app(
     Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
     Error = actix_web::Error,
 > {
+    make_app_with(lab, InMemoryStorage::new()).await
+}
+
+/// [`make_app`] over a storage the test can seed, as a bundle import would.
+async fn make_app_with(
+    lab: Lab,
+    storage: Arc<dyn StorageBackend>,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
+    Error = actix_web::Error,
+> {
     let repo_dyn: Arc<dyn PackageRepository> = InMemoryRepo::new();
-    let storage: Arc<dyn StorageBackend> = InMemoryStorage::new();
     let cache: Arc<dyn CacheStore> = Arc::new(InMemoryCacheStore::new());
     let kinds: Vec<(String, String)> = lab
         .cfg
@@ -751,4 +762,162 @@ async fn a_garbage_upstream_is_never_cached() {
         503,
         "an invalid archive is a failure, not a 200"
     );
+}
+
+// ── §15 Q3: the bundle carries the raw archive ───────────────────────────────
+
+fn archive(raw: bool) -> String {
+    let q = if raw { "?raw=1" } else { "" };
+    format!("/proxy/{MV}/mise-versions/_registry/latest.tar.zst{q}")
+}
+
+#[actix_web::test]
+async fn raw_archive_is_unmerged_and_names_its_bundle_key() {
+    let mut up = mockito::Server::new_async().await;
+    let raw = upstream_archive(&[]);
+    up.mock(
+        "GET",
+        "/raw_archive_is_unmerged_and_names_its_bundle_key/registry/latest.tar.zst",
+    )
+    .with_body(raw.clone())
+    .create_async()
+    .await;
+    let app = make_app(lab(
+        OVERLAY,
+        &format!(
+            "{}/raw_archive_is_unmerged_and_names_its_bundle_key",
+            up.url()
+        ),
+    ))
+    .await;
+    let resp = call_service(&app, get(&archive(true), Some(ADMIN_TOKEN))).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("X-BatleHub-Storage-Key")
+            .and_then(|v| v.to_str().ok()),
+        Some("artifact:mv/_registry/raw/latest.tar.zst")
+    );
+    assert_eq!(read_body(resp).await.to_vec(), raw, "no overlay merged in");
+    // Without `raw`, the same instance merges.
+    let resp = call_service(&app, get(&archive(false), Some(ADMIN_TOKEN))).await;
+    let merged = overlay::check(&read_body(resp).await).expect("valid");
+    assert!(merged.entries.contains_key("acme-deploy"));
+}
+
+#[actix_web::test]
+async fn raw_archive_needs_the_same_read_as_the_route() {
+    let mut up = mockito::Server::new_async().await;
+    let m = up
+        .mock(
+            "GET",
+            "/raw_archive_needs_the_same_read_as_the_route/registry/latest.tar.zst",
+        )
+        .with_body(upstream_archive(&[]))
+        .expect(0)
+        .create_async()
+        .await;
+    let app = make_app(Lab {
+        cfg: config(&base_registries(
+            "",
+            &format!("{}/raw_archive_needs_the_same_read_as_the_route", up.url()),
+        )),
+        closed: vec!["mv"],
+        air_gap: false,
+    })
+    .await;
+    for uri in [archive(true), archive(false)] {
+        let resp = call_service(&app, get(&uri, None)).await;
+        assert!(
+            matches!(resp.status().as_u16(), 401 | 403),
+            "{uri}: {}",
+            resp.status()
+        );
+    }
+    m.assert_async().await;
+}
+
+#[actix_web::test]
+async fn raw_archive_refuses_a_garbage_upstream() {
+    let mut up = mockito::Server::new_async().await;
+    up.mock(
+        "GET",
+        "/raw_archive_refuses_a_garbage_upstream/registry/latest.tar.zst",
+    )
+    .with_body("<html>captive portal</html>")
+    .create_async()
+    .await;
+    let app = make_app(lab(
+        "",
+        &format!("{}/raw_archive_refuses_a_garbage_upstream", up.url()),
+    ))
+    .await;
+    let resp = call_service(&app, get(&archive(true), Some(ADMIN_TOKEN))).await;
+    assert_eq!(
+        resp.status(),
+        503,
+        "the export never carries what mise would refuse"
+    );
+}
+
+/// An air-gapped app whose storage holds `held` where a bundle import files
+/// it; the archive route's status, and on a `200` the merge is checked.
+async fn gapped_with_held(held: Option<Vec<u8>>, upstream: &str) -> u16 {
+    let storage = InMemoryStorage::new();
+    if let Some(bytes) = held {
+        storage
+            .store(
+                "artifact:mv/_registry/raw/latest.tar.zst",
+                bytes.into(),
+                Default::default(),
+            )
+            .await
+            .expect("seeded");
+    }
+    let app = make_app_with(
+        Lab {
+            cfg: config(&gapped(base_registries(OVERLAY, upstream))),
+            closed: Vec::new(),
+            air_gap: true,
+        },
+        storage,
+    )
+    .await;
+    let resp = call_service(&app, get(&archive(false), Some(ADMIN_TOKEN))).await;
+    let status = resp.status().as_u16();
+    if status == 200 {
+        let merged = overlay::check(&read_body(resp).await).expect("mise would accept it");
+        assert!(merged.entries.contains_key("jq"), "the held public entries");
+        assert!(
+            merged.entries["acme-deploy"].contains("github:acme/deploy"),
+            "and this side's overlay"
+        );
+    }
+    status
+}
+
+#[actix_web::test]
+async fn an_air_gap_serves_the_held_archive_with_its_own_overlay() {
+    let status = gapped_with_held(
+        Some(upstream_archive(&[])),
+        "http://127.0.0.1:9/an_air_gap_serves_the_held_archive",
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+#[actix_web::test]
+async fn an_air_gap_refuses_a_corrupt_or_absent_held_archive() {
+    let corrupt = gapped_with_held(
+        Some(b"not a zstd archive".to_vec()),
+        "http://127.0.0.1:9/an_air_gap_refuses_a_corrupt_held_archive",
+    )
+    .await;
+    assert_eq!(corrupt, 503);
+    let absent = gapped_with_held(
+        None,
+        "http://127.0.0.1:9/an_air_gap_refuses_an_absent_held_archive",
+    )
+    .await;
+    assert_eq!(absent, 503);
 }

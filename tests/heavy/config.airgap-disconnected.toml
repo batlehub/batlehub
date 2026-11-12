@@ -215,6 +215,14 @@ mode = "proxy"
 
 [registries.auto_wire]
 enabled = true
+# §15 Q3: the overlay is merged into the archive the bundle carried, raw, from
+# the connected side. `acme-gh` is a name only this instance knows; its
+# backend is the release the bundle holds.
+overlay = true
+
+[[registries.auto_wire.tools]]
+name = "acme-gh"
+backends = [{ full = "github:cli/cli", options = { exe = "gh" } }]
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]

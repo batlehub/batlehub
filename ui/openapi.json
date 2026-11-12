@@ -13762,7 +13762,7 @@
         "tags": [
           "proxy/mise-versions"
         ],
-        "summary": "The registry archive mise floats, with this instance's overlay tools\nmerged in (§4.2). With the overlay off it is the public archive, checked\n(§15 Q17).",
+        "summary": "The registry archive mise floats, with this instance's overlay tools\nmerged in (§4.2). With the overlay off it is the public archive, checked\n(§15 Q17). Air-gapped with nothing cached, it is the raw archive a bundle\ncarried in, merged with this instance's overlay (§15 Q3).",
         "operationId": "mise_versions_registry_archive",
         "parameters": [
           {
@@ -13770,6 +13770,15 @@
             "in": "path",
             "description": "Registry name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "raw",
+            "in": "query",
+            "description": "`1`: the upstream archive as fetched and checked, without the overlay — what `batlehub-cli mise export --include-mise-registry` carries",
+            "required": false,
             "schema": {
               "type": "string"
             }

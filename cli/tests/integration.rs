@@ -4091,6 +4091,51 @@ fn a_bundle_round_trips_from_export_to_import() {
     );
 }
 
+/// RFC 0045 §15 Q3: `--include-mise-registry` asks every `mise-versions`
+/// registry for its raw archive, and says so when one cannot give it — here
+/// `mv` has no `auto_wire`, so the route is a `404` and the bundle carries
+/// nothing for it rather than failing the export.
+#[test]
+fn export_include_mise_registry_reports_a_registry_without_auto_wire() {
+    let srv = TestServer::start_with(&[("mv", "mise-versions")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let plan = serde_json::json!({
+        "plan_version": 1,
+        "generated_from": { "file": "mise.lock", "sha256": "0".repeat(64) },
+        "platforms": ["linux-x64"],
+        "entries": [],
+        "unsupported": [],
+        "unmirrored_hosts": [],
+    });
+    let plan_path = tmp.path().join("plan.json");
+    std::fs::write(&plan_path, serde_json::to_string(&plan).unwrap()).unwrap();
+    let key_path = tmp.path().join("estate.key");
+    std::fs::write(&key_path, "0".repeat(63) + "1").unwrap();
+    let bundle_path = tmp.path().join("estate.bhub");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "mise",
+            "export",
+            "--plan",
+            plan_path.to_str().unwrap(),
+            "--sign-key",
+            key_path.to_str().unwrap(),
+            "-o",
+            bundle_path.to_str().unwrap(),
+            "--include-mise-registry",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "export should succeed: {stdout}{stderr}");
+    assert!(
+        stdout.contains("skipped: mise registry archive [mv]"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("0 entries"), "{stdout}");
+}
+
 // ── Tests: RFC 0011, the credential contract file ────────────────────────────
 //
 // `auth write-token-file` and `auth status` are how a process that is not the

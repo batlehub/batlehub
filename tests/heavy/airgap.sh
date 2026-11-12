@@ -427,11 +427,11 @@ heavy_log "AIRGAP-SEED-OK ($(head -1 "$HEAVY_WORK/seed.txt"))"
 
 head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
 "$CLI" --json mise export --plan "$HEAVY_WORK/plan.json" \
-  --sign-key "$HEAVY_WORK/estate.key" -o "$HEAVY_WORK/estate.bhub" \
+  --sign-key "$HEAVY_WORK/estate.key" -o "$HEAVY_WORK/estate.bhub" --include-mise-registry \
   --bundle-id "heavy-airgap-$HEAVY_RUN" >"$HEAVY_WORK/export.json" 2>"$HEAVY_WORK/export.err" \
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
-[[ "$BLOBS" -eq 19 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 19 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, and a chart archive and its .prov)"; }
+[[ "$BLOBS" -eq 20 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 20 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, a chart archive and its .prov, and mise's raw registry archive — RFC 0045 §15 Q3)"; }
 # `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
 # redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
 # download that goes straight into `tar`. A wrapper rather than the flags
@@ -963,6 +963,44 @@ curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
 grep -q 'unmirrored.example.com' "$HEAVY_WORK/aw-missing.json" \
   || { cat "$HEAVY_WORK/aw-missing.json" >&2; heavy_fail "the wired sink did not record unmirrored.example.com"; }
 heavy_log "MISE-AUTO-WIRE-AIRGAP-OK (one rule; an unmirrored host recorded under its name)"
+
+# RFC 0045 §15 Q3: an *overlay* name, with egress denied. The bundle carried
+# the raw registry archive (`mise export --include-mise-registry`), and this
+# instance serves it merged with its own overlay, so `acme-gh` — a name only
+# this instance knows — resolves through `registry_floating` with nothing
+# cached and no route out. The block is what `registry suggest --mise
+# --auto-wire --mise-catch-all` prints with the overlay on.
+heavy_mark "mise-auto-wire-overlay"
+AWOTOOL="$HEAVY_WORK/mise-auto-wire-overlay"
+AWOENV=(MISE_TRUSTED_CONFIG_PATHS="$AWOTOOL" MISE_DATA_DIR="$AWOTOOL/data"
+        MISE_CACHE_DIR="$AWOTOOL/cache" MISE_STATE_DIR="$AWOTOOL/state")
+mkdir -p "$AWOTOOL"
+cat > "$AWOTOOL/mise.toml" <<EOF
+[settings]
+github_attestations = false
+registry_floating = true
+
+[settings.url_replacements]
+"regex:^https?://([^/]+)/(.*)" = "$HEAVY_TAP_BASE/proxy/$AW_REG/mise-versions/_wire/\$1/\$2"
+
+[tools]
+acme-gh = "$TOOL_VERSION"
+EOF
+heavy_log "mise install acme-gh@$TOOL_VERSION — an overlay name — through the archive the bundle carried"
+run_client "mise install (overlay name)" "$HEAVY_WORK/mise-auto-wire-overlay.txt" \
+  bash -c "cd '$AWOTOOL' && ${AWOENV[*]} ${MISE[*]} install"
+[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/mise-auto-wire-overlay.txt" >&2; heavy_fail "mise install of the overlay name acme-gh failed against the disconnected instance"; }
+heavy_log "mise said:"
+sed 's/^/    /' "$HEAVY_WORK/mise-auto-wire-overlay.txt" | tail -15
+heavy_wire_re_after "mise-auto-wire-overlay" "GET /proxy/$AW_REG/mise-versions/_wire/mise[.]jdx[.]dev/registry/latest[.]tar[.]zst -> 200" \
+  "mise did not take its registry archive from the wire"
+heavy_wire_re_after "mise-auto-wire-overlay" "GET /proxy/$AW_REG/mise-versions/_wire/api[.]github[.]com/repos/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 200" \
+  "the overlay name did not resolve to its backend's release through the wire"
+AWO_INSTALLED="$(cd "$AWOTOOL" && env "${AWOENV[@]}" "${DENY[@]}" "${MISE[@]}" exec -- gh --version 2>/dev/null | head -1 || true)"
+[[ "$AWO_INSTALLED" == *"$TOOL_VERSION"* ]] \
+  || heavy_fail "gh --version answered '$AWO_INSTALLED' after installing acme-gh, expected $TOOL_VERSION"
+measure "mise | install acme-gh@$TOOL_VERSION (overlay name), air gap, held raw archive | registry archive -> 200 through the wire, the release -> 200 | exit 0 after ${CLIENT_SECS}s | $AWO_INSTALLED"
+heavy_log "MISE-AUTO-WIRE-OVERLAY-AIRGAP-OK (an overlay name resolved from the archive the bundle carried)"
 
 # A tag the instance does not hold (RFC 0008-bis §4.4, phase 2): the release
 # by tag is a 503 filed as a *document* miss that names the tag asked for and

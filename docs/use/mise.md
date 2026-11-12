@@ -214,6 +214,18 @@ signatures are ECDSA over an x509 identity, which this server cannot check,
 so it records the **verdict** rather than the signature and labels it as
 evidence about a past check — never as a live one.
 
+**Overlay names across the gap.** Add `--include-mise-registry` to the export
+when the disconnected instance serves its own tools by short name (`overlay =
+true`, §1). The bundle then carries mise's registry archive from every
+`mise-versions` registry with `auto_wire`, **raw**: the public archive as the
+connected instance fetched and checked it, without its overlay. The
+disconnected instance checks it again, merges its **own** overlay into it and
+serves it while nothing fresher is cached, so `mise install acme-deploy` works
+with no egress. The air-gap block that `registry suggest --mise --auto-wire
+--mise-catch-all` prints turns `registry_floating` on when the overlay is on.
+Without a carried archive, or with one that fails the check, the archive route
+answers `503` and mise keeps the registry it has.
+
 ## 3. Turning the air gap on
 
 ```toml
