@@ -199,9 +199,7 @@ const trendText = computed(() => {
       </p>
       <p v-if="verdict.tone === 'bad'" class="mt-2">
         <Button as-child size="sm" variant="outline">
-          <RouterLink to="/admin/observability/health">{{
-            t("adminDashboard.openHealth")
-          }}</RouterLink>
+          <RouterLink to="/admin/system/health">{{ t("adminDashboard.openHealth") }}</RouterLink>
         </Button>
       </p>
     </div>
@@ -213,7 +211,7 @@ const trendText = computed(() => {
     >
       <template #action>
         <Button as-child size="sm">
-          <RouterLink to="/admin/operations/config-reload">{{
+          <RouterLink to="/admin/system/configuration">{{
             t("adminDashboard.openConfig")
           }}</RouterLink>
         </Button>
@@ -298,7 +296,7 @@ const trendText = computed(() => {
                 <!-- The registry page asks system:read; this page only stats:read. -->
                 <RouterLink
                   v-if="can('system:read')"
-                  :to="`/admin/observability/registries/${encodeURIComponent(r.registry)}`"
+                  :to="`/admin/registry/${encodeURIComponent(r.registry)}`"
                   class="hover:underline underline-offset-[3px]"
                   >{{ r.registry }}</RouterLink
                 >
@@ -330,7 +328,7 @@ const trendText = computed(() => {
               <TableCell>
                 <RouterLink
                   v-if="degraded.some((d) => d.registry === r.registry)"
-                  to="/admin/observability/health"
+                  to="/admin/system/health"
                   class="text-destructive hover:underline underline-offset-[3px]"
                 >
                   <Resolution state="blocked" :label="t('adminDashboard.registryErrors')" />

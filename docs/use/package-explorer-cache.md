@@ -41,7 +41,7 @@ Admins can flush the cache from the admin panel or via the API.
 
 #### Admin UI
 
-Navigate to **Admin → Observability → Health** (`/admin/observability/health`). Each registry's card carries a **Refresh explorer** button: confirm it and only the cache entries that include that registry are cleared. Nothing is deleted and no download is interrupted.
+Navigate to **Admin → System → Health & cache** (`/admin/system/health`). Each registry's card carries a **Refresh explorer** button: confirm it and only the cache entries that include that registry are cleared. Nothing is deleted and no download is interrupted.
 
 Flushing the entire cache for every registry at once is an API call only (below, with no `registry` in the body).
 

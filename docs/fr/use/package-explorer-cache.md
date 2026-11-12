@@ -1,6 +1,6 @@
 ---
 sourcePath: use/package-explorer-cache.md
-sourceHash: 7d8310f7afadd1e4
+sourceHash: 4c457e3b2c339730
 ---
 
 # Explorateur de paquets — cache et API
@@ -56,7 +56,7 @@ l'API.
 
 #### Console d'administration
 
-Allez dans **Admin → Observabilité → Santé** (`/admin/observability/health`). La
+Allez dans **Admin → Système → Santé et cache** (`/admin/system/health`). La
 carte de chaque registre porte un bouton **Actualiser l'explorateur** : une fois
 confirmé, seules les entrées de cache qui incluent ce registre sont vidées. Rien
 n'est supprimé et aucun téléchargement n'est interrompu.

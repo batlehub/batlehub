@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: 5abdb425918a6199
+sourceHash: 0a879d1eb4f8fcf0
 ---
 
 # Contrôles de sécurité
@@ -629,7 +629,7 @@ paquet affiche les deux sous *Prochaine réanalyse*.
 
 ### La page Scans {#scans-page}
 
-*Admin → Sécurité et accès → Scans* suit la file d'analyse
+*Admin → Sécurité → Analyses* suit la file d'analyse
 (`GET /api/v1/admin/scans`) :
 
 - **File d'attente** : chaque tâche ouverte, celles qu'un worker tient en
@@ -658,7 +658,7 @@ affiche toujours `SCANNER_ERROR` dans *Verdicts par état*.
 
 ### La page Constats {#findings-page}
 
-*Admin → Sécurité et accès → Constats* liste ce que les scanners ont trouvé,
+*Admin → Sécurité → Constats* liste ce que les scanners ont trouvé,
 tous registres confondus (`GET /api/v1/admin/findings`). Chaque ligne nomme la
 version, la sévérité, le scanner, l'identifiant de l'avis et l'état du verdict
 que le constat a produit. Les filtres portent sur le registre, une sévérité

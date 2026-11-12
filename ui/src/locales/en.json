@@ -334,37 +334,38 @@
     "scheduled": "Scheduled",
     "skipped": "{n} skipped",
     "tagLabel": "Tag to import",
-    "tagPlaceholder": "tag (optional)"
+    "tagPlaceholder": "tag (optional)",
+    "filteredTo": "Showing the imports into {registry} only.",
+    "showAll": "Show every registry"
   },
   "adminNav": {
-    "accessCheck": "Access Check",
+    "accessCheck": "Access check",
     "airGap": "Air gap",
-    "allPackages": "All Packages",
-    "auditLog": "Audit Log",
+    "allPackages": "All packages",
+    "auditLog": "Audit log",
     "authorization": "Authorization",
-    "betaChannel": "Beta Channel",
-    "blocks": "Blocks",
-    "bulkBlock": "Bulk Block",
-    "configReload": "Config Reload",
+    "betaChannel": "Beta channel",
+    "blocks": "Blocked accounts & addresses",
+    "bulkBlock": "Block in bulk",
+    "configReload": "Configuration",
     "dashboard": "Dashboard",
     "findings": "Findings",
     "globalBanner": "Global banner",
-    "health": "Health",
+    "health": "Health & cache",
     "inboundEvents": "Inbound events",
-    "namespacesChannels": "Namespaces & Channels",
-    "notifications": "Notifications",
-    "observability": "Observability",
-    "operations": "Operations",
     "packages": "Packages",
-    "releaseImports": "Release Imports",
-    "sbomExport": "SBOM Export",
+    "releaseImports": "Release imports",
+    "sbomExport": "SBOM export",
     "scans": "Scans",
-    "securityAccess": "Security & Access",
-    "subscriptions": "Subscriptions",
-    "teamNamespaces": "Team Namespaces",
+    "subscriptions": "Notification subscriptions",
+    "teamNamespaces": "Team namespaces",
     "upstream": "Upstream",
     "warming": "Warming",
-    "registries": "Registries"
+    "registriesSection": "Registries",
+    "allRegistries": "All registries",
+    "security": "Security",
+    "access": "Access",
+    "system": "System"
   },
   "adminFindings": {
     "anySeverity": "Any severity",
@@ -1472,7 +1473,14 @@
     "rules": "Rules",
     "security": "Security",
     "grants": "Grants",
-    "grantsCount": "{subjects} subjects · {namespaces} namespaces"
+    "grantsCount": "{subjects} subjects · {namespaces} namespaces",
+    "actionsLabel": "Actions",
+    "actions": {
+      "upstream": "Recheck upstream",
+      "warm": "Warm",
+      "refreshExplorer": "Refresh explorer",
+      "imports": "Release imports"
+    }
   },
   "adminRegistries": {
     "title": "Registries",
@@ -1509,5 +1517,42 @@
     "empty": "No version of this registry is in this state.",
     "noProfile": "This registry has no security profile.",
     "loadFailed": "Could not load the verdicts of this registry."
+  },
+  "palette": {
+    "title": "Go to…",
+    "button": "Go to…",
+    "inputLabel": "Search pages, tasks and registries",
+    "placeholder": "Type a page, a task or a registry",
+    "emptyHint": "Type a package or registry name.",
+    "noMatch": "Nothing matches “{query}”.",
+    "noMatchBare": "Nothing matches.",
+    "searchPackages": "Search packages for “{query}”",
+    "registriesLoading": "Loading registries…",
+    "registriesFailed": "Registries could not be loaded.",
+    "chunkFailed": "The console was updated — reload the page.",
+    "keys": "↑↓ move · ⏎ open · Ctrl ⏎ new tab",
+    "resultCount": "{count} result | {count} results",
+    "group": {
+      "pages": "Pages",
+      "actions": "Actions",
+      "registries": "Registries",
+      "commonTasks": "Common tasks"
+    },
+    "rp": {
+      "accessCheck": "Find out why a download is refused",
+      "upstream": "Recheck an upstream",
+      "config": "Change a registry's configuration",
+      "cve": "Find the versions a CVE affects",
+      "rescan": "Rescan what failed",
+      "blockVersion": "Block one version of a package",
+      "bulkBlock": "Block many versions at once",
+      "blocks": "Block a leaked token's account or an abusive address",
+      "stale": "Refresh a stale package explorer",
+      "audit": "See who changed what",
+      "banner": "Announce maintenance",
+      "namespace": "Give a team a namespace"
+    },
+    "chordMac": "⌘K",
+    "chordCtrl": "Ctrl K"
   }
 }

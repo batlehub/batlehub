@@ -228,7 +228,7 @@ describe("AdminDashboard — monitoring link", () => {
     expect(a.attributes("href")).toBe("https://grafana.test/d/all");
     expect(a.attributes("target")).toBe("_blank");
     expect(a.attributes("rel")).toBe("noopener noreferrer");
-    expect(w.find('a[data-to="/admin/observability/registries/npm-q"]').exists()).toBe(true);
+    expect(w.find('a[data-to="/admin/registry/npm-q"]').exists()).toBe(true);
   });
 
   it("binds no link that is not http(s)", async () => {

@@ -55,9 +55,10 @@ describe("ADMIN_SECTIONS", () => {
    */
   it.each<[string[], string | undefined]>([
     [["quarantine:read", "findings:read", "flags:read", "audit:read"], "/admin/security/scans"],
-    [["audit:read"], "/admin/observability/audit-log"],
+    [["audit:read"], "/admin/system/audit-log"],
     [["stats:read", "config:read"], "/admin/dashboard"],
-    [["config:read"], "/admin/operations/config-reload"],
+    [["config:read"], "/admin/system/configuration"],
+    [["cache:warm"], "/admin/registries/warming"],
     [[], undefined],
   ])("lands %j on %s", (verbs, landing) => {
     expect(firstAdminPage((v) => verbs.includes(v))).toBe(landing);

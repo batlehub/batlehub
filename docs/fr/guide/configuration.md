@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 759c90b1b9ffc167
+sourceHash: d9160de20592a60b
 ---
 
 # Référence de configuration
@@ -2233,7 +2233,7 @@ on_webhook    = true
 > le consommateur plutôt que le publieur qui aurait pu corriger.
 > `signing.required = true` refuse le même artefact dès la requête de publication.
 > Configurer l'un sans l'autre lève `require-signed-release.unsigned-publishes`
-> sur la page d'administration **Rechargement de la configuration** et sur
+> sur la page d'administration **Configuration** et sur
 > `GET /api/v1/admin/config/warnings`.
 
 **`[[registries.rules]]` — refuser `latest` :**
@@ -2364,7 +2364,7 @@ bypass_roles  = ["admin"]
 > avertissement de configuration — `license-gate.no-extractor` quand la règle est
 > simplement inerte, ou `license-gate.denies-everything` quand `block = true` et
 > `allow_unknown = false` se combinent pour refuser tout téléchargement. Les deux
-> apparaissent sur la page d'administration **Rechargement de la configuration**
+> apparaissent sur la page d'administration **Configuration**
 > et sur `GET /api/v1/admin/config/warnings`, parce qu'aucun de ces états ne
 > produit d'erreur à l'exécution : la configuration est valide, la règle est
 > chargée, et elle ne peut simplement pas voir ce qu'elle prétend gouverner.
@@ -3332,7 +3332,7 @@ les blocages nomment alors le chemin du fichier ; un amont qui ne répond pas es
 incrémente une ligne ; une sonde réussie la supprime purement et simplement,
 jamais ne la décrémente. Une ligne confirmée est journalisée en `WARN` avec la
 coordonnée et le nombre de défauts, apparaît dans les jauges
-`batlehub_upstream_*` et dans la table *Exploitation → Amont* de la console, et
+`batlehub_upstream_*` et dans la table *Registres → Amont* de la console, et
 est envoyée à tous les abonnements sur `package_disappeared_upstream` ; une
 réapparition efface la ligne, la journalise et envoie
 `package_reappeared_upstream` ; une passe nulle envoie `upstream_unreachable`

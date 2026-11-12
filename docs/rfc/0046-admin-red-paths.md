@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **Accepted** — signed off 2026-11-11 with every §15 question decided with the user |
 | Short       | Admin red paths                                               |
 | Settles     | Where each administrative task lives, how an operator reaches it from anywhere in the console, and what keeps the admin findable as pages are added |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -976,92 +976,52 @@ rendered gate's existing budgets at four viewports.
 | R1 | Scope | **The three changes of §1, in that order, as one RFC.** The user asked for all three; phasing keeps each shippable alone. |
 | R2 | Backend changes? | **None.** Every list the palette needs already has a filtered reader (§4.4). |
 | R3 | Package search in the palette | **A hand-off row to `/packages?q=`, not results.** The catalog ranks and pages; a second search would disagree with it. |
+| 1 | The M3 tree and its names | **M3: six sections by trigger, as drawn in §4.5.** The misfilings are symptoms of grouping by category; a smaller move would be revisited at the next five pages. Decided 2026-11-11 with the user; matches the recommendation. |
+| 2 | Where the registry-scoped operations live | **Pages under *Registries*, reached from the hub with `?registry=` preselected (M4).** One implementation per control, and the global views stay. Decided 2026-11-11 with the user; matches the recommendation. |
+| 3 | A second shortcut | **`Ctrl/⌘+K` only.** A character-key shortcut such as `/` would have to be remappable or switchable off (WCAG 2.1.4). Decided 2026-11-11 with the user; matches the recommendation. |
+| 4 | Recents | **No recents** until someone asks: they need per-viewer `localStorage` that survives sign-out on a shared machine, and the empty query already shows the red paths. Decided 2026-11-11 with the user; matches the recommendation. |
+| 5 | Reusing `Combobox.vue` | **Extract the listbox into its own component**, keep one ARIA implementation, and add a sibling Sonar multicriteria entry whose `resourceKey` names the extracted file. Decided 2026-11-11 with the user; matches the recommendation. |
+| 6 | `SectionTabs` on desktop | **Kept**; revisited after M1 has been used for a release. Decided 2026-11-11 with the user; matches the recommendation. |
+| 7 | Red paths without a control today | **Listed as gaps in the administration guide's red-path table** and left to their own RFCs ("revoke every token of a user", "what changed in the config last week"). Decided 2026-11-11 with the user; matches the recommendation. |
+| 8 | The phase-3 path table | **The table below**: 17 moved pages, four retired section roots and the `:name` pattern — 21 `LEGACY_REDIRECTS` entries plus one `handleLegacyPath` function; the hub is singular `/admin/registry/:name` so a registry named `upstream` is not shadowed; an old `/admin/security` bookmark opens Scans. Decided 2026-11-11 with the user; matches the recommendation. |
 | 9 | An unsaved configuration edit is lost on navigation | **In phase 1: the page is dirty while the editor's text differs from the text last loaded from disk or last staged as a pending reload (returning to it clears the flag; a stage or a reload from disk resets the baseline); while dirty, `onBeforeRouteLeave` asks with the house `DestructiveConfirm` and a `beforeunload` handler raises the browser's own prompt, both removed when clean or on unmount. No draft in browser storage: the TOML can hold secrets.** Decided 2026-11-11 with the user; matches the recommendation. |
+| 10 | Phase-3 rollback | **Roll forward.** The reverse table (each M3 path → its old path) ships one release before phase 3, inert until the old paths stop being routes, and passes the same no-chain test. Decided 2026-11-11 with the user; matches the recommendation. |
+| 11 | The phone menu | **M1″: expansion on desktop only**; on a phone the menu stays a list of sections (shipped in phase 1). Decided 2026-11-11 with the user; matches the recommendation. |
+
+**Q8's path table**, as decided:
+
+| Today | M3 |
+| --- | --- |
+| `/admin/dashboard` | unchanged |
+| `/admin/observability/registries` | `/admin/registries` |
+| `/admin/observability/registries/:name` | `/admin/registry/:name` |
+| `/admin/operations/upstream` | `/admin/registries/upstream` |
+| `/admin/operations/warming` | `/admin/registries/warming` |
+| `/admin/operations/imports` | `/admin/registries/imports` |
+| `/admin/operations/air-gap` | `/admin/registries/air-gap` |
+| `/admin/packages/all`, `/admin/packages/bulk` | unchanged |
+| `/admin/operations/sbom` | `/admin/packages/sbom` |
+| `/admin/security/scans`, `/admin/security/findings` | unchanged |
+| `/admin/security/access-check` | `/admin/access/check` |
+| `/admin/security/authorization` | `/admin/access/authorization` |
+| `/admin/security/blocks` | `/admin/access/blocks` |
+| `/admin/namespaces/team-namespaces` | `/admin/access/team-namespaces` |
+| `/admin/namespaces/beta-channel` | `/admin/access/beta-channel` |
+| `/admin/operations/config-reload` | `/admin/system/configuration` |
+| `/admin/operations/banner` | `/admin/system/banner` |
+| `/admin/observability/health` | `/admin/system/health` |
+| `/admin/observability/audit-log` | `/admin/system/audit-log` |
+| `/admin/notifications/subscriptions` | `/admin/system/notifications` |
+| `/admin/notifications/inbound` | `/admin/system/inbound-events` |
+| root `/admin/operations` | → `/admin/registries/upstream` |
+| root `/admin/observability` | → `/admin/system/health` |
+| root `/admin/namespaces` | → `/admin/access/team-namespaces` |
+| root `/admin/notifications` | → `/admin/system/notifications` |
+| root `/admin/security` | stays a section root; lands on Scans, not Blocks |
 
 ### Still open
 
-1. **The M3 tree and its names.** Six sections by trigger as drawn, or keep
-   seven and only move the misfiled pages (SBOM to Packages, the explorer
-   flush named, registries out of Observability)? Recommendation: M3 — the
-   misfilings are symptoms of grouping by category, and a smaller move would
-   be revisited at the next five pages.
-2. **Where the registry-scoped operations live.** In M3 Upstream, Warming,
-   Release imports and Air gap are pages under *Registries*, reached from the
-   hub with `?registry=`. The alternative is hub tabs that embed them.
-   Recommendation: pages + preselection (M4): one implementation per
-   control, and the global views (every upstream at once) stay.
-3. **A second shortcut.** `/` as in GitHub and many consoles is a character
-   key shortcut, which WCAG 2.1.4 requires to be remappable or turnable off.
-   Recommendation: `Ctrl/⌘+K` only.
-4. **Recents.** Showing the last five destinations needs `localStorage`
-   (per-viewer, survives sign-out on a shared machine). Recommendation: no,
-   until someone asks; the empty query already shows the red paths.
-5. **Reusing `Combobox.vue`.** Its list is internal; extracting it touches
-   a component with its own Sonar exception (`comboboxRoles`,
-   `sonar-project.properties:191-192`, keyed to `Combobox.vue` alone).
-   Recommendation: extract the listbox, keep one ARIA implementation, and
-   add a sibling multicriteria entry whose `resourceKey` names the extracted
-   file. To be decided before phase 2 starts, since it sets phase 2's file
-   list.
-6. **`SectionTabs` on desktop** once the sidebar lists every page.
-   Recommendation: keep them in phase 1, decide after M1 is used for a
-   release.
-7. **Red paths without a control today.** Two triggers have no page at all:
-   "revoke every token of a user" (only account blocking, RP-8) and "what
-   changed in the config last week" beyond `ConfigChangeHistory`.
-   Recommendation: list them in the administration guide's red-path table as
-   gaps and leave them to their own RFCs.
-8. **The phase-3 path table.** M3 names sections but not URLs, and the
-   redirect count, observation 6 and `console_fetch.sh:234` all depend on
-   them. Proposal, to confirm (22 pages at `234b095c`):
-
-   | Today | M3 |
-   | --- | --- |
-   | `/admin/dashboard` | unchanged |
-   | `/admin/observability/registries` | `/admin/registries` |
-   | `/admin/observability/registries/:name` | `/admin/registry/:name` |
-   | `/admin/operations/upstream` | `/admin/registries/upstream` |
-   | `/admin/operations/warming` | `/admin/registries/warming` |
-   | `/admin/operations/imports` | `/admin/registries/imports` |
-   | `/admin/operations/air-gap` | `/admin/registries/air-gap` |
-   | `/admin/packages/all`, `/admin/packages/bulk` | unchanged |
-   | `/admin/operations/sbom` | `/admin/packages/sbom` |
-   | `/admin/security/scans`, `/admin/security/findings` | unchanged |
-   | `/admin/security/access-check` | `/admin/access/check` |
-   | `/admin/security/authorization` | `/admin/access/authorization` |
-   | `/admin/security/blocks` | `/admin/access/blocks` |
-   | `/admin/namespaces/team-namespaces` | `/admin/access/team-namespaces` |
-   | `/admin/namespaces/beta-channel` | `/admin/access/beta-channel` |
-   | `/admin/operations/config-reload` | `/admin/system/configuration` |
-   | `/admin/operations/banner` | `/admin/system/banner` |
-   | `/admin/observability/health` | `/admin/system/health` |
-   | `/admin/observability/audit-log` | `/admin/system/audit-log` |
-   | `/admin/notifications/subscriptions` | `/admin/system/notifications` |
-   | `/admin/notifications/inbound` | `/admin/system/inbound-events` |
-   | root `/admin/operations` | → `/admin/registries/upstream` |
-   | root `/admin/observability` | → `/admin/system/health` |
-   | root `/admin/namespaces` | → `/admin/access/team-namespaces` |
-   | root `/admin/notifications` | → `/admin/system/notifications` |
-   | root `/admin/security` | stays a section root; lands on Scans, not Blocks |
-
-   That is 17 moved pages, four retired roots and the `:name` pattern: 21
-   `LEGACY_REDIRECTS` entries plus one `handleLegacyPath` function. The hub
-   is singular `/admin/registry/:name` because a registry may be named
-   `upstream` or `warming`, and a static sibling route would shadow its hub.
-   An old `/admin/security` bookmark therefore opens Scans; Blocks is one row
-   further, under Access. Recommendation: this table.
-10. **Phase-3 rollback.** A revert after phase 3 leaves new-path bookmarks
-    that match nothing (§13). Recommendation: roll forward; and ship the
-    reverse table (each M3 path → its old path) **one release before**
-    phase 3, inert until the old paths stop being routes, so that a revert
-    of phase 3 alone is still a pure revert. The reverse table passes the
-    same no-chain test (`navigation.test.ts:94`).
-11. **The phone menu.** `AdminLayout.vue` draws the desktop sidebar and the
-    phone menu from one template (`DefineSectionLinks`), so expanding the
-    sidebar would expand the phone menu to ~23 rows — the length the
-    section menu was built to avoid. Recommendation: M1″ — expansion on
-    desktop only; on a phone the menu stays a list of sections, the trigger
-    names the section, and `SectionTabs` plus the palette reach the pages.
+None: every question was decided with the user on 2026-11-11.
 
 ---
 

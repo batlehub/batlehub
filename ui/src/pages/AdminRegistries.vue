@@ -9,7 +9,7 @@ import { RouterLink } from "vue-router";
 import { adminStats } from "@/client/sdk.gen";
 import type { StatsResponse } from "@/client/types.gen";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OBSERVABILITY_TABS } from "@/config/adminSections";
+import { REGISTRIES_TABS } from "@/config/adminSections";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { PageHeader } from "@/components/ui/page-header";
@@ -35,7 +35,7 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OBSERVABILITY_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminRegistries.title')"
@@ -65,7 +65,7 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
                   <!-- The registry page asks system:read; this list only stats:read. -->
                   <RouterLink
                     v-if="can('system:read')"
-                    :to="`/admin/observability/registries/${encodeURIComponent(r.registry)}`"
+                    :to="`/admin/registry/${encodeURIComponent(r.registry)}`"
                     class="hover:underline underline-offset-[3px]"
                     >{{ r.registry }}</RouterLink
                   >

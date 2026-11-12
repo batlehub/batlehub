@@ -7,7 +7,7 @@ import type { AccessSimulationResponse } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
 import CoordinateFields from "@/components/admin/CoordinateFields.vue";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SECURITY_TABS } from "@/config/adminSections";
+import { ACCESS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -155,7 +155,7 @@ async function simulate() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SECURITY_TABS" />
+    <SectionTabs :tabs="ACCESS_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminAccessCheck.rbacAccessCheck')"
@@ -292,7 +292,7 @@ async function simulate() {
       <p v-if="result.blocked_by === 'account'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByAccount") }}
         <RouterLink
-          to="/admin/security/blocks"
+          to="/admin/access/blocks"
           class="text-primary underline underline-offset-[3px]"
           >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
         >
@@ -300,7 +300,7 @@ async function simulate() {
       <p v-else-if="result.blocked_by === 'ip'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByIp") }}
         <RouterLink
-          to="/admin/security/blocks"
+          to="/admin/access/blocks"
           class="text-primary underline underline-offset-[3px]"
           >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
         >

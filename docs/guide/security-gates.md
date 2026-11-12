@@ -596,7 +596,7 @@ package page's Security tab shows both as *Next rescan*.
 
 ### The Scans page {#scans-page}
 
-*Admin → Security & Access → Scans* follows the scan queue
+*Admin → Security → Scans* follows the scan queue
 (`GET /api/v1/admin/scans`):
 
 - **Queue**: every open job, the ones a worker holds first, with the trigger,
@@ -623,7 +623,7 @@ than the upgrade does not appear under Failures; its verdict still reads
 
 ### The Findings page {#findings-page}
 
-*Admin → Security & Access → Findings* lists what the scanners found, across
+*Admin → Security → Findings* lists what the scanners found, across
 registries (`GET /api/v1/admin/findings`). Each row names the version, the
 severity, the scanner, the advisory id and the state of the verdict the finding
 fed. The filters are the registry, a minimum severity, the scanner, the verdict

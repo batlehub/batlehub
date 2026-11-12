@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
+import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { registryHealth, clearRegistryCache, invalidateExploreCache } from "@/client/sdk.gen";
 import type { RegistryHealthDto } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
@@ -17,7 +18,7 @@ import { REGISTRY_TYPE_VARIANTS, variantFromMap } from "@/lib/badge-variants";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OBSERVABILITY_TABS } from "@/config/adminSections";
+import { SYSTEM_TABS } from "@/config/adminSections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
@@ -40,6 +41,17 @@ const { token } = useAuth();
 const { data, error, loading, reload } = useApi<RegistryHealthDto[]>(
   () => registryHealth() as Promise<{ data?: unknown; error?: unknown }>,
   [token],
+);
+// RFC 0046 §6.3: `?registry=` scrolls to that registry's card and focuses it.
+usePreselectRegistry(
+  () => (data.value ?? []).map((r) => r.registry),
+  () => !loading.value && data.value !== null,
+  (name) =>
+    void nextTick(() => {
+      const card = document.getElementById(`health-${name}`);
+      card?.scrollIntoView({ block: "start" });
+      card?.focus();
+    }),
 );
 
 const expandedErrors = ref<Set<string>>(new Set());
@@ -149,7 +161,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OBSERVABILITY_TABS" />
+    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader
       :title="t('adminHealth.registryHealth')"
       :description="t('adminHealth.liveSnapshotOfEachRegistry')"
@@ -201,7 +213,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
               t("adminHealth.upstreamCounts", { missing: c.missing, disappeared: c.disappeared })
             }}
           </span>
-          <RouterLink to="/admin/operations/upstream" class="text-xs underline">
+          <RouterLink to="/admin/registries/upstream" class="text-xs underline">
             {{ t("adminHealth.upstreamOpen") }}
           </RouterLink>
         </CardContent>
@@ -214,12 +226,18 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
              shrink below its content, so the errors table inside it pushed the
              whole document sideways instead of scrolling in its own box
              (DESIGN.md, The Own-Container Overflow Rule). -->
-        <Card v-for="reg in data" :key="reg.registry" class="flex min-w-0 flex-col">
+        <Card
+          v-for="reg in data"
+          :id="`health-${reg.registry}`"
+          :key="reg.registry"
+          tabindex="-1"
+          class="flex min-w-0 flex-col focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
+        >
           <CardHeader class="pb-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <CardTitle class="min-w-0 font-mono">
                 <RouterLink
-                  :to="`/admin/observability/registries/${encodeURIComponent(reg.registry)}`"
+                  :to="`/admin/registry/${encodeURIComponent(reg.registry)}`"
                   class="hover:underline underline-offset-[3px]"
                   >{{ reg.registry }}</RouterLink
                 >

@@ -1724,7 +1724,7 @@
       {
         "bundle_id": "b-2026-11-10-a41f",
         "created_from": "hub.connected.example.com",
-        "signer_key": "3b1f9c2e7d0a",
+        "signer_key": "3b1f…c0de",
         "entries": 214,
         "blobs": 198,
         "rejected": 1,
@@ -1735,7 +1735,7 @@
       {
         "bundle_id": "b-2026-11-03-77c0",
         "created_from": "hub.connected.example.com",
-        "signer_key": "3b1f9c2e7d0a",
+        "signer_key": "3b1f…c0de",
         "entries": 167,
         "blobs": 160,
         "rejected": 0,

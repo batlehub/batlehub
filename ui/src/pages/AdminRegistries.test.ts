@@ -52,10 +52,7 @@ describe("AdminRegistries", () => {
     });
     const w = await mountPage();
     const links = w.findAll("a[data-to]").map((a) => a.attributes("data-to"));
-    expect(links).toEqual([
-      "/admin/observability/registries/npm-q",
-      "/admin/observability/registries/a%2Fb",
-    ]);
+    expect(links).toEqual(["/admin/registry/npm-q", "/admin/registry/a%2Fb"]);
     expect(w.text()).toContain("90.0%");
     expect(w.text()).toContain("degraded");
     expect(w.text()).toContain("—");

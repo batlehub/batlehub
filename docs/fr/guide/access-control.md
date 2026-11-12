@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 9edc5f4b302c095f
+sourceHash: 011b848b5aba682e
 ---
 
 # Contrôle d'accès
@@ -476,7 +476,7 @@ passée. Un mode fantôme expiré **applique**.
 :::
 
 Chaque rechargement avertit, en nommant chaque nœud et son expiration, et
-l'avertissement apparaît sur la page de rechargement de la configuration plutôt
+l'avertissement apparaît sur la page d'administration **Configuration** plutôt
 que seulement dans un log. Ce qu'un mode fantôme a servi est sur la
 [page d'autorisation](#watching) et dans `batlehub-cli authz shadow`.
 
@@ -486,7 +486,7 @@ mais rien ne fuit — ce pourquoi il n'a pas besoin d'expiration.
 
 ### La surveiller {#watching}
 
-**`/admin/security/authorization`** rassemble les cinq choses qui sont sinon
+**`/admin/access/authorization`** rassemble les cinq choses qui sont sinon
 éparpillées :
 
 | Panneau | Répond à |

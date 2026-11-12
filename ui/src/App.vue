@@ -1,13 +1,34 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref } from "vue";
+import { defineAsyncComponent, ref } from "vue";
 import { RouterView } from "vue-router";
+import { useEventListener } from "@vueuse/core";
 import AppHeader from "@/components/app/AppHeader.vue";
 import AppFooter from "@/components/app/AppFooter.vue";
+import PaletteChunkError from "@/components/app/PaletteChunkError.vue";
+import { useAuth } from "@/composables/useAuth";
+import { isPaletteShortcut, usePalette } from "@/composables/usePalette";
 
 const { t } = useI18n();
 
 const mobileOpen = ref(false);
+
+/* RFC 0046 §4.2: the palette is a lazy chunk, fetched on first open. A chunk
+   that fails to load (hashes rotated by a redeploy) says so instead of the
+   shortcut doing nothing (§10.2). */
+const CommandPalette = defineAsyncComponent({
+  loader: () => import("@/components/app/CommandPalette.vue"),
+  errorComponent: PaletteChunkError,
+});
+const { open: paletteOpen, requested: paletteRequested, openPalette } = usePalette();
+const { isAuthenticated } = useAuth();
+
+// One listener for the whole console, removed with the app.
+useEventListener(window, "keydown", (event: KeyboardEvent) => {
+  if (!isAuthenticated.value || !isPaletteShortcut(event)) return;
+  event.preventDefault();
+  openPalette();
+});
 </script>
 
 <template>
@@ -22,6 +43,7 @@ const mobileOpen = ref(false);
     </a>
 
     <AppHeader v-model:mobile-open="mobileOpen" />
+    <CommandPalette v-if="paletteRequested" v-model:open="paletteOpen" />
 
     <!-- Full width, matching the masthead and the footer.
 

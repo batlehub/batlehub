@@ -25,7 +25,7 @@ describe("the design gate's admin routes (RFC 0046 §6.5)", () => {
     expect(new Set(routes.filter((r) => pages.includes(r)))).toEqual(new Set(pages));
     // The one route that is not a table page is a concrete registry's page.
     expect(routes.filter((r) => !pages.includes(r))).toEqual([
-      expect.stringMatching(/^\/admin\/observability\/registries\/[^/]+$/),
+      expect.stringMatching(/^\/admin\/registry\/[^/]+$/),
     ]);
   });
 });
@@ -53,6 +53,37 @@ describe("hard-coded admin links (RFC 0046 §6.4)", () => {
           .filter((m) => legacy.has(m[1] ?? ""))
           .map((m) => `${file}: ${m[1]}`),
       );
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("admin paths in the documentation (RFC 0046 §11)", () => {
+  /**
+   * Every `/admin/…` UI path the published docs give (EN and FR) is a page,
+   * never a legacy redirect: a reader following a moved path lands somewhere
+   * else than the text describes. RFCs are history and keep their paths; API
+   * paths (`/api/v1/admin/…`) are preceded by `v1` and never match.
+   */
+  it("names no legacy admin path in docs/ or docs/fr/", () => {
+    const root = resolve(process.cwd(), "..", "docs");
+    const skip = new Set(["rfc", "internal", "node_modules", ".vitepress"]);
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        if (skip.has(name)) continue;
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (name.endsWith(".md")) files.push(path);
+      }
+    };
+    walk(root);
+    const legacy = new Set(Object.keys(LEGACY_REDIRECTS));
+    const offenders = files.flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/(?<![\w/])(\/admin(?:\/[a-z0-9-]+)*)/g)]
+        .filter((m) => legacy.has(m[1] ?? ""))
+        .map((m) => `${file}: ${m[1]}`),
+    );
+    expect(files.length).toBeGreaterThan(100);
     expect(offenders).toEqual([]);
   });
 });

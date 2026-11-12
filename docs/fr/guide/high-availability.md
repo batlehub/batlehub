@@ -527,7 +527,7 @@ Ce sont des compromis assumés, consignés dans
   Appliquez un changement sur chaque réplica, ou déployez-les depuis les mêmes
   fichiers (`helm upgrade`). Tant que les réplicas qui se sont signalés dans la
   dernière minute ne servent pas tous la même configuration, la page
-  **Config Reload** affiche un avertissement `config.replica-drift` qui nomme
+  **Configuration** affiche un avertissement `config.replica-drift` qui nomme
   chacun d'eux et la configuration qu'il sert. Chaque réplica envoie toutes les
   quinze secondes une empreinte de sa configuration fusionnée à PostgreSQL
   (`system_kv`), si bien qu'un fichier reformaté mais identique ne compte pas

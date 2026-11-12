@@ -5,7 +5,7 @@ import { useI18n } from "vue-i18n";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { AsyncState } from "@/components/ui/async-state";
@@ -133,7 +133,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader :title="t('airGap.title')" variant="display" />
 
     <!-- Every panel below reads the one load: a failed load says so in place of

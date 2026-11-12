@@ -29,7 +29,15 @@ const tabs = computed(() =>
   }),
 );
 
-const current = computed(() => tabs.value.find((tab) => isActive(tab.to))?.to ?? "");
+/*
+ * The longest match: "All registries" (`/admin/registries`) is a prefix of its
+ * sibling tabs (RFC 0046 M3), and one registry's page belongs to the list.
+ */
+const current = computed(
+  () =>
+    tabs.value.filter((tab) => isActive(tab.to)).sort((a, b) => b.to.length - a.to.length)[0]?.to ??
+    (route.path.startsWith("/admin/registry/") ? "/admin/registries" : ""),
+);
 
 function go(to: string) {
   if (to && to !== current.value) void router.push(to);
@@ -87,10 +95,10 @@ function onBlur(event: FocusEvent) {
       v-for="tab in tabs"
       :key="tab.to"
       :to="tab.to"
-      :aria-current="isActive(tab.to) ? 'page' : undefined"
+      :aria-current="current === tab.to ? 'page' : undefined"
       :class="[
         'px-3 py-2 font-mono text-sm whitespace-nowrap border-b -mb-px',
-        isActive(tab.to)
+        current === tab.to
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground',
       ]"

@@ -6,7 +6,7 @@
 # un plafond, une phrase que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-config.md
-sourceHash: 0384d439bf45e5ca
+sourceHash: 961ac9733413f8e4
 ---
 
 # Configuration du serveur
@@ -772,7 +772,7 @@ configuration avant que la nouvelle ne prenne effet.
    valide la nouvelle configuration, lance des sondes de connectivité vers les
    URL amont, et enregistre un **rechargement en attente** en mémoire.
 2. Un administrateur examine le diff en attente sur la page d'administration
-   **Rechargement de la configuration** (`/admin/config-reload`) et clique sur
+   **Configuration** (`/admin/system/configuration`) et clique sur
    **Appliquer** — ou l'abandonne.
 3. À défaut, l'endpoint `POST /api/v1/admin/config/reload` applique un
    rechargement immédiatement (charger, valider et appliquer atomiquement), ce
@@ -883,7 +883,7 @@ un rechargement à chaud démarre, et vidé à sa fin.
 
 ### Poser le bandeau
 
-Depuis la page d'administration **Rechargement de la configuration**,
+Depuis la page d'administration **Bandeau global** (`/admin/system/banner`),
 remplissez le message, choisissez un niveau (info, warning ou error), puis
 cliquez sur **Set Banner**.
 

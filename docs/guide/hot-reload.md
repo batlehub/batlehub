@@ -160,7 +160,7 @@ location verbatim, so it can be searched for in the TOML.
 `POST /api/v1/admin/config/validate` and `POST /api/v1/admin/config/from-content`
 return the same shape inline under `warnings`, describing the *candidate* config —
 so an admin sees them **before** applying a pending reload rather than after. The
-Config Reload admin page renders both.
+Configuration admin page renders both.
 
 | Code | Meaning |
 |---|---|

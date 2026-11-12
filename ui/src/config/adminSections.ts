@@ -12,15 +12,7 @@
  * reason: `catalogues.test.ts` can only prove a label resolves if it can import
  * it, and an array inside `<script setup>` cannot be imported.
  */
-import {
-  Bell,
-  FolderKey,
-  HeartPulse,
-  LayoutDashboard,
-  Package,
-  RefreshCw,
-  Shield,
-} from "@lucide/vue";
+import { FolderKey, LayoutDashboard, Package, Server, Settings, Shield } from "@lucide/vue";
 
 /** One admin page: its path, its i18n label and the verb its own reads ask for. */
 export interface AdminPage {
@@ -34,6 +26,8 @@ export interface AdminSection {
   to: string;
   label: string;
   icon: typeof LayoutDashboard;
+  /** Another path prefix that belongs to the section (one registry's page). */
+  also?: string;
   pages: AdminPage[];
 }
 
@@ -54,6 +48,31 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     icon: LayoutDashboard,
     pages: [{ to: "/admin/dashboard", label: "adminNav.dashboard", verb: "stats:read" }],
   },
+  /*
+   * RFC 0046 M3: the sections are named by the trigger an operator arrives
+   * with — a registry is broken, a package is wrong, a vulnerability, someone's
+   * access, the instance itself — not by the kind of control.
+   */
+  {
+    to: "/admin/registries",
+    label: "adminNav.registriesSection",
+    icon: Server,
+    // One registry's own page is `/admin/registry/:name` (singular, so a
+    // registry named `upstream` is never shadowed by a sibling page).
+    also: "/admin/registry/",
+    pages: [
+      // RFC 0044 phase 5. The list reads /admin/stats; one registry's page (a
+      // dynamic path) carries its own `meta.verb` in the router.
+      { to: "/admin/registries", label: "adminNav.allRegistries", verb: "stats:read" },
+      // RFC 0014 §4.6.
+      { to: "/admin/registries/upstream", label: "adminNav.upstream", verb: "system:read" },
+      { to: "/admin/registries/warming", label: "adminNav.warming", verb: "cache:warm" },
+      // RFC 0021 §6.5: the publish-side twin of warming.
+      { to: "/admin/registries/imports", label: "adminNav.releaseImports", verb: "cache:warm" },
+      // RFC 0008 §6.6: what came across the air gap, and what the next bundle needs.
+      { to: "/admin/registries/air-gap", label: "adminNav.airGap", verb: "system:read" },
+    ],
+  },
   {
     to: "/admin/packages",
     label: "adminNav.packages",
@@ -61,27 +80,15 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     pages: [
       { to: "/admin/packages/all", label: "adminNav.allPackages", verb: "packages:read" },
       { to: "/admin/packages/bulk", label: "adminNav.bulkBlock", verb: "packages:block" },
+      // The SBOM export observes nothing about a registry: it is about packages.
+      { to: "/admin/packages/sbom", label: "adminNav.sbomExport", verb: "packages:read" },
     ],
   },
   {
     to: "/admin/security",
-    label: "adminNav.securityAccess",
+    label: "adminNav.security",
     icon: Shield,
-    /*
-     * RFC 0004 Phase 5 (*merge*): three tabs became two. "Who is blocked, and
-     * why" was split across an account page and an address page, and an
-     * operator arrives with a symptom rather than a mechanism.
-     */
     pages: [
-      { to: "/admin/security/blocks", label: "adminNav.blocks", verb: "blocks:read" },
-      { to: "/admin/security/access-check", label: "adminNav.accessCheck", verb: "authz:read" },
-      // RFC 0015 §4.8. Beside the access checker: both answer "why was this
-      // refused?", whichever of two mechanisms produced it.
-      {
-        to: "/admin/security/authorization",
-        label: "adminNav.authorization",
-        verb: "authz:read",
-      },
       // RFC 0044 phase 2: GET /admin/scans is instance-tier quarantine:read.
       { to: "/admin/security/scans", label: "adminNav.scans", verb: "quarantine:read" },
       // RFC 0044 phase 3. shortcut: the server also answers findings:read held
@@ -91,75 +98,46 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     ],
   },
   {
-    to: "/admin/namespaces",
-    label: "adminNav.namespacesChannels",
+    to: "/admin/access",
+    label: "adminNav.access",
     icon: FolderKey,
     pages: [
+      // Both answer "why was this refused?", whichever of two mechanisms
+      // produced it (RFC 0015 §4.8).
+      { to: "/admin/access/check", label: "adminNav.accessCheck", verb: "authz:read" },
+      { to: "/admin/access/authorization", label: "adminNav.authorization", verb: "authz:read" },
+      { to: "/admin/access/blocks", label: "adminNav.blocks", verb: "blocks:read" },
       {
-        to: "/admin/namespaces/team-namespaces",
+        to: "/admin/access/team-namespaces",
         label: "adminNav.teamNamespaces",
         verb: "owners:read",
       },
-      { to: "/admin/namespaces/beta-channel", label: "adminNav.betaChannel", verb: "owners:read" },
+      { to: "/admin/access/beta-channel", label: "adminNav.betaChannel", verb: "owners:read" },
     ],
   },
   {
-    to: "/admin/operations",
-    label: "adminNav.operations",
-    icon: RefreshCw,
+    to: "/admin/system",
+    label: "adminNav.system",
+    icon: Settings,
     pages: [
-      // RFC 0014 §4.6. First, because it only reads: the section's index lands
-      // on it rather than on config reload.
-      { to: "/admin/operations/upstream", label: "adminNav.upstream", verb: "system:read" },
+      { to: "/admin/system/configuration", label: "adminNav.configReload", verb: "config:read" },
+      { to: "/admin/system/banner", label: "adminNav.globalBanner", verb: "config:write" },
+      { to: "/admin/system/health", label: "adminNav.health", verb: "system:read" },
+      { to: "/admin/system/audit-log", label: "adminNav.auditLog", verb: "audit:read" },
+      /*
+       * RFC 0004 Phase 5 (*split*): channels stayed with subscriptions because
+       * the subscription form's channel `datalist` is populated from them.
+       */
       {
-        to: "/admin/operations/config-reload",
-        label: "adminNav.configReload",
-        verb: "config:read",
-      },
-      // Was a card at the bottom of config reload: a message to every visitor
-      // filed under "change the running config".
-      { to: "/admin/operations/banner", label: "adminNav.globalBanner", verb: "config:write" },
-      { to: "/admin/operations/warming", label: "adminNav.warming", verb: "cache:warm" },
-      // RFC 0021 §6.5: the publish-side twin of warming.
-      { to: "/admin/operations/imports", label: "adminNav.releaseImports", verb: "cache:warm" },
-      // RFC 0004 Phase 5: the SBOM export observes nothing; it is an operation.
-      { to: "/admin/operations/sbom", label: "adminNav.sbomExport", verb: "packages:read" },
-      // RFC 0008 §6.6: what came across the air gap, and what the next bundle needs.
-      { to: "/admin/operations/air-gap", label: "adminNav.airGap", verb: "system:read" },
-    ],
-  },
-  {
-    to: "/admin/observability",
-    label: "adminNav.observability",
-    icon: HeartPulse,
-    pages: [
-      { to: "/admin/observability/health", label: "adminNav.health", verb: "system:read" },
-      // RFC 0044 phase 5. The list reads /admin/stats; one registry's page (a
-      // dynamic path) carries its own `meta.verb` in the router.
-      {
-        to: "/admin/observability/registries",
-        label: "adminNav.registries",
-        verb: "stats:read",
-      },
-      { to: "/admin/observability/audit-log", label: "adminNav.auditLog", verb: "audit:read" },
-    ],
-  },
-  {
-    to: "/admin/notifications",
-    label: "adminNav.notifications",
-    icon: Bell,
-    /*
-     * RFC 0004 Phase 5 (*split*): two routes, not three. Channels stayed with
-     * subscriptions because the subscription form's channel `datalist` is
-     * populated from the channel list.
-     */
-    pages: [
-      {
-        to: "/admin/notifications/subscriptions",
+        to: "/admin/system/notifications",
         label: "adminNav.subscriptions",
         verb: "system:read",
       },
-      { to: "/admin/notifications/inbound", label: "adminNav.inboundEvents", verb: "system:read" },
+      {
+        to: "/admin/system/inbound-events",
+        label: "adminNav.inboundEvents",
+        verb: "system:read",
+      },
     ],
   },
 ];
@@ -187,9 +165,8 @@ function tabsOf(root: string) {
   return (section?.pages ?? []).map(({ to, label }) => ({ to, label }));
 }
 
+export const REGISTRIES_TABS = tabsOf("/admin/registries");
 export const PACKAGES_TABS = tabsOf("/admin/packages");
 export const SECURITY_TABS = tabsOf("/admin/security");
-export const NAMESPACES_TABS = tabsOf("/admin/namespaces");
-export const OPERATIONS_TABS = tabsOf("/admin/operations");
-export const NOTIFICATIONS_TABS = tabsOf("/admin/notifications");
-export const OBSERVABILITY_TABS = tabsOf("/admin/observability");
+export const ACCESS_TABS = tabsOf("/admin/access");
+export const SYSTEM_TABS = tabsOf("/admin/system");

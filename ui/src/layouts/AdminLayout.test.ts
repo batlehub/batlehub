@@ -37,9 +37,9 @@ describe("AdminLayout", () => {
   it("offers a delegate only the pages and sections of their verbs (RFC 0042)", () => {
     held.verbs = ["audit:read"];
     try {
-      const w = mountAdmin("/admin/observability/audit-log");
-      expect(hrefsIn(w, "aside")).toEqual(["/admin/observability/audit-log"]);
-      expect(hrefsIn(w, "#admin-sections-mobile")).toEqual(["/admin/observability"]);
+      const w = mountAdmin("/admin/system/audit-log");
+      expect(hrefsIn(w, "aside")).toEqual(["/admin/system/audit-log"]);
+      expect(hrefsIn(w, "#admin-sections-mobile")).toEqual(["/admin/system"]);
     } finally {
       held.verbs = null;
     }
@@ -55,7 +55,7 @@ describe("AdminLayout", () => {
     const headings = w.findAll('aside [role="group"] > span');
     expect(headings).toHaveLength(ADMIN_SECTIONS.length - 1);
     for (const heading of headings) expect(heading.attributes("tabindex")).toBeUndefined();
-    expect(w.get("aside").text()).toContain("Security & Access");
+    expect(w.get("aside").text()).toContain("Blocked accounts & addresses");
   });
 
   /** RFC 0046 M1′: a section shows only the pages held, never a greyed-out row. */
@@ -86,15 +86,26 @@ describe("AdminLayout", () => {
   });
 
   it("marks the page on desktop and its section on mobile, sub-routes included", () => {
-    const w = mountAdmin("/admin/observability/registries/npm");
+    const w = mountAdmin("/admin/registry/npm");
     // The position is announced, not only painted.
     const current = (selector: string) =>
       w
         .findAll(`${selector} a`)
         .filter((a) => a.attributes("aria-current") === "page")
         .map((a) => a.attributes("href"));
-    expect(current("aside")).toEqual(["/admin/observability/registries"]);
-    expect(current("#admin-sections-mobile")).toEqual(["/admin/observability"]);
+    expect(current("aside")).toEqual(["/admin/registries"]);
+    // One registry's page belongs to the Registries section (M3, M4).
+    expect(current("#admin-sections-mobile")).toEqual(["/admin/registries"]);
+  });
+
+  /** "All registries" is a prefix of its siblings: only the longest match is current. */
+  it("marks only the page itself under a page that prefixes it", () => {
+    const w = mountAdmin("/admin/registries/upstream");
+    const current = w
+      .findAll("aside a")
+      .filter((a) => a.attributes("aria-current") === "page")
+      .map((a) => a.attributes("href"));
+    expect(current).toEqual(["/admin/registries/upstream"]);
   });
 
   /**
@@ -102,9 +113,9 @@ describe("AdminLayout", () => {
    * instead of four wrapped rows of links above the page.
    */
   it("names the current section on the mobile trigger and opens the list on demand", async () => {
-    const w = mountAdmin("/admin/operations/config-reload");
+    const w = mountAdmin("/admin/system/configuration");
     const trigger = w.get('button[aria-controls="admin-sections-mobile"]');
-    expect(trigger.text()).toContain("Operations");
+    expect(trigger.text()).toContain("System");
     expect(trigger.attributes("aria-expanded")).toBe("false");
     expect((w.get("#admin-sections-mobile").element as HTMLElement).style.display).toBe("none");
 

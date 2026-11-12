@@ -70,7 +70,7 @@ All configuration changes that affect runtime behavior (new registries, RBAC rul
 
    ```bash
    batlehub-cli server config changes
-   # or via Admin UI → Config Reload → History
+   # or via Admin UI → System → Configuration → History
    ```
 
 4. **Reverting** — keep the previous config version in version control. Roll back by deploying the prior commit.

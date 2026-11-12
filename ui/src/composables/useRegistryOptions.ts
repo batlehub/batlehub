@@ -22,7 +22,7 @@ import { useAuth } from "./useAuth";
 export function useRegistryOptions() {
   const { token } = useAuth();
 
-  const { data, loading, error } = useApi<RegistryInfo[]>(
+  const { data, loading, error, reload } = useApi<RegistryInfo[]>(
     () => listRegistries() as Promise<{ data?: unknown; error?: unknown }>,
     [token],
   );
@@ -35,5 +35,6 @@ export function useRegistryOptions() {
   const typeOf = (name: string): string | undefined =>
     registries.value.find((r) => r.name === name)?.type;
 
-  return { registries, options, typeOf, loading, error };
+  // `reload`: the palette refetches when opened after a failed load (RFC 0046 §4.4).
+  return { registries, options, typeOf, loading, error, reload };
 }

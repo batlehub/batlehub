@@ -22,7 +22,8 @@ import type {
 } from "@/client/types.gen";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import StatsTrendChart from "@/components/admin/StatsTrendChart.vue";
-import { OBSERVABILITY_TABS } from "@/config/adminSections";
+import { ADMIN_PAGE_VERBS, REGISTRIES_TABS } from "@/config/adminSections";
+import { useAuth } from "@/composables/useAuth";
 import { formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Alert } from "@/components/ui/alert";
@@ -36,6 +37,22 @@ const route = useRoute();
 const router = useRouter();
 
 const name = computed(() => String(route.params.name ?? ""));
+
+const { can } = useAuth();
+/** RFC 0046 M4: the pages that act on one registry, in the order an incident needs them. */
+const ACTIONS = [
+  { to: "/admin/registries/upstream", label: "adminRegistry.actions.upstream" },
+  { to: "/admin/registries/warming", label: "adminRegistry.actions.warm" },
+  { to: "/admin/system/health", label: "adminRegistry.actions.refreshExplorer" },
+  { to: "/admin/registries/imports", label: "adminRegistry.actions.imports" },
+  { to: "/admin/system/configuration", label: "adminRegistry.editConfig" },
+];
+const actions = computed(() =>
+  ACTIONS.filter((action) => {
+    const verb = ADMIN_PAGE_VERBS[action.to];
+    return verb !== undefined && can(verb);
+  }),
+);
 
 // ── the view ─────────────────────────────────────────────────────────────────
 
@@ -228,9 +245,9 @@ watch(
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OBSERVABILITY_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <RouterLink
-      to="/admin/observability/registries"
+      to="/admin/registries"
       class="text-sm text-muted-foreground hover:underline underline-offset-[3px]"
       >← {{ t("adminRegistry.back") }}</RouterLink
     >
@@ -241,9 +258,7 @@ watch(
       <p class="font-mono text-sm">{{ t("adminRegistry.missing", { name }) }}</p>
       <p class="text-sm text-muted-foreground">{{ t("adminRegistry.missingHint") }}</p>
       <Button as-child size="sm" variant="outline">
-        <RouterLink to="/admin/observability/registries">{{
-          t("adminRegistry.backToList")
-        }}</RouterLink>
+        <RouterLink to="/admin/registries">{{ t("adminRegistry.backToList") }}</RouterLink>
       </Button>
     </div>
 
@@ -268,12 +283,6 @@ watch(
         :description="`${view.registry_type} · ${view.mode}`"
       >
         <template #actions>
-          <Button as-child size="sm" variant="outline">
-            <RouterLink
-              :to="{ path: '/admin/operations/config-reload', query: { registry: view.name } }"
-              >{{ t("adminRegistry.editConfig") }}</RouterLink
-            >
-          </Button>
           <Button v-if="monitoring" as-child size="sm" variant="outline">
             <a
               :href="monitoring"
@@ -352,6 +361,30 @@ watch(
             >{{ view.suggestions.length ? `⚠ ${view.suggestions.length}` : "0" }}</span
           >
         </RouterLink>
+      </nav>
+
+      <!--
+        RFC 0046 M4: the controls for this registry are links to the pages that
+        own them, the registry preselected — one implementation per control. An
+        action is drawn only when the guard would open its page (`can(verb)` at
+        the instance tier); with none left the strip is absent, not empty.
+      -->
+      <nav
+        v-if="actions.length > 0"
+        :aria-label="t('adminRegistry.actionsLabel')"
+        class="flex flex-wrap items-baseline gap-x-4 text-sm"
+        data-testid="actions"
+      >
+        <span class="font-mono text-xs uppercase tracking-wider text-muted-foreground">{{
+          t("adminRegistry.actionsLabel")
+        }}</span>
+        <RouterLink
+          v-for="action in actions"
+          :key="action.to"
+          :to="{ path: action.to, query: { registry: view.name } }"
+          class="inline-block py-1 underline underline-offset-[3px]"
+          >{{ t(action.label) }}</RouterLink
+        >
       </nav>
 
       <Tabs v-model="activeTab">

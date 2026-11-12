@@ -17,7 +17,7 @@ import SectionTabs from "@/components/admin/SectionTabs.vue";
 import PendingReloadCard from "@/components/admin/PendingReloadCard.vue";
 import ConfigEditorCard from "@/components/admin/ConfigEditorCard.vue";
 import ConfigChangeHistory from "@/components/admin/ConfigChangeHistory.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -334,7 +334,7 @@ function settleLeave(leave: boolean) {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="successMsg ?? ''" />
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader variant="display" :title="t('adminConfigReload.configReload')" />
 
     <!--
