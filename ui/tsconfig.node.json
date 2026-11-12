@@ -32,6 +32,7 @@
     "src/test/fixtures.test.ts",
     "src/test/stub-server.test.ts",
     "src/config/registryTypes.docs.test.ts",
+    "src/config/adminSections.files.test.ts",
     "src/design/composed-contrast.test.ts",
     "src/design/system-rules.test.ts"
   ]

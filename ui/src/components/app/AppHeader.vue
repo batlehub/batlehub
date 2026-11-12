@@ -3,7 +3,8 @@ import { useI18n } from "vue-i18n";
 import { computed, useTemplateRef } from "vue";
 import { useResizeObserver } from "@vueuse/core";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { Menu, X, BookOpen } from "@lucide/vue";
+import { Menu, X, BookOpen, Search } from "@lucide/vue";
+import { usePalette } from "@/composables/usePalette";
 import { useAuth } from "@/composables/useAuth";
 import { accountTabs, primaryNav, SECURITY_VERBS, TOOLS_TABS } from "@/config/navigation";
 import { firstAdminPage } from "@/config/adminSections";
@@ -21,6 +22,7 @@ const mobileOpen = defineModel<boolean>("mobileOpen", { default: false });
 const { identity, isAuthenticated, isOidcSession, can, canAny, logout } = useAuth();
 const route = useRoute();
 const router = useRouter();
+const { openPalette, chord } = usePalette();
 
 /* The bar is opaque and unblurred: DESIGN.md's Elevation rule leaves this
    system no blurs and no layered surfaces, and a translucent sticky bar is
@@ -176,6 +178,20 @@ function handleLogout() {
              one control here that reads the same as an icon — which is how the
              two toggles beside it already work — and `aria-label` keeps its name
              at every width, so nothing is lost but the glyphs. -->
+        <!-- RFC 0046 §4.2: the palette's button, from `xl` only. The bar's
+             French min-content leaves ~15px of slack at `lg` (see above), so
+             between `lg` and `xl` the shortcut and the admin sidebar's own
+             button are the routes in; below `lg` the mobile menu carries it. -->
+        <button
+          v-if="isAuthenticated"
+          type="button"
+          class="hidden xl:flex items-center gap-2 whitespace-nowrap border border-border px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+          @click="openPalette"
+        >
+          <Search class="h-3.5 w-3.5" aria-hidden="true" />
+          {{ t("palette.button") }}
+          <kbd class="font-mono normal-case tracking-normal">{{ t(chord) }}</kbd>
+        </button>
         <a
           :href="DOCS_URL"
           target="_blank"
@@ -235,6 +251,18 @@ function handleLogout() {
           @click="mobileOpen = false"
           >{{ t(link.label) }}</RouterLink
         >
+        <button
+          v-if="isAuthenticated"
+          type="button"
+          class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:text-foreground"
+          @click="
+            mobileOpen = false;
+            openPalette();
+          "
+        >
+          <Search class="h-3.5 w-3.5" aria-hidden="true" />
+          {{ t("palette.button") }}
+        </button>
         <a
           :href="DOCS_URL"
           target="_blank"

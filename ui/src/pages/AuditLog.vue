@@ -11,7 +11,7 @@ import { formatDate } from "@/lib/format";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
 import ExposurePanel from "@/components/admin/ExposurePanel.vue";
 import { PageHeader } from "@/components/ui/page-header";
-import { OBSERVABILITY_TABS } from "@/config/adminSections";
+import { SYSTEM_TABS } from "@/config/adminSections";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -287,7 +287,7 @@ async function purge() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OBSERVABILITY_TABS" />
+    <SectionTabs :tabs="SYSTEM_TABS" />
     <Announcer :message="announcement" />
     <!-- `total`, not the loaded page: the endpoint returns 100 rows by
              default and the count must not silently mean "the first 100". -->

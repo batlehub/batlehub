@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { ref, onMounted, computed } from "vue";
+import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { OPERATIONS_TABS } from "@/config/adminSections";
+import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Card, CardContent } from "@/components/ui/card";
@@ -74,9 +75,21 @@ const tagInputs = ref<Record<string, string>>({});
 
 const key = (registry: string, repo: string) => `${registry}/${repo}`;
 
+/** RFC 0046 §6.3: `?registry=` narrows the table to that registry's imports. */
+const only = ref("");
+usePreselectRegistry(
+  () => registries.value.map((r) => r.registry),
+  () => !loading.value && registries.value.length > 0,
+  (name) => {
+    only.value = name;
+  },
+);
+
 /** Flattened for one table: the row is an import, not a registry. */
 const rows = computed(() =>
-  registries.value.flatMap((r) => r.imports.map((i) => ({ registry: r.registry, ...i }))),
+  registries.value
+    .filter((r) => !only.value || r.registry === only.value)
+    .flatMap((r) => r.imports.map((i) => ({ registry: r.registry, ...i }))),
 );
 
 async function loadImports() {
@@ -139,7 +152,7 @@ onMounted(() => void loadImports());
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="OPERATIONS_TABS" />
+    <SectionTabs :tabs="REGISTRIES_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"
@@ -166,6 +179,12 @@ onMounted(() => void loadImports());
         </p>
       </template>
 
+      <p v-if="only" class="mb-2 flex items-center gap-3 text-sm text-muted-foreground">
+        {{ t("adminImports.filteredTo", { registry: only }) }}
+        <Button variant="outline" size="sm" @click="only = ''">
+          {{ t("adminImports.showAll") }}
+        </Button>
+      </p>
       <Card>
         <CardContent class="p-0">
           <Table :label="t('adminImports.releaseImports')">

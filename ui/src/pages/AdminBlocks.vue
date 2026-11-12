@@ -36,7 +36,7 @@ import { useApi, extractMessage } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatDate as fmtDate } from "@/lib/format";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SECURITY_TABS } from "@/config/adminSections";
+import { ACCESS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
@@ -286,7 +286,7 @@ async function confirmUnblock() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SECURITY_TABS" />
+    <SectionTabs :tabs="ACCESS_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"

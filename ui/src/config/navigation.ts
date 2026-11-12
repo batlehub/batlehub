@@ -70,6 +70,18 @@ export function packagePath(registry: string, name: string): string {
   return `/packages/${encodeURIComponent(registry)}/${encodeURIComponent(name)}`;
 }
 
+/**
+ * One registry's admin page (RFC 0044 phase 5, RFC 0046 M4); a name is data, so
+ * it is encoded. Singular `registry`, so no sibling page can shadow a registry
+ * named `upstream` or `warming`.
+ */
+export function registryHubPath(name: string): string {
+  return `/admin/registry/${encodeURIComponent(name)}`;
+}
+
+/** The registry page's old pattern (RFC 0044), redirected by the router. */
+export const LEGACY_REGISTRY_HUB = /^\/admin\/observability\/registries\/([^/]+)$/;
+
 /** The diagnostics hub's tabs. */
 export const TOOLS_TABS: NavLink[] = [
   { to: "/tools/access-check", label: "tools.accessCheck" },
@@ -94,32 +106,90 @@ export const LEGACY_REDIRECTS: Record<string, string> = {
   "/access-check": "/tools/access-check",
   "/path-mapper": "/tools/url-mapper",
 
-  // Admin pages that moved when the sections were introduced.
-  "/admin/bulk": "/admin/packages/bulk",
-  // RFC 0004 Phase 5 (*merge*). The two pre-section aliases are re-pointed at
-  // the destination in the same change as the two section paths: a redirect
-  // that lands on another redirect key is a chain, which `navigation.test.ts`
-  // refuses.
-  "/admin/users": "/admin/security/blocks",
-  "/admin/ip-blocks": "/admin/security/blocks",
-  "/admin/security/users": "/admin/security/blocks",
-  "/admin/security/ip-blocks": "/admin/security/blocks",
-  "/admin/access-check": "/admin/security/access-check",
-  "/admin/team-namespaces": "/admin/namespaces/team-namespaces",
-  "/admin/beta-channel": "/admin/namespaces/beta-channel",
-  "/admin/config-reload": "/admin/operations/config-reload",
-  "/admin/warming": "/admin/operations/warming",
-  // RFC 0004 Phase 5 (*remove*): the explore-cache page's one job was pressing
-  // a button, and the control now sits beside Clear Cache on the health page —
-  // where an operator actually notices the explorer is stale. Both entries
-  // point at the destination directly: a redirect that lands on another
+  // Admin pages that moved when the sections were introduced. Every entry
+  // points at its final page directly: a redirect that lands on another
   // redirect key is a chain, and `navigation.test.ts` refuses those.
-  "/admin/explore-cache": "/admin/observability/health",
-  "/admin/operations/explore-cache": "/admin/observability/health",
-  "/admin/health": "/admin/observability/health",
-  "/admin/sbom": "/admin/operations/sbom",
-  "/admin/observability/sbom": "/admin/operations/sbom",
-  "/admin/audit-log": "/admin/observability/audit-log",
+  "/admin/bulk": "/admin/packages/bulk",
+  // RFC 0004 Phase 5 (*merge*): blocked accounts and addresses on one page.
+  "/admin/users": "/admin/access/blocks",
+  "/admin/ip-blocks": "/admin/access/blocks",
+  "/admin/security/users": "/admin/access/blocks",
+  "/admin/security/ip-blocks": "/admin/access/blocks",
+  "/admin/access-check": "/admin/access/check",
+  "/admin/team-namespaces": "/admin/access/team-namespaces",
+  "/admin/beta-channel": "/admin/access/beta-channel",
+  "/admin/config-reload": "/admin/system/configuration",
+  "/admin/warming": "/admin/registries/warming",
+  // RFC 0004 Phase 5 (*remove*): the explore-cache page's one job was pressing
+  // a button, and the control now sits beside Clear Cache on the health page.
+  "/admin/explore-cache": "/admin/system/health",
+  "/admin/operations/explore-cache": "/admin/system/health",
+  "/admin/health": "/admin/system/health",
+  "/admin/sbom": "/admin/packages/sbom",
+  "/admin/observability/sbom": "/admin/packages/sbom",
+  "/admin/audit-log": "/admin/system/audit-log",
+
+  // RFC 0046 phase 3 (§15 Q8): the sections regrouped by trigger. Seventeen
+  // pages and four section roots; one registry's page, a pattern, is
+  // `handleLegacyPath`'s.
+  "/admin/observability/registries": "/admin/registries",
+  "/admin/operations/upstream": "/admin/registries/upstream",
+  "/admin/operations/warming": "/admin/registries/warming",
+  "/admin/operations/imports": "/admin/registries/imports",
+  "/admin/operations/air-gap": "/admin/registries/air-gap",
+  "/admin/operations/sbom": "/admin/packages/sbom",
+  "/admin/security/access-check": "/admin/access/check",
+  "/admin/security/authorization": "/admin/access/authorization",
+  "/admin/security/blocks": "/admin/access/blocks",
+  "/admin/namespaces/team-namespaces": "/admin/access/team-namespaces",
+  "/admin/namespaces/beta-channel": "/admin/access/beta-channel",
+  "/admin/operations/config-reload": "/admin/system/configuration",
+  "/admin/operations/banner": "/admin/system/banner",
+  "/admin/observability/health": "/admin/system/health",
+  "/admin/observability/audit-log": "/admin/system/audit-log",
+  "/admin/notifications/subscriptions": "/admin/system/notifications",
+  "/admin/notifications/inbound": "/admin/system/inbound-events",
+  "/admin/operations": "/admin/registries/upstream",
+  "/admin/observability": "/admin/system/health",
+  "/admin/namespaces": "/admin/access/team-namespaces",
+  "/admin/notifications": "/admin/system/notifications",
+};
+
+/**
+ * RFC 0046 §15 Q10: the section tree's paths → the paths before it, applied
+ * only to a path **no route matches**.
+ *
+ * Shipped one release ahead of the regrouping, so that a revert of the
+ * regrouping alone is still a pure revert: a bookmark taken on the new tree
+ * then lands on its old page instead of on nothing. Once the new paths are
+ * routes, nothing here ever applies; the table is inert, not wrong.
+ */
+export const REVERSE_REDIRECTS: Record<string, string> = {
+  "/admin/registries": "/admin/observability/registries",
+  "/admin/registries/upstream": "/admin/operations/upstream",
+  "/admin/registries/warming": "/admin/operations/warming",
+  "/admin/registries/imports": "/admin/operations/imports",
+  "/admin/registries/air-gap": "/admin/operations/air-gap",
+  "/admin/packages/sbom": "/admin/operations/sbom",
+  "/admin/access": "/admin/security/access-check",
+  "/admin/access/check": "/admin/security/access-check",
+  "/admin/access/authorization": "/admin/security/authorization",
+  "/admin/access/blocks": "/admin/security/blocks",
+  "/admin/access/team-namespaces": "/admin/namespaces/team-namespaces",
+  "/admin/access/beta-channel": "/admin/namespaces/beta-channel",
+  "/admin/system": "/admin/observability/health",
+  "/admin/system/configuration": "/admin/operations/config-reload",
+  "/admin/system/banner": "/admin/operations/banner",
+  "/admin/system/health": "/admin/observability/health",
+  "/admin/system/audit-log": "/admin/observability/audit-log",
+  "/admin/system/notifications": "/admin/notifications/subscriptions",
+  "/admin/system/inbound-events": "/admin/notifications/inbound",
+};
+
+/** The new registry page's pattern, reversed; `to` takes an already-encoded segment. */
+export const REVERSE_REGISTRY_HUB = {
+  from: /^\/admin\/registry\/([^/]+)$/,
+  to: (segment: string) => `/admin/observability/registries/${segment}`,
 };
 
 /** Section index paths, which land on their first tab. */
@@ -127,15 +197,13 @@ export const SECTION_INDEXES: Record<string, string> = {
   "/me": "/me/profile",
   "/tools": "/tools/access-check",
   "/admin": "/admin/dashboard",
+  // `/admin/registries` is not here: it is a page, the list of registries.
   "/admin/packages": "/admin/packages/all",
-  "/admin/security": "/admin/security/blocks",
-  "/admin/namespaces": "/admin/namespaces/team-namespaces",
-  // The read-only tab, not config reload: a section should open on what it
+  // RFC 0046 §15 Q8: Security is the scans and their findings now; an old
+  // `/admin/security` bookmark opens Scans, and Blocks is under Access.
+  "/admin/security": "/admin/security/scans",
+  "/admin/access": "/admin/access/check",
+  // The read-only page, not configuration: a section should open on what it
   // knows, not on the control that changes a running instance.
-  "/admin/operations": "/admin/operations/upstream",
-  "/admin/observability": "/admin/observability/health",
-  // Not a LEGACY_REDIRECTS entry: `/admin/notifications` is not removed, it
-  // becomes a section root like `/admin/packages`. The sidebar still points at
-  // it, and `AdminLayout`'s `isActive` matches by prefix.
-  "/admin/notifications": "/admin/notifications/subscriptions",
+  "/admin/system": "/admin/system/health",
 };

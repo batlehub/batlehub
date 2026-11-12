@@ -258,7 +258,7 @@ Rejected at startup and on every reload:
 | host routing with no trusted-proxy policy | routing would depend on an ungoverned header |
 
 Warned about but accepted, and surfaced at
-`GET /api/v1/admin/config/warnings` and on the Config Reload admin page:
+`GET /api/v1/admin/config/warnings` and on the Configuration admin page:
 
 | Condition | Behaviour |
 | --- | --- |

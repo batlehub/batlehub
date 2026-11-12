@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/change-management.md
-sourceHash: 9bd84f1f1c84e93e
+sourceHash: 76e1d4982194c325
 ---
 
 # Politique de gestion du changement — BatleHub
@@ -91,7 +91,7 @@ débit, ajouts de blocages d'IP) doit être :
 
    ```bash
    batlehub-cli server config changes
-   # ou depuis la console → Rechargement de la configuration → Historique
+   # ou depuis la console → Système → Configuration → Historique
    ```
 
 4. **Réversible** — gardez la version précédente de la configuration sous

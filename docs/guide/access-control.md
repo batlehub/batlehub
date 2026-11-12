@@ -447,7 +447,7 @@ refuses to start with a date already past. An expired shadow **enforces**.
 :::
 
 Every reload warns, naming each node and its expiry, and the warning appears on
-the Config Reload page rather than only in a log. What a shadow has served is on
+the Configuration admin page rather than only in a log. What a shadow has served is on
 the [authorization page](#watching) and in `batlehub-cli authz shadow`.
 
 `versioning` takes a `dry_run = true` too. Its direction is milder — a
@@ -456,7 +456,7 @@ badly-named or duplicate version is accepted, so bad data lands but nothing leak
 
 ### Watching it {#watching}
 
-**`/admin/security/authorization`** gathers the five things that are otherwise
+**`/admin/access/authorization`** gathers the five things that are otherwise
 scattered:
 
 | Panel | Answers |

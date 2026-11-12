@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { RefreshCw } from "@lucide/vue";
@@ -58,7 +59,16 @@ const byReference = computed<boolean>({
 });
 
 const registries = ref<string[]>([]);
+const registriesLoaded = ref(false);
 const registry = ref("");
+// RFC 0046 §6.3 (RP-4): `?registry=` preselects the filter once the list is in.
+usePreselectRegistry(
+  () => registries.value,
+  () => registriesLoaded.value,
+  (name) => {
+    registry.value = name;
+  },
+);
 const severity = ref("");
 const scanner = ref("");
 const reference = ref("");
@@ -263,6 +273,7 @@ onMounted(async () => {
   try {
     const { data } = await listRegistries();
     registries.value = (data ?? []).map((r) => r.name).sort((a, b) => a.localeCompare(b));
+    registriesLoaded.value = true;
   } catch {
     // The filter falls back to "all"; the list itself still loads.
   }

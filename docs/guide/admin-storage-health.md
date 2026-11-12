@@ -74,7 +74,7 @@ Returns per-registry status (upstream reachability, cache hit rate) and overall 
 
 ### The registry page {#registry-page}
 
-*Admin → Observability → Registries* lists every registry; each name opens its
+*Admin → Registries → All registries* lists every registry; each name opens its
 page (`GET /api/v1/admin/registries/{name}`). A strip at the top carries the
 five signals someone opens it for — upstream, cache, scan, queue and advice —
 and four tabs (`?tab=overview|activity|scan|config`) hold the detail:

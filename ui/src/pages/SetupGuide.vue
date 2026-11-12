@@ -213,7 +213,7 @@ function showSelector(def: RegistryTypeDef): boolean {
       >
         <template #action>
           <Button v-if="can('config:read')" as-child size="sm">
-            <RouterLink to="/admin/operations/config-reload">{{
+            <RouterLink to="/admin/system/configuration">{{
               t("setupGuide.openConfig")
             }}</RouterLink>
           </Button>

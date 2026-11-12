@@ -1,6 +1,6 @@
 ---
 sourcePath: use/package-explorer-cache.md
-sourceHash: 992737a26a9d9fe3
+sourceHash: 4c457e3b2c339730
 ---
 
 # Explorateur de paquets — cache et API
@@ -56,11 +56,13 @@ l'API.
 
 #### Console d'administration
 
-Allez dans **Admin → Cache d'exploration** (`/admin/explore-cache`). Deux actions
-sont disponibles :
+Allez dans **Admin → Système → Santé et cache** (`/admin/system/health`). La
+carte de chaque registre porte un bouton **Actualiser l'explorateur** : une fois
+confirmé, seules les entrées de cache qui incluent ce registre sont vidées. Rien
+n'est supprimé et aucun téléchargement n'est interrompu.
 
-- **Invalider par registre** — choisissez un registre dans la liste déroulante et cliquez sur **Invalider le registre**. Seules les entrées de cache qui incluent ce registre sont vidées.
-- **Tout invalider** — vide le cache entier. Tous les registres sont concernés.
+Vider le cache entier, pour tous les registres à la fois, passe uniquement par
+l'API (ci-dessous, sans `registry` dans le corps).
 
 Après invalidation, la requête suivante sur une entrée vidée réinterroge la base
 et repeuple le cache de façon transparente.
