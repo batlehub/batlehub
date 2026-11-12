@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — signed off 2026-11-11 with every §15 question decided with the user |
+| Status      | **Implemented** — signed off 2026-11-11; phases 1, 2, 2½ and 3 landed 2026-11-12 in #322 (`ba575848`); §17 records where the built thing differs |
 | Short       | Admin red paths                                               |
 | Settles     | Where each administrative task lives, how an operator reaches it from anywhere in the console, and what keeps the admin findable as pages are added |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1037,3 +1037,81 @@ None: every question was decided with the user on 2026-11-11.
 The security-relevant property — the palette lists no more than the guard
 allows — lands in phase 2 with the palette, tested by the same commit; the
 sidebar filter it shares is already enforced in phase 1.
+
+---
+
+## 17. Revision against the tree (2026-11-12)
+
+Every phase of §16 landed in one pull request, #322, squashed on `main` as
+`ba575848`: phase 1 as `59c01c34`, phases 2, 2½ and 3 as `40306018`.
+
+| Phase | State | What landed |
+| --- | --- | --- |
+| 1 | done | `ADMIN_SECTIONS` as the single table, the expanded desktop sidebar (M1, M1′, M1″), the `?registry=` caret in the configuration editor, the unsaved-edit guard (Q9), the design-gate fixtures for the eight missing pages |
+| 2 | done | `components/ui/listbox/Listbox.vue` extracted from `Combobox.vue` (its tests unchanged), `lib/palette.ts`, `config/redPaths.ts` (RP-1 to RP-12, keywords in `en` and `fr`), `composables/usePalette.ts`, `components/app/CommandPalette.vue` loaded lazily with `PaletteChunkError.vue`; Sonar entries `listboxRoles` and `paletteRoles` beside `comboboxRoles` |
+| 2½ | done | `REVERSE_REDIRECTS` and `REVERSE_REGISTRY_HUB` in `config/navigation.ts`, applied only to a path no route matches; inert since phase 3 |
+| 3 | done | The M3 tree, the 21 `LEGACY_REDIRECTS` of the Q8 table with every older alias re-pointed at its final page, the hub at `/admin/registry/:name`, the M4 actions strip, `?registry=` on the five §6.3 pages through one composable, the hard-coded links moved, every legacy path rewritten in `docs/` and `docs/fr/` (11 French pages re-stamped), the red-path table in the administration guide |
+
+### Where the build differs from the text
+
+1. **`/admin/system` lands on Health.** The RFC named no landing page for
+   System; Health follows the old Operations root, which opened on what it
+   knows. `/admin/security` lands on Scans and `/admin/access` on Access
+   check, as written.
+2. **No palette button in the header between `lg` and `xl`.** The bar's
+   French min-content leaves about 15 px at 1 024 px; the shortcut and the
+   admin sidebar's button cover that band. The header button shows from
+   `xl`, the mobile menu below `lg`.
+3. **Pages carry no `keywords` field** (§6.1). The label and section name
+   match well enough; the red-path actions carry the bilingual keywords.
+4. **A refused hub page lands on the Registries section's first held page**,
+   not on the dashboard, and the security group's landing after a refused
+   configuration page is `/admin/system/audit-log`, because the
+   configuration page moved to System and the guard lands on the same
+   section's first held page. `console_fetch.sh` asserts that path.
+5. **T5's `?registry=../x` is tested once**, on the shared
+   `composables/usePreselectRegistry.ts`, not per page as §14 wrote: the
+   five pages read the value only through it.
+6. **The design gate found one defect** before landing: the M4 strip's links
+   wrapped closer than the 24 px target size at 390 px. Fixed with
+   `inline-block py-1`; the rerun covered 160 combinations with 0
+   unexpected findings.
+
+### The proof, as observed
+
+`tests/heavy/console_fetch.sh` ended `CONSOLE-FETCH-HEAVY-OK` in the browser
+sidecar's Chrome on 2026-11-12, on a fresh database. It observed:
+
+- **Observation 2:** admin `rescan` resolves first to
+  `/admin/security/scans?tab=failures`, which loads only the scans and
+  verdicts requests.
+- **Observation 4:** the security group's `config` offers only
+  `/packages?q=config`, and the session makes no `/api/v1/admin/config*`
+  request.
+- **Observation 5:** `Ctrl+K` in the editor opens nothing and leaves the
+  textarea unchanged.
+- **Observation 6:** all 17 old paths land on M3 with the query kept.
+- **Observation 7:** both the sidebar and the palette ask before leaving an
+  edit, the edit is kept on Cancel, and `beforeunload` prompts on close.
+
+**Observations 1 and 3 were not run in a browser.** They are proven at the
+unit level only. Observation 1, the sidebar's links and `aria-current`, is
+in `layouts/AdminLayout.test.ts`. Observation 3, the caret's
+`selectionStart`, including when the content resolves after mount, is in
+`pages/AdminConfigReload.test.ts`.
+
+### Threats, as tested
+
+| Row | Test |
+| --- | --- |
+| T1 | `CommandPalette.test.ts`: the palette lists exactly `useRegistryOptions`' list, a registry-only viewer, and a new viewer sees only their own registries |
+| T2 | `lib/palette.test.ts`: admin rows equal the guard's set for four verb sets, one of them registry-only |
+| T3 | the registry-only case above (unit) and observation 4 (heavy) |
+| T4 | `components/ui/listbox/Listbox.test.ts`: a markup-shaped registry name renders as text |
+| T5 | `usePreselectRegistry.test.ts` (see point 5) and the router's `%2F..%2F` case, which stays one segment |
+| T6 | observation 5 (heavy) and the shortcut-rule unit tests |
+
+§8 holds: no dependency was added, and `ui/pnpm-lock.yaml` is unchanged by
+the RFC. The §4.5 mocks stay as written; deviations 1, 2 and 4 are the only
+places the shipped screens differ from them.
+

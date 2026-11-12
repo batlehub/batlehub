@@ -412,10 +412,6 @@ export const sidebar = {
           text: "0045 — mise auto-wire",
           link: "/rfc/0045-mise-auto-wire",
         },
-        {
-          text: "0046 — Admin red paths",
-          link: "/rfc/0046-admin-red-paths",
-        },
       ],
     },
     {
@@ -572,6 +568,10 @@ export const sidebar = {
         {
           text: "0042 — Security console by verb",
           link: "/rfc/0042-security-console-by-verb",
+        },
+        {
+          text: "0046 — Admin red paths",
+          link: "/rfc/0046-admin-red-paths",
         },
       ],
     },
