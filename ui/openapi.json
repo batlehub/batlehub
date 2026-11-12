@@ -13832,15 +13832,7 @@
         ],
         "responses": {
           "307": {
-            "description": "The origin, for a wired prefix with no typed rule",
-            "headers": {
-              "Location": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "The URL mise asked for"
-              }
-            }
+            "description": "The origin, for a wired prefix with no typed rule; `Location` is the URL mise asked for"
           },
           "400": {
             "description": "A malformed wire path"

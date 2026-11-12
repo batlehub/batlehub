@@ -414,7 +414,8 @@ pub async fn wire_refusal(
         ("outcome" = String, Path, description = "`bounce`, `not-wired`, `malformed` or `sink` — set by the wire, not the client"),
     ),
     responses(
-        (status = 307, description = "The origin, for a wired prefix with no typed rule", headers(("Location" = String, description = "The URL mise asked for"))),
+        // No `headers(...)`: Spectral (owasp:api8) then demands CORS headers on the response.
+        (status = 307, description = "The origin, for a wired prefix with no typed rule; `Location` is the URL mise asked for"),
         (status = 400, description = "A malformed wire path"),
         (status = 403, description = "Access denied"),
         (status = 404, description = "Not wired, or not reached through the wire"),
