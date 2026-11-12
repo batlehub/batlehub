@@ -898,7 +898,9 @@ async fn main() -> Result<()> {
     // request resolves its verdict once, so no in-flight request straddles two
     // policies.
     let proxy_trust = batlehub_web::ProxyTrust::from_config(config.effective_trusted_proxies());
-    let registry_host_map = batlehub_web::RegistryHostMap::from_app_config(&config);
+    let registry_host_map = batlehub_web::RegistryHostMap::from_app_config(&config).with_wire(
+        batlehub_web::mise_wire::MiseWire::build(&config, &upstream_map)?,
+    );
     let local_svc = Arc::new(LocalRegistryService {
         backend: local_registry_backend,
         storage: storage.clone(),

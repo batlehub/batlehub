@@ -185,6 +185,11 @@ type = "mise-versions"
 name = "mise-versions-${HEAVY_RUN}"
 mode = "proxy"
 
+# RFC 0045: the wire, for the `mise-auto-wire` phase. It rewrites only its own
+# `_wire/` path, so the classic `mise-versions` phase is unaffected.
+[registries.auto_wire]
+enabled = true
+
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
@@ -475,4 +480,32 @@ hosts = ["devfile-local.localhost"]
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── RFC 0045 §6.P case 9: two prefixes of one host, two registries ────────────
+#
+# A loopback file host the `mise-versions` phase serves itself; each registry
+# mirrors one directory of it, and a third directory (`/c/`) is wired by none.
+[[registries]]
+type = "generic"
+name = "aw-a-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${HEAVY_CW_FILES_PORT}/a"]
+path_allow = ["**"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "aw-b-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${HEAVY_CW_FILES_PORT}/b"]
+path_allow = ["**"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
 admin = ["*"]

@@ -402,9 +402,13 @@ a prop of the whole list (`ConfigWarningList.vue:11`), and a dismissal only
 hides a row for the browser session (`AdminConfigReload.vue:96-108`). The
 three that are known only at run time (marked †) come from the last archive
 build, which `get_config_warnings` (`handlers/back_office/config.rs:455`)
-appends to the config's own list. That build runs **eagerly** on load, on
-reload and on each archive refresh, not on the first client fetch, so the
-warnings exist after a restart. They are **per replica**: the config page
+appends to the config's own list. That build was meant to run **eagerly** on
+load, on reload and on each archive refresh; **as implemented (2026-11-12) it
+runs on the first archive request of each replica**, so after a restart or a
+reload the † rows are absent until a client floats the registry. Known gap:
+the wire is built where no proxy service or HTTP client exists
+(`MiseWire::build`), and an eager fetch belongs in a startup/reload hook that
+holds both. They are **per replica**: the config page
 shows the replica that answered. The candidate and pending panels
 (`ConfigEditorCard.vue`, `PendingReloadCard.vue`) cannot show a † warning
 before the reload is applied; with the default `"drop"`, a colliding tool
@@ -603,8 +607,12 @@ console's collision list, which an operator reads).
 ```text
 $ mise install acme-deploy@2.4.0
 mise ERROR failed to install forgejo:acme/deploy@2.4.0
-mise ERROR HTTP status client error (403 Forbidden) for url (https://hub.example.com/proxy/mise-versions/mise-versions/_wire/forge.acme.internal/api/v1/repos/acme/deploy/releases/tags/v2.4.0)
+mise ERROR HTTP status client error (404 Not Found) for url (https://hub.example.com/proxy/mise-versions/mise-versions/_wire/forge.acme.internal/api/v1/repos/acme/deploy/releases/tags/v2.4.0)
 ```
+
+Since §15 Q15 the answer is the same `404 not_wired` an unwired host gets, for
+a caller who may read the `mise-versions` registry; one who may not gets that
+registry's own `401`/`403`.
 
 It decides that the user sees the URL they sent, not the internal path it was
 rewritten to, because that is the line they will paste into a ticket.
@@ -1019,8 +1027,8 @@ for the `mise-versions` registry. Assertions are on the tap
    forge.
 5. **Refusal, the credential boundary.** With a netrc token lacking read on
    the `forgejo` registry, `mise install acme-deploy@2.4.0` exits non-zero,
-   and its error, quoted with `heavy_client_said`, holds `403 Forbidden` and
-   the `_wire/forge.acme.internal/api/v1/…` URL. The fixture forge receives no
+   and its error, quoted with `heavy_client_said`, holds `404 Not Found`
+   (`not_wired`, §15 Q15) and the `_wire/forge.acme.internal/api/v1/…` URL. The fixture forge receives no
    request for `acme/deploy`. The wire added no access. The same case in
    `tests/heavy/authz.sh` (`live:mise-auto-wire`) carries the allowed arm.
 6. **Refusal, the overlay cannot shadow by accident.** The fixture upstream

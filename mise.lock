@@ -27,7 +27,6 @@ backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
 checksum = "sha256:e6d426ca0c123f61fad58a361da0329f2a93cd206bc87040ed8d9576dd9eb583"
-checksum_source = "mise-versions"
 url = "https://github.com/anthropics/claude-code/releases/download/v2.1.318/claude-linux-x64.tar.gz"
 url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/707216832"
 
@@ -46,7 +45,6 @@ backend = "github:VirusTotal/yara-x"
 
 [tools."github:VirusTotal/yara-x"."platforms.linux-x64"]
 checksum = "sha256:cabb8df46492fff59c51261302c71ed9cb2cef393d3f0ca560801a34a8e24cbe"
-checksum_source = "mise-versions"
 url = "https://github.com/VirusTotal/yara-x/releases/download/v1.20.0/yara-x-v1.20.0-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/VirusTotal/yara-x/releases/assets/527452366"
 
@@ -92,7 +90,6 @@ backend = "github:sourcefrog/cargo-mutants"
 
 [tools."github:sourcefrog/cargo-mutants"."platforms.linux-x64"]
 checksum = "sha256:dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e"
-checksum_source = "mise-versions"
 url = "https://github.com/sourcefrog/cargo-mutants/releases/download/v27.1.0/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/sourcefrog/cargo-mutants/releases/assets/436335520"
 

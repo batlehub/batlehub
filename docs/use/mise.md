@@ -50,6 +50,63 @@ and sent nowhere. The generator writes its rule first when the instance has
 such a registry. In an air gap the list answers `404` at once, and mise falls
 back to the backend's list — the one §2 composes from what the bundle held.
 
+### 1.2 Auto-wire: one rule for every host {#auto-wire}
+
+The rules above are one per host and per URL shape, and they go stale when the
+instance mirrors a new host. With auto-wire ([RFC 0045](/rfc/0045-mise-auto-wire))
+the client carries **one** rule that sends every mirrored host to the
+instance, and the server decides where each request goes. It is enabled on the
+`mise-versions` registry:
+
+```toml
+[[registries]]
+name = "mise-versions"
+type = "mise-versions"
+  [registries.auto_wire]
+  enabled = true      # default false
+  overlay = false     # true to serve your own tools by short name (below)
+```
+
+Then print the block for your account and put it in **one** mise config file:
+
+```bash
+batlehub-cli registry suggest --mise --auto-wire                    # connected
+batlehub-cli registry suggest --mise --auto-wire --mise-catch-all   # air gap
+```
+
+mise does not merge `url_replacements` across files: a project `mise.toml`
+that still carries the classic rules replaces this block whole. Remove the
+classic block from every committed `mise.toml` (`grep -rl url_replacements`)
+before relying on the auto-wire one, and keep a `mise-versions.jdx.dev` rule in
+any block that stays, so tool listings keep going through the instance.
+
+**Your own tools by short name.** With `overlay = true`, each
+`[[registries.auto_wire.tools]]` entry (a `source` on a `github` or `forgejo`
+registry of this instance, or explicit `backends`) is added to the registry
+archive mise floats, and the block turns `registry_floating` on. A name that
+also exists upstream is left out on both sides by default
+(`on_collision = "drop"`) and listed on the configuration page. A binary with no
+forge behind it can be served today as an `http:` backend whose `url` points at
+a `generic` registry; it has no publish step and no per-version block list.
+
+**When an install fails.** mise prints the URL it asked for. `curl` it with
+your token to read why:
+
+```bash
+curl -s -H "Authorization: Bearer $BATLEHUB_TOKEN" '<the URL from the error>'
+```
+
+- `404` with `"code":"not_wired"`: the host or path is not mirrored for you —
+  regenerate the block, or ask for read access on the registry behind it.
+- an overlay name that mise does not find: check `mise --version` (2026.8.0 or
+  later), `ls ~/.cache/mise/mise-registry/` (the archive was fetched), and the
+  collision list on the configuration page.
+
+**Turning it off.** Switching `overlay` off keeps the archive route wired, so
+clients pick up the public registry at their next refresh. Names you stop
+serving go in `retired`, which keeps answering their listings here; a client
+drops its cached archive with `rm -rf ~/.cache/mise/mise-registry`.
+
 ## 2. What an air gap needs
 
 A host with no route off the site cannot install anything mise has not

@@ -205,3 +205,18 @@ upstreams = ["https://charts.jetstack.io"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# RFC 0045: the wire, for the auto-wire catch-all section. It rewrites only its
+# own `_wire/` path; air-gapped, an unwired host lands in the sink.
+[[registries]]
+type = "mise-versions"
+name = "mise-versions-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.auto_wire]
+enabled = true
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

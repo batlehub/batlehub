@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/mise-versions.md
-sourceHash: 1b3d50cfefdf280d
+sourceHash: 4abfc27aa86556ca
 ---
 
 # Hôte de versions de mise
@@ -47,6 +47,22 @@ l'écrivent, en premier, dès que l'instance a un registre `mise-versions`.
 mise n'interroge cet hôte que pour un outil dont le backend est **celui du
 registre par défaut** — `jq`, `node`, `terraform` — jamais pour un backend
 explicite comme `github:cli/cli`, listé directement par son backend.
+
+### Auto-wire : une règle pour tous les hôtes
+
+Avec `[registries.auto_wire] enabled = true` sur ce registre
+([RFC 0045](/rfc/0045-mise-auto-wire)), mise porte une seule règle pour tous
+les hôtes que l'instance met en miroir, au lieu d'une par hôte. Le serveur
+l'affiche pour votre compte :
+
+```bash
+batlehub-cli registry suggest --mise --auto-wire
+batlehub-cli registry suggest --mise --auto-wire --mise-catch-all
+```
+
+La seconde forme est la variante coupée du réseau.
+[Faire pointer mise vers BatleHub](/fr/use/mise#auto-wire) couvre l'overlay,
+le dépannage et le retour arrière.
 
 ## Authentification
 

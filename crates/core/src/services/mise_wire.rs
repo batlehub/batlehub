@@ -544,6 +544,71 @@ impl WireTable {
         (WireTable { own_host, pairs }, warnings)
     }
 
+    /// Wire `mise.jdx.dev/registry/` to the `mise-versions` registry
+    /// `registry`'s archive route (§15 Q17): present whenever the wire is
+    /// enabled, whatever `overlay` says, so a client never strands on a cached
+    /// archive. Other paths under the prefix are a plain bounce.
+    #[must_use]
+    pub fn with_registry_archive(mut self, registry: &str) -> Self {
+        let rule = Regex::new(r"^https://mise\.jdx\.dev/registry/latest\.tar\.zst$")
+            .expect("static pattern compiles");
+        self.pairs.push(Pair {
+            host: "mise.jdx.dev".to_owned(),
+            prefix: "registry/".to_owned(),
+            registry: registry.to_owned(),
+            proxy_base: format!("/proxy/{registry}"),
+            forge_api: false,
+            scheme: "https",
+            rules: vec![(
+                rule,
+                "{proxy}/mise-versions/_registry/latest.tar.zst".to_owned(),
+            )],
+        });
+        self
+    }
+
+    /// Whether `registry` wires at least one prefix.
+    pub fn wires_registry(&self, registry: &str) -> bool {
+        self.pairs.iter().any(|p| p.registry == registry)
+    }
+
+    /// Every `(host, prefix, registry)` the table wires, in declaration order.
+    pub fn wired(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.pairs
+            .iter()
+            .map(|p| (p.host.as_str(), p.prefix.as_str(), p.registry.as_str()))
+    }
+
+    /// Whether nothing is wired at all.
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty() && self.own_host.is_none()
+    }
+
+    /// [`Self::target`], where `request_host` (the host the request arrived
+    /// on, without port) also counts as this instance's own host: the air-gap
+    /// catch-all rule rewrites the instance's own URLs into the wire too.
+    pub fn target_on(
+        &self,
+        request_host: &str,
+        host: &str,
+        rest: &str,
+        air_gap: bool,
+    ) -> WireOutcome {
+        let name = host.split_once(':').map_or(host, |(n, _)| n);
+        // A wired `host[:port]` wins: another service on the instance's host
+        // (`127.0.0.1:8189` beside an instance on `:8156`) is not the instance.
+        let wired = self.pairs.iter().any(|p| p.host == host);
+        if !wired
+            && !request_host.is_empty()
+            && name == request_host
+            && valid_host(host)
+            && valid_rest(rest)
+        {
+            return own_host_target(rest);
+        }
+        self.target(host, rest, air_gap)
+    }
+
     /// The wired `(host, prefix)` pairs, in declaration order.
     pub fn pairs(&self) -> impl Iterator<Item = (&str, &str)> {
         self.pairs
@@ -558,14 +623,7 @@ impl WireTable {
             return WireOutcome::Malformed;
         }
         if self.own_host.as_deref() == Some(host) {
-            // `proxy/{registry}/…` back to itself; nothing else of the own host.
-            let mut segs = rest.splitn(3, '/');
-            return match (segs.next(), segs.next(), segs.next()) {
-                (Some("proxy"), Some(reg), Some(_)) if !reg.is_empty() => {
-                    WireOutcome::Rewrite(format!("/{rest}"))
-                }
-                _ => WireOutcome::NotWired,
-            };
+            return own_host_target(rest);
         }
         let sink = || WireOutcome::Sink(format!("/_air-gap/unmirrored/{host}/{rest}"));
         let Some(pair) = self
@@ -599,6 +657,17 @@ impl WireTable {
         } else {
             WireOutcome::Bounce(url)
         }
+    }
+}
+
+/// `proxy/{registry}/…` back to the instance itself; nothing else of it.
+fn own_host_target(rest: &str) -> WireOutcome {
+    let mut segs = rest.splitn(3, '/');
+    match (segs.next(), segs.next(), segs.next()) {
+        (Some("proxy"), Some(reg), Some(_)) if !reg.is_empty() => {
+            WireOutcome::Rewrite(format!("/{rest}"))
+        }
+        _ => WireOutcome::NotWired,
     }
 }
 
@@ -718,6 +787,79 @@ mod tests {
             upstreams: &[],
             path_routing: true,
         }
+    }
+
+    #[test]
+    fn the_registry_archive_is_wired_to_the_mise_versions_registry() {
+        let (t, _) = WireTable::build(&[], None);
+        let t = t.with_registry_archive("mv");
+        assert_eq!(
+            t.target("mise.jdx.dev", "registry/latest.tar.zst", false),
+            WireOutcome::Rewrite("/proxy/mv/mise-versions/_registry/latest.tar.zst".into())
+        );
+        // Another file under the prefix is a plain bounce; outside it, not wired.
+        assert_eq!(
+            t.target("mise.jdx.dev", "registry/other.tar.zst", false),
+            WireOutcome::Bounce("https://mise.jdx.dev/registry/other.tar.zst".into())
+        );
+        assert_eq!(
+            t.target("mise.jdx.dev", "install.sh", false),
+            WireOutcome::NotWired
+        );
+    }
+
+    #[test]
+    fn a_wired_port_on_the_request_host_is_not_the_own_host() {
+        let up = ["http://127.0.0.1:8189/a".to_owned()];
+        let regs = [WireRegistry {
+            name: "files",
+            kind: RegistryKind::Generic,
+            upstream: Some("http://127.0.0.1:8189/a"),
+            upstreams: &up,
+            path_routing: true,
+        }];
+        let (t, _) = WireTable::build(&regs, None);
+        assert_eq!(
+            t.target_on("127.0.0.1", "127.0.0.1:8189", "a/tool.tgz", false),
+            WireOutcome::Rewrite("/proxy/files/generic/tool.tgz".into())
+        );
+        // The instance's own port is still the own host.
+        assert_eq!(
+            t.target_on(
+                "127.0.0.1",
+                "127.0.0.1:8156",
+                "proxy/files/generic/x",
+                false
+            ),
+            WireOutcome::Rewrite("/proxy/files/generic/x".into())
+        );
+    }
+
+    #[test]
+    fn the_request_host_is_the_own_host() {
+        let (t, _) = WireTable::build(&[], None);
+        assert_eq!(
+            t.target_on(
+                "hub.example.com",
+                "hub.example.com:8443",
+                "proxy/npm/lodash",
+                false
+            ),
+            WireOutcome::Rewrite("/proxy/npm/lodash".into())
+        );
+        assert_eq!(
+            t.target_on(
+                "hub.example.com",
+                "hub.example.com",
+                "api/v1/admin/users",
+                false
+            ),
+            WireOutcome::NotWired
+        );
+        assert_eq!(
+            t.target_on("hub.example.com", "hub.example.com", "proxy/../api", false),
+            WireOutcome::Malformed
+        );
     }
 
     #[test]

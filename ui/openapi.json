@@ -7384,6 +7384,35 @@
         ]
       }
     },
+    "/api/v1/mise/auto-wire": {
+      "get": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "The mise rule of this instance's wire.",
+        "operationId": "mise_auto_wire",
+        "responses": {
+          "200": {
+            "description": "The url_replacements rule, filtered to the caller's registries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MiseAutoWire"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No mise-versions registry has auto_wire enabled"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/packages": {
       "get": {
         "tags": [
@@ -13719,6 +13748,111 @@
           },
           "409": {
             "description": "Version already published"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/_registry/latest.tar.zst": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The registry archive mise floats, with this instance's overlay tools\nmerged in (§4.2). With the overlay off it is the public archive, checked\n(§15 Q17).",
+        "operationId": "mise_versions_registry_archive",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "mise's registry archive, the overlay merged in",
+            "content": {
+              "application/zstd": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "auto_wire is not enabled on this registry"
+          },
+          "503": {
+            "description": "The upstream archive is unavailable and none is held"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-versions/_wire-answer/{outcome}": {
+      "get": {
+        "tags": [
+          "proxy/mise-versions"
+        ],
+        "summary": "The wire's own answer: a bounce, `not_wired`, a malformed path, or the\nair-gap sink — behind read on this registry. Reached only as a rewrite;\ncalled directly it is `404` and nothing else.",
+        "operationId": "mise_versions_wire_answer",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "path",
+            "description": "`bounce`, `not-wired`, `malformed` or `sink` — set by the wire, not the client",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "307": {
+            "description": "The origin, for a wired prefix with no typed rule",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The URL mise asked for"
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed wire path"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not wired, or not reached through the wire"
+          },
+          "501": {
+            "description": "Air gap: recorded, this host has no mirror"
           }
         },
         "security": [
@@ -24107,12 +24241,17 @@
         "required": [
           "code",
           "message",
-          "path"
+          "path",
+          "dismissible"
         ],
         "properties": {
           "code": {
             "type": "string",
             "description": "Stable slug identifying the *kind* of problem, e.g.\n`\"subdomain.invalid-dns-label\"`. Safe to match on; the `message` is not."
+          },
+          "dismissible": {
+            "type": "boolean",
+            "description": "Whether the console offers to hide it for the session. `false` for a\nwarning that must stay in view while it applies (RFC 0045\n`mise.overlay.forced-shadow`)."
           },
           "message": {
             "type": "string",
@@ -26625,6 +26764,74 @@
           "message": {
             "type": "string",
             "description": "Human-readable confirmation of what happened."
+          }
+        }
+      },
+      "MiseAutoWire": {
+        "type": "object",
+        "description": "The client side of the wire, filtered to what the caller may see.",
+        "required": [
+          "pattern",
+          "replacement",
+          "hosts",
+          "hidden_hosts",
+          "air_gap_pattern",
+          "registry_floating",
+          "overlay_tools"
+        ],
+        "properties": {
+          "air_gap_pattern": {
+            "type": "string",
+            "description": "The air-gap catch-all key (every host to the wire)."
+          },
+          "hidden_hosts": {
+            "type": "integer",
+            "description": "Wired hosts left out because the caller cannot read their registries.",
+            "minimum": 0
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The wired hosts in `pattern`, in table order."
+          },
+          "overlay_tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MiseOverlayToolInfo"
+            },
+            "description": "Overlay tools the caller may see (§15 Q16)."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "`url_replacements` key, `regex:` prefixed."
+          },
+          "registry_floating": {
+            "type": "boolean",
+            "description": "`true` when the overlay is on: print `registry_floating = true`."
+          },
+          "replacement": {
+            "type": "string",
+            "description": "`url_replacements` value."
+          }
+        }
+      },
+      "MiseOverlayToolInfo": {
+        "type": "object",
+        "required": [
+          "name",
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

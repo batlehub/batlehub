@@ -191,6 +191,9 @@ GALAXY_REG="galaxy-$HEAVY_RUN"
 DEVFILE_REG="devfile-$HEAVY_RUN"
 MV_REG="mise-versions-$HEAVY_RUN"
 MV_GATED_REG="mise-versions-gated-$HEAVY_RUN"
+# RFC 0045 §6.P case 9: the loopback file host the two `aw-*` generic
+# registries mirror, read by the server from its own environment.
+export HEAVY_CW_FILES_PORT="${HEAVY_CW_FILES_PORT:-8189}"
 
 # The two newest stable jq versions on mise's versions host, and an age gate
 # one day older than the newest — read here, before the server starts, because
@@ -1143,6 +1146,103 @@ EOF
     heavy_fail "mise: the tool that ran is not the version this instance served"
   }
   heavy_log "CLOSED-WORLD-MISE-OK ($(grep -m1 'gh version' "$out"), attestations off)"
+}
+
+# ── §10b. mise auto-wire (RFC 0045 §6.P) ─────────────────────────────────────
+#
+# The client config is exactly what `registry suggest --mise --auto-wire`
+# prints — one rule, no hand-written line — and the claim is on the tap: every
+# request mise built from a public URL arrives under `_wire/`, and each reaches
+# its own kind. Cases 1, 2 and 7 of §6.P; the overlay cases (3, 4, 6, 8) and
+# the two-prefix case 9 need fixtures this suite does not have yet. Run as the
+# last section of the `mise-versions` phase: the wire is that kind's route,
+# and `registry_kind_coverage.rs` keeps one phase per kind.
+
+mise_auto_wire_cases() {
+  heavy_runner_for mise "mise@latest"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-auto-wire" bh
+  out="$(cw_out mise-auto-wire)"
+  local conf="$base/config"
+  mkdir -p "$conf" "$base/data" "$base/cache" "$base/state" "$base/home"
+  local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+  cargo build -p batlehub-cli >"$base/cli-build.log" 2>&1 \
+    || { cat "$base/cli-build.log" >&2; heavy_fail "mise-auto-wire: batlehub-cli did not build"; }
+  bh="$HEAVY_ROOT/target/debug/batlehub-cli"
+
+  # 1. The block, as the CLI prints it, written as-is.
+  heavy_log "mise-auto-wire §1: registry suggest --mise --auto-wire"
+  HOME="$base/home" BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$ADMIN_TOKEN" \
+    "$bh" registry suggest --mise --auto-wire >"$conf/config.toml" 2>"$out" \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: the CLI did not print a block"; }
+  [[ "$(grep -c '^"regex:' "$conf/config.toml")" == 1 ]] \
+    || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the block is not exactly one rule"; }
+  grep -q '_wire/\$1/\$2' "$conf/config.toml" \
+    || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the rule does not target the wire"; }
+
+  # 2. A registry tool, through the one rule: the list from the versions host,
+  # the release and its asset from the github kind, all under `_wire/`.
+  heavy_log "mise-auto-wire §2: mise install jq@$MV_PREV, egress denied"
+  heavy_mark aw-install
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "jq@$MV_PREV" \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: the install failed through the wire"; }
+  cw_step "$out.run" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" exec "jq@$MV_PREV" -- jq --version \
+    || { cat "$out.run" >&2; heavy_fail "mise-auto-wire: the installed jq did not run"; }
+  grep -q "jq-$MV_PREV" "$out.run" \
+    || { cat "$out.run" >&2; heavy_fail "mise-auto-wire: the installed jq is not $MV_PREV"; }
+  heavy_wire_re_after aw-install \
+    "GET /proxy/$MV_REG/mise-versions/_wire/mise-versions[.]jdx[.]dev/(data|tools)/jq[.]toml[^ ]* -> 200" \
+    "mise-auto-wire: the version list did not go through the wire"
+  heavy_wire_re_after aw-install \
+    "GET /proxy/$MV_REG/mise-versions/_wire/api[.]github[.]com/repos/jqlang/jq/[^ ]* -> 200" \
+    "mise-auto-wire: the release did not go through the wire to the github kind"
+
+  # 7. A host the server does not wire: `404 not_wired`, readable by curl.
+  heavy_log "mise-auto-wire §7: an unwired host answers not_wired"
+  local code
+  code="$(curl -sS -o "$out.nw" -w '%{http_code}' \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions/_wire/nowhere.example.com/x")"
+  [[ "$code" == 404 ]] && grep -q '"not_wired"' "$out.nw" \
+    || { cat "$out.nw" >&2; heavy_fail "mise-auto-wire: an unwired host answered $code, not 404 not_wired"; }
+  # 9. §15 Q10's proof: two prefixes of one host, each to its own registry,
+  # and a third prefix of that host wired by none.
+  heavy_log "mise-auto-wire §9: /a/ and /b/ of one host, two registries"
+  local port="$HEAVY_CW_FILES_PORT" files="$base/files" flog="$base/files.log" d
+  mkdir -p "$files/a" "$files/b" "$files/c" "$base/pkg/bin" "$base/case9"
+  printf '#!/bin/sh\necho CLOSED-WORLD-RAN aw-tool\n' >"$base/pkg/bin/aw-tool"
+  chmod +x "$base/pkg/bin/aw-tool"
+  for d in a b c; do tar -C "$base/pkg" -czf "$files/$d/aw-$d-1.0.0.tar.gz" bin; done
+  python3 -m http.server "$port" --bind 127.0.0.1 --directory "$files" >"$flog" 2>&1 &
+  HEAVY_EXTRA_PIDS+=("$!")
+  for _ in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:$port/" && break; sleep 0.5; done
+  grep -qF "1:$port)" "$conf/config.toml" || grep -qF "1:$port|" "$conf/config.toml" \
+    || { cat "$conf/config.toml" >&2; heavy_fail "mise-auto-wire: the block does not wire 127.0.0.1:$port"; }
+  cat >"$base/case9/mise.toml" <<EOF
+[tools]
+"http:aw-a" = { version = "1.0.0", url = "http://127.0.0.1:$port/a/aw-a-{{version}}.tar.gz", bin_path = "bin" }
+"http:aw-b" = { version = "1.0.0", url = "http://127.0.0.1:$port/b/aw-b-{{version}}.tar.gz", bin_path = "bin" }
+EOF
+  heavy_mark aw-prefix
+  cw_step "$out" "$base/case9" "${DENY[@]}" "${miseenv[@]}" MISE_TRUSTED_CONFIG_PATHS="$base/case9" \
+    "${mise[@]}" install \
+    || { cat "$out" >&2; heavy_fail "mise-auto-wire: the two http: tools did not install through the wire"; }
+  for d in a b; do
+    heavy_wire_re_after aw-prefix \
+      "GET /proxy/$MV_REG/mise-versions/_wire/127[.]0[.]0[.]1:$port/$d/aw-$d-1[.]0[.]0[.]tar[.]gz -> 200" \
+      "mise-auto-wire: /$d/ did not go through the wire"
+    # The server fetched it from the registry that mirrors /$d/, by that path.
+    grep -q "\"GET /$d/aw-$d-1.0.0.tar.gz" "$flog" \
+      || { cat "$flog" >&2; heavy_fail "mise-auto-wire: the file host never served /$d/ — the request did not reach its registry"; }
+  done
+  code="$(curl -sS -o "$out.c" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions/_wire/127.0.0.1:$port/c/aw-c-1.0.0.tar.gz")"
+  [[ "$code" == 404 ]] && grep -q '"not_wired"' "$out.c" \
+    || { cat "$out.c" >&2; heavy_fail "mise-auto-wire: /c/ answered $code, not 404 not_wired"; }
+  grep -q '"GET /c/' "$flog" \
+    && heavy_fail "mise-auto-wire: /c/ reached the file host though no registry wires it"
+  heavy_log "CLOSED-WORLD-MISE-AUTO-WIRE-OK (jq-$MV_PREV through one rule)"
 }
 
 # ── §11. nvm ─────────────────────────────────────────────────────────────────
@@ -2384,6 +2484,8 @@ phase_mise-versions() {
     && heavy_fail "mise-versions: a request named jq-$MV_NEWEST through the gated registry"
 
   heavy_log "CLOSED-WORLD-MISE-VERSIONS-OK (latest is $MV_PREV with $MV_NEWEST blocked or too young)"
+  # 8. RFC 0045: the same tool through one auto-wire rule.
+  mise_auto_wire_cases
 }
 
 for phase in "${WANTED[@]}"; do

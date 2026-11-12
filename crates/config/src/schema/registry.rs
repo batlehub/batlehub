@@ -477,6 +477,10 @@ pub struct RegistryConfig {
     /// Has no effect on registry types that do not support upstream search.
     #[serde(default)]
     pub search_url: Option<String>,
+    /// RFC 0045 — the mise wire and overlay, on a `mise-versions` registry
+    /// only. Absent is off.
+    #[serde(default)]
+    pub auto_wire: Option<super::mise_auto_wire::AutoWireConfig>,
     /// Optional SBOM generation configuration. When absent, SBOM is disabled.
     #[serde(default)]
     pub sbom: Option<SbomConfig>,

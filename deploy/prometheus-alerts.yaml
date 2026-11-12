@@ -20,6 +20,29 @@ groups:
             {{ $value | humanizePercentage }} of requests are returning errors
             (threshold 5%). Check application logs for upstream or DB errors.
 
+      # ── mise overlay (RFC 0045) ──────────────────────────────────────────────
+
+      # Upstream took one of the estate's tool names: with the default
+      # on_collision = "drop" that name now installs nowhere (T5, §15 Q9).
+      # A rise that follows a config reload is the operator's own change, and a
+      # series younger than the window is a restart, not a collision.
+      - alert: BatleHubMiseOverlayCollision
+        expr: |
+          max by (instance) (batlehub_mise_overlay_collisions{resolution="drop"})
+            > max by (instance) (max_over_time(batlehub_mise_overlay_collisions{resolution="drop"}[1h] offset 10m))
+          and on (instance) (max by (instance) (increase(batlehub_config_reloads_total[1h])) == 0)
+          and on (instance) (max by (instance) (batlehub_mise_overlay_collisions{resolution="drop"} offset 1h) >= 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A mise overlay tool name was taken by the upstream registry on {{ $labels.instance }}"
+          description: >
+            batlehub_mise_overlay_collisions{resolution="drop"} rose without a
+            config reload: upstream added a name the overlay declares, and both
+            entries are now left out, so that name installs nowhere. The config
+            warnings panel lists the tool; rename it or set its on_collision.
+
       - alert: BatleHubDown
         expr: up{job="batlehub"} == 0
         for: 1m

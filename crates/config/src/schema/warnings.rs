@@ -26,6 +26,10 @@ pub struct ConfigWarning {
     /// Where in the config the problem is, in a form that can be searched for in
     /// the TOML: `"server.trusted_proxies"`, `"registries[3].name"`.
     pub path: String,
+    /// Whether the console offers to hide it for the session. `false` for a
+    /// warning that must stay in view while it applies (RFC 0045
+    /// `mise.overlay.forced-shadow`).
+    pub dismissible: bool,
 }
 
 impl ConfigWarning {
@@ -38,11 +42,34 @@ impl ConfigWarning {
             code: code.into(),
             message: message.into(),
             path: path.into(),
+            dismissible: true,
         }
+    }
+
+    /// The same warning, kept in view while it applies.
+    #[must_use]
+    pub fn not_dismissible(mut self) -> Self {
+        self.dismissible = false;
+        self
     }
 }
 
 // ── Warning codes ─────────────────────────────────────────────────────────────
+
+/// RFC 0045: two registries claim the same wired `(host, prefix)`.
+pub const MISE_WIRE_PREFIX_CLAIMED: &str = "mise.wire.prefix-claimed";
+/// RFC 0045: an overlay `backends` entry names a host the wire does not route.
+pub const MISE_OVERLAY_BACKEND_UNWIRED: &str = "mise.overlay.backend-unwired";
+/// RFC 0045 §15 Q16: the overlay names reach readers who cannot read the source.
+pub const MISE_OVERLAY_READERS_WIDER: &str = "mise.overlay.readers-wider";
+/// RFC 0045: `overlay = true` while `enabled = false`.
+pub const MISE_OVERLAY_INERT: &str = "mise.overlay.inert";
+/// RFC 0045 †: an overlay name collides with the upstream archive.
+pub const MISE_OVERLAY_COLLISION: &str = "mise.overlay.collision";
+/// RFC 0045 †: `on_collision = "overlay"` shadows a public tool.
+pub const MISE_OVERLAY_FORCED_SHADOW: &str = "mise.overlay.forced-shadow";
+/// RFC 0045 †: the last upstream archive failed mise's checks.
+pub const MISE_OVERLAY_UPSTREAM_INVALID: &str = "mise.overlay.upstream-invalid";
 
 /// No `[audit]` block: nothing in the audit trail ever expires (RFC 0036 §4.3).
 pub const AUDIT_NO_RETENTION: &str = "audit.no-retention";

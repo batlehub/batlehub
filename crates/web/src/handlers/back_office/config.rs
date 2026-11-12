@@ -456,6 +456,8 @@ pub async fn get_config_warnings(
     identity: AuthIdentity,
     reload_svc: web::Data<Arc<ConfigReloadService>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
+    access: Option<web::Data<crate::AccessConfigLock>>,
 ) -> Result<impl Responder, AppError> {
     crate::handlers::back_office::require_verb(
         &identity,
@@ -468,6 +470,17 @@ pub async fn get_config_warnings(
     // Not part of the config's own warnings: the replicas' disagreement is
     // read from the shared state at each request.
     warnings.extend(reload_svc.replica_drift().await);
+    // RFC 0045: the wire's rows, the † ones from this replica's last build.
+    if let Some(wire) = hosts.and_then(|h| h.wire()) {
+        let anonymous = match &access {
+            Some(a) => a.read().await.anonymous.clone(),
+            None => Default::default(),
+        };
+        warnings.extend(crate::handlers::proxy::mise_versions::mise_wire_warnings(
+            &wire,
+            &|name| anonymous.contains(name),
+        ));
+    }
     Ok(web::Json(ConfigWarningsResponse { warnings }))
 }
 

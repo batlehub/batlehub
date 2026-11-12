@@ -29,6 +29,21 @@ mise reaches this host through the same `[settings.url_replacements]` it uses fo
 
 mise asks this host only for a tool whose backend is the **registry default** — `jq`, `node`, `terraform` — never for an explicit backend such as `github:cli/cli`. Those are listed by their backend directly.
 
+### Auto-wire: one rule for every host
+
+With `[registries.auto_wire] enabled = true` on this registry
+([RFC 0045](/rfc/0045-mise-auto-wire)), mise carries one rule for every host
+the instance mirrors instead of one per host. The server prints it for your
+account:
+
+```bash
+batlehub-cli registry suggest --mise --auto-wire
+batlehub-cli registry suggest --mise --auto-wire --mise-catch-all
+```
+
+The second form is the air-gap variant. [Pointing mise at BatleHub](/use/mise#auto-wire)
+covers the overlay, troubleshooting and rollback.
+
 ## Authentication
 
 mise sends a `~/.netrc` entry for the host a rule rewrote to, so an authenticated instance needs one stanza for the proxy host — the same one the forge registries use:

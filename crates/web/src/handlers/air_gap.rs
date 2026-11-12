@@ -53,7 +53,12 @@ pub async fn unmirrored_sink(
     path: web::Path<String>,
     svc: web::Data<Arc<ProxyService>>,
 ) -> Result<HttpResponse, AppError> {
-    let tail = path.into_inner();
+    Ok(sink_answer(&svc, path.into_inner()).await)
+}
+
+/// The sink's answer for `tail` (`{host}/{rest}`): recorded, then `501`.
+/// Also reached through the mise wire's `_wire-answer` (RFC 0045 §15 Q15).
+pub async fn sink_answer(svc: &ProxyService, tail: String) -> HttpResponse {
     let host = host_of(&tail).to_owned();
     let (record, recorder) = {
         let hot = svc.hot.read().await;
@@ -76,7 +81,7 @@ pub async fn unmirrored_sink(
         }
     }
     tracing::info!(host = %host, "air gap: request for a host with no mirror");
-    Ok(HttpResponse::NotImplemented().json(serde_json::json!({
+    HttpResponse::NotImplemented().json(serde_json::json!({
         "error": "Not Implemented",
         "code": "unmirrored_host",
         "message": format!(
@@ -85,7 +90,7 @@ pub async fn unmirrored_sink(
         ),
         "host": host,
         "bundle_hint": "batlehub-cli air-gap missing --kind unmirrored_host",
-    })))
+    }))
 }
 
 #[derive(Deserialize, IntoParams)]

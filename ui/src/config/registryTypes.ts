@@ -2127,6 +2127,27 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `A block here hides a version from mise's list; block the same release on the ` +
           `tool's own registry too, which is the one that refuses the download.`,
       },
+      {
+        key: "mise-versions-auto-wire",
+        label: "auto-wire (one rule for every host)",
+        lang: "bash",
+        template: () =>
+          [
+            `# Server side (RFC 0045): on this registry`,
+            `#   [registries.auto_wire]`,
+            `#   enabled = true      # every mirrored host through one mise rule`,
+            `#   overlay = false     # true to serve your own tools by short name`,
+            ``,
+            `# Client side: the block, computed by the server for your account`,
+            `batlehub-cli registry suggest --mise --auto-wire`,
+            `# Air gap: every host to this instance, unmirrored ones recorded`,
+            `batlehub-cli registry suggest --mise --auto-wire --mise-catch-all`,
+          ].join("\n"),
+        note:
+          `Put the block in one mise config file: mise does not merge ` +
+          `<code>url_replacements</code> across files, so a project file with the classic ` +
+          `rules replaces it whole.`,
+      },
     ],
   },
   {

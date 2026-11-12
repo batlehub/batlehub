@@ -1387,6 +1387,8 @@ jobs:
           - kind: pacman
           - kind: rustup
           - kind: mise-versions
+          # RFC 0045 §6.P case 5: the wire adds no access.
+          - kind: mise-auto-wire
     services:
       postgres:
         image: postgres:17-alpine
@@ -1417,7 +1419,7 @@ jobs:
       # mise is the client for all three forge kinds — one binary, three
       # backends — and it is the client whose `netrc` setting the phases rely on.
       - name: Install mise
-        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions'
+        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions' || matrix.kind == 'mise-auto-wire'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"

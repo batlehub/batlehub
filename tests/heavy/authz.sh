@@ -3251,7 +3251,7 @@ some other reason, which is exactly what the warmed repository exists to prevent
 # project's setup snippets said they were before the phases were written.
 
 AUTHZ_LIVE_KINDS=(goproxy nodedist sdkman github forgejo gitlab generic deb rpm pacman rustup
-                  mise-versions)
+                  mise-versions mise-auto-wire)
 
 LIVE_GO="live-go-$HEAVY_RUN"
 LIVE_NODEDIST="live-nodedist-$HEAVY_RUN"
@@ -3544,6 +3544,36 @@ EOF
   return $?
 }
 
+# ── mise-auto-wire — one rule, the target registry's grants (RFC 0045) ──────
+#
+# Not a kind: the wire is the `mise-versions` kind's route, and this target is
+# its §6.P case 5 — the wire adds no access. One rule sends api.github.com and
+# github.com to `live-mise-versions`'s `_wire/`, which rewrites them onto
+# `live-github` before authentication, so the reader (grants on both) installs
+# and the caller holding nothing is refused, with egress closed so a fallback
+# cannot go around the instance.
+live_run_mise_auto_wire() {
+  local suffix="$1" login="$2" token="$3"
+  local root="$HEAVY_WORK/live-mise-auto-wire-$suffix"
+  mkdir -p "$root"/{data,cache,config,state,home}
+  authz_live_netrc "$root/home" "$login" "$token"
+  cat >"$root/config/config.toml" <<EOF
+[settings]
+github_attestations = false
+
+[settings.url_replacements]
+"regex:^https://(api\\\\.github\\\\.com|github\\\\.com)/(.*)" = "$HEAVY_TAP_BASE/proxy/$LIVE_MV/mise-versions/_wire/\$1/\$2"
+EOF
+  HOME="$root/home" \
+  MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
+  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
+  HTTPS_PROXY="http://127.0.0.1:1" HTTP_PROXY="http://127.0.0.1:1" \
+  https_proxy="http://127.0.0.1:1" http_proxy="http://127.0.0.1:1" \
+  NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
+    bash -c 'cd "$1" && mise install "$2"' _ "$root" "github:$LIVE_MISE_TOOL@$LIVE_MISE_VERSION"
+  return $?
+}
+
 # ── generic — curl, which is this kind's whole client ───────────────────────
 #
 # A path proxy has no protocol for a package manager to speak, so the client is
@@ -3742,6 +3772,10 @@ phase_live() {
       heavy_runner_for mise "mise@latest"
       authz_live_pair mise-versions "mise ls-remote of a registry tool, credential in ~/.netrc" \
         live_run_mise_versions ;;
+    mise-auto-wire)
+      heavy_runner_for mise "mise@latest"
+      authz_live_pair mise-auto-wire "mise install github:… through one auto-wire rule, credential in ~/.netrc" \
+        live_run_mise_auto_wire ;;
     rustup)
       heavy_need rustup "the Rust toolchain installer"
       authz_live_pair rustup "rustup toolchain install, credential in RUSTUP_DIST_SERVER" \

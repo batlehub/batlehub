@@ -30,7 +30,7 @@ use batlehub_core::{
 
 use super::common::{proxy_document, require_registry_type};
 use super::upstream::{cached_forward_with, Outbound};
-use crate::handlers::schemas::ProtocolDocument;
+use crate::handlers::schemas::{ProtocolDocument, UpstreamDocument};
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap, UpstreamMap};
 
 const KIND: &str = "mise-versions";
@@ -88,9 +88,16 @@ async fn version_list(
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
 ) -> Result<HttpResponse, AppError> {
     require_registry_type(&registry, KIND, &map)?;
     let tool = tool_of(&file)?;
+    // RFC 0045 T6: an overlay or retired name is answered here, before any
+    // cache lookup, and never reaches jdx.dev.
+    if let Some(refusal) = local_name_refusal(hosts.as_ref(), &registry, tool) {
+        authorize(&svc, &registry, tool, &identity).await?;
+        return Err(refusal);
+    }
     if air_gapped(&svc).await {
         authorize(&svc, &registry, tool, &identity).await?;
         return Err(AppError::not_found(format!(
@@ -135,10 +142,11 @@ pub async fn mise_versions_data(
     map: web::Data<RegistryMap>,
     upstreams: web::Data<UpstreamMap>,
     client: web::Data<reqwest::Client>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
 ) -> Result<HttpResponse, AppError> {
     let (registry, file) = path.into_inner();
     let Some(triple) = precompiled_triple(&file) else {
-        return version_list(registry, file, identity, svc, map).await;
+        return version_list(registry, file, identity, svc, map, hosts).await;
     };
     require_registry_type(&registry, KIND, &map)?;
     authorize(&svc, &registry, "python", &identity).await?;
@@ -189,9 +197,10 @@ pub async fn mise_versions_tools(
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
 ) -> Result<HttpResponse, AppError> {
     let (registry, file) = path.into_inner();
-    version_list(registry, file, identity, svc, map).await
+    version_list(registry, file, identity, svc, map, hosts).await
 }
 
 async fn beacon(
@@ -348,6 +357,464 @@ pub async fn mise_versions_github_data(
     map: web::Data<RegistryMap>,
 ) -> Result<HttpResponse, AppError> {
     github_mirror(&path.into_inner().0, &identity, &svc, &map).await
+}
+
+// ── RFC 0045: the wire's own answers, and the registry archive ──────────────
+
+/// `404 not_wired` for `host`. Built from the host alone, so the answer to an
+/// unwired host and to a rewrite the caller cannot read is the same body
+/// (§15 Q15): the outcome never maps the wired hosts.
+fn not_wired(host: &str) -> AppError {
+    AppError::not_found(format!(
+        "{host} is not wired on this instance. Regenerate the rule: \
+         batlehub-cli registry suggest --mise --auto-wire"
+    ))
+    .coded("not_wired")
+}
+
+/// What `_wire-answer` says to the caller of `request` for a rewrite whose
+/// target refused it (§15 Q15): `not_wired` when the caller may read the
+/// `mise-versions` registry, that registry's own refusal otherwise.
+pub async fn wire_refusal(
+    request: &actix_web::HttpRequest,
+    registry: &str,
+    host: &str,
+) -> HttpResponse {
+    use actix_web::{HttpMessage, ResponseError};
+    let identity = request
+        .extensions()
+        .get::<batlehub_core::entities::Identity>()
+        .cloned()
+        .unwrap_or_else(batlehub_core::entities::Identity::anonymous);
+    let Some(svc) = request.app_data::<web::Data<Arc<ProxyService>>>() else {
+        return not_wired(host).error_response();
+    };
+    match svc
+        .authorize_listing(
+            &PackageId::new(registry, "index", "index"),
+            &identity,
+            Action::ReleasesList,
+        )
+        .await
+    {
+        Ok(()) => not_wired(host).error_response(),
+        Err(e) => AppError::from(e).error_response(),
+    }
+}
+
+/// The wire's own answer: a bounce, `not_wired`, a malformed path, or the
+/// air-gap sink — behind read on this registry. Reached only as a rewrite;
+/// called directly it is `404` and nothing else.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/mise-versions/_wire-answer/{outcome}",
+    tag = "proxy/mise-versions",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("outcome" = String, Path, description = "`bounce`, `not-wired`, `malformed` or `sink` — set by the wire, not the client"),
+    ),
+    responses(
+        (status = 307, description = "The origin, for a wired prefix with no typed rule", headers(("Location" = String, description = "The URL mise asked for"))),
+        (status = 400, description = "A malformed wire path"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Not wired, or not reached through the wire"),
+        (status = 501, description = "Air gap: recorded, this host has no mirror"),
+    ),
+    security(("bearer_token" = [])),
+)]
+// shortcut: GET only — mise reaches every wired host with GET but for the
+// beacon, whose POST is a typed rewrite; widen if a client POSTs elsewhere.
+#[get("/proxy/{registry}/mise-versions/_wire-answer/{outcome}")]
+pub async fn mise_versions_wire_answer(
+    req: actix_web::HttpRequest,
+    path: web::Path<(String, String)>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+) -> Result<HttpResponse, AppError> {
+    use actix_web::HttpMessage;
+    let (registry, _) = path.into_inner();
+    let answer = req
+        .extensions()
+        .get::<crate::mise_wire::WireAnswer>()
+        .cloned();
+    let Some(answer) = answer else {
+        return Err(AppError::not_found("no such route"));
+    };
+    require_registry_type(&registry, KIND, &map)?;
+    authorize(&svc, &registry, "index", &identity).await?;
+    Ok(match answer {
+        crate::mise_wire::WireAnswer::Bounce(url) => HttpResponse::TemporaryRedirect()
+            .insert_header((actix_web::http::header::LOCATION, url))
+            .insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"))
+            .finish(),
+        crate::mise_wire::WireAnswer::NotWired(host) => return Err(not_wired(&host)),
+        crate::mise_wire::WireAnswer::Malformed => {
+            return Err(AppError::bad_request("malformed mise wire path").coded("malformed"))
+        }
+        crate::mise_wire::WireAnswer::Sink(tail) => {
+            crate::handlers::air_gap::sink_answer(&svc, tail).await
+        }
+    })
+}
+
+/// The wire of `hosts` when it belongs to `registry`.
+fn wire_of(
+    hosts: Option<&web::Data<crate::RegistryHostMap>>,
+    registry: &str,
+) -> Option<Arc<crate::mise_wire::MiseWire>> {
+    hosts
+        .and_then(|h| h.wire())
+        .filter(|w| w.registry == registry)
+}
+
+/// Overlay and `retired` names are answered here and never forwarded (§4.2,
+/// T6): mise then lists from the tool's backend, through the wire.
+fn local_name_refusal(
+    hosts: Option<&web::Data<crate::RegistryHostMap>>,
+    registry: &str,
+    tool: &str,
+) -> Option<AppError> {
+    let wire = wire_of(hosts, registry)?;
+    wire.local_names.contains(tool).then(|| {
+        AppError::not_found(format!(
+            "'{tool}' is one of this instance's own tools; mise lists it from its backend"
+        ))
+        .coded("overlay_tool")
+    })
+}
+
+/// The upstream archive check failed, or the merge did — for the config page.
+#[derive(Debug, Clone, Default)]
+pub struct OverlayBuild {
+    pub collisions: Vec<batlehub_adapters::registry::mise_registry_overlay::CollisionReport>,
+    pub upstream_invalid: Option<String>,
+}
+
+/// The last archive build of this process, read by the config page (†).
+pub fn last_overlay_build() -> OverlayBuild {
+    overlay_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .last
+        .clone()
+}
+
+/// `(sha256 of the raw archive, overlay hash)`.
+type MemoKey = (Vec<u8>, Vec<u8>);
+
+#[derive(Default)]
+struct OverlayState {
+    /// `(sha256 of the raw archive, overlay hash)` → merged bytes: one slot.
+    memo: Option<(MemoKey, Arc<Vec<u8>>)>,
+    last: OverlayBuild,
+}
+
+fn overlay_state() -> &'static std::sync::Mutex<OverlayState> {
+    static STATE: std::sync::OnceLock<std::sync::Mutex<OverlayState>> = std::sync::OnceLock::new();
+    STATE.get_or_init(Default::default)
+}
+
+/// Single-flight for the archive fetch and the time of the last failure per
+/// key: process-wide, not per actix worker (§6.4).
+fn archive_gate(
+) -> &'static tokio::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static GATE: std::sync::OnceLock<
+        tokio::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    GATE.get_or_init(Default::default)
+}
+
+const NEGATIVE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+const ARCHIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The raw upstream archive, checked as mise checks it before it is cached,
+/// so a truncated `200` or a captive portal never evicts a good stale copy.
+async fn raw_archive(
+    svc: &Arc<ProxyService>,
+    client: &reqwest::Client,
+    registry: &str,
+    upstream: &str,
+    offline: bool,
+) -> Result<Vec<u8>, AppError> {
+    use batlehub_adapters::registry::mise_registry_overlay as overlay;
+    use batlehub_core::error::CoreError;
+    use batlehub_core::services::proxy::{FetchOutcome, UpstreamBytes};
+
+    let key = format!("mise-versions:{registry}:registry-archive:{upstream}");
+    let url = format!("{upstream}/registry/latest.tar.zst");
+    // Followers wait for the leader, then read what it cached.
+    let mut gate = archive_gate().lock().await;
+    let failed_recently = gate.get(&key).is_some_and(|t| t.elapsed() < NEGATIVE_TTL);
+    let ttl = super::upstream::passthrough_ttl(svc, registry).await;
+    let result = svc
+        .cached_passthrough(registry, &key, Some(ttl), || async {
+            if offline {
+                return Err(CoreError::Registry(
+                    "air gap: this instance does not dial out".to_owned(),
+                ));
+            }
+            if failed_recently {
+                return Err(CoreError::Registry(
+                    "the archive upstream failed in the last 60 s".to_owned(),
+                ));
+            }
+            // Any non-2xx is a failure, so the held copy is served (§6.4).
+            let body = super::upstream::get_bounded(
+                client,
+                &url,
+                ARCHIVE_TIMEOUT,
+                overlay::MAX_COMPRESSED,
+            )
+            .await?;
+            if let Err(e) = overlay::check(&body) {
+                overlay_state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .last
+                    .upstream_invalid = Some(e.to_string());
+                return Err(CoreError::Registry(format!("archive refused: {e}")));
+            }
+            Ok(FetchOutcome::Cacheable(UpstreamBytes {
+                content_type: "application/zstd".to_owned(),
+                body,
+            }))
+        })
+        .await;
+    match result {
+        Ok(p) => Ok(p.bytes.body),
+        Err(e) => {
+            if !offline && !failed_recently {
+                gate.insert(key, std::time::Instant::now());
+            }
+            drop(gate);
+            tracing::warn!(error = %e, "mise registry archive unavailable");
+            Err(AppError::service_unavailable(format!(
+                "the mise registry archive is unavailable: {e}"
+            )))
+        }
+    }
+}
+
+/// The registry archive mise floats, with this instance's overlay tools
+/// merged in (§4.2). With the overlay off it is the public archive, checked
+/// (§15 Q17).
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/mise-versions/_registry/latest.tar.zst",
+    tag = "proxy/mise-versions",
+    params(("registry" = String, Path, description = "Registry name")),
+    responses(
+        (status = 200, description = "mise's registry archive, the overlay merged in", body = UpstreamDocument, content_type = "application/zstd"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "auto_wire is not enabled on this registry"),
+        (status = 503, description = "The upstream archive is unavailable and none is held"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/proxy/{registry}/mise-versions/_registry/latest.tar.zst")]
+pub async fn mise_versions_registry_archive(
+    path: web::Path<String>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+    client: web::Data<reqwest::Client>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
+) -> Result<HttpResponse, AppError> {
+    use batlehub_adapters::registry::mise_registry_overlay as overlay;
+    use sha2::{Digest, Sha256};
+
+    let registry = path.into_inner();
+    require_registry_type(&registry, KIND, &map)?;
+    authorize(&svc, &registry, "registry", &identity).await?;
+    let Some(wire) = wire_of(hosts.as_ref(), &registry) else {
+        return Err(AppError::not_found(
+            "auto_wire is not enabled on this registry",
+        ));
+    };
+    let offline = air_gapped(&svc).await;
+    let raw = raw_archive(
+        &svc,
+        &client,
+        &registry,
+        wire.auto_wire.registry_upstream(),
+        offline,
+    )
+    .await?;
+    let respond = |body: Vec<u8>| {
+        HttpResponse::Ok()
+            .content_type("application/zstd")
+            .body(body)
+    };
+    if !wire.auto_wire.overlay || wire.overlay.is_empty() {
+        return Ok(respond(raw));
+    }
+    let key = (
+        Sha256::digest(&raw).to_vec(),
+        Sha256::digest(format!("{:?}", wire.overlay).as_bytes()).to_vec(),
+    );
+    if let Some((k, bytes)) = &overlay_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .memo
+    {
+        if *k == key {
+            return Ok(respond(bytes.as_ref().clone()));
+        }
+    }
+    let checked = overlay::check(&raw).map_err(|e| {
+        AppError::service_unavailable(format!("the held registry archive is invalid: {e}"))
+    })?;
+    let (entries, collisions) = overlay::merge(&checked, &wire.overlay)
+        .map_err(|e| AppError::internal(format!("overlay entry: {e}")))?;
+    let merged = overlay::pack(&entries)
+        .map_err(|e| AppError::internal(format!("repacking the registry archive: {e}")))?;
+    for resolution in [
+        overlay::Collision::Drop,
+        overlay::Collision::Overlay,
+        overlay::Collision::Upstream,
+    ] {
+        let n = collisions
+            .iter()
+            .filter(|c| c.resolution == resolution)
+            .count();
+        metrics::gauge!("batlehub_mise_overlay_collisions", "resolution" => resolution.as_str())
+            .set(n as f64);
+    }
+    for c in &collisions {
+        tracing::warn!(
+            tool = %c.tool,
+            upstream_entry = %c.upstream_entry,
+            on_collision = c.resolution.as_str(),
+            "mise overlay: a tool name collides with the upstream registry"
+        );
+    }
+    let merged = Arc::new(merged);
+    {
+        let mut st = overlay_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        st.memo = Some((key, Arc::clone(&merged)));
+        st.last = OverlayBuild {
+            collisions,
+            upstream_invalid: None,
+        };
+    }
+    Ok(respond(merged.as_ref().clone()))
+}
+
+/// The config page's RFC 0045 rows (§4.3): what the table left out, the
+/// overlay's static checks, and the last archive build of this replica (†).
+pub fn mise_wire_warnings(
+    wire: &crate::mise_wire::MiseWire,
+    readable_anonymously: &dyn Fn(&str) -> bool,
+) -> Vec<batlehub_config::schema::ConfigWarning> {
+    use batlehub_config::schema::warnings as w;
+    use batlehub_config::schema::ConfigWarning;
+    use batlehub_core::services::mise_wire::{url_host, WireWarning};
+
+    let at = |name: &str| {
+        wire.indices.get(name).map_or_else(
+            || format!("registries[{name}]"),
+            |i| format!("registries[{i}]"),
+        )
+    };
+    let tools = format!("registries[{}].auto_wire.tools", wire.index);
+    let mut out = Vec::new();
+    for warning in &wire.warnings {
+        if let WireWarning::PrefixClaimed {
+            registry,
+            claimed_by,
+            host,
+            prefix,
+        } = warning
+        {
+            out.push(ConfigWarning::new(
+                w::MISE_WIRE_PREFIX_CLAIMED,
+                format!("{}.upstreams", at(registry)),
+                format!(
+                    "{host}/{prefix} is claimed by {claimed_by} and {registry}; {claimed_by} wins."
+                ),
+            ));
+        }
+    }
+    let wired_hosts: std::collections::BTreeSet<&str> =
+        wire.table.wired().map(|(h, _, _)| h).collect();
+    for (j, t) in wire.auto_wire.tools.iter().enumerate() {
+        for b in &t.backends {
+            let host = match b {
+                batlehub_config::schema::mise_auto_wire::MiseBackendConfig::Full {
+                    full,
+                    options,
+                } if full.starts_with("http:") => options
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .and_then(url_host),
+                other if other.full().starts_with("github:") => Some("api.github.com".to_owned()),
+                other if other.full().starts_with("gitlab:") => Some("gitlab.com".to_owned()),
+                _ => None,
+            };
+            if let Some(h) = host.filter(|h| !wired_hosts.contains(h.as_str())) {
+                out.push(ConfigWarning::new(
+                    w::MISE_OVERLAY_BACKEND_UNWIRED,
+                    format!("{tools}[{j}].backends"),
+                    format!(
+                        "{} names {h}, which is not wired: installs go there directly.",
+                        b.full()
+                    ),
+                ));
+            }
+        }
+        if let Some(src) = &t.source {
+            if readable_anonymously(&wire.registry) && !readable_anonymously(&src.registry) {
+                out.push(ConfigWarning::new(
+                    w::MISE_OVERLAY_READERS_WIDER,
+                    format!("{tools}[{j}].source.registry"),
+                    format!(
+                        "\"{}\" and its backend reach readers of {} who cannot read {}.",
+                        t.name, wire.registry, src.registry
+                    ),
+                ));
+            }
+        }
+    }
+    let build = last_overlay_build();
+    for c in &build.collisions {
+        let Some(j) = wire.auto_wire.tools.iter().position(|t| t.name == c.tool) else {
+            continue;
+        };
+        out.push(ConfigWarning::new(
+            w::MISE_OVERLAY_COLLISION,
+            format!("{tools}[{j}].name"),
+            format!(
+                "\"{}\" is in the upstream mise registry too (as \"{}\"); settled by on_collision = \"{}\".",
+                c.tool,
+                c.upstream_entry,
+                c.resolution.as_str()
+            ),
+        ));
+        if c.resolution == batlehub_adapters::registry::mise_registry_overlay::Collision::Overlay {
+            out.push(
+                ConfigWarning::new(
+                    w::MISE_OVERLAY_FORCED_SHADOW,
+                    format!("{tools}[{j}].on_collision"),
+                    format!(
+                        "\"{}\" shadows the public tool while on_collision = \"overlay\".",
+                        c.upstream_entry
+                    ),
+                )
+                .not_dismissible(),
+            );
+        }
+    }
+    if let Some(why) = &build.upstream_invalid {
+        out.push(ConfigWarning::new(
+            w::MISE_OVERLAY_UPSTREAM_INVALID,
+            format!("registries[{}].auto_wire.registry_upstream", wire.index),
+            format!("The last archive from {} failed mise's checks ({why}); the held copy, if any, is served.", wire.auto_wire.registry_upstream()),
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

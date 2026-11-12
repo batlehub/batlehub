@@ -24,6 +24,7 @@ incident. The most specific row wins, so
 | `ip_blocking.trusted_proxies` | hot | the proxy-trust policy, as the deprecated fallback of `server.trusted_proxies` |
 | `limits.packages_per_page` | hot | listing pagination |
 | `limits.versions_per_page` | hot | listing pagination |
+| `registries[*].auto_wire` | hot | the mise wire table and overlay (RFC 0045), rebuilt with the routing table |
 | `registries[*].cache.serve_stale` | hot | the registry's metadata policy |
 | `registries[*].grants` | hot | the registry's grant hierarchy |
 | `registries[*].hosts` | hot | the host → registry routing table |
@@ -41,6 +42,7 @@ incident. The most specific row wins, so
 | `limits.max_artifact_size_bytes` | partial | the request path; the scan worker keeps the startup limit |
 | `proxy` | partial | the registry clients and cargo index; the README fetcher and warming keep the startup proxy |
 | `registries[*]` | partial | the registry clients, policies and maps; warming and release imports keep the startup client |
+| `registries[*].auto_wire.registry_upstream` | partial | the overlay's archive upstream; a held copy under the old URL is not reused |
 | `registries[*].cache.artifact_ttl_secs` | partial | the registry's download policy; eviction keeps the startup TTL |
 | `registries[*].cache.metadata_ttl_secs` | partial | the registry's metadata policy; warming keeps the startup client |
 | `registries[*].cache` | restart | the warming and eviction services, built once |

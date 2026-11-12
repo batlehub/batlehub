@@ -4,6 +4,7 @@ pub mod error;
 pub mod extractors;
 pub mod handlers;
 pub mod middleware;
+pub mod mise_wire;
 pub mod services;
 pub mod spa;
 
@@ -370,6 +371,11 @@ pub struct RegistryHostMap {
     public: LockedMap<String>,
     /// `"npm1"` → `true` when `path_routing = false`.
     host_only: LockedMap<bool>,
+    /// The mise wire (RFC 0045), `None` when off. It lives here rather than
+    /// in a holder of its own because it changes with this table: on reload
+    /// it is swapped last, after the router's `RegistryMap` and the host map,
+    /// so a rewrite never names a registry the router does not have yet.
+    wire: mise_wire::MiseWireSlot,
 }
 
 impl RegistryHostMap {
@@ -386,7 +392,26 @@ impl RegistryHostMap {
             by_host: LockedMap::new(by_host),
             public: LockedMap::new(public),
             host_only: LockedMap::new(host_only),
+            wire: mise_wire::MiseWireSlot::default(),
         }
+    }
+
+    /// The same table with the mise wire `wire` (RFC 0045).
+    #[must_use]
+    pub fn with_wire(self, wire: Option<mise_wire::MiseWire>) -> Self {
+        *self
+            .wire
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = wire.map(Arc::new);
+        self
+    }
+
+    /// The mise wire in force, if any.
+    pub fn wire(&self) -> Option<Arc<mise_wire::MiseWire>> {
+        self.wire
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// The registry bound to `normalised_host`, if any. The caller must have
@@ -441,6 +466,11 @@ impl RegistryHostMap {
         self.by_host.replace_from(&other.by_host);
         self.public.replace_from(&other.public);
         self.host_only.replace_from(&other.host_only);
+        let wire = other.wire();
+        *self
+            .wire
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = wire;
     }
 }
 
@@ -772,7 +802,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             mise_versions::{
                 mise_versions_beacon, mise_versions_beacon_tools, mise_versions_beacon_track,
                 mise_versions_data, mise_versions_github_api, mise_versions_github_data,
-                mise_versions_tools,
+                mise_versions_registry_archive, mise_versions_tools, mise_versions_wire_answer,
             },
             nix::{
                 nix_build_log, nix_cache_info, nix_ls, nix_nar, nix_nar_upstream_shape,
@@ -912,11 +942,12 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
     cfg.service(download_cli);
     cfg.service(list_registries);
-    // Explore: detail path before list (more specific first); upstream before
-    // list. The README route is more specific than the detail route it extends,
-    // so it comes first — otherwise `/{registry}/{name}/readme` would match the
-    // detail path with `name = "{name}/readme"` on the registries whose names
-    // contain a slash.
+    cfg.service(crate::handlers::front_office::mise_auto_wire::mise_auto_wire); // GET /api/v1/mise/auto-wire (RFC 0045)
+                                                                                // Explore: detail path before list (more specific first); upstream before
+                                                                                // list. The README route is more specific than the detail route it extends,
+                                                                                // so it comes first — otherwise `/{registry}/{name}/readme` would match the
+                                                                                // detail path with `name = "{name}/readme"` on the registries whose names
+                                                                                // contain a slash.
     cfg.service(explore_package_readme);
     // Likewise more specific than the detail route, and than the README route:
     // it carries the version and the index as their own segments.
@@ -1207,6 +1238,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
         // mise's versions host (RFC 0043). The `data/github/…` mirror before
         // `data/{file}`; `{file}` cannot match a slash, but the order says
         // which one owns the prefix. Anything else is the scope's 404.
+        cfg.service(mise_versions_wire_answer); // ANY  …/mise-versions/_wire-answer/{outcome}  (RFC 0045)
+        cfg.service(mise_versions_registry_archive); // GET  …/mise-versions/_registry/latest.tar.zst  (RFC 0045)
         cfg.service(mise_versions_github_data); // GET  …/mise-versions/data/github/{tail}  (503)
         cfg.service(mise_versions_data); // GET  …/mise-versions/data/{file}  (filtered list | python index)
         cfg.service(mise_versions_tools); // GET  …/mise-versions/tools/{file}  (filtered list, mise < 2026.6.6)

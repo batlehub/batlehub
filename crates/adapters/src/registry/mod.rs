@@ -145,6 +145,8 @@ pub mod conda;
 pub use conda::CondaRegistryClient;
 
 #[cfg(feature = "registry-mise-versions")]
+pub mod mise_registry_overlay;
+#[cfg(feature = "registry-mise-versions")]
 pub mod mise_versions;
 #[cfg(feature = "registry-mise-versions")]
 pub use mise_versions::MiseVersionsRegistryClient;
