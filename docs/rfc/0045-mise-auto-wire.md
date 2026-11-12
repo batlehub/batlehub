@@ -1622,8 +1622,10 @@ Each point was checked against the code on 2026-11-12.
     the overlay on, aqua tools still resolve against the release's own copy,
     the T13 residual risk does not materialise today, and the generated
     block's comment ("aqua tools resolve against the current aqua registry
-    (served by this instance)") is wrong for this mise. Left as observed: a
-    `contents/` route on the `github` kind is a change of its own.
+    (served by this instance)") was wrong for this mise. The comment now says
+    what happens (`render_auto_wire`, `cli/src/cli/registry.rs`, with a test),
+    and `use/mise.md` documents the one warning mise prints. A `contents/`
+    route on the `github` kind is a change of its own.
 16. **mise resolves a tool argument before it floats the archive.** On an
     emptied cache, the first `mise install acme-deploy@latest` answers
     `acme-deploy not found in mise tool registry`, and the archive request

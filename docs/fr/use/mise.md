@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 3ba793a1f24c15dd
+sourceHash: 2cf7959df236a094
 ---
 
 # Faire pointer mise vers BatleHub
@@ -94,7 +94,14 @@ d'outils passent toujours par l'instance.
 `forgejo` de cette instance, ou des `backends` explicites) est ajoutée à
 l'archive de registre que mise fait flotter, et le bloc active
 `registry_floating`. Un nom qui existe aussi en amont est retiré des deux côtés
-par défaut (`on_collision = "drop"`) et listé sur la page de configuration. Un
+par défaut (`on_collision = "drop"`) et listé sur la page de configuration.
+`registry_floating` fait aussi télécharger à mise le registre aqua courant,
+depuis `api.github.com/repos/aquaproj/aqua-registry/contents/registry.yaml`. Le
+type `github` n'a pas de route `contents/` : cette requête répond `404`, mise
+avertit une fois (`failed to load floating aqua registry`) et garde le registre
+aqua embarqué dans sa version, celui avec lequel cette version a été testée. Un
+paquet aqua plus récent que votre mise reste introuvable tant que vous ne mettez
+pas mise à jour. Un
 binaire sans forge derrière lui peut déjà être servi comme backend `http:`
 dont l'`url` pointe vers un registre `generic` ; il n'a ni publication ni liste
 de blocage par version.

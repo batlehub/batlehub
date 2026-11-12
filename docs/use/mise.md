@@ -85,7 +85,13 @@ any block that stays, so tool listings keep going through the instance.
 registry of this instance, or explicit `backends`) is added to the registry
 archive mise floats, and the block turns `registry_floating` on. A name that
 also exists upstream is left out on both sides by default
-(`on_collision = "drop"`) and listed on the configuration page. A binary with no
+(`on_collision = "drop"`) and listed on the configuration page.
+`registry_floating` also makes mise fetch the current aqua registry, from
+`api.github.com/repos/aquaproj/aqua-registry/contents/registry.yaml`. The
+`github` kind has no `contents/` route, so that request answers `404`: mise
+warns once (`failed to load floating aqua registry`) and keeps the aqua registry
+baked into its release, the one that release was tested with. An aqua package
+newer than your mise is not found until mise is upgraded. A binary with no
 forge behind it can be served today as an `http:` backend whose `url` points at
 a `generic` registry; it has no publish step and no per-version block list.
 
