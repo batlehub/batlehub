@@ -181,3 +181,19 @@ upstreams = ["https://charts.jetstack.io"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# RFC 0045 §15 Q3: the export carries mise's registry archive, raw, from this
+# registry's `?raw=1`; the disconnected side merges its own overlay. Same name
+# as the disconnected one, because a bundle entry names its registry.
+[[registries]]
+type = "mise-versions"
+name = "mise-versions-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.auto_wire]
+enabled = true
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

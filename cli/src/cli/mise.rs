@@ -60,6 +60,11 @@ pub struct ExportArgs {
     /// the same plan produce the same id and an import idempotent.
     #[arg(long)]
     pub bundle_id: Option<String>,
+    /// Also carry mise's registry archive, raw, from every `mise-versions`
+    /// registry with `auto_wire` (RFC 0045 §15 Q3), so the disconnected
+    /// instance can serve its overlay names with no egress.
+    #[arg(long)]
+    pub include_mise_registry: bool,
 }
 
 #[derive(Args)]
@@ -308,6 +313,70 @@ async fn export_one(
     Some((bundle_entry, bytes, digest))
 }
 
+/// RFC 0045 §15 Q3: the raw registry archive of every `mise-versions`
+/// registry, under the key the server reports. Raw, not merged: each side of
+/// the gap merges its own overlay.
+async fn export_mise_registries(
+    client: &BatleHubClient,
+    skipped: &mut Vec<String>,
+) -> Vec<(batlehub_core::services::bundle::BundleEntry, Vec<u8>)> {
+    use sha2::{Digest, Sha256};
+    let registries = match client.list_registries().await {
+        Ok(r) => r,
+        Err(e) => {
+            skipped.push(format!("mise registry archive: listing registries: {e}"));
+            return Vec::new();
+        }
+    };
+    let wired: Vec<_> = registries
+        .into_iter()
+        .filter(|r| r.registry_type == "mise-versions")
+        .collect();
+    if wired.is_empty() {
+        skipped.push("mise registry archive: this server has no mise-versions registry".to_owned());
+    }
+    let mut out = Vec::new();
+    for r in wired {
+        let path = format!(
+            "/proxy/{}/mise-versions/_registry/latest.tar.zst?raw=1",
+            r.name
+        );
+        let fetched = match client.fetch_for_bundle(&path).await {
+            Ok(f) => f,
+            Err(e) => {
+                skipped.push(format!("mise registry archive [{}]: {e}", r.name));
+                continue;
+            }
+        };
+        let Some(key) = fetched.storage_key.as_deref() else {
+            skipped.push(format!(
+                "mise registry archive [{}]: the server reported no storage key",
+                r.name
+            ));
+            continue;
+        };
+        let key = key.strip_prefix("artifact:").unwrap_or(key).to_owned();
+        let digest = hex::encode(Sha256::digest(&fetched.bytes));
+        out.push((
+            batlehub_core::services::bundle::BundleEntry {
+                registry: r.name,
+                key,
+                digest,
+                size: fetched.bytes.len() as u64,
+                package_name: None,
+                version: None,
+                verdict: None,
+                reason_codes: Vec::new(),
+                verified_at: None,
+                git_ref: None,
+                facts: None,
+            },
+            fetched.bytes,
+        ));
+    }
+    out
+}
+
 /// What `mise export` printed, in either shape.
 fn print_export_report(
     json: bool,
@@ -379,6 +448,12 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
         };
         entries.push(bundle_entry);
         blobs.entry(digest).or_insert(bytes);
+    }
+    if args.include_mise_registry {
+        for (bundle_entry, bytes) in export_mise_registries(client, &mut skipped).await {
+            blobs.entry(bundle_entry.digest.clone()).or_insert(bytes);
+            entries.push(bundle_entry);
+        }
     }
 
     // A provider archive installs only beside its checksum list and the

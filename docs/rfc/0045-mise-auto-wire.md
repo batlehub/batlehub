@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — re-accepted 2026-11-11 after the last-review panel; §15 Q15–Q17 decided with the user, no blocker |
+| Status      | **Accepted** — re-accepted 2026-11-11 after the last-review panel; §15 Q15–Q17 decided with the user, Q3 on 2026-11-12, no blocker |
 | Short       | mise auto-wire                                                |
 | Settles     | One mise rule routes every wired host through BatleHub, and the estate's own tools reach mise by short name through an overlay on the floating registry |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -81,6 +81,9 @@ An air-gapped estate writes `^https://([^/]+)/(.*)` instead of the host list:
 every host goes to the wire, and the ones it does not know fall to the
 RFC 0008 sink on the server. `registry_floating = true` is printed only when
 the overlay is on, because it also floats mise's aqua registry (§4.1, §15 Q13).
+In an air gap the bundle carries mise's registry archive raw
+(`mise export --include-mise-registry`), and the disconnected instance merges
+its own overlay into it, so overlay names resolve there too (§15 Q3).
 
 ```mermaid
 flowchart LR
@@ -521,6 +524,12 @@ $ batlehub-cli registry suggest --mise --auto-wire --mise-catch-all
 # Put it in ONE config file (see the connected header). Air gap: every host
 # goes to this instance. Hosts it does not mirror answer 501 and are recorded
 # for the next bundle. Troubleshooting: https://hub.example.com/docs/use/mise#auto-wire
+[settings]
+# Overlay names resolve from the registry archive the last bundle carried
+# (`batlehub-cli mise export --include-mise-registry`).
+# Also floats mise's aqua registry: aqua tools resolve against the current
+# aqua registry (served by this instance), not the copy baked into mise.
+registry_floating = true
 [settings.url_replacements]
 "regex:^https://([^/]+)/(.*)" = "https://hub.example.com/proxy/mise-versions/mise-versions/_wire/$1/$2"
 $ echo $?
@@ -528,10 +537,10 @@ $ echo $?
 ```
 
 It decides that the air-gap block has its own header (the connected one
-says unlisted hosts are fetched directly, which is false here) and prints no
-`registry_floating` until phase 5 carries the archive in the bundle (§15 Q3):
-before that, floating would only add the aqua side effect. With the overlay
-off the air-gap block is the same, which is why it has no variant.
+says unlisted hosts are fetched directly, which is false here) and, with the
+overlay on, prints `registry_floating` with a line naming the export flag
+that carries the archive (phase 5, §15 Q3). With the overlay off the block
+has no `[settings]` table and is otherwise the same.
 
 **Same command — the instance has no wire**
 
@@ -1265,7 +1274,7 @@ URI or the query: mise puts tokens in queries for some forges
 | jdx.dev slow (accepts, then trickles) | the 30 s total timeout | counted as unreachable: held copy, or `503` and the negative entry; followers share the leader's deadline | automatic |
 | jdx.dev or a mirror answers 403, 404 or 429, copy held | upstream metrics | any non-2xx is a failure: held copy served, negative entry set, no re-dial for 60 s | automatic |
 | Held copy lost: in-memory store restarted, or a Redis stale copy past max(TTL, 7 days), during an outage | `503` | as "nothing held" | automatic, on the next successful fetch |
-| Air gap, nothing held | `503`, not recorded in the sink | as "nothing held"; overlay names need the connected side until §15 Q3's phase 5 | Q3 |
+| Air gap, nothing cached | the archive a bundle carried (`artifact:{reg}/_registry/raw/latest.tar.zst`) | re-checked, merged with this instance's overlay and served; absent or failing the check: `503`, not recorded in the sink, as "nothing held" | the next bundle exported with `--include-mise-registry` (§15 Q3) |
 | Upstream archive malformed, truncated or over a limit | `mise.overlay.upstream-invalid`, upstream metrics | never cached; the held copy stays, or `503` | automatic once upstream is fixed |
 | Clients retrying a failed refresh on every command | wire request rate | single-flight plus the 60-second negative entry, process-wide: one upstream attempt a minute per process, not per worker | automatic |
 | Config reload drops a registry a client rule names | `not_wired` counter | `404` for that prefix (closed) | regenerate the rule |
@@ -1464,7 +1473,7 @@ before this RFC, not a weaker one.
 | --- | --- | --- |
 | 1 | How is the mode spelled? | **A `[registries.auto_wire]` table, not `mode = "hybrid"`.** `hybrid` already means publish plus proxy fallthrough to `require_local_mode`, `supports_local_mode()` and the console's uploads. "Hybrid" stays the docs' word for what it does: local answers first (overlay, own host, `404` for overlay listings), upstream for the rest. As recommended. |
 | 2 | What does a name collision do? | **Both dropped by default; `on_collision` per tool settles it otherwise: `"drop"`, `"overlay"` (force the name) or `"upstream"` (yield).** The default fails closed for T4 and T5. The user asked for a way to force a name or resolve the clash, and a per-tool field keeps the force on the line that causes it, shown on the config page while it applies. Extends the recommendation. Its operational cost is reopened as Q9. |
-| 3 | Does an air-gap bundle carry the merged archive? | **Phase 5, after reading the export code.** Until then the docs say that overlay names need the connected side; `mise.lock`-driven installs of public tools still work. As recommended. |
+| 3 | Does an air-gap bundle carry the merged archive? | **It carries the raw archive, not the merged one; each side merges its own overlay.** `batlehub-cli mise export --include-mise-registry` adds one entry per `mise-versions` registry with `auto_wire`, fetched from `_registry/latest.tar.zst?raw=1`: the upstream archive as fetched and checked, behind the same read check as the route, filed under the key the server reports (`{reg}/_registry/raw/latest.tar.zst`). The import writes it to storage like any entry. Air-gapped with nothing cached, the archive route reads that key, re-runs `mise_registry_overlay::check`, and serves it merged with the local overlay; an absent or bad copy keeps the `503`, not recorded in the sink. The air-gap block of `registry suggest` prints `registry_floating` when the overlay is on. Decided 2026-11-12 with the user, after reading the export code (phase 5). |
 | 4 | Two registries claim one host | **First declared wins, with a warning.** As recommended. Narrowed by the panel: the claim is now on a `(host, prefix)` pair (Q10). |
 | 5 | Does `/api/v1/mise/auto-wire` filter hosts by visibility? | **Yes.** The closed side by default, and the regenerate cost falls on the user being granted something. As recommended. The panel added that the wire's own answers must not leak what this filter hides (T9). |
 | 6 | Wired host, untyped path | **`307` to the origin**, bounded by T3, keeping today's behaviour for paths no typed rule covers. As recommended. Its credential cost is reopened as Q11. |
@@ -1526,7 +1535,7 @@ None.
 | 2 | Config (`auto_wire` without `overlay`), the rewrite with its fast path, opt-out re-check and registry-host refusal, `_wire-answer`, `WiredFrom`, `/api/v1/mise/auto-wire`, `registry suggest --auto-wire`, reload rows, the T1–T3 and T9–T11 tests; §15 Q15 (an unreadable target answers `not_wired`, the sink through `_wire-answer`) and Q17 (`mise.jdx.dev/registry/` wired while enabled, a raw passthrough of the public archive until phase 3 brings the merge, with the on → off → refresh test). The closed-world phase, cases 1, 2, 7 and 9 (Q10's proof, which must pass before the phase lands), and case 5 against a `github` source until phase 3 brings `source`. Useful alone: the one-rule block. |
 | 3 | The overlay: config (`tools`, `retired`, `source`), `_registry/latest.tar.zst` with validation, single-flight and negative entry, the merge, the local `404` for overlay and retired listings, collisions, the seven warning codes (with §15 Q16's `mise.overlay.readers-wider`) and the filtered `overlay_tools`, the non-dismissible row, the alert rule, T4–T8, T12, T13. Cases 3, 4, 5 (on the forgejo source), 6 and 8. T6's local `404` lands in the same phase as the overlay names it protects. |
 | 4 | `airgap.sh` phase, `authz.sh` `live:mise-auto-wire`, docs (EN + FR) including the migration, the rollback, the troubleshooting list and the `http:` stopgap of Q8, ROADMAP. |
-| 5 | Q3: the bundle carries the raw archive, if Q3 is decided that way. |
+| 5 | Q3: the bundle carries the raw archive (`mise export --include-mise-registry`, `?raw=1` on the archive route), the air-gapped route serves the held copy merged with its own overlay, the air-gap block prints `registry_floating`; the in-process tests in `mise_auto_wire.rs` and the overlay-name install in `airgap.sh`. |
 
 Phases 2 and 3 depend on RFC 0043 phase 1 (the `mise-versions` kind), which
 is on `main` (`RegistryKind::MiseVersions`,

@@ -1,7 +1,7 @@
 ---
 title: Procédure de coupure réseau
 sourcePath: operations/air-gap.md
-sourceHash: e186cd071ca85591
+sourceHash: b10487f7cb335cf3
 ---
 
 # Procédure de coupure réseau
@@ -99,6 +99,12 @@ transporté à travers une coupure.
 ```bash
 batlehub-cli mise export --plan mise-plan.json --sign-key ./estate.key -o estate.bhub
 ```
+
+**Un parc qui sert ses propres outils par nom court** (l'auto-wire de mise avec
+`overlay = true`) ajoute `--include-mise-registry` : le lot transporte alors
+l'archive de registre de mise, brute, et l'instance coupée y fusionne son
+propre overlay, si bien que les noms de l'overlay se résolvent sans aucune
+sortie réseau. Voir [mise](/fr/use/mise#_2-3-exporter-transporter-importer).
 
 ```text
 estate.bhub · 41 entries · 38 blob(s) · signed

@@ -248,16 +248,21 @@ pub fn render_auto_wire(
         out.push_str(&format!(
             "# a new host. Troubleshooting: {server}/docs/use/mise#auto-wire\n"
         ));
-        if aw.registry_floating {
-            out.push_str("[settings]\n");
+    }
+    if aw.registry_floating {
+        out.push_str("[settings]\n");
+        if catch_all {
+            // §15 Q3: the archive crosses the gap with the bundle.
             out.push_str(
-                "# Also floats mise's aqua registry: aqua tools resolve against the current\n",
+                "# Overlay names resolve from the registry archive the last bundle carried\n",
             );
-            out.push_str(
-                "# aqua registry (served by this instance), not the copy baked into mise.\n",
-            );
-            out.push_str("registry_floating = true\n");
+            out.push_str("# (`batlehub-cli mise export --include-mise-registry`).\n");
         }
+        out.push_str(
+            "# Also floats mise's aqua registry: aqua tools resolve against the current\n",
+        );
+        out.push_str("# aqua registry (served by this instance), not the copy baked into mise.\n");
+        out.push_str("registry_floating = true\n");
     }
     let key = if catch_all {
         &aw.air_gap_pattern
@@ -549,8 +554,17 @@ mod auto_wire_tests {
         let out = render_auto_wire(&aw(0, true), "https://hub.example.com", true, false);
         assert!(out.contains("Air gap: every host"));
         assert!(!out.contains("fetched directly"));
-        assert!(!out.contains("registry_floating"));
+        // §15 Q3: the bundle carries the archive, so the overlay floats here too.
+        assert!(out.contains("--include-mise-registry"));
+        assert!(
+            !render_auto_wire(&aw(0, false), "https://hub.example.com", true, false)
+                .contains("registry_floating")
+        );
         let parsed: toml::Table = toml::from_str(&out).expect("TOML");
+        assert_eq!(
+            parsed["settings"]["registry_floating"].as_bool(),
+            Some(true)
+        );
         assert!(parsed["settings"]["url_replacements"]
             .as_table()
             .unwrap()
