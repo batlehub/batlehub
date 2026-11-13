@@ -13,7 +13,7 @@ reference: true
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
 | Supersedes  | — (amends RFC 0045 §6.1: conda joins the upstream-derived kinds, §6.4) |
-| Touches     | `cli` (`api/suggest.rs`, `api/client_setup.rs`, `api/mise_plan.rs`, `cli/mise.rs`), `crates/core` (`services/mise_wire.rs` once RFC 0045 phase 1 lands), `tests/heavy` (`closed_world.sh`, `airgap.sh`), `.github/workflows/test.yaml` and `mise-scan.yaml` (the pinned mise), docs (`use/mise.md`, `registries/generic.md`, `registries/conda.md`, `registries/nuget.md`) |
+| Touches     | `cli` (`api/suggest.rs`, `api/client_setup.rs`, `api/mise_plan.rs`, `cli/mise.rs`), `crates/core` (`services/mise_wire.rs` once RFC 0045 phase 1 lands), `crates/adapters` (`registry/path_proxy.rs`: `generic` globs with `require_literal_separator`, §15 Q7), `tests/heavy` (`closed_world.sh`, `airgap.sh`), `.github/workflows/test.yaml` and `mise-scan.yaml` (the pinned mise), docs (`use/mise.md`, `registries/generic.md`, `registries/conda.md`, `registries/nuget.md`) |
 | Risk        | medium — §7 (the CLI writes the client rules that decide which host a tool's bytes come from) |
 
 ---
@@ -184,7 +184,7 @@ aquaproj/aqua-registry at `017ef00e`).
    | Group (defaults) | Routed after this RFC | Correct verdict, no route yet | Gap |
    | --- | --- | --- | --- |
    | aqua GitHub types (656) | 656 (`github`) | — | — |
-   | aqua `http` (48) | 23: hashicorp 8, storage.googleapis.com 6 (bucket widening), apache 3, k8s 2, sonarsource 2 (existing preset), helm 1 (existing), docker 1 | — | 25: awscli 3 and crossplane 2 meet the threshold and get a preset after a probe (§15 Q6); 20 single-tool hosts |
+   | aqua `http` (48) | 23: hashicorp 8, storage.googleapis.com 6 (bucket widening), apache 3, k8s 2, sonarsource 2 (existing preset), helm 1 (existing), docker 1 | — | 25: awscli 3 and crossplane 2 meet the threshold and get a preset after a probe (§15 Q6: by measurement and on request); 20 single-tool hosts |
    | `http:` (17) | 10: julia, oc, openshift-install, sentinel, tfc-agent, nomad-pack, dart, flutter, grok, … | — | 7: nim, kotlin-toolchain, neo4j, cursor-agent, muse, twg, android-cli |
    | vfox embedded (40) | 2 by preset: ant, groovy | 38: the verdict becomes a note; a lock gives a narrow generic | — |
    | vfox cloned (1, `tiny`) | — | — | unsupported (git) |
@@ -232,7 +232,10 @@ aquaproj/aqua-registry at `017ef00e`).
   scope, as GitHub.
 - **Live signature verification on the disconnected side** for `packslip:`,
   aqua's cosign/slsa and vfox attestations. RFC 0008 §5 ("What will not
-  work") already rules it out; this RFC does not reopen it.
+  work") already rules it out; this RFC does not reopen it. packslip does not
+  need it: its Sigstore check uses a trust root embedded in the mise binary
+  and fetches no TUF root (§15 Q5), so a packslip tool installs air-gapped
+  once the documents it verifies are held like any other artifact.
 - **The `core:*` toolchains** — RFC 0048.
 - **A dedicated kind for HashiCorp releases or dl.k8s.io.** A `generic`
   registry with a preset caches and allowlists them; per-version blocking for
@@ -245,8 +248,10 @@ aquaproj/aqua-registry at `017ef00e`).
 
 ### 4.1 Configuration
 
-No server configuration changes. The operator sees new presets in what the
-CLI suggests:
+No new server option. One server behaviour changes: `generic`'s `path_allow`
+globs match with `require_literal_separator` (§15 Q7), so `*` stops at `/`
+(migration note in §13). The operator sees new presets in what the CLI
+suggests:
 
 ```toml
 # written by `batlehub-cli registry suggest --mise`
@@ -254,8 +259,8 @@ CLI suggests:
 name       = "hashicorp-releases"
 type       = "generic"
 upstreams  = ["https://releases.hashicorp.com"]
-# one literal product prefix each: in `generic` globs `*` also crosses `/`
-# (`path_proxy.rs:90`), so "*/*/*" would be the whole host
+# one literal product prefix each, so the allowlist names products,
+# not the host
 path_allow = ["terraform/**", "consul/**", "nomad/**", "packer/**",
               "vault/**", "waypoint/**", "boundary/**", "sentinel/**",
               "tfc-agent/**", "nomad-pack/**"]
@@ -281,11 +286,14 @@ dotnet.registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
   version of the tools that use the host, plus the listing document mise
   reads. Absent `path_allow` on a hand-written generic registry keeps
   today's meaning (validated by `validate_registry_path_allow`,
-  `crates/config/src/schema/mod.rs:2600`). The presets are written as literal
-  product prefixes, because `glob::Pattern::matches` runs with default
-  options in `path_proxy.rs:90`, where `*` also crosses `/`: `*/*/*` would be
-  the whole host. Whether `generic` should switch to
-  `require_literal_separator` is §15 Q7.
+  `crates/config/src/schema/mod.rs:2600`). Today `glob::Pattern::matches`
+  runs with default options in `crates/adapters/src/registry/path_proxy.rs:90`,
+  where `*` also crosses `/` (`*/*/*` is the whole host, `go*` admits
+  `go1.25/anything/below`). Phase 2 switches the call to `matches_with` and
+  `require_literal_separator: true` for every `generic` registry (§15 Q7), so
+  `*` stays inside one segment and only `**` crosses `/`. The presets are
+  still written as literal product prefixes, and their refusal corpus runs
+  under the new semantics.
 - `dotnet.registry_url` is written only when a `nuget` registry is chosen
   for the mise target, together with the NuGet.config source the install
   needs (§6.2). Absent, mise lists from nuget.org as today.
@@ -298,7 +306,10 @@ dotnet.registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
 - Each rule has a minimum mise version (conda middleware, embedded vfox,
   `dotnet.registry_url`); an older mise only *warns* on an unknown setting
   (`src/config/config_file/mise_toml.rs:681`) and the tool goes direct, so
-  `docs/use/mise.md` states the minimum per rule and `setup` prints it.
+  `docs/use/mise.md` states the minimum per rule and `setup` prints it next
+  to the rule (§15 Q8). `setup` does not refuse a rule an older mise cannot
+  honour: it does not run `mise --version`, and the floor is the operator's
+  to check.
 
 ### 4.2 Behaviour rules
 
@@ -309,14 +320,26 @@ dotnet.registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
   prefix decides, through `BACKEND_REGISTRIES`. (3) No row: the reason.
 - **aqua without a lock** keeps mapping to `github` — 648 of 704 are — and
   the suggestion carries a note: "aqua packages of type `http` download from
-  their vendor's host; run `mise lock` to see it". The CLI does not guess
-  which aqua package is which (§12).
+  their vendor's host; run `mise lock` to see it". A note, not a refusal
+  (§15 Q2): refusing would break the lock-less path for the 648 GitHub
+  packages to warn about 48. The CLI does not guess which aqua package is
+  which (§12).
 - **vfox without a lock** is not "unsupported". The reason becomes: "vfox
   plugins built into mise download over HTTP through `url_replacements`; run
   `mise lock` so the plan knows the URL. A plugin mise clones (one named by
   URL, or not built in) cannot come through." The plan cannot tell an
   embedded plugin from a cloned one by name alone without a list that
   drifts, so it tells the operator how to find out instead.
+- **vfox plugins known to shell out** — `php`, `poetry`, `pipenv` today —
+  get a second note, locked or not: "vfox:{plugin} runs a subprocess
+  ({what}) whose own downloads bypass `url_replacements`; connected they go
+  direct, air-gapped they fail" (§15 Q4, T5). The list is
+  `VFOX_SUBPROCESS_PLUGINS` in `cli/src/api/suggest.rs`, keyed by the
+  registry's short name. It is a list that drifts, accepted as such: it is
+  re-measured on every mise pin bump (§6.5) by grepping the embedded
+  plugins' Lua for `os.execute`/`cmd.exec`, and a plugin missing from it
+  loses only the warning, never a route. `docs/use/mise.md` keeps the same
+  list with what each subprocess fetches.
 - **`asdf:`** keeps today's "unsupported" reason unchanged.
 - **`dotnet:`** maps to `nuget`. mise reads only the version list itself
   (`dotnet.registry_url`, `src/backend/dotnet.rs:175-179`); the install is a
@@ -359,6 +382,8 @@ Warnings:
 | --- | --- | --- |
 | aqua tool, no lock | `github` suggested, note printed | `registry suggest --mise` output, next to the registry |
 | vfox tool, no lock | not unsupported; note printed | same, and `mise plan`'s `notes` |
+| vfox tool in `VFOX_SUBPROCESS_PLUGINS` (php, poetry, pipenv) | planned as usual; subprocess note printed | `registry suggest --mise` above its registry, `mise plan`'s `notes` |
+| a rule needs a newer mise than some clients may run | written; the floor printed beside it | `setup`'s `detail` line, `docs/use/mise.md` |
 | a locked `conda:` tool on a channel no registry fronts | the tool goes direct | `mise plan`: its host under `no mirror:` (the lock carries the URL) |
 | a conda registry on a channel-less upstream | no rule, skipped with the reason | `setup`'s `detail` line, as `foreign_upstream` does today |
 | `dotnet:` chosen without the NuGet source writable | listing proxied, install would go direct | `setup` prints "also run `setup --client nuget`" |
@@ -443,6 +468,7 @@ $ batlehub-cli mise plan
   unsupported: asdf:mise-plugins/mise-postgres: a git-fetched plugin backend; mise clones it, and there is no HTTP path through BatleHub
   unsupported: packslip:tool.example.com: reads https://tool.example.com/.well-known/packslip.json; no registry mirrors tool.example.com
   note: vfox:jdx/vfox-ant: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL
+  note: vfox:php: runs a subprocess (configure, make) whose own downloads bypass url_replacements; connected they go direct, air-gapped they fail
 ```
 
 Exit 0: a plan with unsupported tools is still a plan (RFC 0008 §2.1). Empty
@@ -452,13 +478,15 @@ case — nothing unsupported, nothing to note: the summary line alone, as today.
 
 ```text
 mise  ~/.config/mise/conf.d/batlehub.toml  would write 2 rules, 1 setting
-      conda      → ^https://conda\.anaconda\.org/conda-forge/(.+)
-      conda-bio  → ^https://conda\.anaconda\.org/bioconda/(.+)
-      nuget      → dotnet.registry_url = https://hub.example.com/proxy/nuget/nuget/v3/index.json
+      conda      → ^https://conda\.anaconda\.org/conda-forge/(.+)      (mise ≥ {floor})
+      conda-bio  → ^https://conda\.anaconda\.org/bioconda/(.+)        (mise ≥ {floor})
+      nuget      → dotnet.registry_url = https://hub.example.com/proxy/nuget/nuget/v3/index.json   (mise ≥ {floor})
       also run `batlehub-cli setup --client nuget`: `dotnet tool install` reads NuGet.config, not mise
 ```
 
 Setup works per registry: both channels get their rule, nothing is skipped.
+Each line carries the rule's minimum mise version (§15 Q8); `{floor}` is the
+measured version phase 1 records per rule, not a placeholder the CLI prints.
 
 **Refusal — two registries on one channel**
 
@@ -562,8 +590,14 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
   | `julialang-s3.julialang.org` | `julia-dist` | `https://julialang-s3.julialang.org/bin` | `versions.json`, `linux/**`, `mac/**`, `winnt/**` | julia |
   | `download.docker.com` | `docker-dl` | `https://download.docker.com` | `linux/static/stable/**`, `mac/static/stable/**` | docker-cli |
 
-  Every pattern starts with a literal product segment: `*` crosses `/` in
-  `generic` globs (§4.1, §15 Q7).
+  Every pattern starts with a literal product segment, and is tested under
+  `require_literal_separator` (§4.1, §15 Q7). Each preset whose host serves
+  a mutable document (`release/stable.txt`, `versions.json`, a bucket's
+  `version_list_url`) lists it in the `generic` revalidate list RFC 0048
+  phase 1b adds (§15 Q10), so "latest" does not freeze in the cache.
+- `VFOX_SUBPROCESS_PLUGINS` (§4.2, §15 Q4): `("php", "configure, make")`,
+  `("poetry", "the installer script, run by python")`, `("pipenv", "pip")`;
+  `registry_for_backend` and the plan attach its note.
 
   `storage.googleapis.com` is already a bucket host
   (`cli/src/api/suggest.rs:182-186`): dart (`dart-archive`), flutter
@@ -572,11 +606,17 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
   that function's allowlist for a bucket to the *directory* of the observed
   path plus the `version_list_url` the registry TOML names, instead of the
   single file — and checks that `version_list_url` is on the same host and
-  bucket before admitting it. The `dl.google.com` preset stays `go*`
-  (RFC 0048 owns it); android-sdk's `dl.google.com/android/**` is §15 Q3,
-  whose answer is to key presets by host **and** path prefix
-  (`generic_preset`, `proxy_path_for` and `registry_kind_for_host`,
-  `:137`, `:214`, `:277`, all assume one preset per host today).
+  bucket before admitting it.
+- `dl.google.com` carries **two `generic` registries on one host** (§15 Q3):
+  `go-dl` (upstream `https://dl.google.com/go`, `go*`, RFC 0048 owns it) and
+  a new `android-dl` (upstream `https://dl.google.com/android`, for
+  android-sdk, aapt2 and android-cli), each wired on
+  its `(host, prefix)` pair the way RFC 0045 §15 Q10 settled for the server
+  wire. Presets are therefore keyed by host **and** path prefix:
+  `generic_preset`, `proxy_path_for` and `registry_kind_for_host` (`:137`,
+  `:214`, `:277`) take the URL's path and pick the longest matching prefix,
+  where they assume one preset per host today. `android-dl`'s `path_allow`
+  is probed in phase 2 before the preset is written, like every preset.
 - `mise_url_replacements` (`cli/src/api/suggest.rs:1342-1366`) derives the
   conda rule from the registry's upstream, next to the generic derivation,
   until RFC 0045 phase 1 moves the table. `typed_url_replacements("conda")`
@@ -625,14 +665,22 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
   `.github/workflows/mise-scan.yaml:98`, whose comment requires it to equal
   `test.yaml`'s. The conda `url_replacements` middleware and the embedded
   vfox plugins this RFC relies on are verified in 2026.11.3's source; all
-  four move to 2026.11.3 in their own PR, first (§15 Q1).
+  four move to the current 2026.11.x release (2026.11.3 or later; 2026.11.7
+  is the newest on crates.io on 2026-11-13) **inside phase 1** (§15 Q1), and
+  phase 1 runs every existing mise phase under the new pin before it merges,
+  so a behaviour change elsewhere is caught in the same PR. Each pin bump
+  also re-runs the measurement script this RFC used: the §2.7 counts, the
+  preset threshold (§15 Q6) and `VFOX_SUBPROCESS_PLUGINS` (§15 Q4). If the
+  pin lands on a release later than 2026.11.3, the source facts this RFC
+  cites are re-read at that release in the same PR.
 - `closed_world.sh` `phase_mise` (line 1082) gains the cases of §6.P;
   `airgap.sh` gains the refusal cases.
 
 ### 6.P Proof against a real client
 
 Suite `tests/heavy/closed_world.sh mise` and `tests/heavy/airgap.sh`, client
-**mise 2026.11.3** (linux-x64, the release asset CI already downloads), the
+**mise at the phase-1 pin** (2026.11.3 or the later 2026.11.x the pin lands
+on, §6.5; linux-x64, the release asset CI already downloads), the
 wire read with `heavy_wire_re_after` and never from mise's exit code alone.
 The tool versions below are the ones the phase will pin; they are proposals,
 not yet resolved against each backend.
@@ -678,8 +726,10 @@ not yet resolved against each backend.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
-- `crates/adapters/src/registry/generic*` — the presets are CLI data; the
-  generic kind's server code does not change.
+- `crates/adapters/src/registry/generic*` — the presets are CLI data. The
+  one server change to the kind is the glob call in `path_proxy.rs:90`
+  (§15 Q7); the revalidate list and the cold-fill path are RFC 0048's
+  (§15 Q9, Q10).
 - `crates/adapters/src/registry/conda/` — the server already serves any
   channel it is pointed at; only the client rule was channel-blind.
 - `tests/heavy/authz.sh` — no new grant shape: every route used exists and is
@@ -711,10 +761,10 @@ second registry on a shared host.
 | # | Threat (STRIDE) | Where | Mitigation | Residual risk |
 | --- | --- | --- | --- | --- |
 | T1 | Tampering — a registry of one conda channel answers another channel's reads | boundary 1 | rule derived from the registry's own upstream; `foreign_upstream` compares the whole channel URL (`cli/src/api/client_setup.rs:1200`) | none known; accepted by the author |
-| T2 | Elevation — a preset turns BatleHub into an open fetcher for a whole vendor host | boundary 2 | presets start with a literal product segment; a unit test runs every preset against a corpus of paths it must refuse (another product, the host root) — not a "no `**`" check, since `*` crosses `/` in `generic` globs (`path_proxy.rs:90`) | a product directory is still wide (all of `maven/**`); accepted, it is one product. Operator-written `*` patterns are as wide as `**` today (§15 Q7) |
+| T2 | Elevation — a preset turns BatleHub into an open fetcher for a whole vendor host | boundary 2 | presets start with a literal product segment; a unit test runs every preset against a corpus of paths it must refuse (another product, the host root) — not a "no `**`" check, since `*` crossed `/` in `generic` globs (`path_proxy.rs:90`) until §15 Q7 | a product directory is still wide (all of `maven/**`); accepted, it is one product. Operator-written `*` patterns stop at `/` from phase 2: `require_literal_separator` in `path_proxy.rs:90` (§15 Q7), proved by `generic_star_does_not_cross_a_separator` |
 | T3 | Info disclosure — the netrc credential for the proxy follows a rewritten URL to another host, or over http | boundary 1 | mise clears cross-host credentials and refuses a downgrade on a rewrite (`src/backend/conda.rs:65-80`, the same rule `crate::http::Client` applies); BatleHub rules always target the instance | relies on mise; regression covered by §6.P 9 (an assertion on a host egress already blocks would be vacuous) |
 | T4 | Repudiation/DoS — a backend reported covered goes direct in an air gap and times out | boundary 1 | catch-all rule (`cli/src/api/suggest.rs:1439`) sinks every unwired host to a `501` recorded under `unmirrored` | none for HTTP; T5 remains |
-| T5 | Info disclosure — a vfox plugin's subprocess (php's build, poetry's installer) fetches directly | boundary 4 | out of the rewriter's reach; documented per plugin in `docs/use/mise.md` | **accepted, highest residual**: in connected mode those requests leave the estate unproxied; in an air gap they fail |
+| T5 | Info disclosure — a vfox plugin's subprocess (php's build, poetry's installer) fetches directly | boundary 4 | out of the rewriter's reach; documented per plugin in `docs/use/mise.md`, and the plan and `suggest` flag the plugins of `VFOX_SUBPROCESS_PLUGINS` (§4.2, §15 Q4) | **accepted, highest residual**: in connected mode those requests leave the estate unproxied; in an air gap they fail. The flag list drifts between pin bumps; a plugin missing from it loses the warning, not a route |
 | T6 | Spoofing — upstream registry data points a template at an attacker host | boundary 3 | a rewritten URL only reaches hosts with a registry; an unwired host is direct (connected) or sunk (air gap), as today; a bucket's `version_list_url` is admitted only on the same host and bucket (§6.1) | unchanged from today |
 | T7 | Tampering / EoP — `dotnet:` reported covered while its install bypasses the proxy: `dotnet tool install` is a subprocess reading NuGet.config (`src/backend/dotnet.rs:138-154`), so with only `dotnet.registry_url` written the listing is proxied and the `.nupkg` is not, skipping blocks connected and missing the catch-all air-gapped | boundary 4 | `setup` writes or demands the NuGet.config source (§6.2); `mise plan` notes `dotnet:` as subprocess-fetched | the install's correctness rests on NuGet.config, outside mise; §6.P 5's negative arm proves a blocked `.nupkg` does not install |
 
@@ -753,11 +803,11 @@ RBAC on every route, the catch-all sink of RFC 0008, and RFC 0045's
 ## 8. Supply chain
 
 No new dependency, image, action or tool in BatleHub; `task audit` is
-unchanged. The **pinned mise moves from 2026.9.5 to 2026.11.3** in all four
-places (`test.yaml` lines 1024, 1401, 1550; `mise-scan.yaml:98`; MIT, the
-release asset CI already verifies by URL). The bump
-also changes mise's behaviour in every other mise phase; phase 1 runs them
-all before the pin lands (§13).
+unchanged. The **pinned mise moves from 2026.9.5 to the current 2026.11.x**
+(2026.11.3 or later) in all four places (`test.yaml` lines 1024, 1401, 1550;
+`mise-scan.yaml:98`; MIT, the release asset CI already verifies by URL), in
+phase 1 (§15 Q1). The bump also changes mise's behaviour in every other mise
+phase; phase 1 runs them all under the new pin before it merges (§13).
 
 ---
 
@@ -787,8 +837,8 @@ generic read.
 | A future mise un-embeds a vfox plugin | §6.P case 4 (the tap sees a git clone) | the tool goes direct (connected) or fails (air gap) | the plan's note already tells the operator to check |
 | An aqua package changes type | the lock's URL | lock path is right by construction | none needed |
 | A vendor host down or slow, cold miss | generic `502`, upstream latency metric | closed: `502`; a cached artifact is still served | retry once the vendor is back |
-| A large cold artifact slower than mise's 30 s read timeout | mise's own timeout and retries | **open** — the fill may never complete; §15 Q9 (blocker) | — |
-| A mutable index under a preset (`release/stable.txt`, `*/index.json`, `versions.json`) | stale "latest" | cached forever (`artifact_ttl_secs` null) — §15 Q10 | purge by hand until Q10 lands |
+| A large cold artifact slower than mise's 30 s read timeout | mise's own timeout and retries | the fill is detached from the request and single-flighted, and bytes stream to the client as they arrive (RFC 0048 phase 1b, §15 Q9): a retry joins the running fill instead of starting another | none needed; a fill that fails upstream caches nothing |
+| A mutable index under a preset (`release/stable.txt`, `*/index.json`, `versions.json`) | the revalidate list (§15 Q10) | revalidated against upstream on read; on an upstream error the cached copy is served stale | none needed; until RFC 0048 phase 1b lands, purge by hand |
 | Air gap, per tool | — | only lock-driven installs work; an aqua or vfox listing request goes to the catch-all sink (`501`, recorded); a held artifact is served by path | carry the version in the next bundle |
 
 ### 10.3 Performance and capacity
@@ -833,14 +883,24 @@ CPU path.
 
 - **Default behaviour**: the server is unchanged; a block regenerated with a
   new CLI gains rules, an old block keeps working.
-- **Migration**: none. An operator who added a generic registry by hand for
-  one of the preset hosts keeps it; the preset is a suggestion.
+- **Migration**: one, for `generic` globs (§15 Q7). From phase 2 `*` no
+  longer crosses `/`: a hand-written `path_allow` that relied on it (`go*`
+  meant to admit `go1.25/sub/file`, `v*` for `v1.2/bin/x`) starts refusing
+  those paths with the kind's existing `403`. The fix is to write `**` where
+  a separator must be crossed. The release notes and
+  `docs/registries/generic.md` carry the note with the before/after of one
+  pattern; the change fails closed, so nothing is admitted that was refused.
+  An operator who added a generic registry by hand for one of the preset
+  hosts keeps it; the preset is a suggestion.
 - **Operator prerequisites**: none beyond the registries the CLI suggests.
 - **Rollback**: an older CLI writes the older block; registries created from
   presets keep serving. Rolling back re-opens §2's gaps, nothing in §7.
-- **Staged rollout**: the mise pin bump (all four pins, §6.5) lands as its
-  own PR and runs every existing mise phase first. Landing order with RFC
-  0048: pin PR → this RFC's phase 1 (`MisePlan.notes`) → RFC 0048 phase 1.
+- **Staged rollout**: the mise pin bump (all four pins, §6.5) lands inside
+  phase 1, which runs every existing mise phase under the new pin before it
+  merges (§15 Q1). Landing order with RFC 0048: this RFC's phase 1 (pin +
+  `MisePlan.notes`) → RFC 0048 phase 1 → RFC 0048 phase 1b (cold fill,
+  revalidate list) → this RFC's phase 2, so each preset ships with its
+  revalidate globs.
 - **Old plans and bundles**: `MisePlan.notes` is `#[serde(default)]` and
   `PLAN_VERSION` moves to 2, so a plan written by an older CLI still reads.
 - **Existing conda behaviour**: a lock-less `conda:` suggestion keeps writing
@@ -858,16 +918,24 @@ CPU path.
   on one real URL per preset; the conda derivation escapes a channel URL with
   `.` and `+`, and derives nothing from a channel-less upstream; a lock-less
   `conda:` keeps the conda-forge rule; `spm:` GitLab form → `gitlab`; the
-  bucket-host allowlist widening and its same-bucket check.
+  bucket-host allowlist widening and its same-bucket check; `dl.google.com`
+  URLs under `/go/` and `/android/` pick `go-dl` and `android-dl` (§15 Q3);
+  each `VFOX_SUBPROCESS_PLUGINS` entry carries its note, an embedded plugin
+  outside the list does not (§15 Q4).
+- **Unit** (`crates/adapters/src/registry/path_proxy.rs`, §15 Q7):
+  `generic_star_does_not_cross_a_separator` (`go*` refuses
+  `go1.25/x/y`, admits `go1.25.4.linux-amd64.tar.gz`), `**` still crosses,
+  and every CLI preset's corpus re-run under the new semantics.
 - **Unit** (`cli/src/api/client_setup.rs`): `nuget` writes
   `dotnet.registry_url`, no rule; two conda registries of two channels write
-  two rules; a conda registry with no named upstream is skipped (T1).
+  two rules; a conda registry with no named upstream is skipped (T1); each
+  written rule's line carries its minimum mise version (§15 Q8).
 - **Unit** (`cli/src/api/mise_plan.rs`): the `notes` list for `vfox:`; a
   version-1 plan without `notes` still reads; a conda entry still gets a
   `proxy_path`.
 - **Proof**: §6.P, cases 1–8.
 - **Security**: T1 (§6.P 2 and the two-channel unit test), T2 (preset corpus
-  test, §6.P 6), T3 (§6.P 9), T4 (§6.P 7), T7 (§6.P 5's negative arm). T5
+  test, `generic_star_does_not_cross_a_separator`, §6.P 6), T3 (§6.P 9), T4 (§6.P 7), T7 (§6.P 5's negative arm). T5
   has no negative test: it is the accepted residual.
 - **Audit**: `task audit` unchanged.
 - **Existing suites**: every `closed_world.sh` mise phase and `airgap.sh`
@@ -882,65 +950,21 @@ CPU path.
 | # | Question | Decision |
 | --- | --- | --- |
 | 1 | Is conda-forge-only routing acceptable as a first step? | **Yes, as the baseline shipped in #318 (`234b095c`).** It closed the "unsupported" verdict for the 20 conda tools at once; this RFC generalises it. |
+| Q1 (2026-11-13) | The mise pin: bump in phase 1, or in its own PR first? | **Inside this RFC's phase 1**, from 2026.9.5 to the current 2026.11.x (2026.11.3 or later), all four pins (§6.5). Against the draft's recommendation of a separate PR: the user keeps one PR, and phase 1 runs every existing mise phase under the new pin before it merges, so a regression elsewhere is still seen, in the same CI run. |
+| Q2 (2026-11-13) | aqua without a lock: note or refusal? | **A note** (§4.2). As recommended: a refusal would break the lock-less path for 648 GitHub packages to warn about 48. |
+| Q3 (2026-11-13) | `dl.google.com` serves Go and Android: one preset or two? | **Two `generic` registries on one host**, `go-dl` and `android-dl`, wired on `(host, prefix)` as RFC 0045 §15 Q10 settled; presets are keyed by host and path prefix (§6.1). As recommended. |
+| Q4 (2026-11-13) | vfox subprocesses (T5): document only, or also flag the known shell-out plugins? | **Both**: documented per plugin in `docs/use/mise.md`, and the plan and `suggest` flag `php`, `poetry`, `pipenv` from `VFOX_SUBPROCESS_PLUGINS` (§4.2, §6.1). Against the draft's "document only": the user wants the warning where the operator reads the plan. The list drifts; it is re-measured on each mise pin bump (§6.5), and a missing entry costs a warning, not a route. |
+| Q5 (2026-11-13) | Does packslip's `trusted_root(None)` fetch a TUF root online? | **No — it uses a root embedded at build time.** mise calls `packslip::sigstore::trusted_root(None)` (`src/backend/packslip.rs:1032`, mise 2026.11.3, which locks packslip 1.11.3); packslip's `trusted_root` is `TrustedRoot::from_json(json.unwrap_or(SIGSTORE_PRODUCTION_TRUSTED_ROOT))` (`packslip-1.11.3/src/sigstore.rs:546-551`), and that constant is `include_str!("trusted_root.json")` (`sigstore-trust-root-0.15.1/src/trusted_root.rs:359`). packslip's only network client, `RekorClient`, is used by `sign` (`sigstore.rs:293`), not on the verify path. So packslip tools install air-gapped with nothing extra for the trust root; what they need is the documents they verify, held like any artifact. Residual: the root is frozen at the mise build, so a Sigstore root rotation needs a newer mise, not a network. A research answer, not a user decision. |
+| Q6 (2026-11-13) | Do presets grow by measurement only, or on request too? | **Both.** The §2.7 threshold is re-measured on each pin bump (§6.5), and an operator's request adds a preset after the same path-layout probe and refusal-corpus test. Against the draft's "by measurement" alone. awscli.amazonaws.com and releases.crossplane.io are probed in phase 2. |
+| Q7 (2026-11-13) | `generic` glob semantics: switch to `require_literal_separator`, or document? | **Switch the kind**: `path_proxy.rs:90` matches with `require_literal_separator: true` from phase 2, so `*` stays inside a segment. A behaviour change that fails closed; the migration note is in §13 and the test is `generic_star_does_not_cross_a_separator` (§14). |
+| Q8 (2026-11-13) | Minimum mise version per rule: document and print, or refuse? | **A floor per rule, stated in `docs/use/mise.md` and printed by `setup`** beside the rule (§4.1, §4.5). As recommended: `setup` does not run the client's `mise`, so it cannot know what to refuse. |
+| Q9 (2026-11-13) | Cold large downloads versus mise's 30 s timeout — blocker | **A detached single-flight fill plus streaming to the client while caching.** As recommended. Shared with RFC 0048 §15 Q9 and **owned by RFC 0048, phase 1b**: it is a change to the proxy's cache path for every kind, and RFC 0048 is the one touching `crates/core`. This RFC's presets rely on it; §10.2 links it. No longer a blocker here. |
+| Q10 (2026-11-13) | Mutable index files under a preset | **A per-glob revalidate list on `generic`, with stale-on-error.** As recommended. Shared with RFC 0048 §15 Q12 and **owned by RFC 0048, phase 1b**; this RFC's phase 2 fills the list for each preset's mutable files (§6.1) and lands after it. |
 
 ### Still open
 
-1. **The mise pin.** Bump the heavy suite from 2026.9.5 to 2026.11.3 in this
-   RFC's phase 1, or in its own PR first? Recommendation: its own PR, so a
-   behaviour change in another phase is not read as this RFC's.
-2. **aqua without a lock: note or refusal?** The note keeps the lock-less
-   path useful for the 648 GitHub tools; a refusal would force `mise lock`.
-   Recommendation: note.
-3. **`dl.google.com` serves both Go (RFC 0048) and Android
-   (`android-sdk`, `aapt2`, `android-cli`).** One preset per host cannot
-   hold two upstream prefixes today. Split into two generic registries on one
-   host (RFC 0045 §15 Q10 allows prefix wiring), or widen the existing
-   preset? Recommendation: two registries.
-4. **vfox subprocesses (T5).** Document per plugin only, or also make the
-   plan flag the plugins known to shell out (php, poetry, pipenv)?
-   Recommendation: document only; the flag would be the drifting list §12
-   rejects.
-5. **packslip's sigstore trust root.** `packslip::sigstore::trusted_root(None)`
-   (`src/backend/packslip.rs:1032`) is not read here: whether it fetches a
-   TUF root online decides whether packslip tools install in an air gap at
-   all. To be read in the packslip crate before phase 3.
-6. **Preset ownership.** The threshold is now stated (§2.7: two or more
-   defaults on the host); does the table grow only by that measurement, or
-   on request too? awscli.amazonaws.com (3) and releases.crossplane.io (2)
-   meet it and need a probe of their path layout before a preset is written.
-   Recommendation: by measurement, re-run on each mise pin bump with the
-   script this RFC used.
-7. **`generic` glob semantics.** `path_proxy.rs:90` calls
-   `glob::Pattern::matches` with default options, so `*` crosses `/`:
-   product-scoped patterns read narrower than they are, in operators' own
-   configs too (`go*` admits `go1.25/anything/below`). Options: switch the
-   kind to `require_literal_separator` (a behaviour change that needs a
-   migration note, since some hand-written allowlists will start refusing),
-   or keep it and document it. Meanwhile the presets use literal product
-   prefixes and the T2 test uses a refusal corpus.
-8. **Minimum mise version per rule.** An older mise warns on an unknown
-   setting and goes direct (§4.1). State a floor per rule in the docs and
-   have `setup` print it (recommended), or refuse to write a rule the user's
-   `mise --version` cannot honour?
-9. **Cold large downloads versus mise's 30 s timeout — blocker.** The
-   cold-miss path stores the whole upstream body before serving the first
-   byte (`crates/core/src/services/proxy/cache.rs:376-455`); mise's
-   `http_timeout` is 30 s between reads with 3 retries. A large cold
-   artifact through a preset (or RFC 0048's JDKs and Swift) can exceed it;
-   each retry is a new upstream fetch (no artifact single-flight), and a
-   client disconnect may cancel the fill, so the cache may never fill.
-   Options: stream to the client while caching; an artifact single-flight
-   with a detached fill; at minimum `setup` writes `http_timeout`.
-   Recommendation: **detached single-flight fill plus streaming**. Same
-   question as RFC 0048 §15 Q9; answered once.
-10. **Mutable index files under a preset.** `release/stable.txt`,
-   `*/index.json`, `versions.json` (and RFC 0048's `builds.txt`,
-   `api/v1/install/releases.json`, zig's `download/index.json`) are cached
-   forever by `generic` (`artifact_ttl_secs` null,
-   `crates/config/src/schema/registry.rs:1256-1258`); a registry-wide TTL
-   would also expire tarballs, which are not served stale on expiry.
-   Recommendation: a per-glob revalidate list on `generic` with
-   stale-on-error. Same as RFC 0048 §15 Q12; answered once.
+None: every question was decided with the user on 2026-11-13, Q5 by reading
+packslip's source.
 
 ---
 
@@ -948,8 +972,7 @@ CPU path.
 
 | Phase | Content |
 | --- | --- |
-| 0 | The mise pin bump, all four pins, its own PR (§15 Q1). |
-| 1 | Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions. Useful alone: the plan stops lying about 40 tools. |
-| 2 | Presets and the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
-| 3 | `dotnet.registry_url` in the mise target, conda rule derived from the upstream, `foreign_upstream` per channel; §6.P 1, 2, 5, 8; `registries/conda.md`, `registries/nuget.md`. |
+| 1 | The mise pin bump, all four pins, to the current 2026.11.x with every existing mise phase run under it (§15 Q1). Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, `VFOX_SUBPROCESS_PLUGINS` and its note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions and the subprocess plugins. Useful alone: the plan stops lying about 40 tools. |
+| 2 | After RFC 0048 phase 1b. `require_literal_separator` in `path_proxy.rs` with its test and migration note (§15 Q7); presets keyed by host and prefix, `android-dl` beside `go-dl` (§15 Q3), the awscli and crossplane probes (§15 Q6), each preset's revalidate globs, the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
+| 3 | `dotnet.registry_url` in the mise target, conda rule derived from the upstream, `foreign_upstream` per channel, the per-rule floor in `setup`'s output; §6.P 1, 2, 5, 8; `registries/conda.md`, `registries/nuget.md`. |
 | 4 | Move the presets and the conda derivation into `WIRE_RULES` once RFC 0045 phase 1 is on `main` (or nothing, if RFC 0045 phase 1 moved them). |
