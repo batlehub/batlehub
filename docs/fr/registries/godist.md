@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/godist.md
-sourceHash: 8a202cf5d48827a4
+sourceHash: 24c93bc798625458
 ---
 
 # Chaîne d'outils Go (mise)

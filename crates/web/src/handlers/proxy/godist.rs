@@ -29,14 +29,14 @@ use actix_web::{get, web, HttpResponse, Responder};
 
 use batlehub_core::{
     entities::{Action, PackageId},
-    ports::DocumentKind,
+    ports::{DocumentKind, VersionDocument},
     services::{
         godist::{git_refs, parse_file_name, GO_PACKAGE},
         ProxyService,
     },
 };
 
-use super::common::{fetch_proxy_document, proxy_document, proxy_stream, require_registry_type};
+use super::common::{document_response, fetch_proxy_document, proxy_stream, require_registry_type};
 use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap};
 
@@ -60,17 +60,9 @@ pub async fn godist_index_json(
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
-    let registry = path.into_inner();
-    require_registry_type(&registry, "godist", &map)?;
-    proxy_document(
-        svc,
-        PackageId::new(&registry, GO_PACKAGE, "index"),
-        identity,
-        Action::ReleasesList,
-        DocumentKind::Versions,
-        String::new(),
-    )
-    .await
+    Ok(document_response(
+        release_document(path.into_inner(), identity, svc, map).await?,
+    ))
 }
 
 /// Go's releases as git tags, for `git ls-remote` (mise's `go.repo`).
@@ -100,9 +92,22 @@ pub async fn godist_info_refs(
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
 ) -> Result<HttpResponse, AppError> {
-    let registry = path.into_inner();
+    let doc = release_document(path.into_inner(), identity, svc, map).await?;
+    let refs = doc.body.as_json().map(git_refs).unwrap_or_default();
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(refs))
+}
+
+/// The filtered release document, which both listings answer from.
+async fn release_document(
+    registry: String,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+) -> Result<VersionDocument, AppError> {
     require_registry_type(&registry, "godist", &map)?;
-    let doc = fetch_proxy_document(
+    fetch_proxy_document(
         svc,
         PackageId::new(&registry, GO_PACKAGE, "index"),
         identity,
@@ -110,11 +115,7 @@ pub async fn godist_info_refs(
         DocumentKind::Versions,
         String::new(),
     )
-    .await?;
-    let refs = doc.body.as_json().map(git_refs).unwrap_or_default();
-    Ok(HttpResponse::Ok()
-        .content_type("text/plain; charset=utf-8")
-        .body(refs))
+    .await
 }
 
 /// One archive of one Go release, or its `.sha256`.
