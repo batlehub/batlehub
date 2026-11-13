@@ -30,6 +30,7 @@ export type RegistryType =
   | "galaxy"
   | "nix"
   | "nodedist"
+  | "godist"
   | "mise-versions"
   | "sdkman"
   | "rustup"
@@ -488,6 +489,9 @@ export const defaultUpstream: Record<RegistryType, string> = {
   // and a narinfo names its NAR by a path under the same host (RFC 0028 §6.8).
   nix: "https://cache.nixos.org",
   nodedist: "https://nodejs.org/dist",
+  // The archives; versions and checksums come from go.dev/dl's release
+  // document (`metadata_url`, RFC 0048 §6.7).
+  godist: "https://dl.google.com/go",
   // mise asks this host for a tool's versions before any other (RFC 0043).
   "mise-versions": "https://mise-versions.jdx.dev",
   // `upstreams` is the candidates API; the download broker is the second host
@@ -529,6 +533,7 @@ export const PROXY_ONLY_TYPES = new Set<RegistryType>([
   "jetbrains",
   "generic",
   "nodedist",
+  "godist",
   "sdkman",
   "rustup",
   "mise-versions",
