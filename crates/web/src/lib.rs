@@ -782,7 +782,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gl_download_archive, gl_download_link, gl_download_raw, gl_get_release,
                 gl_list_releases, gl_packages,
             },
-            godist::{godist_file, godist_index_json},
+            godist::{godist_file, godist_index_json, godist_info_refs},
             goproxy::{
                 goproxy_file, goproxy_latest, goproxy_list, goproxy_publish, goproxy_sumdb,
                 goproxy_vuln_entry, goproxy_vuln_index, goproxy_vuln_query,
@@ -1263,6 +1263,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
         // Go distribution (RFC 0048 §6.7): the document before `{file}`, so
         // `index.json` is never read as a file name.
         cfg.service(godist_index_json); // GET …/godist/index.json  (filtered document)
+        cfg.service(godist_info_refs); // GET …/godist/info/refs   (git ref list, RFC 0048 §15 Q13)
         cfg.service(godist_file); // GET …/godist/{file}  (archive or .sha256)
     }
     fn nix_routes(cfg: &mut UtoipaServiceConfig) {

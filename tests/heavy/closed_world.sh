@@ -1638,6 +1638,30 @@ EOF
     "godist: the blocked release was not refused with a 403"
   heavy_log "godist: with go@$GODIST_BLOCKED blocked, mise said:"
   heavy_client_said "$out" '403|Forbidden|error' 3
+
+  # mise's other list (RFC 0048 §15 Q13): off the versions host it runs
+  # `git ls-remote --tags --refs <go.repo> 'go*'` (go.rs:268-285, the `git`
+  # binary). Pointed at this registry, the tags are the filtered release
+  # document, so the blocked release is not offered. A fresh cache dir: the
+  # install above cached the versions host's list. github.com is behind the
+  # closed proxy, and its list would carry $GODIST_BLOCKED — so the absence
+  # below is this registry's filter, not a fallback.
+  heavy_mark godist-ls-remote
+  heavy_log "godist: mise ls-remote go through go.repo, versions host off"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" MISE_CACHE_DIR="$base/cache-ls" \
+    MISE_USE_VERSIONS_HOST=false MISE_GO_REPO="$dist" "${mise[@]}" ls-remote go \
+    || { cat "$out" >&2; heavy_fail "godist: mise ls-remote go failed through go.repo"; }
+  heavy_wire_re_after godist-ls-remote \
+    "GET /proxy/$GODIST_REG/godist/info/refs[?]service=git-upload-pack -> 200" \
+    "godist: git ls-remote did not read the ref list from the godist registry"
+  [[ "$(heavy_wire_count_after godist-ls-remote 'mise-versions/data/go')" == 0 ]] \
+    || heavy_fail "godist: mise asked the versions host with MISE_USE_VERSIONS_HOST=false — the list is not the ref list's"
+  grep -qx "$GODIST_GO" "$out" \
+    || { cat "$out" >&2; heavy_fail "godist: mise ls-remote go does not list $GODIST_GO"; }
+  if grep -qx "$GODIST_BLOCKED" "$out"; then
+    heavy_fail "godist: mise ls-remote go still lists the blocked $GODIST_BLOCKED"
+  fi
+  heavy_log "godist: mise ls-remote go lists $(wc -l <"$out") versions, $GODIST_GO in, $GODIST_BLOCKED out"
   heavy_unblock "$GODIST_REG" go "$GODIST_BLOCKED"
 
   heavy_log "CLOSED-WORLD-GODIST-OK (the toolchain came from the instance: $ran)"

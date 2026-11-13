@@ -11,7 +11,7 @@ Proxy and cache Go's toolchain distribution (`dl.google.com/go`) as a *typed* re
 | **Modes** | proxy-only |
 | **Addressing** | one package (`go`), one version per release (`1.25.4`, without the `go` prefix), one archive per platform |
 | **Private publish** | proxy-only |
-| **Air gap** | held archives and their `.sha256` served by path; `index.json` composed from the held archives. mise's version list comes from its versions host, so an air-gapped install is lock-driven |
+| **Air gap** | held archives and their `.sha256` served by path; `index.json` and the git ref list composed from the held archives. mise's version list comes from its versions host or that ref list, so an air-gapped install is lock-driven |
 
 ## Proxy setup
 
@@ -25,7 +25,17 @@ mise downloads `{go.download_mirror}/go{version}.{os}-{arch}.tar.gz` and then `{
 
 Setting `MISE_GO_DOWNLOAD_MIRROR=https://batlehub.example.com/proxy/<registry>/godist` does the same for one shell.
 
-mise does **not** read its list of Go versions from this registry: it asks its versions host first (`data/go.toml`, which a [mise versions host](/registries/mise-versions) registry serves) and falls back to `git ls-remote https://github.com/golang/go`. Route the versions host too, or `mise install go@1.25` resolves against the public list.
+mise reads its list of Go versions from its versions host (`data/go.toml`, which a [mise versions host](/registries/mise-versions) registry serves), or — when it does not use the versions host (`MISE_USE_VERSIONS_HOST=false`) — with `git ls-remote --tags` on `go.repo`, `https://github.com/golang/go` by default. This registry answers that second route too: point `go.repo` at it and the tags come from Go's release document, blocked releases removed.
+
+```toml
+# ~/.config/mise/config.toml
+[settings.go]
+repo = "https://batlehub.example.com/proxy/<registry>/godist"
+```
+
+or `MISE_GO_REPO=https://batlehub.example.com/proxy/<registry>/godist` for one shell. `batlehub-cli setup apply --only mise` writes both this and the rewrite rule above. Route one of the two lists, or `mise install go@1.25` resolves against the public one.
+
+The "repository" is a ref list and nothing else: `GET …/godist/info/refs` answers git's *dumb* HTTP form (`text/plain`, one `<id>\trefs/tags/go{version}` line per release), which `git ls-remote` accepts whichever protocol version it asks for. The ids are not commits — each is the SHA-1 of its ref name, so the list is stable — and a clone or fetch finds no object to download.
 
 ## Authentication
 
@@ -48,13 +58,13 @@ upstreams = ["https://dl.google.com/go"]  # the default: archives and .sha256
 # metadata_url = "https://go.dev/dl/?mode=json&include=all"  # the default
 
 [registries.rbac]
-# index.json is a listing (`releases:list`); the archives are reads (`releases:read`).
+# index.json and info/refs are listings (`releases:list`); the archives are reads (`releases:read`).
 anonymous = ["releases:read", "releases:list"]
 ```
 
 ## Blocked versions
 
-A block is written on `go@1.25.4` — the version as mise spells it; the document's `go1.25.4` matches it too. The version is read from the file name, so a blocked release is refused with `403` on its archive **and** its `.sha256`, whichever URL the client builds and whatever a `mise.lock` pins. `index.json` drops the release. mise's own list, which comes from the versions host, still shows it: the refusal is the download's, and mise reports it as a failed download.
+A block is written on `go@1.25.4` — the version as mise spells it; the document's `go1.25.4` matches it too. The version is read from the file name, so a blocked release is refused with `403` on its archive **and** its `.sha256`, whichever URL the client builds and whatever a `mise.lock` pins. `index.json` and the git ref list drop the release, so `mise ls-remote go` no longer offers it when mise lists through `go.repo`; through the versions host, a [mise versions host](/registries/mise-versions) registry drops it the same way. Through the public list, the refusal is the download's, and mise reports it as a failed download.
 
 A file the release document does not list — another version, another platform, a typo — is `404` without a request to the upstream, so a client cannot make this registry fetch an arbitrary path.
 
@@ -75,6 +85,7 @@ See [blocking a package version](/guide/admin-policies#block-a-package-version) 
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/godist/{file}` | One archive of one Go release, or its `.sha256`. |
 | `GET` | `/proxy/{registry}/godist/index.json` | Go's release document, blocked releases removed. |
+| `GET` | `/proxy/{registry}/godist/info/refs` | Go's releases as git tags, for `git ls-remote` (mise's `go.repo`). |
 <!-- END endpoints -->
 
 :::

@@ -12650,6 +12650,50 @@
         ]
       }
     },
+    "/proxy/{registry}/godist/info/refs": {
+      "get": {
+        "tags": [
+          "proxy/godist"
+        ],
+        "summary": "Go's releases as git tags, for `git ls-remote` (mise's `go.repo`).",
+        "description": "The *dumb* HTTP ref list: `<sha>\\trefs/tags/go{version}` per release of\nthe filtered document, so a blocked release is absent. git sends\n`?service=git-upload-pack` (and may send `Git-Protocol: version=2`); a\n`text/plain` answer is how a dumb server replies to both, and `ls-remote`\nneeds nothing more. The object ids are the SHA-1 of the ref name, not\ncommits — nothing can be fetched from this \"repository\".",
+        "operationId": "godist_info_refs",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`<sha1-of-ref>\\trefs/tags/go{version}` per listed release, blocked releases removed (git's dumb HTTP ref list)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/godist/{file}": {
       "get": {
         "tags": [

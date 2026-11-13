@@ -244,3 +244,62 @@ async fn the_routes_refuse_a_registry_of_another_kind() {
         Some("/proxy/{registry}/godist/{file}")
     );
 }
+
+/// `git ls-remote <instance>/proxy/{reg}/godist` — mise's Go list when it does
+/// not use the versions host (RFC 0048 §15 Q13): a tag per listed release, the
+/// blocked one gone, in the dumb-HTTP form git falls back to on `text/plain`
+/// whichever protocol version it asked for.
+#[actix_web::test]
+async fn the_git_ref_list_has_no_blocked_release() {
+    let server = upstream(&digest(ARCHIVE)).await;
+    let app = app_against(&server).await;
+    block_version(&app, REG, "go", "1.25.3").await;
+
+    let req = actix_web::test::TestRequest::get()
+        .uri(&format!(
+            "/proxy/{REG}/godist/info/refs?service=git-upload-pack"
+        ))
+        .insert_header(("Git-Protocol", "version=2"))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(ctype.starts_with("text/plain"), "{ctype}");
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("\trefs/tags/go1.25.4\n"), "{body}");
+    assert!(
+        !body.contains("go1.25.3"),
+        "a blocked release is listed: {body}"
+    );
+}
+
+/// Only the ref list is routed: git's smart-protocol POST and the dumb paths
+/// it would read next reach nothing that asks upstream.
+#[actix_web::test]
+async fn nothing_else_of_git_reaches_upstream() {
+    let mut server = mockito::Server::new_async().await;
+    let never = server
+        .mock("GET", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+    let app = app_against(&server).await;
+    let req = actix_web::test::TestRequest::post()
+        .uri(&format!("/proxy/{REG}/godist/git-upload-pack"))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let status = call_service(&app, req).await.status();
+    assert!(status == 404 || status == 405, "{status}");
+    for path in ["HEAD", "objects/info/packs"] {
+        let resp = call_service(&app, admin_get(&file_url(path))).await;
+        assert!(resp.status().is_client_error(), "{path}: {}", resp.status());
+    }
+    never.assert_async().await;
+}

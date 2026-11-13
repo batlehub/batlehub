@@ -625,6 +625,11 @@ fn matrix() -> Vec<Row> {
             .coord("go", "9.8.7")
             .token("go1.1.0")
             .vis(WHOLE_REGISTRY),
+        // The same document as git tags (RFC 0048 §15 Q13), for `git ls-remote`.
+        Row::new("godist", "/proxy/reg/godist/info/refs")
+            .coord("go", "9.8.7")
+            .token("go1.1.0")
+            .vis(WHOLE_REGISTRY),
         // ── rustup (RFC 0024) ────────────────────────────────────────────────
         // Proxy-only like `nodedist`, with two packages rather than one: `rust`
         // for the toolchains and `rustup` for the installer's own tree, so a
@@ -1206,6 +1211,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/mise-versions/_registry/latest.tar.zst", Coverage::NoRow("mise's registry archive with the overlay merged, no package read (RFC 0045, proxy-only kind); `mise_auto_wire.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/_wire-answer/{outcome}", Coverage::NoRow("the wire's own answer, reached only as a rewrite and 404 without one (RFC 0045); `mise_auto_wire.rs` asserts the refusals and `wire_answer_without_extension_is_404`")),
     ("/proxy/{registry}/godist/index.json", Coverage::Row),
+    ("/proxy/{registry}/godist/info/refs", Coverage::Row),
     ("/proxy/{registry}/godist/{file}", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),

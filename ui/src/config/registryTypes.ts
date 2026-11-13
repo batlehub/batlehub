@@ -190,7 +190,12 @@ const godistClientSetup = (
 ) => `# ~/.config/mise/config.toml — mise downloads go{v}.{os}-{arch}.tar.gz
 # and its .sha256 from go.download_mirror; this rule sends both here.
 [settings.url_replacements]
-"regex:^https://dl\\\\.google\\\\.com/go/(.+)" = "${ctx.registryUrl}/godist/$1"`;
+"regex:^https://dl\\\\.google\\\\.com/go/(.+)" = "${ctx.registryUrl}/godist/$1"
+
+# Off the versions host, mise lists Go with git ls-remote on go.repo;
+# this registry answers it, blocked releases removed.
+[settings.go]
+repo = "${ctx.registryUrl}/godist"`;
 
 const godistServerConfig = (ctx: SnippetContext) => `[[registries]]
 name      = "${ctx.registryName}"
@@ -226,8 +231,9 @@ const GODIST: RegistryTypeDef = {
           ? `mise sends the <code>~/.netrc</code> entry for this host on every URL a rule ` +
             `rewrote, so a <code>machine</code> line with your token is the credential. `
           : ``) +
-        `mise lists Go versions through its versions host, not this registry: a blocked ` +
-        `release is refused with a <code>403</code> when mise downloads it.`,
+        `mise lists Go versions through its versions host, or with <code>git ls-remote</code> ` +
+        `on <code>go.repo</code> when it does not use it: this registry answers the second, ` +
+        `and a blocked release is refused with a <code>403</code> when mise downloads it.`,
     },
     { key: "godist-config", label: "Server config", lang: "toml", template: godistServerConfig },
   ],
