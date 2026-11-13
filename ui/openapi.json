@@ -14136,7 +14136,6 @@
           {
             "name": "registry",
             "in": "path",
-            "description": "Registry name",
             "required": true,
             "schema": {
               "type": "string"
@@ -14145,7 +14144,6 @@
           {
             "name": "file",
             "in": "path",
-            "description": "`{tool}.toml`, or `python-precompiled-{triple}.gz`",
             "required": true,
             "schema": {
               "type": "string"
@@ -14154,7 +14152,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The version list as TOML, or the gzipped python index, both filtered",
+            "description": "As `data/{file}`",
             "content": {
               "application/toml": {
                 "schema": {
@@ -14162,15 +14160,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Unsafe tool name"
-          },
-          "403": {
-            "description": "Access denied"
-          },
-          "404": {
-            "description": "Unknown tool or file, unknown registry, or an air-gapped listing"
           }
         },
         "security": [

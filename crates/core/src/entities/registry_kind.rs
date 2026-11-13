@@ -1532,9 +1532,7 @@ mod tests {
             [
                 // Marshal indexes only; the JSON APIs are filtered.
                 "rubygems", // Signed repository indexes.
-                "deb",
-                "rpm",
-                "pacman",
+                "deb", "rpm", "pacman",
                 // `apk`'s index is signed over its own bytes too, and every
                 // shipping apk verifies it before reading one — so the block
                 // is enforced at the `.apk`, whose file name carries a real

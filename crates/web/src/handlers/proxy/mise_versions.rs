@@ -139,13 +139,9 @@ async fn version_list(
 pub async fn mise_versions_data(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
-    upstreams: web::Data<UpstreamMap>,
-    client: web::Data<reqwest::Client>,
-    hosts: Option<web::Data<crate::RegistryHostMap>>,
+    deps: DataFileDeps,
 ) -> Result<HttpResponse, AppError> {
-    data_file(path, identity, svc, map, upstreams, client, hosts).await
+    data_file(path, identity, deps).await
 }
 
 /// The same documents under the path mise 2026.1.0–2026.6.5 asks for its
@@ -155,40 +151,33 @@ pub async fn mise_versions_data(
     get,
     path = "/proxy/{registry}/mise-versions/tools/{file}",
     tag = "proxy/mise-versions",
-    params(
-        ("registry" = String, Path, description = "Registry name"),
-        ("file" = String, Path, description = "`{tool}.toml`, or `python-precompiled-{triple}.gz`"),
-    ),
-    responses(
-        (status = 200, description = "The version list as TOML, or the gzipped python index, both filtered", body = ProtocolDocument, content_type = "application/toml"),
-        (status = 400, description = "Unsafe tool name"),
-        (status = 403, description = "Access denied"),
-        (status = 404, description = "Unknown tool or file, unknown registry, or an air-gapped listing"),
-    ),
+    params(("registry" = String, Path), ("file" = String, Path)),
+    responses((status = 200, description = "As `data/{file}`", body = ProtocolDocument, content_type = "application/toml")),
     security(("bearer_token" = [])),
 )]
 #[get("/proxy/{registry}/mise-versions/tools/{file}")]
 pub async fn mise_versions_tools(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
-    upstreams: web::Data<UpstreamMap>,
-    client: web::Data<reqwest::Client>,
-    hosts: Option<web::Data<crate::RegistryHostMap>>,
+    deps: DataFileDeps,
 ) -> Result<HttpResponse, AppError> {
-    data_file(path, identity, svc, map, upstreams, client, hosts).await
+    data_file(path, identity, deps).await
 }
+
+/// What `data/{file}` and `tools/{file}` read, extracted as one tuple.
+type DataFileDeps = (
+    web::Data<Arc<ProxyService>>,
+    web::Data<RegistryMap>,
+    web::Data<UpstreamMap>,
+    web::Data<reqwest::Client>,
+    Option<web::Data<crate::RegistryHostMap>>,
+);
 
 /// `data/{file}` and `tools/{file}` answer the same two documents.
 async fn data_file(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
-    upstreams: web::Data<UpstreamMap>,
-    client: web::Data<reqwest::Client>,
-    hosts: Option<web::Data<crate::RegistryHostMap>>,
+    (svc, map, upstreams, client, hosts): DataFileDeps,
 ) -> Result<HttpResponse, AppError> {
     let (registry, file) = path.into_inner();
     let Some(triple) = precompiled_triple(&file) else {
