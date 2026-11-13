@@ -8,12 +8,12 @@ reference: true
 | ----------- | ------------------------------------------------------------ |
 | Status      | Draft                                                         |
 | Short       | mise core toolchains                                          |
-| Settles     | Which route each of mise's thirteen `core:` toolchains takes through BatleHub — a typed kind, a `generic` preset, or a stated refusal — and a `mise-java` kind for the one that has none |
+| Settles     | Which route each of mise's thirteen `core:` toolchains takes through BatleHub — a typed kind, a `generic` preset, or a stated refusal — with a `mise-java` kind for the one that has none and a `godist` kind for Go |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `cli`, `crates/core`, `crates/adapters`, `crates/web`, `crates/config`, `server`, `tests/heavy`, docs |
+| Touches     | `cli`, `crates/core` (including the proxy cache-fill path, §15 Q9, shared with RFC 0047), `crates/adapters`, `crates/web`, `crates/config`, `server`, `tests/heavy`, docs |
 | Risk        | medium (§7)                                                   |
 
 ---
@@ -39,15 +39,22 @@ mise 2026.11.3 source:
   (`rustup`), Python, Bun and Ruby (`github`) — and the CLI is taught to say so
   with the *typed* kind rather than a `generic` preset.
 - **Six get a `generic` preset**: Deno, Zig, Elixir, Erlang and Swift are new;
-  Go keeps the `go-dl` preset it has. Cached and counted, no per-version
-  policy — the same bargain `generic` is documented to be. (PyPy, a Python
-  *flavour* rather than a toolchain, gets one too.)
+  Go keeps the `go-dl` preset it has until phase 5. Cached and counted, no
+  per-version policy — the same bargain `generic` is documented to be. (PyPy,
+  a Python *flavour* rather than a toolchain, gets one too.)
+- **Go then gets a `godist` kind** (phase 5), modelled on `nodedist`, so a Go
+  release can be blocked the way a Node release can (§15 Q3).
 - **Java gets a new `mise-java` kind**, because 7 450 JVM builds from
   nineteen vendors on eleven hosts sit behind one metadata document, and a
   block on a JDK is the control an operator actually asks for.
 - **.NET is refused, with its reason**: mise runs Microsoft's install script
   as a subprocess, the script's feed is not configurable from mise, and no
-  rewrite rule can reach it.
+  rewrite rule can reach it. The fix belongs in mise: an issue asking for a
+  `dotnet.feed` setting is opened at jdx/mise (§15 Q4); no code here.
+- **The proxy's cold path changes for every kind**: a large cold artifact is
+  filled once, detached from the request, and streamed to the client while it
+  is cached, so mise's 30 s read timeout no longer loses it (phase 1b, §15 Q9,
+  shared with RFC 0047).
 
 ### Before / after
 
@@ -146,6 +153,9 @@ $ batlehub-cli mise plan
   can, through a `mise-java` kind.
 - The per-tool settings mise needs to reach the rewrite (Zig's mirrors) are
   written by the same command that writes the rules.
+- Go versions can be blocked through a `godist` kind (phase 5).
+- A cold artifact of any size the registry admits reaches a mise client
+  inside its 30 s read timeout, and is fetched upstream once (phase 1b).
 
 **Non-goals**
 
@@ -154,10 +164,8 @@ $ batlehub-cli mise plan
   `ruby.rs:956-957`, `erlang.rs:109`) and run them as subprocesses. Same answer
   as `asdf:` and `vfox:` in `docs/use/mise.md` §5: unsupported, named in the
   plan.
-- **A `godist` kind.** Go releases are 60 MB tarballs on one host with a
-  `.sha256` beside each; per-version policy on them is worth an RFC of its own
-  (§15 Q3), not a rider on this one.
-- **.NET.** No route exists without a change to mise (§2.1, §15 Q4).
+- **.NET.** No route exists without a change to mise (§2.1, §15 Q4). This RFC
+  opens an upstream issue and documents the refusal; it writes no code for it.
 - **The non-core backends** (`aqua`, `http`, `conda`, `vfox`, …). RFC 0047.
 - **Rewriting vendor URLs inside the Java metadata.** `mise.lock` records the
   URL of the row it installed (`java.rs:229`), and mise matches the lock
@@ -190,7 +198,23 @@ name       = "hex-builds"
 type       = "generic"
 upstreams  = ["https://builds.hex.pm/builds"]
 path_allow = ["elixir/**", "otp/**"]
+# new on `generic` (phase 1b, §15 Q12): paths revalidated on every read,
+# served stale if upstream fails; everything else stays cached as today
+revalidate = ["elixir/builds.txt", "otp/*/*/builds.txt"]
+
+[[registries]]
+name       = "swift-dl"
+type       = "generic"
+upstreams  = ["https://download.swift.org"]
+path_allow = ["swift-6.2-release/**"]
+# new on every kind (phase 1b, §15 Q11): overrides [limits] for this one
+max_artifact_size_bytes = 1_200_000_000
 ```
+
+| Option | Default | Why this default |
+| --- | --- | --- |
+| `revalidate` (`generic`) | absent: nothing revalidated, today's behaviour | a path is mutable only if the operator, or a preset, says so; each entry is a `path_allow`-style glob that must also be admitted by `path_allow` |
+| `max_artifact_size_bytes` (any kind) | absent: the instance's `[limits] max_artifact_size_bytes` (500 MiB) applies | a registry is raised on purpose, one at a time; the override may be above or below the instance limit, and it is the limit for that registry |
 
 **The `mise-java` kind** is new:
 
@@ -204,6 +228,12 @@ upstreams = ["https://mise-java.jdx.dev"]   # default
 # A row naming anything else is dropped from the document served (§4.2 R4).
 vendor_hosts = ["github.com/adoptium/", "github.com/SAP/SapMachine/",
                 "cdn.azul.com/zulu/", "corretto.aws/downloads/", "…"]
+# Hosts a vendor host may redirect to (§15 Q2). Every hop is https and lands
+# on vendor_hosts or redirect_hosts, or the download is a 502.
+redirect_hosts = ["download.visualstudio.microsoft.com",
+                  "d2xrhe97vsfxuc.cloudfront.net",
+                  "objectstorage.uk-london-1.oraclecloud.com",
+                  "release-assets.githubusercontent.com"]
 
   # Optional, as for every kind: an age gate, keyed on the row's `created_at`.
   [[registries.rules]]
@@ -214,9 +244,31 @@ vendor_hosts = ["github.com/adoptium/", "github.com/SAP/SapMachine/",
 | Option | Default | Why this default |
 | --- | --- | --- |
 | `upstreams` | `["https://mise-java.jdx.dev"]` | the only metadata host mise reads (`java.rs:381`) |
-| `vendor_hosts` | the host + prefix set of §6.1 | closed list: a prefix the operator has not seen is not fetched. Open (`["*"]`), empty, or a bare `github.com` is refused at load (§4.3) |
+| `vendor_hosts` | the host + prefix set of §6.1, derived from the measured document | closed list: a prefix the operator has not seen is not fetched. Open (`["*"]`), empty, or a bare `github.com` is refused at load (§4.3, §15 Q8) |
+| `redirect_hosts` | the four measured redirect targets: `download.visualstudio.microsoft.com` (from `aka.ms`), `d2xrhe97vsfxuc.cloudfront.net` (from `cache-redirector.jetbrains.com`), `objectstorage.uk-london-1.oraclecloud.com` (from `gds.oracle.com`), `release-assets.githubusercontent.com` (from `github.com`) | closed list, hosts only (a redirect target's path is the CDN's, not the vendor's); a hop elsewhere, or over `http://`, is `502` and nothing is cached (§15 Q2) |
 | `release_age_gate` rule | absent | same as every kind; `created_at` is present on every row, and `MiseJava` joins the kinds whose gate refuses a missing timestamp (§6.3) |
 | `release_types` | `["ga"]` | `ea` builds are opt-in; the URL segment is validated against this list |
+
+Rows with a weak or no checksum (`sha1:`, `md5:`, none) are **kept** in the
+served document (§15 Q10): no option drops them. How they are counted and
+logged is §6.3 and §10.1; the risk is accepted in §7.1 T5.
+
+**The `godist` kind** (phase 5, §15 Q3):
+
+```toml
+[[registries]]
+name      = "go"
+type      = "godist"
+upstreams = ["https://dl.google.com/go"]   # default; archives and .sha256
+# The release document read for versions, checksums and blocks; default:
+# metadata_url = "https://go.dev/dl/?mode=json&include=all"
+```
+
+| Option | Default | Why this default |
+| --- | --- | --- |
+| `upstreams` | `["https://dl.google.com/go"]` | `go.download_mirror`'s default in mise (`go.rs:389`, `schema/mise.json:2217-2219`) |
+| `metadata_url` | `https://go.dev/dl/?mode=json&include=all` | Go's own release document: 371 releases, a `sha256` and `size` per file, 2 279 774 B (probed 2026-11-13) |
+| `release_age_gate` rule | refused at load | the document carries no release date; a gate with nothing to read would wave every version through, so it is refused rather than inert |
 
 ### 4.2 Behaviour rules
 
@@ -234,14 +286,14 @@ everything mise fetches itself and nothing a subprocess fetches.
 | bun | versions host | `github.com/oven-sh/bun` + `SHASUMS256.txt` (`bun.rs:52`, `:93`) | yes | **`github`** |
 | ruby | versions host | precompiled `github.com/jdx/ruby` releases (setting `ruby.precompiled_url`, `ruby.rs:866-871`) | yes | **`github`** |
 | ruby (compiled) | — | ruby-build git clone + `cache.ruby-lang.org` by subprocess | no | **unsupported** |
-| erlang | versions host | Linux: `builds.hex.pm/builds/otp/{arch}/{os}/OTP-{v}.tar.gz` + `builds.txt` (`erlang.rs:204-224`); macOS: GitHub release asset (`erlang.rs:283-289`) | yes | **preset `hex-builds`** + `github` |
+| erlang | versions host | Linux: `builds.hex.pm/builds/otp/{arch}/{os}/OTP-{v}.tar.gz` + `builds.txt` (`erlang.rs:204-224`); macOS: `otp-{arch}-apple-darwin.tar.gz` (`erlang.rs:283-289`) from the GitHub releases of **`erlef/otp_builds`** (`erlang.rs:457`, `:665`, `:774`); Windows: `erlang/otp` (`:520`) | yes | **preset `hex-builds`** + `github` |
 | elixir | versions host | `builds.hex.pm/builds/elixir/{v}.zip` + `builds.txt` checksum (`elixir.rs:63-76`) | yes | **preset `hex-builds`** |
-| go | versions host; fallback `git ls-remote github.com/golang/go` (`go.rs:268`) | `dl.google.com/go/go{v}.{os}-{arch}.tar.gz` + `.sha256` (`go.rs:128`, `:389`) | yes | **preset `go-dl`** (exists) |
+| go | versions host; fallback `git ls-remote github.com/golang/go` (`go.rs:268`) | `dl.google.com/go/go{v}.{os}-{arch}.tar.gz` + `.sha256` (`go.rs:128`, `:389`) | yes | **preset `go-dl`** (exists); **`godist`** from phase 5 |
 | deno | versions host; fallback `deno.com/versions.json` (`deno.rs:139`) | `dl.deno.land/release/v{v}/…zip` + `.sha256sum` (`deno.rs:80`, `:212`) | yes | **preset `deno-dl`** |
 | zig | versions host; fallback `ziglang.org/download/index.json` (`zig.rs:378`) | 17 community mirrors, then `ziglang.org`; minisign-verified (`zig.rs:151-238`) | yes, **only with mirrors off** | **preset `zig-dl`** + `zig.use_community_mirrors = false` |
 | swift | versions host | `www.swift.org/api/v1/install/releases.json` then `download.swift.org/…` + `.sig`, GPG-verified (`swift.rs:136-144`, `:543`, `:931`) | yes | **presets `swift-dl` + `swift-api`** |
 | java | **not** the versions host (`versions_host.rs:21-28` excludes it) — `mise-java.jdx.dev/jvm/{type}/{os}/{arch}.json` | the row's `url`, eleven hosts; checksum from the row (`java.rs:207-234`) | yes | **new kind `mise-java`** |
-| dotnet | versions host; `builds.dotnet.microsoft.com/…/releases-index.json` (`dotnet.rs:434`) | `dotnet-install.sh` subprocess, feeds hard-coded (§6.1) | script fetch only | **unsupported** |
+| dotnet | versions host; `builds.dotnet.microsoft.com/…/releases-index.json` (`dotnet.rs:434`) | `dotnet-install.sh` subprocess, feeds hard-coded (§6.1) | script fetch only | **unsupported** until mise passes `--azure-feed` (upstream issue, §15 Q4) |
 
 The uninteresting cases, stated:
 
@@ -250,9 +302,18 @@ The uninteresting cases, stated:
 - **R2. A preset registry exists.** The rule is written; the file is cached on
   first miss and served by path. No version can be blocked: `generic_get`
   builds one synthetic package (`docs/rfc/0010-toolchain-managers.md` §2.2).
+  The preset's mutable documents (`builds.txt`, `releases.json`, zig's
+  `download/index.json`, PyPy's `versions.json`) are in its `revalidate`
+  list: revalidated on read, served stale on an upstream error (§15 Q12).
 - **R3. A `mise-java` registry, nothing blocked.** The metadata document is
   relayed with rows outside `vendor_hosts` dropped, byte-identical otherwise;
-  a download is fetched from the row's own URL and cached.
+  a download is fetched from the row's own URL and cached. A row with a
+  `sha1:`, `md5:` or no checksum is kept (§15 Q10); its archive is cached
+  verified against SHA-1, or unverified for `md5:` and none, and counted
+  (§10.1).
+- **R3b. A redirect.** Each hop must be `https://` and land on a
+  `vendor_hosts` prefix or a `redirect_hosts` host; otherwise `502`, nothing
+  cached, `WARN` with the hop's host (§15 Q2).
 - **R4. A row whose host is not in `vendor_hosts`.** Dropped from the served
   document, counted in `batlehub_mise_java_rows_dropped_total{reason="host"}`
   and listed once per document refresh at `WARN` with the host. mise then
@@ -269,6 +330,12 @@ The uninteresting cases, stated:
   `404`, never an upstream fetch of the client's URL (§7.3). An archive
   already cached and verified is served even after its row is withdrawn,
   unless it is blocked.
+- **R6b. A `godist` registry** (phase 5). `go{v}.{os}-{arch}.{ext}` and its
+  `.sha256` are served by path; the version is read from the file name and
+  checked against the release document, so a blocked Go version is `403` on
+  both files, and a file the document does not list is `404` without an
+  upstream fetch. The `.sha256` is answered from the document's `sha256`, and
+  the archive is verified against it at cache write.
 - **R7. A version the versions host does not answer for.** mise falls back to
   the tool's own listing (`src/backend/mod.rs:3596-3612`). For `go` that is a
   git `ls-remote` and cannot be routed; for `deno`, `zig` and `swift` it is a
@@ -285,6 +352,11 @@ Hard errors (the server refuses to load), in the loader's existing
 | an entry with a scheme, port, wildcard or `..` | `registries[3].vendor_hosts[2]: "https://cdn.azul.com": write host/prefix, without a scheme` | entries are compared exactly |
 | a bare multi-tenant host (`github.com`) | `registries[3].vendor_hosts[0]: "github.com" is shared by every GitHub account; name the repository prefix, e.g. "github.com/adoptium/"` | §15 Q8 |
 | `release_types` outside `ga`, `ea` | `registries[3].release_types: "nightly" is not one of ga, ea` | they become a URL segment upstream |
+| a `redirect_hosts` entry with a scheme, path, port, wildcard, or an IP literal | `registries[3].redirect_hosts[1]: "http://cdn.example": write a host name only` | entries are compared exactly against each hop's host; IPs are never a redirect target |
+| `max_artifact_size_bytes = 0` on a registry | `registries[3].max_artifact_size_bytes: must be at least 1` | `0` would refuse every artifact while looking like "no limit" |
+| a `raw.max_size_bytes` above the registry's own limit | the existing `validate_raw_ceilings` message, now against the registry's effective limit | the effective limit of a registry is its override if set, else `[limits]` |
+| a `revalidate` entry not admitted by `path_allow`, or on a kind other than `generic` | `registries[3].revalidate[0]: "x/**" is outside path_allow` | a revalidated path that can never be served is a typo |
+| `release_age_gate` on a `godist` registry | `registries[3]: release_age_gate needs a release date, and the Go release document has none` | a gate with nothing to read would pass everything (§4.1) |
 
 Warnings (load succeeds). These are **CLI-side only**: the server never sees a
 mise block, so they are printed by `registry suggest`, `setup` and `mise plan`,
@@ -306,6 +378,7 @@ New routes, all under the `mise-java` kind scope (`kind_scope` in
 | --- | --- | --- |
 | `GET /proxy/{reg}/mise-java/jvm/{type}/{os}/{arch}.json` | read on `{reg}` | the filtered metadata document (`ProtocolDocument`) |
 | `GET /proxy/{reg}/mise-java/dl/{host}/{path}` | read on `{reg}`, grant on `java@{version}` | the archive (`ArtifactBytes`) |
+| `GET /proxy/{reg}/godist/{file}` (phase 5) | read on `{reg}`, grant on `go@{version}` | the archive or its `.sha256` (`ArtifactBytes`) |
 
 No admin API changes. The registry appears in the existing registry list and
 package explorer under package `java`. One spelling throughout: the version is
@@ -328,7 +401,7 @@ additions, both stated: a `# Not routable through BatleHub` comment section at
 the end of the `suggest` output, and `blocked:` / `note:` lines in the plan
 summary, below the existing `no mirror:` and `unsupported:` lines.
 
-`registry suggest --mise` on a lock naming java, zig, elixir and dotnet:
+`registry suggest --mise` on a lock naming java, zig, elixir, swift and dotnet:
 
 ```text
 $ batlehub-cli registry suggest --mise
@@ -356,9 +429,18 @@ path_allow = [
 ]
 …
 
-# JDK builds reach 475 MB, Swift 1 007 MB; [limits] max_artifact_size_bytes
-# is 500 MiB by default and instance-wide — raise it before routing swift
-# (there is no per-registry limit yet, §15 Q11).
+# from mise.lock: swift
+[[registries]]
+type       = "generic"
+name       = "swift-dl"
+upstreams  = ["https://download.swift.org"]
+path_allow = [
+  "swift-6.2-release/**",
+]
+# Swift tarballs reach 1 007 MB; [limits] max_artifact_size_bytes is
+# 500 MiB by default. This registry alone is raised (§15 Q11).
+max_artifact_size_bytes = 1200000000
+…
 
 # Not routable through BatleHub:
 #   dotnet (core:dotnet) — mise runs dotnet-install.sh, whose download feed
@@ -372,7 +454,8 @@ zig.use_community_mirrors = false   # mirrors are tried before ziglang.org
 ```
 
 Decides: the refusal is printed where the operator is already reading, not
-only in `mise plan`; the Zig setting travels with its rule. Empty case (no
+only in `mise plan`; the Zig setting travels with its rule; a size limit is
+raised on the one registry that needs it, never instance-wide. Empty case (no
 `core:` tool in the lock): no registry block and no `[settings]` line, exactly
 today's output.
 
@@ -463,7 +546,8 @@ allow.** The client's URL is a lookup key, never a fetch target.
 ```mermaid
 graph TD
     W["WIRE_RULES (RFC 0045 §6.1)"] --> T1["mise-java: mise-java.jdx.dev + vendor hosts"]
-    W --> T2["generic presets: ziglang.org, builds.hex.pm,<br/>dl.deno.land, download.swift.org, www.swift.org,<br/>downloads.python.org, dl.google.com"]
+    W --> T2["generic presets: ziglang.org, builds.hex.pm,<br/>dl.deno.land, download.swift.org, www.swift.org,<br/>downloads.python.org, dl.google.com/go until phase 5"]
+    W --> T6["godist (phase 5): dl.google.com/go/"]
     W --> T3["github: python, bun, ruby, erlang/macOS"]
     W --> T4["nodedist: nodejs.org"]
     E["client env (setup)"] --> T5["rustup: RUSTUP_DIST_SERVER"]
@@ -512,7 +596,7 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
 `download.java.net` 60, `developers.redhat.com` 12, `gds.oracle.com` 12,
 `d3pxv6yz143wms.cloudfront.net` 4. Checksums: `sha256:` 4 183, `sha512:` 1 036,
 `sha1:` 1 950 (every Liberica row), `md5:` 180, none 101 — so 2 231 rows,
-30 %, carry a weak checksum or none (§15 Q10). No row carries a
+30 %, carry a weak checksum or none; all are kept (§15 Q10). No row carries a
 `checksum_url`.
 
 `dotnet-install.sh` (fetched the same day) hard-codes its feeds —
@@ -576,7 +660,8 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
   renderer emits it under `[settings]`, `setup` merges it the same way. It is
   the **one** settings function: RFC 0047's `dotnet.registry_url` is a row of
   it, not a second mechanism. Landing order: RFC 0047's mise pin bump, then
-  RFC 0047 phase 1 (which adds `MisePlan.notes`), then this RFC's phase 1.
+  RFC 0047 phase 1 (the mise pin bump and `MisePlan.notes`), then this
+  RFC's phase 1.
 
 `cli/src/api/client_setup.rs`: `MISE_TYPES` (`:1536`) gains `rustup` and
 `mise-java` — `mise-java` **before** `github`, because the classic block is
@@ -602,8 +687,14 @@ the token is in that file and exported to every subprocess.
   (`crates/core/src/services/integrity.rs:75-104`), which would silently skip
   cache-write verification with one `WARN` per download (`CLAUDE.md`, step 1).
   It handles `sha256:`, `sha512:`, `sha1:`, `md5:` and empty; `parse_expected`
-  has no MD5 branch, so `md5:` rows are unverifiable at cache write. What the
-  kind does with `sha1:`, `md5:` and empty rows by default is §15 Q10.
+  has no MD5 branch, so `md5:` rows are unverifiable at cache write. All
+  three are **kept** (§15 Q10): a `sha1:` row is verified with SHA-1 at
+  cache write; an `md5:` or empty row is cached unverified. Each such cache
+  write increments `batlehub_mise_java_weak_downloads_total{registry,
+  checksum}` (`checksum` in `sha1 | md5 | none`) and logs one `INFO` line
+  naming the coordinate and the checksum class; the served document's count
+  of such rows is the `weak` series of §10.1. The access-log row of the
+  download carries the same `checksum` class.
 - The download index: `(host, path) → (row coordinate, checksum)`, built from
   the **union** of the cached metadata documents (one per type, OS and
   architecture) and kept in the cache store, not in process or per-worker
@@ -624,9 +715,15 @@ the token is in that file and exported to every subprocess.
   client with the ordinary listing TTL; downloads through
   `ssrf::fetch_following_redirects` (`crates/adapters/src/registry/ssrf.rs:231`),
   which re-checks every hop against `is_blocked_ip` (`:87`). Redirect targets
-  are **not** in `vendor_hosts` — three of the eleven hosts are redirectors
-  (§6.1). §15 Q2 now recommends https on the row and on every hop plus a
-  `redirect_hosts` list; until it is decided, they are SSRF-checked only.
+  are **not** in `vendor_hosts` — three of the eleven hosts are redirectors,
+  and `github.com` sends release assets to `release-assets.githubusercontent.com`
+  (§6.1). So, per §15 Q2: the row URL must be `https://`, and the redirect
+  loop refuses any hop that is not `https://` or whose host is in neither
+  `vendor_hosts` nor `redirect_hosts` — on top of `is_blocked_ip`, so a
+  redirect to `127.0.0.1` is refused twice. A refused hop is `502`, nothing
+  cached. `fetch_following_redirects` gains the allowlist and the scheme
+  check as arguments; its other callers pass none and keep today's
+  behaviour.
 - `crates/web/src/handlers/proxy/mise_java.rs`: the two routes of §4.4, both
   `body = …` declared for `openapi_contract.rs`.
 - `server/src/builders.rs`: the client arm; `crates/config`: the three options
@@ -639,13 +736,89 @@ the token is in that file and exported to every subprocess.
 | `nodedist`, `rustup`, `github` | as their RFCs (0010, 0024, 0008-bis): listings composed from held files |
 | presets | a held file is served by path; no listing to compose (`docs/registries/generic.md:14`). mise's versions-host request answers `404` (RFC 0043), the fallback listing goes to an unwired or sunk host (RFC 0045 `Sink`), so **only a lock-driven install works** — the stance of `docs/use/mise.md` §5 |
 | `mise-java` | the metadata document is **composed** from the held archives' rows, recorded at import with their original `url` and checksum; `mise ls-remote java` lists what the bundle carries. Phase 3 |
+| `godist` (phase 5) | held archives served by path, their `.sha256` answered from the held rows; a lock-driven install only, as for the presets |
 | dotnet | unchanged: unsupported |
+
+### 6.6 Cold fill, `revalidate` and the per-registry limit (phase 1b)
+
+Server changes shared with RFC 0047, which owns none of them and links here
+(RFC 0047 §15 Q9, Q10). They land before this RFC's phase 2 and before
+RFC 0047's phase 2.
+
+- **Detached single-flight fill, streamed (§15 Q9).** Today the cold-miss
+  path stores the whole upstream body before serving a byte
+  (`crates/core/src/services/proxy/cache.rs:376-455`). The fill becomes a
+  task keyed on the storage key and spawned detached from the request: the
+  first miss starts it, every concurrent or retried request for the same key
+  joins it and receives the bytes already staged, then the rest as they
+  arrive. A client disconnect drops that subscriber, never the fill.
+  Integrity verification and promotion from the staging key stay as they
+  are; the **final chunk is withheld until the digest is checked**, so a
+  client that sees a complete body saw a verified one, and on a mismatch the
+  response is reset and nothing is promoted. The size limit stops the
+  stream at the limit, as it stops it today. A registry whose policy holds
+  an artifact before serving it (quarantine) keeps store-then-serve:
+  streaming never hands out bytes the policy would hold.
+- **`revalidate` on `generic` (§15 Q12).** A list of globs, matched with
+  the same options as `path_allow` (`require_literal_separator`, RFC 0047
+  §15 Q7). A cached path that matches is revalidated upstream on each read
+  (conditional `GET` on the stored `ETag`/`Last-Modified` where upstream
+  sends them, else a full fetch through the single-flight); on an upstream
+  error or timeout the cached copy is served stale (`200`) and counted
+  (§10.1). Paths that do not match keep today's
+  cache-forever behaviour; `artifact_ttl_secs` is unchanged. The CLI's
+  presets — this RFC's and RFC 0047's — write their mutable documents into
+  it.
+- **Per-registry `max_artifact_size_bytes` (§15 Q11).** An optional field on
+  `[[registries]]`, carried to `HotConfig` as a per-registry map beside
+  `integrity` (`hot.integrity.get(registry_name)`,
+  `crates/core/src/services/proxy/handle.rs:145-149`); the limit at
+  `handle.rs:150` becomes the registry's entry, else the instance value,
+  else 500 MiB. `validate_raw_ceilings` compares `raw.max_size_bytes`
+  against that effective limit.
+
+### 6.7 The `godist` kind (phase 5)
+
+Built now rather than on demand (§15 Q3), modelled on `nodedist` (RFC 0010):
+
+- `RegistryKind::Godist` (`"godist"`), in `ALL`, with every compiler-forced
+  arm (`CLAUDE.md` step 5) and `render_listing`'s silent arm written
+  explicitly.
+- `crates/adapters/src/registry/godist.rs`, a flat file: the release document
+  (`metadata_url`, §4.1) through the shared client and the listing TTL, the
+  files from `{upstream}/{file}`. The document is a new parser of upstream
+  input: a fixed `serde` struct, a size cap, and a `fuzz_godist_document`
+  target.
+- `crates/web/src/handlers/proxy/godist.rs`: the route of §4.4, `body =
+  ArtifactBytes` for `openapi_contract.rs`; the file name is validated
+  against `go{version}.{os}-{arch}.{tar.gz|zip}[.sha256]` before it reaches a
+  storage key.
+- The coordinate is `go@{version}` (`1.25.4`, without the `go` prefix, as
+  mise spells it), so a block entry reads `go@1.25.4` and a glob
+  `go@1.25.*`.
+- The CLI: `TYPED_HOSTS` gains the `(dl.google.com, /go/)` prefix → `godist`,
+  `typed_url_replacements` a `godist` arm
+  (`^https://dl\.google\.com/go/(.+)` → `{proxy}/$1`), and
+  `registry_kind_for_host` accepts `go-dl` or `godist` for that prefix, as it
+  does for Node and Rust (§13). `android-dl` (RFC 0047 §15 Q3) keeps the
+  `/android/` prefix of the same host.
+- The five per-kind gates of `CLAUDE.md` step 9 — `authz.sh`'s
+  `authz_check_kinds_covered`, `registry_kind_coverage.rs` (live phase and
+  air-gap claim), `soak_kind_coverage.rs`, `authz_matrix.rs` (both route
+  inventories) and the README-extractor check in `sbom/extractor/mod.rs` —
+  plus `profile_route_coverage.rs`, all in phase 5. Air gap: `AirGap::Case`,
+  the `.sha256` answered from the held rows, a lock-driven install only, as
+  for the presets.
+- Closed-world phase `godist` and an `authz.sh` phase (`live:godist`; the
+  kind has no local mode).
 
 ### 6.P Proof against a real client
 
-Suite: `tests/heavy/closed_world.sh`, new phases `mise-core` and `mise-java`,
-client mise 2026.11.3 — CI's `MISE_VERSION` pin (`.github/workflows/test.yaml`
-lines 1024, 1401, 1550, today `2026.9.5`), bumped first by RFC 0047's pin PR;
+Suite: `tests/heavy/closed_world.sh`, new phases `mise-core`, `mise-java` and
+`godist`,
+client mise 2026.11.3 or the later 2026.11.x — CI's `MISE_VERSION` pin
+(`.github/workflows/test.yaml` lines 1024, 1401, 1550, today `2026.9.5`),
+bumped inside RFC 0047's phase 1 (RFC 0047 §15 Q1);
 `phase_mise` (`:1082`) itself passes `mise@latest`. Egress denied, every
 request through the tap; assertions on the wire transcript with
 `heavy_wire_re_after`, never on mise's exit code alone. The air-gap half is
@@ -690,8 +863,18 @@ they are the predictions the phases will check.
     (and, separately, send the two to different replicas sharing the cache) —
     the download is `200`: the index is cache-backed (R6), not per-process.
 13. A throttled vendor link (the tap delays the first byte by 40 s) on a cold
-    475 MB bell-sw JDK — records what mise's 30 s `http_timeout` does to a
-    cold miss today; this is the measurement behind §15 Q9.
+    475 MB bell-sw JDK — run once before phase 1b to record today's failure,
+    then as the phase 1b proof (§15 Q9): `mise install` exits 0, the tap
+    shows **one** upstream `GET` for the archive whatever mise's retries,
+    and a second client started mid-fill joins it rather than fetching again.
+14. **Refusal, redirects (§15 Q2).** A fixture vendor host that redirects to
+    `http://` and another that redirects to `127.0.0.1` — `curl` of each
+    row's `dl/` path gets `502`, the cache holds nothing for either, and the
+    tap shows no request to the redirect target.
+15. `mise install go@1.25.4` through a `godist` registry (phase 5) — the tap
+    shows the archive and `.sha256` under `/proxy/go/godist/`, no request to
+    `dl.google.com` from the client; with `go@1.25.4` blocked, mise exits
+    non-zero quoting the `403`, and the upstream log has no archive `GET`.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
@@ -716,7 +899,7 @@ flowchart LR
     C["mise client<br/>(token)"] -->|"1"| B["BatleHub<br/>mise-java"]
     B -->|"2 · metadata"| J["mise-java.jdx.dev<br/>third party"]
     B -->|"3 · archive, per row"| V["vendor hosts<br/>(allow-listed)"]
-    V -.->|"4 · redirects"| R["CDNs off-list<br/>(SSRF-checked)"]
+    V -.->|"4 · redirects, https only"| R["redirect_hosts<br/>(allow-listed, SSRF-checked)"]
 ```
 
 Boundary 2 is new trust: a document BatleHub did not write decides which URLs
@@ -724,14 +907,16 @@ boundary 3 fetches.
 
 | # | Threat (STRIDE) | Mitigation | Enforced by | Residual |
 | --- | --- | --- | --- | --- |
-| T1 | **Tampering / EoP** — a compromised `mise-java.jdx.dev` names an internal URL, or any GitHub user's release asset, turning the kind into an SSRF or a malware relay | rows outside `vendor_hosts` dropped, entries being host + path prefix so `github.com/<anyone>/` is not allowed (§15 Q8); the download route fetches only indexed `(host, path)`; every hop `is_blocked_ip`-checked | `filter_document`, the download index, `ssrf::fetch_following_redirects` | a vendor repository itself compromised — accepted, same as direct; owner: operator. Redirect hops are not allow-listed until §15 Q2 is decided |
-| T2 | **Tampering** — the same compromise names a malicious archive with a matching checksum, or backdates `created_at` past the age gate | none at this layer: checksum and timestamp come from the same document | — | equal to mise direct; a committed `mise.lock` pins the checksum on first lock and mise re-verifies. The age gate can be defeated by a backdated row. Accepted, recorded in §15 Q5 |
+| T1 | **Tampering / EoP** — a compromised `mise-java.jdx.dev` names an internal URL, or any GitHub user's release asset, turning the kind into an SSRF or a malware relay | rows outside `vendor_hosts` dropped, entries being host + path prefix so `github.com/<anyone>/` is not allowed (§15 Q8); the download route fetches only indexed `(host, path)`; the row and every hop must be `https://` and land on `vendor_hosts` or `redirect_hosts`, and every hop is `is_blocked_ip`-checked (§15 Q2) | `filter_document`, the download index, `ssrf::fetch_following_redirects` with the allowlist; tests `a_row_on_another_github_owner_is_never_served`, `a_redirect_to_http_or_loopback_is_502_and_uncached` | a vendor repository itself compromised — accepted, same as direct; owner: operator. A `redirect_hosts` CDN serving another tenant's object on the same host — accepted, the redirect is chosen by the vendor host, not by the document |
+| T2 | **Tampering** — the same compromise names a malicious archive with a matching checksum, or backdates `created_at` past the age gate | none at this layer: checksum and timestamp come from the same document | — | equal to mise direct; a committed `mise.lock` pins the checksum on first lock and mise re-verifies. The age gate can be defeated by a backdated row. **Accepted residual** (§15 Q5): no cross-check against vendor-published checksums; owner: operator, the defence is the committed lock |
 | T3 | **Spoofing** — the client requests `dl/{host}/{path}` for a host it chose | the client's URL is a lookup key only (R6) | download index | none |
 | T4 | **EoP** — a lock-pinned URL bypasses a block because mise skips the metadata when the lock has the URL (`java.rs:615-634`) | the download route resolves the URL to its row and applies the block there (R5); the `mise-java` rules precede the `github` rules, an acceptance criterion of phase 2 (§15 Q1) | download handler, rule order in `MISE_TYPES` | under RFC 0045's wire the longest prefix wins, so `github.com/adoptium/` beats `github.com/` there too; a hand-written block that puts `github` first escapes the block |
-| T5 | **Tampering** — a cache-write without verification because of the `sha256:` form, or a weak algorithm | `normalise_checksum` | `services/mise_java.rs` | 2 231 rows (30 %) are weak or unverified: `sha1:` 1 950, `md5:` 180 (no MD5 in `parse_expected`), none 101. Default treatment is §15 Q10 |
-| T6 | **DoS** — 1 GB Swift tarballs and 475 MB JDKs fill storage, and a cold miss fans out | existing quotas and `path_allow`; `[limits] max_artifact_size_bytes` (500 MiB default, instance-wide — Swift is refused at it); sizes stated in §10.3 | quota rules, `proxy/handle.rs:150` | operator sizing; retry fan-out on a cold miss is §15 Q9 |
+| T5 | **Tampering** — a cache-write without verification because of the `sha256:` form, or a weak algorithm | `normalise_checksum`; SHA-1 verified at cache write | `services/mise_java.rs`; test `a_sha256_prefixed_checksum_is_verified_on_cache_write` | **Accepted residual** (§15 Q10): all rows are kept. 2 231 rows (30 %) are weak or unverified — `sha1:` 1 950 (verified with a broken algorithm), `md5:` 180 (no MD5 in `parse_expected`) and none 101 (both cached unverified). Every such cache write is counted in `batlehub_mise_java_weak_downloads_total{checksum}` and logged at `INFO` with the coordinate; mise's own check against the same row, and the committed lock, are the remaining defence; owner: operator |
+| T6 | **DoS** — 1 GB Swift tarballs and 475 MB JDKs fill storage, and a cold miss fans out | existing quotas and `path_allow`; `max_artifact_size_bytes`, now per registry (§15 Q11), so only the registry that needs 1 GB is raised; the detached single-flight fill (§15 Q9) turns N retries of a cold miss into one upstream fetch | quota rules, `proxy/handle.rs:150`, the fill task (§6.6); tests `a_registry_limit_overrides_the_instance_limit`, `concurrent_cold_misses_fetch_upstream_once` | operator sizing |
 | T7 | **Info disclosure** — the client's token sent to a vendor host | upstream requests carry only the registry's own configured credential, never the client's | `UpstreamHttpOptions` per registry (`crates/adapters/src/registry/http_client.rs:122`) | none |
 | T8 | **Tampering** — Zig mirrors bypass the proxy | generated `use_community_mirrors = false`; obs. 2 | `mise_settings_for` | a hand-written config without it goes direct — warned in `mise plan` |
+| T9 | **EoP** — a blocked Go version installed from a lock-pinned URL, or a file the release document does not list | `godist` reads the version from the file name and applies the block on both the archive and its `.sha256`; an unlisted file is `404` without upstream (R6b) | `godist` handler; tests `a_blocked_go_version_download_is_403`, `an_unlisted_go_file_is_404_without_upstream` | a hand-written block routing `dl.google.com/go` to a `generic` registry escapes it, as for Node |
+| T10 | **Tampering** — streaming hands a client bytes that later fail verification | the final chunk is withheld until the digest is checked; a mismatch resets the response and promotes nothing; a quarantined kind keeps store-then-serve (§6.6) | the fill task; test `a_streamed_mismatch_resets_and_caches_nothing` | a client that does not check the length may keep a truncated file; mise checks the checksum it already has |
 
 ### 7.2 Authentication and authorisation
 
@@ -749,7 +934,9 @@ an upstream URL. `{host}` and `{path}` are never fetched as given: they are a
 key into the index, compared byte-for-byte after percent-decoding once; a miss
 is `404`. The metadata parser is `serde_json` into a fixed struct with a
 document size cap (8 MiB, twice the largest probed) — a new parser of
-upstream input, so a `fuzz_mise_java_filter` target covers `filter_document`.
+upstream input, so a `fuzz_mise_java_filter` target covers `filter_document`;
+`godist`'s release document gets `fuzz_godist_document` the same way, and its
+file name is matched against a fixed pattern before any storage key (§6.7).
 Presets change nothing here: `generic`'s `path_allow` is mandatory
 (`generic_without_path_allow_is_rejected`, `crates/config/src/lib.rs:1403`).
 
@@ -758,13 +945,14 @@ Presets change nothing here: `generic`'s `path_allow` is mandatory
 No new secret in the server; the client-side rustup credential goes to the
 user-level mise config only (§6.2). Checksums: SHA-256/512 from the row for
 5 219 rows; SHA-1 for 1 950 (every Liberica row), MD5 for 180, none for 101 —
-their default is §15 Q10.
+all kept, counted and logged (§15 Q10, T5).
 End-to-end signatures that survive the cache untouched, because the verifier
 is mise and the key ships in mise: Node GPG (`node.rs:417-439`), Swift GPG
 (`swift.rs:136-144`), Zig minisign (`zig.rs:238`), Python attestations via
 the `github` kind. Go, Deno and Elixir checksums come from the same host as
 the artifact, so a poisoned cache entry would be self-consistent; `mise.lock`
-is the defence and the docs say so.
+is the defence and the docs say so. `godist` verifies against the release
+document from `go.dev`, a different host from the archive's.
 
 ### 7.5 Abuse and resource exhaustion
 
@@ -788,9 +976,10 @@ and `glob`, already in `Cargo.lock`, and `task security` is unchanged. New
 *upstreams*, which are supply chain of a different kind: `mise-java.jdx.dev`
 (operated by mise's author; MIT project, the document is generated from vendor
 APIs) and the eleven vendor hosts, all already reached by any mise estate
-today, directly. The heavy suites pin mise **2026.9.5** today (`test.yaml`
-lines 1024, 1401, 1550 and `mise-scan.yaml:98`); RFC 0047's pin-bump PR to
-2026.11.3 is a prerequisite of §6.P. No new CI action.
+today, directly, plus `go.dev` (Go's release document, Google) for `godist`.
+The heavy suites pin mise **2026.9.5** today (`test.yaml` lines 1024, 1401,
+1550 and `mise-scan.yaml:98`); RFC 0047's phase 1 bumps it to the current
+2026.11.x, a prerequisite of §6.P. No new CI action.
 
 ---
 
@@ -814,6 +1003,15 @@ mise's install beacon is RFC 0043's and is not touched here.
 - `batlehub_mise_java_document_rows{registry, type, os, arch}` after
   filtering, so a vendor disappearing from the served document is a step on a
   graph, not a support ticket.
+- `batlehub_mise_java_weak_downloads_total{registry, checksum}`, `checksum`
+  in `sha1 | md5 | none`: archives cached with a weak or no verification
+  (§15 Q10), each also an `INFO` line with the coordinate.
+- `batlehub_proxy_fill_joined_total{registry}`: requests that joined a
+  running cold fill instead of starting one (§15 Q9); and
+  `batlehub_generic_revalidate_total{registry, outcome}`, `outcome` in
+  `fresh | updated | stale_served` (§15 Q12), so a vendor outage behind a
+  revalidated index is a rising `stale_served`, not a silence.
+- `godist` uses the existing per-kind metrics; nothing kind-specific.
 - A blocked download writes the usual audit row with the block's id; the
   explorer shows `java` with each vendor-version and its block state.
 
@@ -824,13 +1022,15 @@ mise's install beacon is RFC 0043's and is not touched here.
 | `mise-java.jdx.dev` down | stale-on-error | last good document served if the registry allows stale; else `502`, and mise errors |
 | a vendor host down | closed | `502` for that row; other vendors unaffected |
 | a stale row (`404` upstream, as SapMachine 10-ea) | closed | `404` relayed, nothing cached |
-| a redirect to a blocked IP | closed | `502`, `WARN` with the host |
+| a redirect to a blocked IP, to `http://`, or to a host outside `vendor_hosts` and `redirect_hosts` | closed | `502`, nothing cached, `WARN` with the host (§15 Q2) |
 | checksum mismatch | closed | nothing cached, `502`, `ERROR` with expected and actual |
 | the catalogue answers `200` with `[]`, a truncated array, or a row-count drop > 25 % | closed to the bad document | last good document kept and served, `WARN`, `reason="implausible"` (§6.3) |
 | restart, second replica, cache eviction of a document | — | the index is rebuilt from the cached documents, or the documents are refetched through the single-flight before any `404` (R6) |
-| a cold miss on a large archive slower than mise's 30 s read timeout | **open question** | mise retries up to 3 times, each a new upstream fetch; the fill may never complete — §15 Q9 (blocker) |
-| an artifact over `[limits] max_artifact_size_bytes` (Swift, 1 007 MB) | closed | refused after the transfer, every retry pays it again; `suggest` prints the limit note (§4.5) |
-| a mutable index (`builds.txt`, `api/v1/install/releases.json`, `download/index.json`, PyPy `versions.json`) cached by a preset | stale | `generic` caches it forever (`artifact_ttl_secs` null); a new OTP release finds no row and erlang's checksum lookup fails (`erlang.rs:214`) — §15 Q12 |
+| a cold miss on a large archive slower than mise's 30 s read timeout | — | the detached fill streams bytes as they arrive, so mise's read timer is fed; a retry joins the running fill; a client that gives up does not cancel it, and the next request is served from cache (§6.6, §15 Q9) |
+| the fill fails upstream mid-transfer | closed | the response is reset, nothing promoted, every joined client errors; the next request starts a new fill |
+| an artifact over its registry's `max_artifact_size_bytes` (or the instance's) | closed | the stream stops at the limit, nothing cached; `suggest` writes the override on the registry that needs it (§4.5, §15 Q11) |
+| a mutable index (`builds.txt`, `api/v1/install/releases.json`, `download/index.json`, PyPy `versions.json`) under a preset | stale-on-error | in the preset's `revalidate` list: revalidated on read, served stale and counted when upstream fails (§6.6, §15 Q12) |
+| `go.dev`'s release document unreachable (`godist`) | stale-on-error | last good document served; a never-fetched document is `502` |
 
 No new background job; the document cache uses the existing cache store.
 
@@ -844,7 +1044,9 @@ storage does: the instance-wide `[limits] max_artifact_size_bytes` (500 MiB
 by default, `crates/config/src/schema/mod.rs:539`), which Swift exceeds and
 bell-sw's 475 MB nears; and the cold-miss path, which stores the whole body
 before serving the first byte
-(`crates/core/src/services/proxy/cache.rs:376-455`) against mise's 30 s `http_timeout` with 3 retries (§15 Q9).
+(`crates/core/src/services/proxy/cache.rs:376-455`) against mise's 30 s
+`http_timeout` with 3 retries — phase 1b streams it and fills it once
+(§6.6, §15 Q9). The limit becomes per registry in the same phase (§15 Q11).
 
 ---
 
@@ -859,9 +1061,12 @@ before serving the first byte
 - **Licensing**: none of ours. The proxy caches vendor JDKs under their
   licences; Oracle's terms on redistribution are the operator's question, as
   they are for SDKMAN today (`docs/registries/sdkman.md`).
-- **Documentation**: `docs/registries/mise-java.md` (new),
-  `docs/registries/generic.md` (preset list), `docs/use/mise.md` §5 (core
-  table, dotnet, Zig mirrors), `docs/guide/caching.md` (sizes).
+- **Documentation**: `docs/registries/mise-java.md` and
+  `docs/registries/godist.md` (new), `docs/registries/generic.md` (preset
+  list, `revalidate`), `docs/use/mise.md` §5 (core table, the dotnet refusal
+  with a link to the upstream issue once opened, Zig mirrors),
+  `docs/guide/caching.md` (sizes, streamed cold fill),
+  `docs/guide/configuration.md` (per-registry `max_artifact_size_bytes`).
 
 ---
 
@@ -872,9 +1077,11 @@ before serving the first byte
 | **Point mise users at SDKMAN for Java** | Two toolchain managers per workstation; SDKMAN's identifiers (`21.0.5-tem`) differ from mise's (`temurin-21.0.5`), so `.mise.toml` and policy disagree. And `sdkman` covers fewer vendors than the document's nineteen |
 | **`generic` presets for the eleven Java hosts** | Caches bytes, enforces nothing — the gap RFC 0010 §2.2 closed for Node. Three hosts are redirectors whose targets are other hosts, so the preset set never stabilises |
 | **Rewrite vendor URLs inside the served document** | One rule instead of twelve, but every `mise.lock` then records `hub.example.com`; mise matches locks by URL (`java.rs:370`), so a lock written through the proxy breaks the day the proxy moves, and a lock written direct never matches the proxied document |
-| **Ask mise upstream for a `java.metadata_url` setting** | Solves only the first request; downloads still need rules. Worth doing anyway (§15 Q6), not a substitute |
+| **Ask mise upstream for a `java.metadata_url` setting** | Solves only the first request; downloads still need rules, and the rewrite rule on `mise-java.jdx.dev` already does it. Not asked (§15 Q6) |
 | **Do nothing; document "unsupported"** | The plan would at least stop lying, which phase 1 does. Java would stay unblockable |
-| **A `godist` kind now** | Same cost as `nodedist` for a toolchain whose estates are smaller; §15 Q3 |
+| **Wait for an estate to ask before building `godist`** (the draft's recommendation) | Leaves Go the one mainstream toolchain whose versions cannot be blocked while Node, Rust and Java can; the user chose to build it in phase 5 (§15 Q3) |
+| **Drop `md5:` and checksum-less Java rows by default** (the draft's recommendation) | Removes 281 rows (`md5:` 180, none 101) some estates may need, and SHA-1 would have taken every Liberica build with it; the user kept every row and accepted the residual with a count (§15 Q10) |
+| **Only write `http_timeout` in `setup`** | A larger timeout per client does not stop each retry being a new upstream fetch, nor a disconnect cancelling the fill; it treats one client, not the proxy (§15 Q9) |
 
 ---
 
@@ -889,16 +1096,33 @@ Rust), the existing block keeps its rule, and `setup` refuses to write a
 second rule for a prefix a declared registry already claims (RFC 0047 §4.3's
 one-claim policy, applied here rather than a silently dead duplicate). The
 CLI's own `node-dist` / `rust-dist` presets are deleted (§6.2). A config
-naming `type = "mise-java"` on an older server fails to load with the
-existing unknown-kind error. No migration, no default changes on existing
-registries.
+naming `type = "mise-java"` or `type = "godist"` on an older server fails
+to load with the existing unknown-kind error. No migration, no default
+changes on existing registries.
+
+Phase 1b changes the cold path for every kind: bytes now reach the client
+while the fill runs, and concurrent misses share one fetch. Nothing changes
+for a cached artifact or for a quarantined kind. `max_artifact_size_bytes`
+absent on a registry keeps the instance limit, and `revalidate` absent keeps
+cache-forever, so an unchanged config behaves as before. Rollback: an older
+server **ignores** the two new fields rather than refusing them —
+`RegistryConfig` does not deny unknown fields
+(`crates/config/src/schema/registry.rs:148-149`) — so it falls back to the
+instance limit (Swift refused again: closed) and to cache-forever for the
+revalidated paths (stale "latest" again). The release notes say so.
+
+Phase 5 changes what the CLI suggests for Go: `godist` instead of the
+`go-dl` preset. An estate's existing `go-dl` registry keeps working —
+`mise plan` accepts either kind for `dl.google.com/go/`, and `setup` refuses
+a second rule on a prefix one already claims, as for Node and Rust above.
 
 ---
 
 ## 14. Test plan
 
 - **Unit (`cli`)**: one test per `core:` backend asserting its route (a table
-  test, so a fifteenth core tool is a red test); `core:dotnet` unsupported
+  test, so a fifteenth core tool is a red test); `core:erlang` on a macOS
+  lock resolves to `github` for `erlef/otp_builds`; `core:dotnet` unsupported
   with the reason; `zig.use_community_mirrors = false` present iff `zig-dl`
   is; `nodejs.org` and `static.rust-lang.org` suggest the typed kind.
 - **Unit (`core`)**: `filter_document` drops off-list hosts, blocked and gated
@@ -926,7 +1150,27 @@ registries.
   `crates/web/tests/air_gap.rs`), `soak_kind_coverage.rs`, `authz_matrix.rs`,
   `profile_route_coverage.rs` (the two routes in `perf/profile_routes.txt`),
   the README-extractor check.
-- **Heavy**: §6.P, both phases, plus `airgap.sh` obs. 9.
+- **Phase 1b (`crates/core`, `crates/web/tests`)**:
+  `concurrent_cold_misses_fetch_upstream_once`,
+  `a_client_disconnect_does_not_cancel_the_fill`,
+  `a_streamed_mismatch_resets_and_caches_nothing` (T10),
+  `a_quarantined_kind_still_stores_before_serving`,
+  `a_revalidated_path_is_served_stale_on_upstream_error`,
+  `an_unlisted_path_is_not_revalidated`,
+  `a_registry_limit_overrides_the_instance_limit`; config tests for the
+  §4.3 rows on `revalidate` and `max_artifact_size_bytes`.
+- **`mise-java`, added by the decisions**: T1
+  `a_redirect_to_http_or_loopback_is_502_and_uncached` and
+  `a_redirect_off_redirect_hosts_is_502`; T5
+  `a_md5_row_is_kept_cached_unverified_and_counted`; config
+  `redirect_host_with_scheme_is_rejected`.
+- **`godist` (phase 5)**: T9 `a_blocked_go_version_download_is_403`,
+  `an_unlisted_go_file_is_404_without_upstream`,
+  `the_sha256_is_answered_from_the_document`; config
+  `godist_age_gate_is_rejected`; fuzz `fuzz_godist_document`; the five
+  per-kind gates and `profile_route_coverage.rs`; a `<name>_…traversal…`
+  `400` test for a file name with `..`.
+- **Heavy**: §6.P, the three phases, plus `airgap.sh` obs. 9.
 
 ---
 
@@ -938,78 +1182,23 @@ registries.
 | --- | --- | --- |
 | R1 | Rewrite URLs in the Java document, or route vendor hosts? | **Route vendor hosts; serve URLs unchanged.** Lock portability (§12). |
 | R2 | Should Zig's mirrors be wired too? | **No — turn them off.** Seventeen hosts that change daily cannot be a preset; the setting is one line. |
+| Q1 (2026-11-13) | Java rows on `github.com` (3 459 of 7 450) bypass `mise-java`'s block if the `github` rules match first | **Order the `mise-java` rules for the known JDK repos before the `github` rules**, the repo list derived from the document; an acceptance criterion of phase 2, proved by `a_locked_blocked_temurin_via_the_rules_is_403`. As recommended: the classic block is first-match, and under RFC 0045's wire the longer prefix wins anyway. |
+| Q2 (2026-11-13) | Redirect targets off `vendor_hosts` | **https on the row URL and on every hop, plus `redirect_hosts`**, defaulting to the measured targets of the three redirectors (`aka.ms`, `cache-redirector.jetbrains.com`, `gds.oracle.com`); a redirect to `127.0.0.1` or to `http://` is `502` and nothing is cached (§4.1, §6.4, T1). As recommended. One addition from §6.1's own probe: `github.com` redirects release assets to `release-assets.githubusercontent.com`, so the default lists it too, or every GitHub row would be refused. |
+| Q3 (2026-11-13) | A `godist` kind: now, or when an estate asks? | **Now**, as phase 5, modelled on `nodedist`, with the five per-kind gates (§6.7). Against the draft, which leaned to waiting (§12): the user wants Go blockable like Node, Rust and Java. |
+| Q4 (2026-11-13) | .NET: contribute a `dotnet.feed` setting to mise? | **Open an issue at jdx/mise asking for it; no code here; document the refusal meanwhile** (`docs/use/mise.md` §5, the plan's `unsupported` line). The issue text is drafted for the user to approve before it is opened. When mise ships the setting, a preset on `builds.dotnet.microsoft.com` becomes a follow-up. |
+| Q5 (2026-11-13) | Same-document checksums (T2): accept, or cross-check vendor checksums? | **Accepted residual**, documented in §7.1 T2: a committed `mise.lock` is the defence, as for mise direct. No cross-check. |
+| Q6 (2026-11-13) | Ask mise for `java.metadata_url`? | **No.** The rewrite rule on `mise-java.jdx.dev` already routes the first request (§12). |
+| Q7 (2026-11-13) | Erlang on macOS: which GitHub repository? | **`erlef/otp_builds`.** mise 2026.11.3 resolves the precompiled macOS asset `otp-{arch}-apple-darwin.tar.gz` (`src/plugins/core/erlang.rs:283-289`) with `github::get_release("erlef/otp_builds", &release_tag)` at install (`erlang.rs:457`), lists from `github::list_releases("erlef/otp_builds")` (`:665`) and locks from the same repository (`:774`). Windows reads `erlang/otp` (`:520`). Read from the crate source; a research answer, not a user decision. |
+| Q8 (2026-11-13) | `vendor_hosts` as host + path prefix | **Entries are `host/prefix/`, the default derived from the measured document, a bare `github.com` refused at load** (§4.1, §4.3). As recommended. |
+| Q9 (2026-11-13) | Cold large downloads versus mise's 30 s timeout — blocker | **A detached single-flight fill plus streaming to the client while caching** (§6.6), proved by §6.P obs. 13. As recommended. **Owned here, phase 1b**; RFC 0047 §15 Q9 links to it. No longer a blocker. |
+| Q10 (2026-11-13) | Default for weak and unverified Java rows | **Keep all rows** — `md5:` 180, none 101, `sha1:` 1 950. Against the draft's recommendation to drop `md5:` and empty rows. Recorded as an accepted residual in §7.1 T5: SHA-1 rows are verified with SHA-1, `md5:` and empty rows are cached unverified, and each such cache write is counted in `batlehub_mise_java_weak_downloads_total{checksum}` and logged at `INFO` with the coordinate (§6.3, §10.1). |
+| Q11 (2026-11-13) | A per-registry size limit? | **A per-registry `max_artifact_size_bytes` override** (§4.1, §6.6), in phase 1b; `suggest` writes it on `swift-dl`. As the draft's first option. |
+| Q12 (2026-11-13) | Mutable index files under a preset | **A per-glob `revalidate` list on `generic`, with stale-on-error** (§4.1, §6.6). As recommended. **Owned here, phase 1b**; RFC 0047 §15 Q10 links to it. |
 
 ### Still open
 
-1. **Java rows on `github.com`** (3 459 of 7 450). If the `github` kind's
-   rules match first, those downloads bypass `mise-java`'s block when a lock
-   pins the URL (T4) — the block fails open. Options: order the `mise-java`
-   rules for the known JDK repos (`adoptium/`, `SAP/SapMachine/`, …) before
-   the `github` rules; or have the `github` kind consult `mise-java` blocks by
-   URL. Recommendation: the first, with the repo list derived from the
-   document — and it is an **acceptance criterion of phase 2**, proved by
-   `a_locked_blocked_temurin_via_the_rules_is_403`, not a follow-up. In the
-   classic block order is everything (first match); under RFC 0045's wire the
-   longest prefix wins, so the repo-prefixed rule wins there regardless.
-2. **Redirect targets off `vendor_hosts`.** `aka.ms`,
-   `cache-redirector.jetbrains.com` and `gds.oracle.com` redirect to hosts not
-   on the list, and `ssrf.rs`'s hop check does not refuse an https→http
-   redirect; with an egress proxy, `public_only_dns` is skipped and the SSRF
-   check rests on the pre-request DNS check (`ensure_public_url`).
-   Recommendation (revised after review): require **https on the row URL and
-   on every hop**, and add `redirect_hosts`, defaulting to the three measured
-   targets (CloudFront distribution names are per distribution, so stable);
-   test: a row whose host redirects to `127.0.0.1` or to `http://` gets `502`
-   and nothing is cached.
-3. **A `godist` kind** for per-version policy on Go — now, or when an estate
-   asks?
-4. **.NET**: contribute a `dotnet.feed` setting to mise that passes
-   `--azure-feed`, then route `builds.dotnet.microsoft.com` with a preset? Who
-   owns the upstream PR?
-5. **Same-document checksums** (T2): is a mise-java compromise an accepted
-   residual, or should the kind cross-check a vendor-published checksum where
-   one exists (Temurin, Corretto publish them)?
-6. **Ask mise for `java.metadata_url`**, so the first request needs no rewrite
-   rule?
-7. **Erlang on macOS**: confirm the GitHub repository mise reads the
-   precompiled asset from — the source names the asset (`erlang.rs:283-289`),
-   not verified here which release it reads.
-8. **`vendor_hosts` as host + path prefix.** `github.com` is multi-tenant:
-   with a hostname-only list, a compromised document can name any account's
-   release asset with a matching checksum and pass every control (T1).
-   Recommendation: entries are `host/prefix/`, the default derived from the
-   measured document (`github.com/adoptium/`, `github.com/SAP/SapMachine/`,
-   …), and a bare `github.com` is refused at load (§4.3). Open: whether any
-   other measured host is multi-tenant enough to need the same.
-9. **Cold large downloads versus mise's 30 s timeout — blocker.** The cold-miss
-   path stores the whole upstream body before serving the first byte
-   (`crates/core/src/services/proxy/cache.rs:376-455`), and checksummed
-   downloads are staged and verified first. mise's `http_timeout` is 30 s
-   between reads with 3 retries (`schema/mise.json:2370-2378`). A cold JDK
-   (194–475 MB) or Swift (1 007 MB) can exceed it; each retry is a new
-   upstream fetch (there is no artifact single-flight, only discovery's), and
-   a client disconnect may cancel the fill, so the cache may never fill.
-   Options: stream to the client while caching; an artifact single-flight
-   whose fill is detached from the request; at minimum `setup` writes a
-   larger `http_timeout`. Recommendation: **a detached single-flight fill plus
-   streaming**, proved by §6.P obs. 13. The same question is RFC 0047 §15 Q9;
-   the answer is shared and lands once.
-10. **Default for weak and unverified Java rows.** `md5:` 180 and none 101
-    cannot be verified at cache write; `sha1:` 1 950 (all Liberica) can, by a
-    broken algorithm. Recommendation: drop `md5:` and empty rows by default,
-    counted `reason="unverified"`, with an explicit opt-in to keep them;
-    decide whether SHA-1 rows are kept (Liberica is the only source of some
-    builds) or opted in the same way.
-11. **A per-registry size limit.** `max_artifact_size_bytes` is instance-wide
-    (`proxy/handle.rs:150`), so routing Swift means raising it for every
-    registry. Add a per-registry override, or keep the note `suggest` prints?
-12. **Mutable index files under a preset.** `builds.txt`,
-    `api/v1/install/releases.json`, zig's `download/index.json` and PyPy's
-    `versions.json` are cached forever by `generic` (`artifact_ttl_secs`
-    defaults to null, `crates/config/src/schema/registry.rs:1256-1258`); a
-    registry-wide TTL would also expire the tarballs, which are not served
-    stale on expiry. Recommendation: a per-glob revalidate list on `generic`
-    with stale-on-error. Shared with RFC 0047 §15 Q10; lands once.
+None: every question was decided with the user on 2026-11-13, Q7 by reading
+mise's source.
 
 ---
 
@@ -1017,11 +1206,16 @@ registries.
 
 | Phase | Content | Leaves green |
 | --- | --- | --- |
-| 0 | prerequisites, not this RFC: RFC 0047's mise pin bump; RFC 0047 phase 1 (`MisePlan.notes`); §15 Q9 answered | — |
+| 0 | prerequisites, not this RFC: RFC 0047 phase 1 (the mise pin bump and `MisePlan.notes`) | — |
 | 1 | CLI: presets, typed suggestions for node/rust (presets deleted, `nodedist` rule arm, plan accepts both kinds), the `core:` route table, dotnet refusal, Zig setting, `mise_settings_for`; `docs/use/mise.md` §5; heavy `mise-core` phase (obs. 1, 2, 7, 8, 10, 11) | unit + heavy |
-| 2 | `mise-java` kind: core filter, cache-backed index, adapter, routes, config validation, `vendor_hosts` in the registry DTO + `dump-spec` + `ui:generate`, `mise-java` before `github`, metrics, the gates with `AirGap::Gap`; heavy `mise-java` phase (obs. 3–6, 12, 13) | unit + integration + gates + heavy |
+| 1b | Server, shared with RFC 0047: the detached single-flight fill streamed to the client (§15 Q9), `revalidate` on `generic` (§15 Q12), per-registry `max_artifact_size_bytes` (§15 Q11); the CLI then writes each preset's `revalidate` globs and the `swift-dl` override; their tests (§14) and obs. 13; `docs/guide/caching.md`, `docs/guide/configuration.md`. Lands before phase 2 here and before RFC 0047 phase 2 | unit + integration + heavy |
+| 2 | `mise-java` kind: core filter, cache-backed index, adapter with the https-only, `redirect_hosts`-checked redirect loop, routes, config validation, `vendor_hosts` and `redirect_hosts` in the registry DTO + `dump-spec` + `ui:generate`, `mise-java` before `github` (acceptance: `a_locked_blocked_temurin_via_the_rules_is_403`), weak-row counting, metrics, the gates with `AirGap::Gap`; heavy `mise-java` phase (obs. 3–6, 12, 14) | unit + integration + gates + heavy |
 | 3 | `mise-java` air gap: composed document, bundle import, `AirGap::Case` + `air_gap.rs` case; `airgap.sh` obs. 9 | heavy + gates |
 | 4 | move the rows into RFC 0045's `WIRE_RULES` once it lands, as RFC 0047 phase 4 does | unit |
+| 5 | `godist` kind (§6.7): core, adapter, route, config, fuzz target, CLI typed host and rule arm, the five per-kind gates and `profile_route_coverage.rs`, `AirGap::Case`; heavy `godist` phase (obs. 15) and its `authz.sh` live phase; `docs/registries/godist.md` | unit + integration + gates + heavy |
 
-The security controls of §7 (host allowlist, download index, grant before
-fetch) land in phase 2 with the routes they protect.
+The security controls of §7 (host allowlist, redirect allowlist, download
+index, grant before fetch) land in phase 2 with the routes they protect;
+`godist`'s block and file-name check land in phase 5 with its route, and
+the withheld final chunk (T10) lands in phase 1b with the streaming it
+protects.
