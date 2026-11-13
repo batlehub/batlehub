@@ -763,6 +763,7 @@ impl ProxyService {
         )
         .await
         {
+            let credential = matches!(&e, CoreError::AccessDenied(d) if d.credential);
             let reason = e.to_string();
             super::warn_if_audit_failed(
                 self.repo
@@ -782,6 +783,7 @@ impl ProxyService {
             return Ok(ProxyResponse::Denied {
                 reason,
                 verdict: None,
+                credential,
             });
         }
         // ── 2. Resolve metadata (cache-first) ─────────────────────────────────
@@ -853,6 +855,7 @@ impl ProxyService {
             return Ok(ProxyResponse::Denied {
                 reason,
                 verdict: verdict.map(Box::new),
+                credential: false,
             });
         }
         let warned = verdict
@@ -1386,6 +1389,7 @@ impl ProxyService {
                 .await
         {
             return Some(ProxyResponse::Denied {
+                credential: matches!(&e, CoreError::AccessDenied(d) if d.credential),
                 reason: e.to_string(),
                 verdict: None,
             });
@@ -1394,6 +1398,7 @@ impl ProxyService {
             return Some(ProxyResponse::Denied {
                 reason,
                 verdict: None,
+                credential: false,
             });
         }
         let metadata = crate::entities::PackageMetadata::minimal(
@@ -1420,6 +1425,7 @@ impl ProxyService {
             return Some(ProxyResponse::Denied {
                 reason,
                 verdict: verdict.map(Box::new),
+                credential: false,
             });
         }
         tracing::info!(
