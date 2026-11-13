@@ -278,7 +278,7 @@ async fn composer_upload_version_override_via_query_param() {
 }
 
 #[actix_web::test]
-async fn composer_upload_anonymous_returns_403() {
+async fn composer_upload_anonymous_returns_401() {
     let app = make_local_composer_app(RegistryMode::Local).await;
     let zip = make_composer_zip("myvendor/anon-pkg", "1.0.0");
     let req = TestRequest::post()
@@ -287,7 +287,7 @@ async fn composer_upload_anonymous_returns_403() {
         .set_payload(zip)
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -385,13 +385,13 @@ async fn composer_yank_excludes_version_from_p2() {
 }
 
 #[actix_web::test]
-async fn composer_yank_anonymous_returns_403() {
+async fn composer_yank_anonymous_returns_401() {
     let app = make_local_composer_app(RegistryMode::Local).await;
     let req = TestRequest::delete()
         .uri("/proxy/local-composer/api/packages/acme/anon-pkg/versions/1.0.0")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

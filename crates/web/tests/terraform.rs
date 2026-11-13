@@ -340,7 +340,7 @@ async fn terraform_provider_binary_upload_refuses_a_dash_in_the_os() {
 }
 
 #[actix_web::test]
-async fn terraform_provider_binary_upload_anonymous_returns_403() {
+async fn terraform_provider_binary_upload_anonymous_returns_401() {
     let app = make_local_terraform_app(RegistryMode::Local).await;
 
     let req = TestRequest::post()
@@ -358,7 +358,7 @@ async fn terraform_provider_binary_upload_anonymous_returns_403() {
         .set_payload(b"fake-zip-bytes".as_slice())
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -1567,7 +1567,7 @@ async fn a_download_signature_cannot_authenticate_a_publish() {
         .to_request();
     assert_eq!(
         call_service(&app, req).await.status(),
-        403,
+        401,
         "a download signature must not authorise a publish"
     );
 

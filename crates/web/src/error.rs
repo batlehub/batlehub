@@ -29,6 +29,9 @@ pub struct AppError {
     /// about it, because the thing reading it is a script building the next
     /// bundle.
     pub details: Option<serde_json::Value>,
+    /// A refusal a credential might lift ([`batlehub_core::error::Denial`]);
+    /// read by [`wants_credential`](Self::wants_credential).
+    pub credential: bool,
 }
 
 impl AppError {
@@ -44,6 +47,7 @@ impl AppError {
             message: msg.into(),
             code: None,
             details: None,
+            credential: false,
         }
     }
 
@@ -77,6 +81,19 @@ impl AppError {
 
     pub fn forbidden(msg: impl Into<String>) -> Self {
         Self::with_status(StatusCode::FORBIDDEN, msg)
+    }
+
+    /// A `403` that a credential could turn into an answer: the grant
+    /// hierarchy or the package's audience refused the caller, as against a
+    /// rule judging the artifact (age, block, scripts, seal), which refuses
+    /// everybody alike.
+    ///
+    /// Read by the auth middleware to answer an *anonymous* proxy read with
+    /// `401` and a challenge instead, because git, NuGet and Maven only send
+    /// the credential they hold after one. The core says which refusals these
+    /// are, by building them with `CoreError::credential_denied`.
+    pub fn wants_credential(&self) -> bool {
+        self.status == StatusCode::FORBIDDEN && self.credential
     }
 
     pub fn bad_request(msg: impl Into<String>) -> Self {
@@ -178,7 +195,10 @@ impl From<CoreError> for AppError {
                 "coordinate": key,
                 "bundle_hint": "batlehub-cli air-gap missing",
             })),
-            CoreError::AccessDenied(msg) => Self::forbidden(msg),
+            CoreError::AccessDenied(denial) => Self {
+                credential: denial.credential,
+                ..Self::forbidden(denial.message)
+            },
             CoreError::UnknownRegistry(name) => {
                 Self::bad_request(format!("unknown registry: {name}"))
             }
@@ -311,6 +331,18 @@ mod tests {
     fn service_unavailable_status_is_503() {
         let e = AppError::service_unavailable("backend down");
         assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn wants_credential_follows_the_core_denial_type_not_its_wording() {
+        let cred = AppError::from(CoreError::credential_denied("anything at all"));
+        assert_eq!(cred.status, StatusCode::FORBIDDEN);
+        assert!(cred.wants_credential());
+        // The same words from a rule do not challenge: the type decides.
+        let rule = AppError::from(CoreError::access_denied("no grant for 'x'"));
+        assert!(!rule.wants_credential());
+        assert!(!AppError::forbidden("no grant for 'x'").wants_credential());
+        assert!(!AppError::not_found("x").wants_credential());
     }
 
     #[test]

@@ -78,7 +78,7 @@ impl LocalRegistryService {
                 ));
             }
             (None, Some(ty)) => {
-                return Err(CoreError::AccessDenied(format!(
+                return Err(CoreError::access_denied(format!(
                     "signature type '{ty}' supplied without a signature \
                      (X-Artifact-Signature header missing)"
                 )));
@@ -94,7 +94,7 @@ impl LocalRegistryService {
             match sig_type {
                 Some(st) if signing.allowed_types.iter().any(|t| t == st) => {}
                 Some(st) => {
-                    return Err(CoreError::AccessDenied(format!(
+                    return Err(CoreError::access_denied(format!(
                         "signature type '{st}' is not in the allowed list"
                     )));
                 }
@@ -216,7 +216,7 @@ impl LocalRegistryService {
         // `package_exists` left their owners unenforced. `can_publish` is
         // `true` for a package nobody owns, so a genuinely new one still passes.
         if !ownership.can_publish(registry, name, publisher).await? {
-            return Err(CoreError::AccessDenied(format!(
+            return Err(CoreError::access_denied(format!(
                 "you are not an owner of '{name}' in registry '{registry}'"
             )));
         }
@@ -240,7 +240,7 @@ impl LocalRegistryService {
             return Ok(());
         };
         if !ownership.can_publish(registry, name, identity).await? {
-            return Err(CoreError::AccessDenied(format!(
+            return Err(CoreError::access_denied(format!(
                 "you are not an owner of '{name}' in registry '{registry}'"
             )));
         }
@@ -320,11 +320,10 @@ impl LocalRegistryService {
         // ["releases:publish"]` is told why the grant they wrote is not enough
         // rather than being told they lack a role they did not ask about.
         if publisher.user_id.is_none() {
-            return Err(CoreError::AccessDenied(
+            return Err(CoreError::credential_denied(
                 "publishing requires an identified principal: the publisher is recorded as \
                  the package's first owner, and a package with no owner is publishable by \
-                 anyone and claimable by nobody"
-                    .into(),
+                 anyone and claimable by nobody",
             ));
         }
 
@@ -931,7 +930,7 @@ impl LocalRegistryService {
         {
             return Ok(());
         }
-        Err(CoreError::AccessDenied(format!(
+        Err(CoreError::access_denied(format!(
             "'{name}' is owned by another publisher"
         )))
     }

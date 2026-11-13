@@ -745,8 +745,9 @@ async fn cargo_publish_anonymous_still_blocked_in_ns_mode() {
         .uri("/proxy/local-cargo/api/v1/crates/new")
         .set_payload(make_publish_payload("any/pkg", "1.0.0"))
         .to_request();
-    // Blocked by the base role check (User required), not namespace check.
-    assert_eq!(call_service(&app, req).await.status(), 403);
+    // Blocked by the identified-principal check, not the namespace check: a
+    // credential could answer it, so an anonymous caller is challenged.
+    assert_eq!(call_service(&app, req).await.status(), 401);
 }
 
 // ── Visibility download tests (Cargo local registry) ─────────────────────────
@@ -799,7 +800,7 @@ async fn cargo_download_internal_package_blocks_anonymous() {
     let req = TestRequest::get()
         .uri("/proxy/local-cargo/my-crate/1.0.0/download")
         .to_request();
-    assert_eq!(call_service(&app, req).await.status(), 403);
+    assert_eq!(call_service(&app, req).await.status(), 401);
 }
 
 #[actix_web::test]
@@ -914,7 +915,7 @@ async fn cargo_index_internal_blocks_anonymous() {
     let req = TestRequest::get()
         .uri("/proxy/local-cargo/registry/my/li/my-lib")
         .to_request();
-    assert_eq!(call_service(&app, req).await.status(), 403);
+    assert_eq!(call_service(&app, req).await.status(), 401);
 }
 
 #[actix_web::test]

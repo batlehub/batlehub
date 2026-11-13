@@ -126,14 +126,15 @@ count_of() {  # <json> → the number of extensions in the first result
   python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d["results"][0]["extensions"]))'
   return $?
 }
-# With `anonymous = []` the gallery refuses outright — a `403`, not the
+# With `anonymous = []` the gallery refuses outright — a `401` (a `403` before
+# the challenge, which this accepts too), not the
 # empty `200` of a registry that grants anonymous read — which is exactly
 # the status that blanks an Extensions view (§4.4.2), and exactly why the
 # proxy below answers an unauthenticated query itself.
 ANON_CODE="$(curl -s -o "$HEAVY_WORK/anon-registry.json" -w '%{http_code}' -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" \
   "$REGISTRY_BASE/vscode/gallery/extensionquery")"
 case "$ANON_CODE" in
-  403) ANON=0 ;;
+  401|403) ANON=0 ;;
   200) ANON="$(count_of <"$HEAVY_WORK/anon-registry.json" || echo "?")" ;;
   *) heavy_fail "the registry answered an anonymous search with $ANON_CODE" ;;
 esac

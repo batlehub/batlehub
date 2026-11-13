@@ -26,7 +26,9 @@ use std::time::Duration;
 use actix_web::test::call_service;
 use batlehub_adapters::registry::GoDistRegistryClient;
 use batlehub_config::schema::RegistryMode;
-use batlehub_core::{ports::RegistryClient, rules::BlockListRule, services::RegistryPolicy};
+use batlehub_core::{
+    entities::Role, ports::RegistryClient, rules::BlockListRule, services::RegistryPolicy,
+};
 use sha2::{Digest, Sha256};
 
 const REG: &str = "go";
@@ -64,9 +66,23 @@ async fn upstream(sha256: &str) -> mockito::ServerGuard {
 }
 
 async fn app_against(server: &mockito::ServerGuard) -> impl TestService {
+    app_against_with(server, None).await
+}
+
+/// `app_against`, its grants derived from `perms` when given.
+async fn app_against_with(
+    server: &mockito::ServerGuard,
+    perms: Option<RbacFixture>,
+) -> impl TestService {
     let parts = local_registry_app_parts(REG, "godist", RegistryMode::Proxy, None);
     {
         let mut hot = parts.proxy_svc.hot.write().await;
+        if let Some(perms) = perms {
+            hot.grants.insert(
+                REG.to_owned(),
+                Arc::new(fixture_grants(REG, "godist", &RegistryMode::Proxy, &perms)),
+            );
+        }
         hot.registries.insert(
             REG.to_owned(),
             Arc::new(
@@ -302,4 +318,95 @@ async fn nothing_else_of_git_reaches_upstream() {
         assert!(resp.status().is_client_error(), "{path}: {}", resp.status());
     }
     never.assert_async().await;
+}
+
+fn basic(user_and_token: &str) -> String {
+    use base64::Engine;
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(user_and_token)
+    )
+}
+
+fn challenge_of(resp: &actix_web::dev::ServiceResponse) -> Option<String> {
+    resp.headers()
+        .get("www-authenticate")
+        .map(|v| v.to_str().unwrap().to_owned())
+}
+
+/// git sends the credential it holds (URL userinfo, `~/.netrc`, a credential
+/// helper) only in answer to a `401` carrying a challenge, so an anonymous
+/// refusal on a proxy route is that and not a bare `403`. A caller who *did*
+/// authenticate and holds no grant stays a `403`: a challenge would only make
+/// git ask for the same credential again.
+#[actix_web::test]
+async fn an_anonymous_refusal_challenges_and_an_authenticated_one_does_not() {
+    let server = upstream(&digest(ARCHIVE)).await;
+    // Closed to anonymous and to `role:user`, as `config.authz-live.toml` is.
+    let closed = RbacFixture {
+        roles: std::collections::HashMap::from([
+            (Role::Anonymous, vec![]),
+            (Role::User, vec![]),
+            (Role::Admin, vec!["*".to_owned()]),
+        ]),
+        groups: std::collections::HashMap::new(),
+    };
+    let app = app_against_with(&server, Some(closed)).await;
+    let refs = format!("/proxy/{REG}/godist/info/refs?service=git-upload-pack");
+    let get = |auth: Option<String>| {
+        let mut req = actix_web::test::TestRequest::get().uri(&refs);
+        if let Some(a) = auth {
+            req = req.insert_header(("Authorization", a));
+        }
+        req.to_request()
+    };
+
+    let resp = call_service(&app, get(None)).await;
+    assert_eq!(resp.status(), 401);
+    assert_eq!(
+        challenge_of(&resp).as_deref(),
+        Some("Basic realm=\"BatleHub\"")
+    );
+
+    // A credential no provider accepts is the same caller as none.
+    let resp = call_service(&app, get(Some(basic("x:not-a-token")))).await;
+    assert_eq!(resp.status(), 401);
+    assert!(challenge_of(&resp).is_some());
+
+    // The token in the password field, as git sends it after the challenge.
+    let resp = call_service(&app, get(Some(basic(&format!("x:{USER_TOKEN}"))))).await;
+    assert_eq!(resp.status(), 403, "authenticated, no grant");
+    assert_eq!(challenge_of(&resp), None);
+    let resp = call_service(&app, get(Some(basic(&format!("x:{ADMIN_TOKEN}"))))).await;
+    assert_eq!(resp.status(), 200);
+
+    // Never outside `/proxy/`, whatever the status: a browser would pop its
+    // login dialog.
+    for uri in ["/api/v1/me/downloads", "/api/v1/admin/stats"] {
+        let resp = call_service(
+            &app,
+            actix_web::test::TestRequest::get().uri(uri).to_request(),
+        )
+        .await;
+        assert!(resp.status().is_client_error(), "{uri}: {}", resp.status());
+        assert_eq!(challenge_of(&resp), None, "{uri}");
+    }
+}
+
+/// A rule refusing everybody alike is not a credential question: an anonymous
+/// caller the grants admit, refused by a block, gets the `403` and no challenge.
+#[actix_web::test]
+async fn an_anonymous_refusal_by_a_rule_does_not_challenge() {
+    let server = upstream(&digest(ARCHIVE)).await;
+    let app = app_against(&server).await;
+    block_version(&app, REG, "go", "1.25.4").await;
+    let resp = call_service(
+        &app,
+        actix_web::test::TestRequest::get()
+            .uri(&file_url("go1.25.4.linux-amd64.tar.gz.sha256"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(challenge_of(&resp), None);
 }

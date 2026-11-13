@@ -393,7 +393,7 @@ impl ProxyService {
         if let (RuleDecision::Deny { reason }, _) =
             evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await
         {
-            return Err(CoreError::AccessDenied(reason));
+            return Err(CoreError::access_denied(reason));
         }
 
         Ok(metadata)
@@ -531,7 +531,7 @@ impl ProxyService {
         // that has already failed — and it changes the *answer* too, which
         // is the half that matters to the operator reading the `503`.
         if let Some(reason) = self.blocked_reason(coordinate).await {
-            return CoreError::AccessDenied(reason);
+            return CoreError::access_denied(reason);
         }
         let recorder = {
             let hot = self.hot.read().await;
@@ -1076,7 +1076,7 @@ impl ProxyService {
                             req.package_id.clone(),
                             req.identity.user_id.clone(),
                             req.identity.role.clone(),
-                            reason.clone(),
+                            reason.message.clone(),
                         )
                         .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
                     )

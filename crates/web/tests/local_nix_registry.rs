@@ -499,7 +499,7 @@ async fn an_anonymous_caller_cannot_read_a_narinfo_from_a_closed_registry() {
 
     let status = get_anonymous(&app, &format!("{HASH}.narinfo")).await;
     assert!(
-        status == 403 || status == 404,
+        status == 401 || status == 404,
         "an anonymous narinfo read of a closed registry must be refused, got {status}"
     );
 }

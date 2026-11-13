@@ -244,7 +244,7 @@ async fn apk_publish_requires_authentication() {
             .to_request(),
     )
     .await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 /// The traversal test every registry kind owes (CLAUDE.md step 8): a version

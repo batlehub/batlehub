@@ -47,6 +47,8 @@ login <your-user-id>
 password <your-token>
 ```
 
+The same entry covers the version list when `go.repo` points here: mise runs `git ls-remote`, and git reads `~/.netrc` too. git sends a credential only after the server asks for one, so an anonymous read of a closed registry is answered `401` with `WWW-Authenticate: Basic realm="BatleHub"`. git then retries with the `~/.netrc` entry, with a credential helper (`git config --global credential.https://batlehub.example.com.helper store`), or with the userinfo of `MISE_GO_REPO=https://<user>:<token>@batlehub.example.com/proxy/<registry>/godist`. The token goes in the password field. If none of these holds a credential, git asks for one on a terminal; without one (CI, `GIT_TERMINAL_PROMPT=0`) the listing fails with `could not read Username … terminal prompts disabled`. A token the server does not accept fails with `Authentication failed`, and a valid token without `releases:list` with a `403`.
+
 Your administrator's registry block:
 
 ```toml

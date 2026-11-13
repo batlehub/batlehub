@@ -1417,9 +1417,10 @@ phase_nuget() {
   # **`dotnet restore` cannot authenticate to this server, so the read boundary
   # is not observable through it.** `packageSourceCredentials` are attached to
   # `HttpClientHandler.Credentials`, which .NET sends only in answer to a `401`
-  # with a `WWW-Authenticate` header; BatleHub answers an unauthenticated read
-  # `403` with no challenge, so the credential is never offered and a reader who
-  # holds every read verb gets the same `403` as a caller who holds none.
+  # with a `WWW-Authenticate` header; BatleHub answered an unauthenticated read
+  # `403` with no challenge, so the credential was never offered and a reader who
+  # held every read verb got the same `403` as a caller who held none. (It now
+  # challenges: see the pin at the end of this phase.)
   # Verified: `curl -u authz-reader:<token>` on the same URL is authorised, and
   # `ValidAuthenticationTypes = basic` does not change it — the challenge is what
   # is missing, not the scheme.
@@ -1515,17 +1516,17 @@ through is not a seal"; }
   [[ "$denied_status" == "403" ]] || heavy_fail "the denied caller got $denied_status, expected 403"
   [[ "$reader_status" != "403" && "$reader_status" != "401" ]] || heavy_fail \
     "the reader got $reader_status for the flat index — the positive control"
-  [[ "$anon_status" == "403" ]] || heavy_fail "an unauthenticated caller got $anon_status, expected 403"
+  [[ "$anon_status" == "401" ]] || heavy_fail "an unauthenticated caller got $anon_status, expected 401"
 
-  # The finding above, pinned so it cannot quietly change under the comment: an
-  # unauthenticated read is refused **without a challenge**, which is what keeps
-  # `dotnet restore` from ever offering its credential. If a `WWW-Authenticate`
-  # header appears here, the restore arms in this phase can and should come back.
+  # The finding above, now answered: an unauthenticated proxy read a credential
+  # could open is a `401` **with a challenge**, which is what lets `dotnet
+  # restore` offer `packageSourceCredentials`. The restore arms this phase gave
+  # up on can come back; until they do, the challenge is pinned here.
   local challenge
-  challenge="$(curl -s -D - -o /dev/null "$HEAVY_TAP_BASE$flat" | grep -ci '^www-authenticate' || true)"
-  [[ "$challenge" == "0" ]] || heavy_log \
-    "NOTE: the anonymous 403 now carries WWW-Authenticate — NuGet may be able to \
-authenticate, so restore the dotnet restore arms this phase gave up on."
+  challenge="$(curl -s -D - -o /dev/null "$HEAVY_TAP_BASE$flat" | grep -ci '^www-authenticate: Basic' || true)"
+  [[ "$challenge" == "1" ]] || heavy_fail \
+    "the anonymous refusal of the flat index carries no WWW-Authenticate: Basic challenge — \
+NuGet never offers the credential it holds without one"
 
   heavy_log "NUGET-AUTHZ-OK (a seal the client meets, and the read boundary beside it)"
   return 0
@@ -2317,9 +2318,9 @@ served unsigned, so this registry is not exercising RFC 0012 at all"
   # capability is the only thing that opened it, so without it this must refuse.
   signed_url="$(sed -E 's/^[A-Z]+ //; s/ -> .*$//' <<<"$archive_line")"
   stripped_status="$(authz_status GET "$T_ANON" "${signed_url%%\?*}")"
-  [[ "$stripped_status" == "403" ]] || heavy_fail \
+  [[ "$stripped_status" == "401" ]] || heavy_fail \
     "the same artifact URL answered $stripped_status with the bh_sig stripped and no credential, \
-expected 403 — the install above was served by an open registry rather than by a signature, and \
+expected 401 (anonymous, no grant: the challenge) — the install above was served by an open registry rather than by a signature, and \
 every signed-URL assertion in this phase is vacuous"
 
   # A minted document is a bearer capability. Served with a cacheable answer, a
@@ -3434,11 +3435,64 @@ live_run_godist() {
 [settings.url_replacements]
 "regex:^https://dl\\\\.google\\\\.com/go/(.+)" = "$HEAVY_TAP_BASE/proxy/$LIVE_GODIST/godist/\$1"
 EOF
+  # The list first: `go.repo` pointed here, so mise runs `git ls-remote` on
+  # this registry (RFC 0048 Q13). git reads the same `~/.netrc`, but sends it
+  # only in answer to a `401` carrying a challenge — the reason the server
+  # challenges an anonymous proxy read at all.
+  live_godist_ls_remote "$root" "$root/ls-remote.txt" || return 1
+  grep -qx "$LIVE_GODIST_GO" "$root/ls-remote.txt" \
+    || { echo "mise ls-remote go does not list $LIVE_GODIST_GO"; return 1; }
   HOME="$root/home" \
   MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
   MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
     "${HEAVY_RUNNER[@]}" mise install "go@$LIVE_GODIST_GO"
   return $?
+}
+
+# live_godist_ls_remote <root> <out> — `mise ls-remote go` off the versions
+# host, `go.repo` on this registry, HOME (and so `~/.netrc`) under <root>.
+# `GIT_TERMINAL_PROMPT=0`: with no credential git would otherwise ask on a TTY.
+# The askpass variables go too: an IDE terminal (VS Code, Che) exports its own
+# `GIT_ASKPASS`, and git then waits on a dialog nobody answers until mise's
+# 20 s fetch timeout — a failure, but not the one this arm is about.
+live_godist_ls_remote() {
+  local root="$1" out="$2"
+  mkdir -p "$root"/{data,cache-ls,config,state,home}
+  env -u GIT_ASKPASS -u SSH_ASKPASS \
+  HOME="$root/home" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+  MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache-ls" \
+  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
+  MISE_USE_VERSIONS_HOST=false MISE_GO_REPO="$HEAVY_TAP_BASE/proxy/$LIVE_GODIST/godist" \
+    "${HEAVY_RUNNER[@]}" mise ls-remote go >"$out"
+  return $?
+}
+
+# The third caller, beside the pair: no credential at all. It must be refused
+# with the challenge — a `401` and `WWW-Authenticate` on the wire — and the
+# reader's list above must have been a `401` answered by the netrc stanza.
+live_godist_anonymous() {
+  local root="$HEAVY_WORK/live-godist-anon" rc=0
+  heavy_mark live-godist-anon
+  heavy_log "mise ls-remote go, no credential anywhere; must fail on the challenge"
+  set +e
+  live_godist_ls_remote "$root" "$root.txt" >"$HEAVY_WORK/live-godist-anon.log" 2>&1
+  rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "godist: an anonymous git ls-remote listed the closed registry"
+  heavy_client_said "$HEAVY_WORK/live-godist-anon.log" 'Authentication|401|terminal prompts|Username' 3
+  # Asserted, not only printed: a timeout or a DNS error also exits non-zero.
+  grep -qE 'terminal prompts disabled|Authentication failed|could not read Username' \
+    "$HEAVY_WORK/live-godist-anon.log" || heavy_fail \
+    "godist: the anonymous git ls-remote failed, but not on the credential git was asked for"
+  heavy_wire_re_after live-godist-anon \
+    "GET /proxy/$LIVE_GODIST/godist/info/refs[?]service=git-upload-pack -> 401" \
+    "godist: the anonymous ref list was not refused with a 401 — git never offers its credential to a bare 403"
+  heavy_wire_re_after live-godist-allow \
+    "GET /proxy/$LIVE_GODIST/godist/info/refs[?]service=git-upload-pack -> 200" \
+    "godist: the reader's git ls-remote never read the ref list"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+  heavy_log "LIVE-GODIST-ANON-OK"
+  return 0
 }
 
 # ── sdkman — credentials in the two API URLs ────────────────────────────────
@@ -3772,7 +3826,9 @@ phase_live() {
       authz_live_pair nodedist "nvm install, credential in NVM_AUTH_HEADER" live_run_nodedist ;;
     godist)
       heavy_runner_for mise "$AUTHZ_MISE"
-      authz_live_pair godist "mise install go@…, credential in ~/.netrc" live_run_godist ;;
+      heavy_need git "git"
+      authz_live_pair godist "mise ls-remote + install go@…, credential in ~/.netrc" live_run_godist
+      live_godist_anonymous ;;
     sdkman)
       authz_live_pair sdkman "sdk install java, credential in the API URLs" live_run_sdkman ;;
     github)

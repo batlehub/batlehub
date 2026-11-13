@@ -72,7 +72,7 @@ async fn vsix_publish_duplicate_returns_409() {
 }
 
 #[actix_web::test]
-async fn vsix_publish_anonymous_returns_403() {
+async fn vsix_publish_anonymous_returns_401() {
     let app = make_local_vsx_app(RegistryMode::Local).await;
     let req = TestRequest::put()
         .uri("/proxy/local-vsx/my-org.my-ext/1.0.0/vsix")
@@ -80,7 +80,7 @@ async fn vsix_publish_anonymous_returns_403() {
         .set_payload(b"PK\x03\x04fake".to_vec())
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -227,7 +227,7 @@ async fn openvsx_namespace_claim_anonymous_is_refused_and_claims_nothing() {
     let resp = call_service(&app, req).await;
     assert_eq!(
         resp.status(),
-        403,
+        401,
         "`openvsx:namespace:claim` is not granted to anonymous by any translation rule"
     );
 

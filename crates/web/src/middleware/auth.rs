@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
+    http::{
+        header::{self, HeaderValue},
+        StatusCode,
+    },
     Error, HttpMessage,
 };
 use futures::future::LocalBoxFuture;
@@ -16,6 +20,7 @@ use batlehub_core::{
     services::AdminService,
 };
 
+use crate::error::AppError;
 use crate::extractors::{caller_net, raw_auth_from_request};
 
 /// Actix-web middleware that attempts each configured `AuthProvider` in order.
@@ -212,9 +217,39 @@ where
                 }
             }
 
+            // Only a package-manager route may challenge: a `WWW-Authenticate:
+            // Basic` on `/api` or the SPA would pop the browser's login dialog.
+            let challenge = !accepted && req.path().starts_with("/proxy/");
             req.extensions_mut().insert(identity);
-            service.call(req).await
+            let mut res = service.call(req).await?;
+            if challenge {
+                challenge_anonymous(res.response_mut());
+            }
+            Ok(res)
         })
+    }
+}
+
+/// Turn a refusal a credential could answer into `401` + `WWW-Authenticate:
+/// Basic`, for a caller known to have presented none a provider accepted.
+///
+/// git, NuGet and Maven send the credential they hold only in answer to a
+/// `401` carrying a challenge; a bare `403` ends them. Anything else — a rule's
+/// `403`, a `404`, a success — is left as it is.
+pub(crate) fn challenge_anonymous<B>(res: &mut actix_web::HttpResponse<B>) {
+    if res
+        .error()
+        .and_then(|e| e.as_error::<AppError>())
+        .is_some_and(AppError::wants_credential)
+    {
+        // shortcut: the JSON body was rendered for the 403 and still says
+        // "Forbidden"; rewriting it means an EitherBody middleware. Clients read
+        // the status and the challenge, never that field.
+        *res.status_mut() = StatusCode::UNAUTHORIZED;
+        res.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"BatleHub\""),
+        );
     }
 }
 

@@ -458,8 +458,8 @@ MINE_HASH="$(basename "$MINE" | cut -c1-32)"
 heavy_mark anon-nar
 ANON_NAR="$(curl -sS -o /dev/null -w "$HTTP_CODE" -X PUT --data-binary 'not a nar' \
   "$PUBLISH_TO/nar/0000000000000000000000000000000000000000000000000000.nar.xz")"
-[[ "$ANON_NAR" == 403 ]] \
-  || heavy_fail "an unauthenticated NAR upload answered $ANON_NAR, not 403 — the staging area \
+[[ "$ANON_NAR" == 401 ]] \
+  || heavy_fail "an unauthenticated NAR upload answered $ANON_NAR, not 401 — the staging area \
 takes bytes from callers who hold no publish grant"
 
 heavy_mark publish

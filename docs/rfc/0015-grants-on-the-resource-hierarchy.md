@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Implemented** — every phase this document defines has landed, and §13.1–§13.18 record what each one found. §12 carries no open question: the one it had was waiting on a number rather than on a decision, and both numbers have been measured (§13.2, §13.5). Several of this document's own statements were corrected in place by building them — §5.1 and §10 rule 9 would have *widened* every estate, because ownership narrows and grants only widen; §10 rule 2 as first written was a widening the §11.3 differential harness caught; §10 rule 3 contradicted rule 2; and §4.5's `immutable` described an overwrite capability this server does not have. One finding recurs, and it is the transferable part: **a funnel the callers do not all pass through is not a funnel.** The write verbs, the namespace tier in the listing filter, the ownership projection, the aggregates and the three new ecosystem verbs were each translated, stored and reported by `explain` while being requested, filtered or held by nothing — every one of them with passing tests, because a test that grants its own verb and asserts a refusal cannot tell a correct denial from a denial for the wrong reason (§13.17) |
+| Status      | **Implemented** — every phase this document defines has landed, and §13.1–§13.19 record what each one found. §12 carries no open question: the one it had was waiting on a number rather than on a decision, and both numbers have been measured (§13.2, §13.5). Several of this document's own statements were corrected in place by building them — §5.1 and §10 rule 9 would have *widened* every estate, because ownership narrows and grants only widen; §10 rule 2 as first written was a widening the §11.3 differential harness caught; §10 rule 3 contradicted rule 2; and §4.5's `immutable` described an overwrite capability this server does not have. One finding recurs, and it is the transferable part: **a funnel the callers do not all pass through is not a funnel.** The write verbs, the namespace tier in the listing filter, the ownership projection, the aggregates and the three new ecosystem verbs were each translated, stored and reported by `explain` while being requested, filtered or held by nothing — every one of them with passing tests, because a test that grants its own verb and asserts a refusal cannot tell a correct denial from a denial for the wrong reason (§13.17) |
 | Short       | Grants on the hierarchy                                       |
 | Settles     | How a request is authorized: one permission vocabulary with write verbs, grants that attach to a registry/namespace/package hierarchy, and namespaces that carry visibility, immutability and gate policy for everything beneath them |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -3146,3 +3146,46 @@ the last one silently, so one definition had been dead since it was written.
 It is in the load test now. The general lesson is the section's: an artifact that
 nothing loads and nothing references does not stay correct, it stays
 *unexamined*, and the two are indistinguishable until somebody runs it.
+
+### 13.19 What `git ls-remote` found: a denial nobody could answer (2026-11-13)
+
+RFC 0048's ref list (`/proxy/{reg}/godist/info/refs`, Q13) made `git` a client
+of this server, and a closed registry refused every `git ls-remote`, the
+reader's included. git (libcurl, `CURLAUTH_ANY`) sends the credential it holds
+(URL userinfo, `~/.netrc`, a credential helper) only in answer to a `401`
+carrying `WWW-Authenticate`. The grant check answered an anonymous caller `403`,
+and nothing on the server ever sent a challenge. Measured on the wire, all four
+ways of handing git a credential sent one request with no `Authorization` and
+stopped at the `403`. §13.17 had recorded the same thing for `dotnet restore`
+without naming the general cause.
+
+**The fix: a refusal a credential could answer is a `401` for a caller who sent
+none.** The auth middleware is the only place that knows the caller presented
+nothing a provider accepted. On a `/proxy/…` path, it rewrites such a caller's
+`403` to `401` with `WWW-Authenticate: Basic realm="BatleHub"` when the refusal
+is the grant hierarchy's (`no grant for …`), a package audience's (`internal`,
+`private`, `team`), or the publish owner check's. A rule judging the artifact
+(age, block, `scripts = "deny"`, a seal, a bad `bh_sig`) refuses everybody alike
+and stays `403`. An authenticated caller without a grant stays `403` with no
+challenge, because a challenge would only make the client resend the same
+credential. `/api/…` and the SPA never challenge, or a browser would show its
+login dialog. Basic carries the token in the password field, which
+`StaticTokenAuthProvider` already read. `Bearer` is unchanged.
+
+Per client, from the clients' sources and the wire:
+
+| Client | Before (anonymous `403`) | After (`401` + challenge) |
+| --- | --- | --- |
+| git / `mise ls-remote go` | credential never sent; reader refused | netrc, helper or URL userinfo sent on the retry; anonymous: a prompt on a TTY, `could not read Username … terminal prompts disabled` without one |
+| `dotnet restore` | `packageSourceCredentials` never offered (§13.17) | offered on the retry |
+| Maven | needed preemptive auth forced | sends `<servers>` on the retry |
+| pip | fails `403` | retries with keyring or URL credentials; prompts on a TTY, fails under `--no-input` |
+| uv, npm, cargo, Go, composer, bundler, apt, dnf, nvm, sdkman, rustup, curl | credential sent up front or not at all | unchanged; the error now says `401` (npm prints the challenge, cargo marks the registry auth-required) |
+| batlehub-vsx | expired token: `403`, no retry | re-resolves the token and retries once on `401` |
+
+A heavy proof: `authz.sh live:godist` runs `mise ls-remote go` through
+`go.repo` with the credential in `~/.netrc`. The reader lists the release and
+the denied caller is refused `403`. A caller with no credential gets the `401`
+on the wire. Heavy assertions that pinned an anonymous grant denial at `403`
+(NuGet's flat index, Terraform's stripped `bh_sig`, the Nix staging area, the
+VS Code gallery) now expect the `401`.

@@ -79,6 +79,21 @@ login <your-user-id>
 password <your-token>
 ```
 
+La même entrée couvre la liste des versions quand `go.repo` pointe ici : mise
+lance `git ls-remote`, et git lit lui aussi `~/.netrc`. git n'envoie une
+identité qu'après que le serveur l'a demandée ; une lecture anonyme d'un
+registre fermé reçoit donc `401` avec `WWW-Authenticate: Basic realm="BatleHub"`.
+git réessaie alors avec l'entrée `~/.netrc`, avec un *credential helper*
+(`git config --global credential.https://batlehub.example.com.helper store`) ou
+avec l'identité portée par
+`MISE_GO_REPO=https://<user>:<token>@batlehub.example.com/proxy/<registry>/godist`.
+Le jeton se place dans le champ du mot de passe. Si aucune de ces sources ne
+fournit d'identité, git vous la demande dans un terminal ; sans terminal (CI,
+`GIT_TERMINAL_PROMPT=0`), la liste échoue avec
+`could not read Username … terminal prompts disabled`. Un jeton que le serveur
+refuse échoue avec `Authentication failed`, et un jeton valide sans
+`releases:list` avec un `403`.
+
 Le bloc de registre de votre administrateur :
 
 ```toml

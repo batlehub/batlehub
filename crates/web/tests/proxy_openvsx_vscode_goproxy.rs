@@ -42,7 +42,7 @@ async fn proxy_openvsx_vsix_blocked_for_anonymous() {
         .to_request();
     let resp = call_service(&app, req).await;
     // download_vsix uses source:read — anonymous only has releases:read
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -89,7 +89,7 @@ async fn proxy_vscode_marketplace_vsix_blocked_for_anonymous() {
         .to_request();
     let resp = call_service(&app, req).await;
     // download_vsix uses source:read — anonymous only has releases:read
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -165,7 +165,7 @@ async fn proxy_goproxy_zip_blocked_for_anonymous() {
         .to_request();
     let resp = call_service(&app, req).await;
     // zip uses source:read — anonymous only has releases:read
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

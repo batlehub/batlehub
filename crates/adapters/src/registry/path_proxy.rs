@@ -90,7 +90,7 @@ impl PathProxyRegistryClient {
         if self.path_allow.is_empty() || self.path_allow.iter().any(|p| p.matches(path)) {
             return Ok(());
         }
-        Err(CoreError::AccessDenied(format!(
+        Err(CoreError::access_denied(format!(
             "path '{path}' is not in this registry's path_allow allowlist"
         )))
     }

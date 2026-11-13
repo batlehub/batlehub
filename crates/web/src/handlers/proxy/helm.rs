@@ -273,7 +273,7 @@ async fn refuse_blocked_in_another_spelling(
         .await
         .contains(&chart.name, &chart.version)
     {
-        return Err(AppError::from(CoreError::AccessDenied(format!(
+        return Err(AppError::from(CoreError::access_denied(format!(
             "{} {} is blocked",
             chart.name, chart.version
         ))));

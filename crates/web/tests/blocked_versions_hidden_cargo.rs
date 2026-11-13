@@ -122,7 +122,7 @@ async fn the_sparse_index_refuses_an_identity_without_read_access() {
         .to_request();
     assert_eq!(
         call_service(&app, req).await.status(),
-        403,
+        401,
         "anonymous must not be able to enumerate a private registry's crates"
     );
 }

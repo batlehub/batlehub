@@ -84,11 +84,11 @@ curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: appli
 
 SEARCH_BODY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"weebo"}],"pageNumber":1,"pageSize":50}],"flags":950}'
 ANON_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" "$GALLERY_URL/extensionquery")"
-[[ "$ANON_CODE" == "403" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 403 — it must require a credential for this suite to prove anything"
+[[ "$ANON_CODE" == "401" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 401 — it must require a credential for this suite to prove anything"
 AUTHED="$(curl -sS -X POST -H "$HDR_JSON" -H "Authorization: Bearer $USER_TOKEN" -d "$SEARCH_BODY" "$GALLERY_URL/extensionquery" \
   | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d["results"][0]["extensions"]))' || echo "?")"
 [[ "$AUTHED" == "1" ]] || heavy_fail "the registry answered a user's search with $AUTHED extension(s), expected the fixture"
-heavy_log "REGISTRY-OK (anonymous: 403; a user: $EXT_ID — the credential is what the editor has to send)"
+heavy_log "REGISTRY-OK (anonymous: 401; a user: $EXT_ID — the credential is what the editor has to send)"
 
 heavy_log "Pointing $EDITOR_LABEL's product.json at $GALLERY_URL"
 python3 - "$PRODUCT_JSON" "$REGISTRY_BASE" <<'PY'
@@ -255,5 +255,5 @@ fi
 heavy_log "REDACTION-OK (the credential is in none of the editor's output)"
 
 heavy_log "Measurement: $EDITOR_LABEL with patches/che-code loaded at the process boundary, gallery $GALLERY_URL named by $GALLERY_ENV_NAME"
-heavy_log "  no credential: 403 on the editor's own query, 0 credentialed requests; the variable alone: nothing sent"
+heavy_log "  no credential: 401 on the editor's own query, 0 credentialed requests; the variable alone: nothing sent"
 heavy_log "  variable / file / file-over-variable / source-then-variable: installed by id, $(grep -c 'Authorization: Bearer' "$HEAVY_LOG") registry requests with a Bearer in the run"

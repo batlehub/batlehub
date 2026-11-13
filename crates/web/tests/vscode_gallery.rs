@@ -942,7 +942,7 @@ async fn an_unauthorised_identity_is_refused_rather_than_shown_nothing() {
         .to_request();
     assert_eq!(
         call_service(&app, req).await.status(),
-        403,
+        401,
         "anonymous has releases:read but not source:read on this registry"
     );
 }

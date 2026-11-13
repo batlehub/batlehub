@@ -392,7 +392,7 @@ async fn proxy_github_zipball_blocked_for_anonymous() {
         .uri("/proxy/github/rust-lang/rust/zipball/v1.80.0")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -436,7 +436,7 @@ async fn proxy_github_raw_file_blocked_for_anonymous() {
         .uri("/proxy/github/rust-lang/rust/raw/main/README.md")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
