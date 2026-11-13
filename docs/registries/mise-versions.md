@@ -97,7 +97,7 @@ See [blocking a package version](/guide/admin-policies#block-a-package-version) 
 - **The age gate filters the list.** Every entry carries `created_at`, and this kind has no artifact for a gate to refuse, so a `release_age_gate` on the registry hides the versions younger than it — the one listing in BatleHub an age gate filters. It is re-evaluated on every request against the cached list, so a version appears on the day it comes of age.
 - **The install beacon never leaves.** After an install mise reports the tool, version, OS, architecture and backend URL — `GET /t?…` from 2026.11, `POST /api/tools/{tool}` from 2026.5, `POST /api/track` before that. This kind answers `204` and forwards nothing; nothing from it is logged above `trace`. mise sends it fire-and-forget and often exits first, so the request may not appear at all.
 - **The GitHub mirror is refused with `503`.** mise also asks this host for GitHub release metadata (`/api/github/…`) unless `api.github.com` is rewritten. A `503` is the answer mise retries on `api.github.com`; a `404` would read as "no such release" and fail the install. Keep the GitHub registry's rules in the same block, and mise skips the mirror altogether.
-- **The python-build-standalone index** (`data/python-precompiled-<triple>.gz`) is relayed byte-exact and cached; it is not filtered yet.
+- **The python-build-standalone index** (`python-precompiled-<triple>.gz`, which mise 2026.9.5 asks for under `tools/` and later releases under `data/`) is cached as upstream sent it and filtered on the way out: every build of a version blocked as `python` on this registry is removed, and under a `release_age_gate` so is every build whose release date (the `+YYYYMMDD` in its file name) is younger than the gate. An older build of the same version stays. With nothing to remove, the bytes are upstream's.
 - **Older mise.** mise 2026.1.0–2026.6.5 asks for `tools/<tool>.toml`, which is served from the same cache entry. mise before 2026.1 asked for `/<tool>` as plain text; that path is a `404` here, and that mise lists from its backend.
 - **Air gap.** No bundle carries this list — `mise.lock` names assets, not listings — so an air-gapped instance answers `404` without recording a miss. mise then lists from the backend, and RFC 0008-bis composes that list from the assets the bundle carried.
 
@@ -113,10 +113,10 @@ See [blocking a package version](/guide/admin-policies#block-a-package-version) 
 | `GET` | `/proxy/{registry}/mise-versions/api/github/{tail}` | The GitHub mirror's API family — refused with the `503` that makes mise ask |
 | `POST` | `/proxy/{registry}/mise-versions/api/tools/{tool}` | The install beacon of mise 2026.5–2026.10 — answered here, sent nowhere. |
 | `POST` | `/proxy/{registry}/mise-versions/api/track` | The install beacon of mise 2026.1–2026.4 — answered here, sent nowhere. |
-| `GET` | `/proxy/{registry}/mise-versions/data/{file}` | A tool's version list, blocked and too-young versions removed — or a file |
+| `GET` | `/proxy/{registry}/mise-versions/data/{file}` | A tool's version list, blocked and too-young versions removed — or the |
 | `GET` | `/proxy/{registry}/mise-versions/data/github/{tail}` | The GitHub mirror's whole-list family — refused like the API family. |
 | `GET` | `/proxy/{registry}/mise-versions/t` | The install beacon of mise 2026.11 and later — answered here, sent nowhere. |
-| `GET` | `/proxy/{registry}/mise-versions/tools/{file}` | The same version list under the path mise 2026.1.0–2026.6.5 asks for |
+| `GET` | `/proxy/{registry}/mise-versions/tools/{file}` | The same documents under the path mise 2026.1.0–2026.6.5 asks for its |
 <!-- END endpoints -->
 
 :::

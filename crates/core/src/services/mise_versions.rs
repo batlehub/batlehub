@@ -109,9 +109,64 @@ pub fn younger_than(
         .collect()
 }
 
+/// One line of a `python-precompiled-<triple>.gz` index, decompressed: the
+/// version mise reads from it and the build's release date.
+///
+/// The index is one python-build-standalone file name per line. mise 2026.9.5
+/// (`src/plugins/core/python.rs`, `fetch_precompiled_remote_versions` and
+/// `select_python_precompiled`) reads a line only when it matches
+/// `^cpython-(\d+\.\d+\.[\da-z]+)\+(\d+)`: the version, then the release tag,
+/// a `YYYYMMDD` date. `None` for any other line, which mise ignores too. The
+/// date is `None` when the tag is not a calendar date.
+pub fn precompiled_entry(line: &str) -> Option<(&str, Option<DateTime<Utc>>)> {
+    let (version, tail) = line.strip_prefix("cpython-")?.split_once('+')?;
+    let numeric = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    let mut parts = version.splitn(3, '.');
+    let well_formed = parts.next().is_some_and(numeric)
+        && parts.next().is_some_and(numeric)
+        && parts.next().is_some_and(|p| {
+            !p.is_empty()
+                && p.bytes()
+                    .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
+        });
+    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+    if !well_formed || digits == 0 {
+        return None;
+    }
+    let date = tail
+        .get(..8)
+        .filter(|_| digits >= 8)
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok())
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|d| d.and_utc());
+    Some((version, date))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_precompiled_line_is_read_as_mise_reads_it() {
+        let (v, at) = precompiled_entry(
+            "cpython-3.16.0a2+20261110-x86_64-unknown-linux-gnu-install_only.tar.gz",
+        )
+        .unwrap();
+        assert_eq!(v, "3.16.0a2");
+        assert_eq!(at.unwrap().to_rfc3339(), "2026-11-10T00:00:00+00:00");
+        // The 2020 spelling has no `+<tag>`: mise's regex skips it, so do we.
+        assert_eq!(
+            precompiled_entry("cpython-3.7.7-x86_64-unknown-linux-gnu-pgo-20200418T2226.tar.zst"),
+            None
+        );
+        assert_eq!(precompiled_entry("cpython-3.12+20240101-x.tar.gz"), None);
+        assert_eq!(precompiled_entry("pypy-3.12.1+20240101-x.tar.gz"), None);
+        assert_eq!(
+            precompiled_entry("cpython-3.12.1+2024-x.tar.gz"),
+            Some(("3.12.1", None)),
+            "a tag that is not a date is still an entry, undated"
+        );
+    }
 
     /// The head of the real `data/jq.toml`, probed 2026-11-10.
     pub(crate) const JQ: &str = r#"[versions]

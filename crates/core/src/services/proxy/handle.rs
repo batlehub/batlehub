@@ -1585,6 +1585,36 @@ impl ProxyService {
         crate::services::blocking::BlockedVersions::new(kind, versions)
     }
 
+    /// What a `mise-versions` registry hides from the python-build-standalone
+    /// index: the blocked versions of `python` and the `release_age_gate`
+    /// `identity` does not bypass (RFC 0043 decision 3), for
+    /// [`crate::services::blocking::mise_versions::strip_precompiled_index`].
+    pub async fn mise_precompiled_hides(
+        &self,
+        registry: &str,
+        identity: &crate::entities::Identity,
+    ) -> (
+        crate::services::blocking::BlockedVersions,
+        Option<crate::rules::ListingAgeGate>,
+    ) {
+        const PACKAGE: &str = "python";
+        let policy = {
+            let hot = self.hot.read().await;
+            crate::services::authz::policy_in(&hot, registry, PACKAGE)
+        };
+        let gate = policy
+            .as_ref()
+            .and_then(|p| p.rules.iter().find_map(|r| r.listing_age_gate(identity)));
+        let blocked = self
+            .blocked_versions_for(
+                registry,
+                PACKAGE,
+                crate::entities::RegistryKind::MiseVersions,
+            )
+            .await;
+        (blocked, gate)
+    }
+
     /// The versions a security verdict keeps out of the listings (RFC 0018
     /// §4.2 *Listings*), hidden **by the same mechanism as a block** — so
     /// cargo marks them `yanked`, conda drops them from the channel summary,

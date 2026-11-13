@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/mise-versions.md
-sourceHash: c47e091185376fd8
+sourceHash: 56593bb253a8be84
 ---
 
 # Hôte de versions de mise
@@ -145,8 +145,14 @@ et [quels listings sont filtrés](/fr/guide/admin-policies#which-listings-are-fi
   un `404` se lirait « cette publication n'existe pas » et ferait échouer
   l'installation. Gardez les règles du registre GitHub dans le même bloc, et
   mise saute complètement le miroir.
-- **L'index python-build-standalone** (`data/python-precompiled-<triple>.gz`)
-  est relayé octet pour octet et mis en cache ; il n'est pas encore filtré.
+- **L'index python-build-standalone** (`python-precompiled-<triple>.gz`, que
+  mise 2026.9.5 demande sous `tools/` et les versions suivantes sous `data/`)
+  est mis en cache tel que l'amont l'envoie et filtré à la sortie : chaque
+  build d'une version bloquée sous le nom `python` sur ce registre est retiré,
+  et, avec une règle `release_age_gate`, chaque build dont la date de
+  publication (le `+AAAAMMJJ` de son nom de fichier) est plus récente que le
+  seuil. Un build plus ancien de la même version reste. Sans rien à retirer,
+  les octets sont ceux de l'amont.
 - **Anciens mise.** mise 2026.1.0–2026.6.5 demande `tools/<tool>.toml`, servi
   depuis la même entrée de cache. Avant 2026.1, mise demandait `/<tool>` en
   texte brut ; ce chemin répond `404` ici, et ce mise liste depuis son backend.
@@ -168,10 +174,10 @@ et [quels listings sont filtrés](/fr/guide/admin-policies#which-listings-are-fi
 | `GET` | `/proxy/{registry}/mise-versions/api/github/{tail}` | The GitHub mirror's API family — refused with the `503` that makes mise ask |
 | `POST` | `/proxy/{registry}/mise-versions/api/tools/{tool}` | The install beacon of mise 2026.5–2026.10 — answered here, sent nowhere. |
 | `POST` | `/proxy/{registry}/mise-versions/api/track` | The install beacon of mise 2026.1–2026.4 — answered here, sent nowhere. |
-| `GET` | `/proxy/{registry}/mise-versions/data/{file}` | A tool's version list, blocked and too-young versions removed — or a file |
+| `GET` | `/proxy/{registry}/mise-versions/data/{file}` | A tool's version list, blocked and too-young versions removed — or the |
 | `GET` | `/proxy/{registry}/mise-versions/data/github/{tail}` | The GitHub mirror's whole-list family — refused like the API family. |
 | `GET` | `/proxy/{registry}/mise-versions/t` | The install beacon of mise 2026.11 and later — answered here, sent nowhere. |
-| `GET` | `/proxy/{registry}/mise-versions/tools/{file}` | The same version list under the path mise 2026.1.0–2026.6.5 asks for |
+| `GET` | `/proxy/{registry}/mise-versions/tools/{file}` | The same documents under the path mise 2026.1.0–2026.6.5 asks for its |
 <!-- END endpoints -->
 
 :::

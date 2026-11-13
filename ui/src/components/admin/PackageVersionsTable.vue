@@ -17,6 +17,8 @@ import { formatDate as fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import BulkActionBar from "@/components/admin/BulkActionBar.vue";
 import { useRowSelection } from "@/composables/useRowSelection";
+import { useRegistryOptions } from "@/composables/useRegistryOptions";
+import { MISE_BACKEND_TYPES, miseBlockGuess } from "@/lib/miseBlock";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
@@ -106,6 +108,49 @@ async function doBlock(v: PackageVersionDetail) {
   actionError.value = refusal(res);
   if (actionError.value) return;
   emit("reload");
+  await blockOnMise(reason);
+}
+
+// ── The matching mise block (RFC 0043 decision 1) ────────────────────────────
+
+const { registries, typeOf } = useRegistryOptions();
+
+/** One `mise-versions` registry's offered block: pre-filled, editable, opt-in. */
+interface MiseOffer {
+  registry: string;
+  tool: string;
+  version: string;
+  chosen: boolean;
+}
+const miseOffers = ref<MiseOffer[]>([]);
+
+/** A release of a forge mise installs from: offer a block on each versions host. */
+function offerMiseBlocks(v: PackageVersionDetail): MiseOffer[] {
+  if (!MISE_BACKEND_TYPES.includes(typeOf(props.registry) ?? "")) return [];
+  const guess = miseBlockGuess(props.name, v.version);
+  return registries.value
+    .filter((r) => r.type === "mise-versions")
+    .map((r) => ({ registry: r.name, ...guess, chosen: false }));
+}
+
+/** After the forge block landed: the chosen mise blocks, each with the same reason. */
+async function blockOnMise(reason: string): Promise<void> {
+  for (const offer of miseOffers.value) {
+    const tool = offer.tool.trim();
+    const version = offer.version.trim();
+    if (!offer.chosen || !tool || !version) continue;
+    const res = await blockPackage({
+      body: { registry: offer.registry, name: tool, version, reason },
+    });
+    const error = refusal(res);
+    if (error) {
+      actionError.value = t("packageVersionsTable.miseBlockFailed", {
+        registry: offer.registry,
+        error,
+      });
+      return;
+    }
+  }
 }
 
 async function doUnblock(v: PackageVersionDetail) {
@@ -193,6 +238,7 @@ const actionError = ref<string | null>(null);
 function ask(action: PendingAction): void {
   blockReason.value = "";
   actionError.value = null;
+  miseOffers.value = action.kind === "block-one" ? offerMiseBlocks(action.version) : [];
   pending.value = action;
 }
 
@@ -564,5 +610,39 @@ async function bulkUnblock() {
         :placeholder="t('packageVersionsTable.blockReasonPlaceholder')"
       />
     </div>
+    <!-- RFC 0043 decision 1: mise lists this release by its own tool name, so
+         the forge block alone leaves it in `mise ls-remote`. Opt-in per
+         registry; the guess is the admin's to correct. -->
+    <fieldset
+      v-for="(offer, i) in miseOffers"
+      :key="offer.registry"
+      class="space-y-2 border-t border-rule-soft pt-3"
+    >
+      <legend class="sr-only">{{ t("packageVersionsTable.miseBlockLegend") }}</legend>
+      <label class="flex items-start gap-2 text-sm">
+        <input
+          :id="`mise-block-${i}`"
+          v-model="offer.chosen"
+          type="checkbox"
+          class="mt-1 cursor-pointer"
+        />
+        <span>
+          {{ t("packageVersionsTable.miseBlockOffer", { registry: offer.registry }) }}
+          <span class="block text-muted-foreground">{{
+            t("packageVersionsTable.miseBlockWhy")
+          }}</span>
+        </span>
+      </label>
+      <div v-if="offer.chosen" class="grid gap-2 sm:grid-cols-2">
+        <div class="space-y-1">
+          <Label :for="`mise-block-tool-${i}`">{{ t("packageVersionsTable.miseTool") }}</Label>
+          <Input :id="`mise-block-tool-${i}`" v-model="offer.tool" />
+        </div>
+        <div class="space-y-1">
+          <Label :for="`mise-block-version-${i}`">{{ t("common.version") }}</Label>
+          <Input :id="`mise-block-version-${i}`" v-model="offer.version" />
+        </div>
+      </div>
+    </fieldset>
   </DestructiveConfirm>
 </template>

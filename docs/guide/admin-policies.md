@@ -305,7 +305,7 @@ protocol has one and editing it is safe:
 | helm | `index.yaml` | yes — the index describes the whole repository, so a new block reaches it within the blocked-set snapshot's 30-second TTL; and `helm` reads its own cached copy until the next `helm repo update`, so until then the archive download is what refuses |
 | helm | ChartMuseum `api/charts` listings | yes |
 | mise-versions | `data/<tool>.toml` | yes |
-| mise-versions | `data/python-precompiled-<triple>.gz` | no — relayed byte-exact until its format is read from mise's python plugin (RFC 0043 decision 3); a blocked Python version is refused at its asset |
+| mise-versions | `python-precompiled-<triple>.gz` | yes |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence

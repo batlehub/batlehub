@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: af0e2f1ed6e6bebf
+sourceHash: fbe9483f2e9e5a6c
 ---
 
 # Politiques et paquets
@@ -347,7 +347,7 @@ sans danger :
 | helm | `index.yaml` | yes — the index describes the whole repository, so a new block reaches it within the blocked-set snapshot's 30-second TTL; and `helm` reads its own cached copy until the next `helm repo update`, so until then the archive download is what refuses |
 | helm | ChartMuseum `api/charts` listings | yes |
 | mise-versions | `data/<tool>.toml` | yes |
-| mise-versions | `data/python-precompiled-<triple>.gz` | no — relayed byte-exact until its format is read from mise's python plugin (RFC 0043 decision 3); a blocked Python version is refused at its asset |
+| mise-versions | `python-precompiled-<triple>.gz` | yes |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

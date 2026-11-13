@@ -225,40 +225,136 @@ async fn the_github_mirror_is_a_503_never_a_404() {
 
 // ── the python index ─────────────────────────────────────────────────────────
 
-#[actix_web::test]
-async fn the_python_index_is_relayed_byte_exact() {
-    // The index is a passthrough on the registry's configured upstream, so this
-    // app's upstream map names the mock — `lab` leaves it at the default host.
+/// Three builds in the shape of the real index (jdx.dev, probed 2026-11-13):
+/// a 2020 line mise's regex skips, an old 3.12.1 build, and a 3.12.1 and a
+/// 3.13.0 build dated 2099 so any age gate finds them young.
+const PY_INDEX: &str = "cpython-3.7.7-x86_64-unknown-linux-gnu-pgo-20200418T2226.tar.zst\n\
+cpython-3.12.1+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz\n\
+cpython-3.12.1+20990101-x86_64-unknown-linux-gnu-install_only.tar.gz\n\
+cpython-3.13.0+20990101-x86_64-unknown-linux-gnu-install_only.tar.gz\n";
+
+const PY_FILE: &str = "python-precompiled-x86_64-unknown-linux-gnu.gz";
+
+fn gzip(text: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(text.as_bytes()).unwrap();
+    enc.finish().unwrap()
+}
+
+fn gunzip(bytes: &[u8]) -> String {
+    use std::io::Read;
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_string(&mut text)
+        .expect("the served index is gzip, as mise's GzDecoder reads it");
+    text
+}
+
+/// The index app: the registry's upstream is the mock, which answers once.
+async fn python_lab(
+    policy: impl FnOnce(
+        Arc<dyn batlehub_core::ports::PackageRepository>,
+    ) -> (RegistryPolicy, RbacFixture),
+) -> (
+    impl TestService,
+    mockito::Mock,
+    Vec<u8>,
+    mockito::ServerGuard,
+) {
     let mut upstream = mockito::Server::new_async().await;
+    let raw = gzip(PY_INDEX);
     let index = upstream
-        .mock(
-            "GET",
-            "/data/python-precompiled-x86_64-unknown-linux-gnu.gz",
-        )
+        .mock("GET", format!("/data/{PY_FILE}").as_str())
         .with_header("content-type", "application/gzip")
-        .with_body([0x1f, 0x8b, 0x08, 0x00])
+        .with_body(raw.clone())
         .expect(1)
         .create_async()
         .await;
+    let app = upstream_forwarding_app(REG, "mise-versions", upstream.url(), policy).await;
+    (app, index, raw, upstream)
+}
+
+async fn get_bytes<S: TestService>(app: &S, path: &str) -> Vec<u8> {
+    let resp = call_service(app, admin_get(path)).await;
+    assert_eq!(resp.status(), 200, "{path}");
+    read_body(resp).await.to_vec()
+}
+
+/// Nothing hidden: upstream's bytes, under both prefixes, from one cache
+/// entry — mise 2026.9.5 asks under `tools/` (`fetch_precompiled_remote_versions`).
+#[actix_web::test]
+async fn the_python_index_is_byte_exact_with_nothing_hidden_under_both_prefixes() {
+    let (app, index, raw, _upstream) = python_lab(rbac_policy).await;
+    for prefix in ["data", "tools", "data"] {
+        let body = get_bytes(
+            &app,
+            &format!("/proxy/{REG}/mise-versions/{prefix}/{PY_FILE}"),
+        )
+        .await;
+        assert_eq!(body, raw, "{prefix}");
+    }
+    index.assert_async().await;
+}
+
+/// RFC 0043 decision 3: a block on `python` removes every build of that
+/// version, and the next read sees it with no cache flush.
+#[actix_web::test]
+async fn a_blocked_python_version_is_absent_from_the_index() {
+    let (app, index, _, _upstream) = python_lab(rbac_policy).await;
+    get_bytes(&app, &format!("/proxy/{REG}/mise-versions/data/{PY_FILE}")).await;
+    block_version(&app, REG, "python", "3.12.1").await;
+    for prefix in ["data", "tools"] {
+        let text = gunzip(
+            &get_bytes(
+                &app,
+                &format!("/proxy/{REG}/mise-versions/{prefix}/{PY_FILE}"),
+            )
+            .await,
+        );
+        assert!(!text.contains("cpython-3.12.1+"), "{prefix}: {text}");
+        assert!(text.contains("cpython-3.13.0+20990101"), "{prefix}: {text}");
+        assert!(
+            text.contains("cpython-3.7.7-"),
+            "a line mise skips is kept: {text}"
+        );
+    }
+    index.assert_async().await;
+}
+
+/// The gate judges the build: 3.12.1's 2024 build stays, the 2099 ones go.
+#[actix_web::test]
+async fn an_age_gate_hides_the_young_python_builds_only() {
+    let (app, index, _, _upstream) = python_lab(|repo| {
+        let (mut policy, perms) = rbac_policy(repo);
+        policy.rules.push(Box::new(ReleaseAgeGateRule::new(
+            Duration::from_secs(86_400),
+            vec![],
+        )));
+        (policy, perms)
+    })
+    .await;
+    let text =
+        gunzip(&get_bytes(&app, &format!("/proxy/{REG}/mise-versions/tools/{PY_FILE}")).await);
+    assert!(text.contains("cpython-3.12.1+20240107"), "{text}");
+    assert!(!text.contains("20990101"), "{text}");
+    index.assert_async().await;
+}
+
+/// An index that is not gzip is relayed as it came: the filter fails open.
+#[actix_web::test]
+async fn an_unreadable_python_index_is_relayed_untouched() {
+    let mut upstream = mockito::Server::new_async().await;
+    let index = upstream
+        .mock("GET", format!("/data/{PY_FILE}").as_str())
+        .with_header("content-type", "application/gzip")
+        .with_body([0x1f, 0x8b, 0x08, 0x00])
+        .create_async()
+        .await;
     let app = upstream_forwarding_app(REG, "mise-versions", upstream.url(), rbac_policy).await;
-    let resp = call_service(
-        &app,
-        admin_get(&format!(
-            "/proxy/{REG}/mise-versions/data/python-precompiled-x86_64-unknown-linux-gnu.gz"
-        )),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
-    assert_eq!(read_body(resp).await.as_ref(), [0x1f, 0x8b, 0x08, 0x00]);
-    // A second read is the passthrough cache's, not the upstream's.
-    let again = call_service(
-        &app,
-        admin_get(&format!(
-            "/proxy/{REG}/mise-versions/data/python-precompiled-x86_64-unknown-linux-gnu.gz"
-        )),
-    )
-    .await;
-    assert_eq!(again.status(), 200);
+    block_version(&app, REG, "python", "3.12.1").await;
+    let body = get_bytes(&app, &format!("/proxy/{REG}/mise-versions/data/{PY_FILE}")).await;
+    assert_eq!(body, [0x1f, 0x8b, 0x08, 0x00]);
     index.assert_async().await;
 }
 
