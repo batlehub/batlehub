@@ -288,6 +288,7 @@ GET /proxy/{registry}/nodedist/index.json	profiled
 GET /proxy/{registry}/nodedist/index.tab	skip: no arm yet
 GET /proxy/{registry}/nodedist/{version}/{file}	profiled
 GET /proxy/{registry}/godist/index.json	profiled
+GET /proxy/{registry}/godist/info/refs	skip: the same filtered document as index.json, which is profiled
 GET /proxy/{registry}/godist/{file}	profiled
 PUT /proxy/{registry}/nuget/api/v2/package	skip: no arm yet
 PUT /proxy/{registry}/nuget/api/v2/symbolpackage	skip: no arm yet

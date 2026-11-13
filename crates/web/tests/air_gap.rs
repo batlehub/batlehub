@@ -2268,6 +2268,14 @@ async fn a_held_go_release_serves_its_archive_its_sha256_and_a_composed_document
         rows[0]["files"][0]["filename"],
         "go1.25.4.linux-amd64.tar.gz"
     );
+
+    // The git ref list (RFC 0048 §15 Q13) is that same composed document.
+    let resp = get(&app, &format!("/proxy/{REG}/godist/info/refs")).await;
+    assert_eq!(resp.status(), 200);
+    let refs = actix_web::test::read_body(resp).await;
+    let refs = std::str::from_utf8(&refs).unwrap();
+    assert_eq!(refs.lines().count(), 1, "{refs}");
+    assert!(refs.ends_with("\trefs/tags/go1.25.4\n"), "{refs}");
 }
 
 /// SDKMAN's listing coordinate carries the **platform** — `java/linuxx64` — and

@@ -13,6 +13,11 @@
 //!   releases removed — for a client or an operator that reads Go's own
 //!   `go.dev/dl/?mode=json`. mise does not read it: its list comes from the
 //!   versions host (the `mise-versions` kind), or `git ls-remote`.
+//! - `info/refs` is that same filtered document as a git ref list, for the
+//!   `git ls-remote` path: with `MISE_GO_REPO` set to this registry's
+//!   `…/godist`, mise lists Go from it and a blocked release is not offered
+//!   (RFC 0048 §15 Q13). Dumb HTTP only, no object behind any ref; every other
+//!   git path under `…/godist` is unrouted.
 //!
 //! The file name is matched against `go{version}.{os}-{arch}.{tar.gz|zip}`
 //! with an optional `.sha256` before it reaches a storage key, for a clean
@@ -20,19 +25,19 @@
 
 use std::sync::Arc;
 
-use actix_web::{get, web, Responder};
+use actix_web::{get, web, HttpResponse, Responder};
 
 use batlehub_core::{
     entities::{Action, PackageId},
     ports::DocumentKind,
     services::{
-        godist::{parse_file_name, GO_PACKAGE},
+        godist::{git_refs, parse_file_name, GO_PACKAGE},
         ProxyService,
     },
 };
 
-use super::common::{proxy_document, proxy_stream, require_registry_type};
-use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
+use super::common::{fetch_proxy_document, proxy_document, proxy_stream, require_registry_type};
+use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap};
 
 /// Go's release document, blocked releases removed.
@@ -66,6 +71,50 @@ pub async fn godist_index_json(
         String::new(),
     )
     .await
+}
+
+/// Go's releases as git tags, for `git ls-remote` (mise's `go.repo`).
+///
+/// The *dumb* HTTP ref list: `<sha>\trefs/tags/go{version}` per release of
+/// the filtered document, so a blocked release is absent. git sends
+/// `?service=git-upload-pack` (and may send `Git-Protocol: version=2`); a
+/// `text/plain` answer is how a dumb server replies to both, and `ls-remote`
+/// needs nothing more. The object ids are the SHA-1 of the ref name, not
+/// commits — nothing can be fetched from this "repository".
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/godist/info/refs",
+    tag = "proxy/godist",
+    params(("registry" = String, Path, description = "Registry name")),
+    responses(
+        (status = 200, description = "`<sha1-of-ref>\\trefs/tags/go{version}` per listed release, blocked releases removed (git's dumb HTTP ref list)", body = ProtocolDocument, content_type = "text/plain"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Unknown registry"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/proxy/{registry}/godist/info/refs")]
+pub async fn godist_info_refs(
+    path: web::Path<String>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+) -> Result<HttpResponse, AppError> {
+    let registry = path.into_inner();
+    require_registry_type(&registry, "godist", &map)?;
+    let doc = fetch_proxy_document(
+        svc,
+        PackageId::new(&registry, GO_PACKAGE, "index"),
+        identity,
+        Action::ReleasesList,
+        DocumentKind::Versions,
+        String::new(),
+    )
+    .await?;
+    let refs = doc.body.as_json().map(git_refs).unwrap_or_default();
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(refs))
 }
 
 /// One archive of one Go release, or its `.sha256`.

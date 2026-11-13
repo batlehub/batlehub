@@ -1993,6 +1993,7 @@ impl<'a> PlanCtx<'a> {
             TargetId::Mise if chosen.is_empty() => Ok(None),
             TargetId::Mise => {
                 let mut node = None;
+                let mut go_repo = None;
                 let mut bases: BTreeMap<&str, String> = BTreeMap::new();
                 let mut wired = Vec::new();
                 for (ty, r) in chosen {
@@ -2001,6 +2002,11 @@ impl<'a> PlanCtx<'a> {
                         // mise `Url::join`s onto it: without the slash the last
                         // segment is dropped.
                         node = Some(format!("{base}/nodedist/"));
+                    }
+                    if *ty == "godist" {
+                        // `git ls-remote` reads this when mise does not use the
+                        // versions host (RFC 0048 §15 Q13).
+                        go_repo = Some(format!("{base}/godist"));
                     }
                     wired.extend(wire_registry(ty, r));
                     bases.insert(&r.name, base);
@@ -2033,6 +2039,12 @@ impl<'a> PlanCtx<'a> {
                         body.push('\n');
                     }
                     body.push_str(&format!("[settings.node]\nmirror_url = \"{url}\"\n"));
+                }
+                if let Some(url) = go_repo {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    body.push_str(&format!("[settings.go]\nrepo = \"{url}\"\n"));
                 }
                 if !skipped.is_empty() {
                     let note = format!("no mise rules for {}", skipped.join("; "));
@@ -2740,8 +2752,14 @@ impl PlanCtx<'_> {
                     .flatten()
                 {
                     Some(why)
-                } else if body.contains("[settings.node]") {
-                    var(&["MISE_NODE_MIRROR_URL"]).or_else(|| set_in("node.mirror_url"))
+                } else if let Some(why) = body
+                    .contains("[settings.node]")
+                    .then(|| var(&["MISE_NODE_MIRROR_URL"]).or_else(|| set_in("node.mirror_url")))
+                    .flatten()
+                {
+                    Some(why)
+                } else if body.contains("[settings.go]") {
+                    var(&["MISE_GO_REPO"]).or_else(|| set_in("go.repo"))
                 } else {
                     None
                 }
@@ -4647,6 +4665,30 @@ mod tests {
         let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(names.len(), 1, "{names:?}");
         assert!(std::fs::read_to_string(&f).unwrap().starts_with("a="));
+    }
+
+    /// mise lists Go with `git ls-remote <go.repo>` off the versions host
+    /// (RFC 0048 §15 Q13): a godist registry is that repo, and an override of
+    /// it elsewhere is a conflict.
+    #[test]
+    fn mise_go_repo_points_at_godist() {
+        let dir = TempDir::new().unwrap();
+        let mut env = env_in(dir.path(), &[ClientId::Mise]);
+        let regs = vec![reg("go", "godist", "proxy")];
+        let next = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise)
+            .next
+            .clone()
+            .unwrap();
+        assert!(
+            next.contains("[settings.go]\nrepo = \"https://hub.example.com/proxy/go/godist\""),
+            "{next}"
+        );
+        toml::from_str::<toml::Table>(&next).unwrap();
+        env.vars.insert("MISE_GO_REPO".into(), "https://x".into());
+        assert_eq!(
+            find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).state,
+            State::Conflict
+        );
     }
 
     /// n° 12: mise gets its node mirror, and a global setting that would

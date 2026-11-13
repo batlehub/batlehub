@@ -71,6 +71,43 @@ pub fn bare_version(version: &str) -> &str {
     version.strip_prefix("go").unwrap_or(version)
 }
 
+/// `[0-9a-z.]`, starting with a digit and with no `..` — `1.25.4`, `1.26rc1`.
+fn is_version(version: &str) -> bool {
+    version.starts_with(|c: char| c.is_ascii_digit())
+        && !version.contains("..")
+        && version
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase() || c == '.')
+}
+
+/// The release document's versions as a git ref list in the *dumb HTTP*
+/// `info/refs` form (`<sha>\t<ref>\n`), one `refs/tags/go{version}` per release.
+///
+/// mise lists Go with `git ls-remote --tags --refs <go.repo> 'go*'` when it
+/// does not use the versions host (mise 2026.11.3 `src/plugins/core/go.rs:268-285`),
+/// keeping what follows the last `/go`; a ref list is all `ls-remote` reads.
+/// The object ids are **not commits**: each is the SHA-1 of its ref name, so
+/// the list is deterministic and nothing in it can be fetched. A version that
+/// is not [`is_version`] is dropped, so an upstream string never puts a line
+/// break or a space into the list.
+pub fn git_refs(document: &serde_json::Value) -> String {
+    use sha1::{Digest, Sha1};
+    let mut refs: Vec<String> = document
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.get("version")?.as_str())
+        .map(bare_version)
+        .filter(|v| is_version(v))
+        .map(|v| format!("refs/tags/go{v}"))
+        .collect();
+    refs.sort();
+    refs.dedup();
+    refs.iter()
+        .map(|r| format!("{}\t{r}\n", hex::encode(Sha1::digest(r.as_bytes()))))
+        .collect()
+}
+
 /// A downloadable file name, split: `go1.25.4.linux-amd64.tar.gz.sha256` →
 /// `("1.25.4", "go1.25.4.linux-amd64.tar.gz", true)`.
 ///
@@ -88,18 +125,12 @@ pub fn parse_file_name(file: &str) -> Option<(&str, &str, bool)> {
         .strip_prefix("go")?;
     let (version, platform) = stem.rsplit_once('.')?;
     let (os, arch) = platform.split_once('-')?;
-    let ok_version = !version.is_empty()
-        && version.starts_with(|c: char| c.is_ascii_digit())
-        && !version.contains("..")
-        && version
-            .chars()
-            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase() || c == '.');
     let ok_part = |s: &str| {
         !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
     };
-    (ok_version && ok_part(os) && ok_part(arch)).then_some((version, archive, checksum))
+    (is_version(version) && ok_part(os) && ok_part(arch)).then_some((version, archive, checksum))
 }
 
 #[cfg(test)]
@@ -136,6 +167,23 @@ mod tests {
         ] {
             assert_eq!(parse_file_name(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_ref_list_has_one_tag_per_listed_version() {
+        let doc = serde_json::json!([
+            {"version": "go1.25.4"}, {"version": "go1.26rc1"}, {"version": "go1.25.4"},
+            {"version": "go1.2\n0000 refs/heads/x"}, {"version": 7}, {}
+        ]);
+        let refs = git_refs(&doc);
+        let lines: Vec<&str> = refs.lines().collect();
+        assert_eq!(lines.len(), 2, "{refs}");
+        assert!(lines[0].ends_with("\trefs/tags/go1.25.4"), "{refs}");
+        assert!(lines[1].ends_with("\trefs/tags/go1.26rc1"), "{refs}");
+        let (sha, _) = lines[0].split_once('\t').unwrap();
+        assert_eq!(sha.len(), 40);
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(git_refs(&serde_json::json!({})), "");
     }
 
     #[test]

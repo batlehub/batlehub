@@ -637,6 +637,12 @@ const GODIST: &[Conformance] = &[
         "go.dev/dl/?mode=json&include=all — Go's release document, filtered",
     )
     .must_find("go1.1.0"),
+    Conformance::get(
+        "/proxy/godist/godist/info/refs?service=git-upload-pack",
+        "/proxy/{registry}/godist/info/refs",
+        "mise 2026.11.3 go.rs:268-285 — `git ls-remote --tags --refs <go.repo> 'go*'`",
+    )
+    .must_find("\trefs/tags/go1.1.0\n"),
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ d'un autre protocole : ils passent par un registre
 | **Modes** | proxy seul |
 | **Adressage** | un paquet (`go`), une version par publication (`1.25.4`, sans le préfixe `go`), une archive par plateforme |
 | **Publication privée** | proxy seul |
-| **Coupure réseau** | archives détenues et leur `.sha256` servis par chemin ; `index.json` composé à partir des archives détenues. mise lit sa liste de versions sur son hôte de versions, donc une installation coupée du réseau se fait à partir du fichier de verrouillage |
+| **Coupure réseau** | archives détenues et leur `.sha256` servis par chemin ; `index.json` et la liste de refs git composés à partir des archives détenues. mise lit sa liste de versions sur son hôte de versions ou dans cette liste de refs, donc une installation coupée du réseau se fait à partir du fichier de verrouillage |
 
 ## Mise en place du proxy
 
@@ -42,12 +42,31 @@ registre que vous avez configuré :
 Définir `MISE_GO_DOWNLOAD_MIRROR=https://batlehub.example.com/proxy/<registry>/godist`
 fait la même chose pour un seul shell.
 
-mise ne lit **pas** sa liste de versions de Go dans ce registre : il interroge
-d'abord son hôte de versions (`data/go.toml`, que sert un registre
-[hôte de versions de mise](/fr/registries/mise-versions)) et se rabat sur
-`git ls-remote https://github.com/golang/go`. Faites passer l'hôte de versions
-par l'instance lui aussi, sans quoi `mise install go@1.25` se résout contre la
-liste publique.
+mise lit sa liste de versions de Go sur son hôte de versions (`data/go.toml`,
+que sert un registre [hôte de versions de mise](/fr/registries/mise-versions)),
+ou — quand il n'utilise pas l'hôte de versions (`MISE_USE_VERSIONS_HOST=false`) —
+par `git ls-remote --tags` sur `go.repo`, `https://github.com/golang/go` par
+défaut. Ce registre répond aussi à cette seconde voie : faites pointer `go.repo`
+vers lui, et les tags viennent du document de publication de Go, publications
+bloquées retirées.
+
+```toml
+# ~/.config/mise/config.toml
+[settings.go]
+repo = "https://batlehub.example.com/proxy/<registry>/godist"
+```
+
+ou `MISE_GO_REPO=https://batlehub.example.com/proxy/<registry>/godist` pour un
+seul shell. `batlehub-cli setup apply --only mise` écrit ce réglage et la règle
+de réécriture ci-dessus. Faites passer l'une des deux listes par l'instance,
+sans quoi `mise install go@1.25` se résout contre la liste publique.
+
+Le « dépôt » n'est qu'une liste de refs : `GET …/godist/info/refs` répond sous
+la forme HTTP *dumb* de git (`text/plain`, une ligne
+`<id>\trefs/tags/go{version}` par publication), que `git ls-remote` accepte
+quelle que soit la version de protocole demandée. Les identifiants ne sont pas
+des commits — chacun est le SHA-1 du nom de sa ref, si bien que la liste est
+stable — et un clone ou un fetch ne trouve aucun objet à télécharger.
 
 ## Authentification
 
@@ -71,7 +90,7 @@ upstreams = ["https://dl.google.com/go"]  # la valeur par défaut : archives et 
 # metadata_url = "https://go.dev/dl/?mode=json&include=all"  # la valeur par défaut
 
 [registries.rbac]
-# index.json est un listing (`releases:list`) ; les archives sont des lectures (`releases:read`).
+# index.json et info/refs sont des listings (`releases:list`) ; les archives sont des lectures (`releases:read`).
 anonymous = ["releases:read", "releases:list"]
 ```
 
@@ -81,9 +100,11 @@ Un blocage s'écrit sur `go@1.25.4` — la version telle que mise l'écrit ; le
 `go1.25.4` du document y correspond aussi. La version est lue dans le nom de
 fichier, si bien qu'une publication bloquée est refusée par un `403` sur son
 archive **et** sur son `.sha256`, quelle que soit l'URL construite par le client
-et quoi qu'épingle un `mise.lock`. `index.json` retire la publication. La liste
-propre à mise, qui vient de l'hôte de versions, l'affiche encore : le refus est
-celui du téléchargement, et mise le signale comme un téléchargement échoué.
+et quoi qu'épingle un `mise.lock`. `index.json` et la liste de refs git
+retirent la publication : `mise ls-remote go` ne la propose plus quand mise liste
+par `go.repo`, et un registre [hôte de versions de mise](/fr/registries/mise-versions)
+la retire de la même façon. Par la liste publique, le refus est celui du
+téléchargement, et mise le signale comme un téléchargement échoué.
 
 Un fichier que le document de publication ne liste pas — une autre version,
 une autre plateforme, une faute de frappe — reçoit un `404` sans requête vers
@@ -119,6 +140,7 @@ et [quels listings sont filtrés](/fr/guide/admin-policies#which-listings-are-fi
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/godist/{file}` | One archive of one Go release, or its `.sha256`. |
 | `GET` | `/proxy/{registry}/godist/index.json` | Go's release document, blocked releases removed. |
+| `GET` | `/proxy/{registry}/godist/info/refs` | Go's releases as git tags, for `git ls-remote` (mise's `go.repo`). |
 <!-- END endpoints -->
 
 :::
