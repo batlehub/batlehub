@@ -1414,23 +1414,18 @@ phase_nuget() {
   local id="heavyauthz.probe$HEAVY_RUN"
   local sealed_id="heavysealed.probe$HEAVY_RUN"
 
-  # **`dotnet restore` cannot authenticate to this server, so the read boundary
-  # is not observable through it.** `packageSourceCredentials` are attached to
-  # `HttpClientHandler.Credentials`, which .NET sends only in answer to a `401`
-  # with a `WWW-Authenticate` header; BatleHub answered an unauthenticated read
-  # `403` with no challenge, so the credential was never offered and a reader who
-  # held every read verb got the same `403` as a caller who held none. (It now
-  # challenges: see the pin at the end of this phase.)
-  # Verified: `curl -u authz-reader:<token>` on the same URL is authorised, and
-  # `ValidAuthenticationTypes = basic` does not change it — the challenge is what
-  # is missing, not the scheme.
+  # **`dotnet restore` authenticates only when challenged.** `packageSourceCredentials`
+  # are attached to `HttpClientHandler.Credentials`, which .NET sends only in
+  # answer to a `401` with a `WWW-Authenticate` header. BatleHub used to answer
+  # an unauthenticated read `403` with no challenge, so the credential was never
+  # offered and the read boundary was asserted over curl alone; an anonymous
+  # proxy read a credential could open is now a challenged `401` (RFC 0015
+  # §13.19), and the restore arms below drive the boundary through the client.
   #
-  # So this phase asserts what the client *can* carry. `dotnet nuget push` sends
-  # `--api-key` explicitly, so a push is attributable; and the one thing a push
-  # can be refused for on a local registry is a **seal**, because §10 rule 5
-  # hands `releases:publish` to every `role:user` and grants only widen. The read
-  # boundary is asserted with Basic auth over curl, which is the credential the
-  # client would send if it were asked for one.
+  # A push is asserted on a **seal**: `dotnet nuget push` sends `--api-key`
+  # explicitly, so it is attributable, and the one thing a push can be refused
+  # for on a local registry is a seal, because §10 rule 5 hands
+  # `releases:publish` to every `role:user` and grants only widen.
   export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
   export NUGET_PACKAGES="$HEAVY_WORK/nuget-packages"
   export NUGET_HTTP_CACHE_PATH="$HEAVY_WORK/nuget-http-cache"
@@ -1505,9 +1500,9 @@ through is not a seal"; }
   heavy_wire_after "nuget-sealed" "$WIRE_403" \
     "the push was rejected without a 403 on the wire, so it failed for some other reason"
 
-  # ── the read boundary, over curl for the reason above ──
+  # ── the read boundary, over curl ──
   heavy_mark "nuget-read"
-  heavy_log "the flat index — refused and served, with the credential NuGet cannot be made to send"
+  heavy_log "the flat index — refused and served, over curl"
   local flat="/proxy/$NUGET/nuget/v3/flat/$id/index.json"
   local denied_status reader_status anon_status
   denied_status="$(authz_status GET "$T_DENIED" "$flat")"
@@ -1518,17 +1513,75 @@ through is not a seal"; }
     "the reader got $reader_status for the flat index — the positive control"
   [[ "$anon_status" == "401" ]] || heavy_fail "an unauthenticated caller got $anon_status, expected 401"
 
-  # The finding above, now answered: an unauthenticated proxy read a credential
-  # could open is a `401` **with a challenge**, which is what lets `dotnet
-  # restore` offer `packageSourceCredentials`. The restore arms this phase gave
-  # up on can come back; until they do, the challenge is pinned here.
+  # The challenge itself, pinned: without it `dotnet restore` never offers
+  # `packageSourceCredentials`, and the restore arms below would all fail alike.
   local challenge
   challenge="$(curl -s -D - -o /dev/null "$HEAVY_TAP_BASE$flat" | grep -ci '^www-authenticate: Basic' || true)"
   [[ "$challenge" == "1" ]] || heavy_fail \
     "the anonymous refusal of the flat index carries no WWW-Authenticate: Basic challenge — \
 NuGet never offers the credential it holds without one"
 
-  heavy_log "NUGET-AUTHZ-OK (a seal the client meets, and the read boundary beside it)"
+  # ── the read boundary, through the client itself ──
+  # Now that an anonymous refusal is a challenged 401, `dotnet restore` offers
+  # `packageSourceCredentials` — so the boundary above is asserted again with
+  # the credential NuGet actually sends, not only with curl's.
+  restore_as() {  # arm user token|- → the restore's exit status
+    local arm="$1" user="$2" token="$3"
+    local dir="$HEAVY_WORK/restore/$arm"
+    mkdir -p "$dir"
+    local creds=""
+    [[ "$token" == "-" ]] || creds="<packageSourceCredentials><batlehub>
+      <add key=\"Username\" value=\"$user\" />
+      <add key=\"ClearTextPassword\" value=\"$token\" />
+    </batlehub></packageSourceCredentials>"
+    cat > "$dir/nuget.config" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="batlehub" value="$index" allowInsecureConnections="true" />
+  </packageSources>
+  $creds
+</configuration>
+EOF
+    cat > "$dir/consumer.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>$tfm</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="$id" Version="1.0.0" /></ItemGroup>
+</Project>
+EOF
+    # A cache of its own per arm: a package another arm restored must not
+    # satisfy this one without a request.
+    (cd "$dir" && NUGET_PACKAGES="$dir/packages" NUGET_HTTP_CACHE_PATH="$dir/http-cache" \
+      "${dotnet[@]}" restore --configfile "$dir/nuget.config") >"$dir/restore.log" 2>&1
+  }
+
+  heavy_mark "nuget-restore-reader"
+  heavy_log "dotnet restore as the reader — the challenge answered, the package served"
+  restore_as reader authz-reader "$T_READER" \
+    || { tail -30 "$HEAVY_WORK/restore/reader/restore.log" >&2; heavy_fail \
+      "dotnet restore failed for the reader — the positive control"; }
+  heavy_wire_after "nuget-restore-reader" "GET $flat -> 401" \
+    "the reader's restore was never challenged, so it proves nothing about the credential"
+  heavy_wire_re_after "nuget-restore-reader" \
+    "GET /proxy/$NUGET/nuget/v3/flat/$id/1[.]0[.]0/[^ ]+[.]nupkg -> 200" \
+    "the reader's restore did not download the package through the instance"
+
+  heavy_mark "nuget-restore-denied"
+  heavy_log "dotnet restore as a caller holding no read — must fail with its credential sent"
+  restore_as denied authz-denied "$T_DENIED" \
+    && heavy_fail "dotnet restore succeeded for a caller with no read grant"
+  heavy_wire_after "nuget-restore-denied" "GET $flat -> 403" \
+    "the denied restore never met a 403, so it failed before its credential was judged"
+
+  heavy_mark "nuget-restore-anon"
+  heavy_log "dotnet restore with no credential — must fail on the challenge"
+  restore_as anon - - \
+    && heavy_fail "dotnet restore succeeded with no credential"
+  heavy_wire_after "nuget-restore-anon" "GET $flat -> 401" \
+    "the anonymous restore was not refused with the challenge"
+
+  heavy_log "NUGET-AUTHZ-OK (a seal the client meets, and the read boundary through restore)"
   return 0
 }
 
