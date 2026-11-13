@@ -1540,9 +1540,6 @@ mod tests {
                 // is enforced at the `.apk`, whose file name carries a real
                 // coordinate (RFC 0026 §4.4).
                 "apk",
-                // The python-build-standalone index, until its format is read
-                // (RFC 0043 decision 3); the version list itself is filtered.
-                "mise-versions",
             ]
         );
     }
