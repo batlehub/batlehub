@@ -104,8 +104,8 @@ pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml
 # # claude-code-dist (generic)
 # "regex:^https://storage\\.googleapis\\.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/(.+)" = "https://batlehub.example.com/proxy/claude-code-dist/generic/$1"
 
-# # go-dl (generic)
-# "regex:^https://dl\\.google\\.com/go/(.+)" = "https://batlehub.example.com/proxy/go-dl/generic/$1"
+# # godist (godist)
+# "regex:^https://dl\\.google\\.com/go/(.+)" = "https://batlehub.example.com/proxy/godist/godist/$1"
 
 # # helm-bin (generic)
 # "regex:^https://get\\.helm\\.sh/(.+)" = "https://batlehub.example.com/proxy/helm-bin/generic/$1"

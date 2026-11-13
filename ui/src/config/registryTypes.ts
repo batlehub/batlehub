@@ -1956,12 +1956,6 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             ``,
             `[[registries]]`,
             `type       = "generic"`,
-            `name       = "go-dl"                        # the Go *toolchain* tarballs;`,
-            `upstreams  = ["https://dl.google.com/go"]    # Go *modules* use type = "goproxy"`,
-            `path_allow = ["go*.linux-amd64.tar.gz"]`,
-            ``,
-            `[[registries]]`,
-            `type       = "generic"`,
             `name       = "helm-bin"`,
             `upstreams  = ["https://get.helm.sh"]`,
             `path_allow = ["helm-v*-linux-amd64.tar.gz"]`,
@@ -2012,7 +2006,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         label: "mise url_replacements",
         lang: "toml",
         template: (ctx) => {
-          const mirrors = ["node-dist", "rust-dist", "go-dl", "helm-bin", "sonar-binaries"];
+          const mirrors = ["node-dist", "rust-dist", "helm-bin", "sonar-binaries"];
           const p = (name: string) => `${ctx.urlFor(name)}/generic`;
           const lines: string[] = [];
           if (ctx.isAuthenticated) {
@@ -2035,7 +2029,6 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             ``,
             String.raw`"regex:^https://nodejs\\.org/dist/(.+)" = "${p("node-dist")}/$1"`,
             String.raw`"regex:^https://static\\.rust-lang\\.org/(.+)" = "${p("rust-dist")}/$1"`,
-            String.raw`"regex:^https://dl\\.google\\.com/go/(.+)" = "${p("go-dl")}/$1"`,
             String.raw`"regex:^https://get\\.helm\\.sh/(.+)" = "${p("helm-bin")}/$1"`,
             String.raw`"regex:^https://binaries\\.sonarsource\\.com/(.+)" = "${p("sonar-binaries")}/$1"`,
           );

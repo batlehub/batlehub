@@ -747,11 +747,8 @@ anonymous = ["releases:read"]
 # upstreams  = ["https://static.rust-lang.org"]   # RUSTUP_DIST_SERVER
 # path_allow = ["dist/**", "rustup/**"]
 #
-# [[registries]]
-# type       = "generic"
-# name       = "go-dl"
-# upstreams  = ["https://dl.google.com/go"]       # the Go toolchain tarballs;
-# path_allow = ["go*.linux-amd64.tar.gz"]         # Go *modules* use type="goproxy"
+# (The Go toolchain from dl.google.com has its own typed kind, `godist`, with
+# per-version policy: see docs/registries/godist.md.)
 #
 # [[registries]]
 # type       = "generic"
