@@ -116,6 +116,8 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("pypi.org", "pypi", "pypi"),
     ("files.pythonhosted.org", "pypi", "pypi"),
     ("proxy.golang.org", "goproxy", "go"),
+    // The Go *toolchain* (RFC 0048 phase 5); Go *modules* are `goproxy` above.
+    ("dl.google.com", "godist", "godist"),
     ("rubygems.org", "rubygems", "rubygems"),
     ("repo1.maven.org", "maven", "maven"),
     ("registry.terraform.io", "terraform", "terraform"),
@@ -151,14 +153,6 @@ fn generic_preset(host: &str) -> Option<GenericPreset> {
                 ("RUSTUP_DIST_SERVER", "{proxy}"),
                 ("RUSTUP_UPDATE_ROOT", "{proxy}/rustup"),
             ],
-        },
-        "dl.google.com" => GenericPreset {
-            // The Go *toolchain* tarballs. Go *modules* are a separate
-            // `type = "goproxy"` registry — see proxy.golang.org above.
-            name: "go-dl",
-            upstream: "https://dl.google.com/go",
-            path_allow: &["go*"],
-            client_env: &[],
         },
         "get.helm.sh" => GenericPreset {
             name: "helm-bin",
@@ -298,6 +292,7 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     ("pypi:", "pypi", "pypi"),
     ("npm:", "npm", "npm"),
     ("go:", "goproxy", "go"),
+    ("core:go", "godist", "godist"),
     ("gem:", "rubygems", "rubygems"),
     // mise drives rattler in-process, so this one needs the URL rule below too.
     ("conda:", "conda", "conda"),
@@ -1053,7 +1048,6 @@ fn registry_for_backend(backend: &str, source: &str) -> Option<SuggestedRegistry
     let host = match backend {
         "core:rust" => "static.rust-lang.org",
         "core:node" => "nodejs.org",
-        "core:go" => "dl.google.com",
         _ => return None,
     };
     let preset = generic_preset(host)?;
@@ -1727,6 +1721,13 @@ mod tests {
         let reg = registry_for_backend("core:rust", "mise.lock: rust").unwrap();
         assert_eq!(reg.name, "rust-dist");
         assert_eq!(reg.registry_type, "generic");
+        // core:go has its typed kind (RFC 0048 phase 5), so no generic mirror.
+        let reg = registry_for_backend("core:go", "mise.lock: go").unwrap();
+        assert_eq!(reg.registry_type, "godist");
+        assert!(reg.upstreams.is_empty());
+        let reg =
+            registry_for_url("https://dl.google.com/go/go1.25.4.linux-amd64.tar.gz", "s").unwrap();
+        assert_eq!(reg.registry_type, "godist");
         assert!(registry_for_backend("core:unknown-thing", "x").is_none());
     }
 
