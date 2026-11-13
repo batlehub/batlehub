@@ -209,6 +209,13 @@ config:
         user: ["releases:read", "source:read"]
         admin: ["*"]
 
+    - type: "godist"
+      name: "godist"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
     - type: "sdkman"
       name: "sdkman"
       rbac:

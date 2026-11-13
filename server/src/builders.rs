@@ -6,10 +6,10 @@ use batlehub_adapters::db::PgQuotaRepository;
 use batlehub_adapters::registry::{
     ApkRegistryClient, CargoRegistryClient, ComposerRegistryClient, CondaRegistryClient,
     FanoutRegistryClient, ForgejoRegistryClient, GithubRegistryClient, GitlabRegistryClient,
-    GoProxyRegistryClient, JetbrainsMarketplaceRegistryClient, MavenRegistryClient,
-    NodeDistRegistryClient, NpmRegistryClient, NugetRegistryClient, OpenVsxRegistryClient,
-    PathProxyRegistryClient, PypiRegistryClient, RubyGemsRegistryClient, RustupRegistryClient,
-    SdkmanRegistryClient, TerraformRegistryClient, UpstreamHttpOptions,
+    GoDistRegistryClient, GoProxyRegistryClient, JetbrainsMarketplaceRegistryClient,
+    MavenRegistryClient, NodeDistRegistryClient, NpmRegistryClient, NugetRegistryClient,
+    OpenVsxRegistryClient, PathProxyRegistryClient, PypiRegistryClient, RubyGemsRegistryClient,
+    RustupRegistryClient, SdkmanRegistryClient, TerraformRegistryClient, UpstreamHttpOptions,
     VsCodeMarketplaceRegistryClient,
 };
 use batlehub_config::schema::{
@@ -236,6 +236,9 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // The tree nvm itself defaults to; io.js takes a second registry
         // pointed at `https://iojs.org/dist` (RFC 0010 §4.1).
         RegistryKind::Nodedist => resolve_urls(&reg.upstreams, "https://nodejs.org/dist"),
+        // mise's `go.download_mirror` default; the release document is
+        // `metadata_url`, resolved by `second_host` (RFC 0048 §4.1).
+        RegistryKind::Godist => resolve_urls(&reg.upstreams, "https://dl.google.com/go"),
         RegistryKind::MiseVersions => resolve_urls(
             &reg.upstreams,
             batlehub_adapters::registry::mise_versions::DEFAULT_BASE,
@@ -280,7 +283,8 @@ fn make_one(
     opts: &UpstreamHttpOptions,
     path_allow: &[String],
     cargo_index: &str,
-    // SDKMAN only: the download broker, the second host of one protocol.
+    // The second host of one protocol: SDKMAN's download broker, godist's
+    // release document. See `second_host`.
     broker_url: &str,
     registry_name: &str,
     budget: Option<&Arc<dyn batlehub_core::ports::RateLimitBudget>>,
@@ -361,6 +365,7 @@ fn make_one(
         RegistryKind::Jetbrains => path_proxy("jetbrains")?,
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
+        RegistryKind::Godist => Arc::new(GoDistRegistryClient::new(url, broker_url, opts)?),
         RegistryKind::MiseVersions => {
             Arc::new(batlehub_adapters::registry::MiseVersionsRegistryClient::new(url, opts)?)
         }
@@ -424,10 +429,7 @@ pub(super) fn build_registry_client(
     let kind: RegistryKind = reg.registry_type.parse().map_err(anyhow::Error::msg)?;
     let urls = default_upstreams(kind, reg);
     let cargo_index = cargo_index_url(reg);
-    let broker_url = reg
-        .broker_url
-        .clone()
-        .unwrap_or_else(|| batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE.to_owned());
+    let broker_url = second_host(kind, reg);
     if urls.len() == 1 {
         offline_if(
             air_gapped,
@@ -474,6 +476,21 @@ pub(super) fn build_registry_client(
     }
 }
 
+/// The second host a two-host protocol reads: SDKMAN's broker, or godist's
+/// release document.
+fn second_host(kind: RegistryKind, reg: &RegistryConfig) -> String {
+    match kind {
+        RegistryKind::Godist => reg
+            .metadata_url
+            .clone()
+            .unwrap_or_else(|| batlehub_core::services::godist::DEFAULT_METADATA_URL.to_owned()),
+        _ => reg
+            .broker_url
+            .clone()
+            .unwrap_or_else(|| batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE.to_owned()),
+    }
+}
+
 /// One upstream's client as `make_one` builds it, without `CoordinateGuard`:
 /// what `name_injection_probe.rs` aims at to prove each client encodes its
 /// own segments (TD-0005).
@@ -488,7 +505,7 @@ pub(super) fn build_unguarded_client(
         &upstream_options(reg, None),
         &reg.path_allow,
         &cargo_index_url(reg),
-        batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE,
+        &second_host(kind, reg),
         &reg.name,
         None,
         Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),

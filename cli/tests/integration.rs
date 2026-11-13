@@ -5999,6 +5999,7 @@ consult_case! {
     pacman_consult, "pacman"; apk_consult, "apk"; github_consult, "github";
     forgejo_consult, "forgejo"; gitlab_consult, "gitlab"; generic_consult, "generic";
     nodedist_consult, "nodedist"; sdkman_consult, "sdkman"; rustup_consult, "rustup";
+    godist_consult, "godist";
     mise_versions_consult, "mise-versions";
 }
 
@@ -6217,6 +6218,7 @@ configure_case! {
     gitlab_configure, "gitlab", r#","upstream":"https://gitlab.com""#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
     generic_configure, "generic", r#","upstreams":["https://example.com/dl"]"#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
     nodedist_configure, "nodedist", "", ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    godist_configure, "godist", "", ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
     mise_versions_configure, "mise-versions", "", ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
     rustup_configure, "rustup", "", ["rustup"], "rustup", ".config/batlehub/env.sh";
     sdkman_configure, "sdkman", "", [], "sdkman", ".config/batlehub/env.sh";

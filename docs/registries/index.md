@@ -76,6 +76,7 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [mise versions host](./mise-versions) | `mise-versions` | The version lists mise reads before any backend (`data/<tool>.toml`, filtered by the block list and the age gate); the install beacon answered on site | proxy-only | no | `mise-versions.jdx.dev` |
 | [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | no | `nodejs.org/dist` |
+| [Go toolchain](./godist) | `godist` | Go toolchain archives and their `.sha256`, each checked against `go.dev`'s release document and verified before caching (mise) | proxy-only | no | `dl.google.com/go` + `go.dev/dl` |
 | [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | no | `api.sdkman.io/2` + `broker.sdkman.io` |
 | [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | no | `static.rust-lang.org` |
 
@@ -196,6 +197,7 @@ any of them. The page says which rather than showing a disabled button — see
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
+| godist | a Go release is a set of archives and their checksums; the release document carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |

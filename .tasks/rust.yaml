@@ -32,7 +32,7 @@ tasks:
       - 'du -sh target || true'
 
   fuzz:
-    desc: "Run a fuzz target for up to MAX_TIME seconds (default: 30). TARGET is one of `cargo fuzz list` (fuzz_bundle_read, fuzz_deny_latest, fuzz_escaping, fuzz_gem_compact_index, fuzz_grant_resolution, fuzz_image_host, fuzz_integrity_parse, fuzz_listing_filter, fuzz_mise_wire_target, fuzz_narinfo, fuzz_normalize_url, fuzz_osv_parse, fuzz_path_safe, fuzz_rbac_evaluate, fuzz_readme_render, fuzz_release_age, fuzz_release_coordinate, fuzz_repo_index_render, fuzz_repo_publish, fuzz_sbom_extract, fuzz_scanner_extract, fuzz_signed_url, fuzz_ssrf_ip, fuzz_storage_keys, fuzz_svg_sanitize, fuzz_version_order)"
+    desc: "Run a fuzz target for up to MAX_TIME seconds (default: 30). TARGET is one of `cargo fuzz list` (fuzz_bundle_read, fuzz_deny_latest, fuzz_escaping, fuzz_gem_compact_index, fuzz_godist_document, fuzz_grant_resolution, fuzz_image_host, fuzz_integrity_parse, fuzz_listing_filter, fuzz_mise_wire_target, fuzz_narinfo, fuzz_normalize_url, fuzz_osv_parse, fuzz_path_safe, fuzz_rbac_evaluate, fuzz_readme_render, fuzz_release_age, fuzz_release_coordinate, fuzz_repo_index_render, fuzz_repo_publish, fuzz_sbom_extract, fuzz_scanner_extract, fuzz_signed_url, fuzz_ssrf_ip, fuzz_storage_keys, fuzz_svg_sanitize, fuzz_version_order)"
     dir: fuzz
     vars:
       TARGET: '{{.TARGET | default "fuzz_deny_latest"}}'

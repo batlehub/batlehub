@@ -32,6 +32,7 @@ mod composer;
 pub mod coordinator;
 mod devfile;
 mod galaxy;
+mod godist;
 mod goproxy;
 mod helm;
 mod maven;
@@ -125,6 +126,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Rubygems => rubygems::read(doc),
         RegistryKind::Terraform => terraform::read(doc),
         RegistryKind::Nodedist => nodedist::read(doc),
+        RegistryKind::Godist => godist::read(doc),
         RegistryKind::Sdkman => sdkman::read(doc),
         RegistryKind::Rustup => rustup::read(doc),
         RegistryKind::Galaxy => galaxy::read(doc),
@@ -182,6 +184,7 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
+        | RegistryKind::Godist
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         // The versions list carries `created_at` and `requires_ansible`; the
@@ -248,6 +251,7 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
+        | RegistryKind::Godist
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         // The `repository` link lives in `MANIFEST.json`, inside the tarball.

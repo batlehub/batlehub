@@ -1377,6 +1377,7 @@ jobs:
         include:
           - kind: goproxy
           - kind: nodedist
+          - kind: godist
           - kind: sdkman
           - kind: github
           - kind: forgejo
@@ -1419,7 +1420,7 @@ jobs:
       # mise is the client for all three forge kinds — one binary, three
       # backends — and it is the client whose `netrc` setting the phases rely on.
       - name: Install mise
-        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions' || matrix.kind == 'mise-auto-wire'
+        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions' || matrix.kind == 'mise-auto-wire' || matrix.kind == 'godist'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
@@ -1508,6 +1509,9 @@ jobs:
           # mise's versions host (RFC 0043): `jq`, a registry tool, so mise
           # lists it through the host before any backend.
           - phase: mise-versions
+          # Go's toolchain through `godist` (RFC 0048 §6.7): mise lists it
+          # through the versions host, downloads the archive and `.sha256` here.
+          - phase: godist
           # The tool installers and the galleries. `jbplugin` downloads a
           # ~1.5 GB IDE and `vscode` a ~300 MB editor, both cached below.
           - phase: nvm
@@ -1595,7 +1599,7 @@ jobs:
       # one (`forgejo`), a GitLab one (`gitlab`) and its own versions host
       # (`mise-versions`). Same binary, four backends.
       - name: Install mise
-        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
+        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'godist' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"

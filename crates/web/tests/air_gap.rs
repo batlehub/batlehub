@@ -2225,6 +2225,51 @@ async fn a_held_node_release_gets_both_the_index_tab_and_the_index_json() {
     assert_eq!(rows[0]["version"], "v22.11.0");
 }
 
+/// `godist` (RFC 0048 §6.5): mise reads no listing from this kind, so what an
+/// air-gapped instance owes it is the held archive *and* its `.sha256` by path
+/// — mise fetches both — answered rather than timed out. The release document
+/// is composed from the held archives, each `sha256` the held bytes' digest,
+/// with no row for a release whose archive is not held.
+#[actix_web::test]
+async fn a_held_go_release_serves_its_archive_its_sha256_and_a_composed_document() {
+    let (app, _lab) = holding_lab(
+        "godist",
+        true,
+        &[
+            ("go", "1.25.4", Some("go1.25.4.linux-amd64.tar.gz")),
+            ("go", "1.25.4", Some("go1.25.4.linux-amd64.tar.gz.sha256")),
+        ],
+    )
+    .await;
+
+    for file in [
+        "go1.25.4.linux-amd64.tar.gz",
+        "go1.25.4.linux-amd64.tar.gz.sha256",
+    ] {
+        let resp = get(&app, &format!("/proxy/{REG}/godist/{file}")).await;
+        assert_eq!(resp.status(), 200, "{file}");
+    }
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/godist/go1.24.0.linux-amd64.tar.gz"),
+    )
+    .await;
+    assert_eq!(resp.status(), 503, "a release not held is a gap, answered");
+
+    let resp = get(&app, &format!("/proxy/{REG}/godist/index.json")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    let rows = body.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["version"], "go1.25.4");
+    assert_eq!(rows[0]["files"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(
+        rows[0]["files"][0]["filename"],
+        "go1.25.4.linux-amd64.tar.gz"
+    );
+}
+
 /// SDKMAN's listing coordinate carries the **platform** — `java/linuxx64` — and
 /// the held set is filtered by it. That is the detail worth a case: a composed
 /// list that ignored the platform would offer a linux JDK to a mac, and the

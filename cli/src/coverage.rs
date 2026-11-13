@@ -72,6 +72,7 @@ fn configure(kind: RegistryKind) -> Cell {
         K::Nix => Done("user `nix.conf`"),
         K::Github | K::Forgejo | K::Gitlab | K::Generic => Done("mise"),
         K::Nodedist => Done("env + mise"),
+        K::Godist => Done("mise"),
         K::MiseVersions => Done("mise"),
         K::Rustup | K::Sdkman => Done("env"),
         K::Openvsx | K::VscodeMarketplace | K::JetbrainsMarketplace => Done("`setup ide`"),
@@ -109,7 +110,9 @@ fn publish(kind: RegistryKind) -> Cell {
         K::Jetbrains | K::Github | K::Forgejo | K::Gitlab | K::Generic => {
             NotApplicable("proxy only")
         }
-        K::Nodedist | K::Sdkman | K::Rustup => NotApplicable("a vendor's releases, mirrored"),
+        K::Nodedist | K::Godist | K::Sdkman | K::Rustup => {
+            NotApplicable("a vendor's releases, mirrored")
+        }
         K::MiseVersions => NotApplicable("a version list, mirrored"),
     }
 }
@@ -143,6 +146,7 @@ fn consult(kind: RegistryKind) -> Cell {
         | K::Gitlab
         | K::Generic
         | K::Nodedist
+        | K::Godist
         | K::Sdkman
         | K::Rustup
         | K::MiseVersions => Done("`package versions`, `package readme`"),
@@ -175,7 +179,7 @@ fn lifecycle(kind: RegistryKind) -> Cell {
         K::Jetbrains | K::Github | K::Forgejo | K::Gitlab | K::Generic => {
             NotApplicable("proxy only: nothing published here to yank")
         }
-        K::Nodedist | K::Sdkman | K::Rustup => {
+        K::Nodedist | K::Godist | K::Sdkman | K::Rustup => {
             NotApplicable("a vendor's releases: nothing published here to yank")
         }
         K::MiseVersions => NotApplicable("a version list: nothing published here to yank"),
@@ -198,6 +202,9 @@ fn check(kind: RegistryKind) -> Cell {
         K::Github | K::Forgejo => Done("`mise.lock`"),
         K::Gitlab => NotApplicable("`mise plan` maps no GitLab download to a registry yet"),
         K::Nodedist => Done("`.nvmrc`"),
+        K::Godist => {
+            NotApplicable("`mise.lock` pins Go by URL; no Go lockfile maps to a registry yet")
+        }
         K::Sdkman => Done("`.sdkmanrc`"),
         K::Rustup => Done("`rust-toolchain.toml`"),
         K::Maven => NotApplicable("Maven has no lockfile"),

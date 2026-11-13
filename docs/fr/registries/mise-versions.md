@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/mise-versions.md
-sourceHash: 4abfc27aa86556ca
+sourceHash: c47e091185376fd8
 ---
 
 # Hôte de versions de mise
@@ -163,6 +163,8 @@ et [quels listings sont filtrés](/fr/guide/admin-policies#which-listings-are-fi
 <!-- BEGIN endpoints: proxy/mise-versions -->
 | Méthode | Chemin | Description |
 |--------|------|-------------|
+| `GET` | `/proxy/{registry}/mise-versions/_registry/latest.tar.zst` | The registry archive mise floats, with this instance's overlay tools |
+| `GET` | `/proxy/{registry}/mise-versions/_wire-answer/{outcome}` | The wire's own answer: a bounce, `not_wired`, a malformed path, or the |
 | `GET` | `/proxy/{registry}/mise-versions/api/github/{tail}` | The GitHub mirror's API family — refused with the `503` that makes mise ask |
 | `POST` | `/proxy/{registry}/mise-versions/api/tools/{tool}` | The install beacon of mise 2026.5–2026.10 — answered here, sent nowhere. |
 | `POST` | `/proxy/{registry}/mise-versions/api/track` | The install beacon of mise 2026.1–2026.4 — answered here, sent nowhere. |

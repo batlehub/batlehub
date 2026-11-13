@@ -742,6 +742,23 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# RFC 0048 §6.7: both hosts unreachable, so the reader passes the gate and
+# stops at the release document, and nothing leaves the machine.
+[[registries]]
+type = "godist"
+name = "authz-godist-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/go"]
+metadata_url = "https://example.invalid/dl/?mode=json&include=all"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 # mise-versions (RFC 0043): a version list with no artifact. Pointed at a host
 # that does not exist; the row reads the beacon, which never asks it.
 [[registries]]

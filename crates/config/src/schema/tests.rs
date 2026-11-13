@@ -5282,3 +5282,58 @@ fn monitoring_url_encodes_query_metacharacters() {
     );
     assert!(parsed.fragment().is_none(), "{url}");
 }
+
+/// RFC 0048 §4.1: Go's release document has no date, so an age gate on a
+/// `godist` registry would pass every version. Refused, whatever it says.
+#[test]
+fn godist_age_gate_is_rejected() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "godist"
+        name = "go"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = true
+        "#,
+        "an age gate on godist must not load",
+    );
+    assert!(err.contains("release_age_gate"), "{err}");
+    assert!(err.contains("'go'"), "{err}");
+}
+
+/// Proxy-only with both hosts defaulted; `metadata_url` is godist's alone.
+#[test]
+fn godist_loads_bare_and_metadata_url_is_its_own() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "godist"
+        name = "go"
+        metadata_url = "https://go.dev/dl/?mode=json&include=all"
+        "#,
+    )
+    .validate()
+    .expect("a godist registry loads");
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        metadata_url = "https://go.dev/dl/?mode=json"
+        "#,
+        "metadata_url on npm must not load",
+    );
+    assert!(err.contains("metadata_url"), "{err}");
+    validation_error(
+        r#"
+        [[registries]]
+        type = "godist"
+        name = "go"
+        mode = "hybrid"
+        "#,
+        "godist has no publish protocol",
+    );
+}

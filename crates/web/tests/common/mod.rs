@@ -617,6 +617,17 @@ impl RegistryClient for FixedRegistry {
                   "npm": "6.13.0", "lts": "Argon", "security": true }
             ]))),
 
+            // Go's release document (RFC 0048 §6.7): `go`-prefixed versions,
+            // newest first, one archive each.
+            ("godist", DocumentKind::Versions) => Ok(VersionDocument::json(serde_json::json!([
+                { "version": "go1.1.0", "stable": true, "files": [
+                    { "filename": "go1.1.0.linux-amd64.tar.gz", "os": "linux", "arch": "amd64",
+                      "version": "go1.1.0", "sha256": "aa", "size": 1, "kind": "archive" } ] },
+                { "version": "go1.0.0", "stable": true, "files": [
+                    { "filename": "go1.0.0.linux-amd64.tar.gz", "os": "linux", "arch": "amd64",
+                      "version": "go1.0.0", "sha256": "bb", "size": 1, "kind": "archive" } ] }
+            ]))),
+
             // The Rust dist tree (RFC 0024). `manifests.txt` is the list; a
             // channel manifest is one release, addressed by the channel in the
             // package string (`rust/stable`, `rust/2026-09-05/nightly`). The
@@ -1894,6 +1905,11 @@ pub async fn make_app_with_defaults_and_access(
             "nodedist".to_owned(),
             FixedRegistry::new("nodedist") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0048: mise's `core:go` request lines reach the godist routes.
+        (
+            "godist".to_owned(),
+            FixedRegistry::new("godist") as Arc<dyn RegistryClient>,
+        ),
         (
             "sdkman".to_owned(),
             FixedRegistry::new("sdkman") as Arc<dyn RegistryClient>,
@@ -1960,6 +1976,10 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "nodedist".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "godist".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
         (
@@ -2049,6 +2069,7 @@ pub async fn make_app_with_defaults_and_access(
         ("nuget", "nuget"),
         ("composer", "composer"),
         ("nodedist", "nodedist"),
+        ("godist", "godist"),
         ("sdkman", "sdkman"),
         ("rustup", "rustup"),
         ("galaxy", "galaxy"),

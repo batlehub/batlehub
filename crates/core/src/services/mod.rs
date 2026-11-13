@@ -16,6 +16,7 @@ pub mod flags;
 pub mod forge_attachments;
 pub mod forge_refs;
 pub mod galaxy;
+pub mod godist;
 pub mod grants_admin;
 pub mod helm;
 pub mod hot_config;

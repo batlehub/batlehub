@@ -2151,6 +2151,60 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "godist",
+    label: "Go toolchain (mise)",
+    fileHint: "go.mod",
+    description:
+      `Go's toolchain distribution (<code>dl.google.com/go</code>) as a typed registry, so a ` +
+      `Go release can be <em>blocked</em>: every archive is checked against ` +
+      `<code>go.dev</code>'s release document and verified against its <code>sha256</code> ` +
+      `before it is cached, and its <code>.sha256</code> is answered from that document. ` +
+      `Read by mise's <code>core:go</code>. Proxy-only: there is no publish protocol.`,
+    snippets: [
+      {
+        key: "godist-mise",
+        label: "Client setup",
+        lang: "toml",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/godist`;
+          return [
+            `# ~/.config/mise/config.toml — mise downloads go{v}.{os}-{arch}.tar.gz`,
+            `# and its .sha256 from go.download_mirror; this rule sends both here.`,
+            `[settings.url_replacements]`,
+            String.raw`"regex:^https://dl\\.google\\.com/go/(.+)" = "${reg}/$1"`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          (ctx.isAuthenticated
+            ? `mise sends the <code>~/.netrc</code> entry for this host on every URL a rule ` +
+              `rewrote, so a <code>machine</code> line with your token is the credential. `
+            : ``) +
+          `mise lists Go versions through its versions host, not this registry: a blocked ` +
+          `release is refused with a <code>403</code> when mise downloads it.`,
+      },
+      {
+        key: "godist-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "godist"`,
+            `mode      = "proxy"                        # the only mode: no publish protocol`,
+            `upstreams = ["https://dl.google.com/go"]  # the default: archives and .sha256`,
+            `# metadata_url = "https://go.dev/dl/?mode=json&include=all"  # the default`,
+            ``,
+            `[registries.rbac]`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# No release_age_gate: Go's release document carries no date, so the server`,
+            `# refuses one here rather than let it pass every version.`,
+          ].join("\n"),
+      },
+    ],
+  },
+  {
     id: "nodedist",
     label: "Node (nvm, fnm, n, mise)",
     fileHint: ".nvmrc",

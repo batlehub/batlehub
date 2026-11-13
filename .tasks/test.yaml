@@ -527,6 +527,7 @@ tasks:
     cmds:
       - bash tests/heavy/authz.sh live:goproxy
       - bash tests/heavy/authz.sh live:nodedist
+      - bash tests/heavy/authz.sh live:godist
       - bash tests/heavy/authz.sh live:sdkman
       - bash tests/heavy/authz.sh live:github
       - bash tests/heavy/authz.sh live:forgejo

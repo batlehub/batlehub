@@ -52,6 +52,7 @@ import {
   GENERIC_REGISTRY,
   GITHUB_REGISTRY,
   GITLAB_REGISTRY,
+  GO_DIST_REGISTRY,
   GO_REGISTRY,
   JBMARKET_REGISTRY,
   JETBRAINS_REGISTRY,
@@ -735,6 +736,37 @@ export const ARMS = [
     doc: "a release tarball",
     request: () => ({
       url: p(`/proxy/${NODE_REGISTRY}/nodedist/v22.11.0/node-v22.11.0-linux-x64.tar.gz`),
+    }),
+  },
+
+  // ── Go distributions (RFC 0048 §6.7) ──────────────────────────────────────
+  {
+    op: "godist_document",
+    kind: "godist",
+    registry: GO_DIST_REGISTRY,
+    weight: 1,
+    expect: [200],
+    doc: "index.json: Go's release document, filtered",
+    request: () => ({ url: p(`/proxy/${GO_DIST_REGISTRY}/godist/index.json`) }),
+  },
+  {
+    op: "godist_archive",
+    kind: "godist",
+    registry: GO_DIST_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "a release archive, verified against the document",
+    request: () => ({ url: p(`/proxy/${GO_DIST_REGISTRY}/godist/go1.25.4.linux-amd64.tar.gz`) }),
+  },
+  {
+    op: "godist_sha256",
+    kind: "godist",
+    registry: GO_DIST_REGISTRY,
+    weight: 1,
+    expect: [200],
+    doc: "the archive's .sha256, answered from the document",
+    request: () => ({
+      url: p(`/proxy/${GO_DIST_REGISTRY}/godist/go1.25.4.linux-amd64.tar.gz.sha256`),
     }),
   },
 

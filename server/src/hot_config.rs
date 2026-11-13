@@ -404,6 +404,7 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         // The nodedist handlers read it to name the package: `iojs` on the
         // io.js tree, `node` everywhere else (RFC 0010 §4.3).
         RegistryKind::Nodedist => "https://nodejs.org/dist",
+        RegistryKind::Godist => "https://dl.google.com/go",
         // `batlehub-cli setup apply` writes mise rules for these only when
         // the registry proxies the public host (RFC 0038 §6.4); the values
         // match `builders::default_upstreams`.

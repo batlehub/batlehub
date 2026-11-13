@@ -37,6 +37,7 @@ export const COMPOSER_REGISTRY = "perf-composer";
 export const CONDA_REGISTRY = "perf-conda";
 export const NIX_REGISTRY = "perf-nix";
 export const NODE_REGISTRY = "perf-node";
+export const GO_DIST_REGISTRY = "perf-godist";
 export const MISE_VERSIONS_REGISTRY = "perf-mise-versions";
 export const RUSTUP_REGISTRY = "perf-rustup";
 export const TERRAFORM_REGISTRY = "perf-terraform";

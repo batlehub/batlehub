@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: d9160de20592a60b
+sourceHash: 51e54b52410c16db
 ---
 
 # Référence de configuration
@@ -1140,6 +1140,7 @@ deny_missing_timestamp = false   # true pour refuser les paquets sans horodatage
 | `upstreams` | chaîne[] | non | Les URL amont essayées dans l'ordre en cas de défaut de cache ; un 404 de l'une passe à la suivante. Vaut par défaut l'URL intégrée du registre. Obligatoire en mode `hybrid`. |
 | `index_url` | chaîne | non | Cargo uniquement : l'URL de l'index sparse. Vaut `https://index.crates.io` par défaut. Obligatoire en mode `hybrid` et pour les registres Gitea ou Forgejo auto-hébergés. |
 | `broker_url` | chaîne | non | **sdkman uniquement.** Le courtier de téléchargement, second hôte de l'unique protocole. Vaut `https://broker.sdkman.io` par défaut ; `upstreams` est l'API des candidats (`https://api.sdkman.io/2`). Une URL http(s) absolue ; rejetée sur tout autre type ([RFC 0010](/rfc/0010-toolchain-managers) §4.5). |
+| `metadata_url` | chaîne | non | **godist uniquement.** Le document de publication de Go, lu pour savoir quelles publications et quels fichiers existent, et le `sha256` de chacun. Vaut `https://go.dev/dl/?mode=json&include=all` par défaut ; `upstreams` est l'arborescence des archives (`https://dl.google.com/go`). Une URL http(s) absolue ; rejetée sur tout autre type ([RFC 0048](/rfc/0048-mise-core-toolchains) §4.1). |
 | `storage` | chaîne | non | Le nom du backend de stockage. Doit correspondre à un `name` de `[[storage.backends]]`. À omettre pour employer le backend par défaut. |
 | `deny_components` | chaîne[] | non | **rustup uniquement.** Les noms de paquets du manifeste (`rust-docs`, `clippy-preview`) que ce registre ne sert jamais, quoi que dise le manifeste de canal — appliqués avant `[renames]`, car c'est la table que le filtre modifie. Une installation de profil se poursuit sans eux ; un `rustup component add` explicite s'arrête sur le message de rustup lui-même, *« toolchain '…' does not contain component '…' »*. Vide, rien n'est refusé. Rejeté sur tout autre type ([RFC 0024](/rfc/0024-rustup-dist) §4.5). Voir [la chaîne d'outils Rust](/fr/registries/rustup). |
 | `roles` | chaîne | non | **galaxy uniquement.** L'étendue de la surface **rôles v1** d'Ansible Galaxy que ce registre sert : `"proxy"` (défaut — les lectures sont servies, `download_url` est réécrite vers cette instance et l'archive est récupérée côté serveur à travers le garde-fou SSRF), `"index"` (les mêmes lectures, `download_url` relayée, aucune sortie pour les octets des rôles) ou `"off"` (les endpoints v1 répondent `404` **et** `v1` est absent du document de découverte, de sorte qu'`ansible-galaxy role install` échoue sur son propre *« requires API versions 'v1' »*). Rejeté sur tout autre type ([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Voir [Ansible Galaxy](/fr/registries/galaxy#le-reglage-roles). |

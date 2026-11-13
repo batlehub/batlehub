@@ -268,6 +268,7 @@ pub async fn run(
         | RegistryKind::Gitlab
         | RegistryKind::Generic
         | RegistryKind::Nodedist
+        | RegistryKind::Godist
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         | RegistryKind::MiseVersions => {

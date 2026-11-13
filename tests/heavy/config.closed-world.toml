@@ -249,6 +249,19 @@ anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# ── godist: dl.google.com/go, checked against go.dev's release document ─────
+# RFC 0048 §6.7. Both hosts defaulted; mise lists Go through the mise-versions
+# registry above and downloads through this one.
+[[registries]]
+type = "godist"
+name = "godist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 # ── SDKMAN: api.sdkman.io, and the broker that 302s to the vendor's CDN ──────
 #
 # Two upstreams are not configured here: the broker base is the adapter's own

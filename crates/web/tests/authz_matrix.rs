@@ -612,6 +612,19 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── godist (RFC 0048 §6.7) ───────────────────────────────────────────
+        // Proxy-only like `nodedist`: the version comes out of the file name,
+        // so a Go release is a real coordinate (`go` / `9.8.7`). The release
+        // document is a whole-registry one: one package, every release.
+        Row::new("godist", "/proxy/reg/godist/go9.8.7.linux-amd64.tar.gz")
+            .coord("go", "9.8.7")
+            .vis(Expect::NotChecked(
+                "proxy-only: the archive is streamed from upstream and no local package is read",
+            )),
+        Row::new("godist", "/proxy/reg/godist/index.json")
+            .coord("go", "9.8.7")
+            .token("go1.1.0")
+            .vis(WHOLE_REGISTRY),
         // ── rustup (RFC 0024) ────────────────────────────────────────────────
         // Proxy-only like `nodedist`, with two packages rather than one: `rust`
         // for the toolchains and `rustup` for the installer's own tree, so a
@@ -1192,6 +1205,8 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/mise-versions/data/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/_registry/latest.tar.zst", Coverage::NoRow("mise's registry archive with the overlay merged, no package read (RFC 0045, proxy-only kind); `mise_auto_wire.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/_wire-answer/{outcome}", Coverage::NoRow("the wire's own answer, reached only as a rewrite and 404 without one (RFC 0045); `mise_auto_wire.rs` asserts the refusals and `wire_answer_without_extension_is_404`")),
+    ("/proxy/{registry}/godist/index.json", Coverage::Row),
+    ("/proxy/{registry}/godist/{file}", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
