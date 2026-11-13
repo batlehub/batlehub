@@ -404,10 +404,6 @@ export const sidebar = {
           text: "0043 — mise versions host",
           link: "/rfc/0043-mise-versions-host",
         },
-        {
-          text: "0044 — Scan visibility and admin views",
-          link: "/rfc/0044-scan-visibility-and-admin-views",
-        },
       ],
     },
     {
@@ -564,6 +560,10 @@ export const sidebar = {
         {
           text: "0042 — Security console by verb",
           link: "/rfc/0042-security-console-by-verb",
+        },
+        {
+          text: "0044 — Scan visibility and admin views",
+          link: "/rfc/0044-scan-visibility-and-admin-views",
         },
         {
           text: "0045 — mise auto-wire",
