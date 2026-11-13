@@ -4303,8 +4303,10 @@ assert reasons and all(reasons), f"a denied line with no reason: {reasons}"
   rc=$?
   set -e
   [[ $rc -ne 0 ]] || heavy_fail "npm installed from a closed registry with a credential nobody accepts"
-  heavy_wire_after "audit-rejected" "$WIRE_403" \
-    "npm was stopped, but not by the closed registry's 403 — the fallback to anonymous is not what refused it"
+  # The refused credential falls back to anonymous, which the closed registry
+  # challenges: 401, not 403 (RFC 0015 §13.19).
+  heavy_wire_after "audit-rejected" "-> 401" \
+    "npm was stopped, but not by the closed registry's 401 — the fallback to anonymous is not what refused it"
   local first_at
   first_at="$(date +%s)"
   n="$(audit_count credential_rejected)"

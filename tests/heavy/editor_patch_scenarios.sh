@@ -18,7 +18,7 @@
 # request, header included:
 #
 #   1. No credential anywhere: an install by id fails, the registry saw the
-#      query and answered 403, and no request carried an Authorization.
+#      query and answered 401, and no request carried an Authorization.
 #   2. `VSX_REGISTRY_AUTH_TOKEN` with the gallery named by $GALLERY_ENV_NAME:
 #      the install succeeds; every request that reached the registry carried
 #      `Authorization: Bearer`.
@@ -150,10 +150,10 @@ if editor "$P" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/anon.txt" 2>&1; th
 grep -q "gallery credential patch armed" "$HEAVY_WORK/anon.txt" \
   || { cat "$HEAVY_WORK/anon.txt" >&2; heavy_fail "the preload did not run inside $EDITOR_LABEL (no 'patch armed' line)"; }
 [[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/anon.txt" >&2; heavy_fail "$EDITOR_LABEL installed $EXT_ID with no credential anywhere"; }
-heavy_wire_re_after "anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 403" \
+heavy_wire_re_after "anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 401" \
   "the editor's lookup did not reach the registry, or was not refused"
 [[ "$(credentialed_after anon)" == "0" ]] || heavy_fail "a request carried a credential the editor was never given"
-heavy_log "ANON-OK (patch armed, nothing to send: 403 on the editor's own query, $(bare_requests_after anon) request(s), none with a credential)"
+heavy_log "ANON-OK (patch armed, nothing to send: 401 on the editor's own query, $(bare_requests_after anon) request(s), none with a credential)"
 
 # ── 3. The environment variable, with the gallery named the launcher's way ──
 
@@ -239,7 +239,7 @@ PY
 heavy_mark "source-anon"
 if editor "$P3" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/source-anon.txt" 2>&1; then RC=0; else RC=$?; fi
 [[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/source-anon.txt" >&2; heavy_fail "the editor resolved a token *source* — the patch must not"; }
-heavy_wire_re_after "source-anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 403"
+heavy_wire_re_after "source-anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 401"
 [[ "$(credentialed_after source-anon)" == "0" ]] || heavy_fail "a source entry produced a credential"
 heavy_mark "source-env"
 editor "$P3" "$GALLERY_ENV_NAME=$REGISTRY_BASE" VSX_REGISTRY_AUTH_TOKEN="$USER_TOKEN" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/source-env.txt" 2>&1 \

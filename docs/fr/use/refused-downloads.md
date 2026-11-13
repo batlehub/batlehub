@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: 529f9b3b9dc21735
+sourceHash: c8904d09d04abfd1
 ---
 
 # Pourquoi un téléchargement est refusé
