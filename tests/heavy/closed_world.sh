@@ -2792,7 +2792,31 @@ phase_mise-versions() {
   heavy_wire_seen_after mv-gate "jq-$MV_NEWEST" \
     && heavy_fail "mise-versions: a request named jq-$MV_NEWEST through the gated registry"
 
-  heavy_log "CLOSED-WORLD-MISE-VERSIONS-OK (latest is $MV_PREV with $MV_NEWEST blocked or too young)"
+  # 7b. The python-build-standalone index (RFC 0043 decision 3, phase 4).
+  # With python.compile off, mise 2026.9.5 lists CPython from
+  # `tools/python-precompiled-<arch>-<os>.gz` alone
+  # (`_list_remote_versions` → `fetch_precompiled_remote_versions`); its pypy
+  # index is outside the closed world and is only a warning.
+  heavy_log "mise-versions §7b: mise ls-remote python reads the precompiled index"
+  mv_config "$MV_REG"; mv_fresh
+  local pyenv=(MISE_PYTHON_COMPILE=0)
+  heavy_mark mv-py
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${pyenv[@]}" "${mise[@]}" ls-remote python \
+    || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote python failed inside the closed world"; }
+  heavy_wire_re_after mv-py "GET /proxy/$MV_REG/mise-versions/(data|tools)/python-precompiled-[a-z0-9_-]+[.]gz -> 200" \
+    "mise-versions: mise did not read the python index through this instance"
+  local py_blocked
+  py_blocked="$(grep -E '^[0-9]+[.][0-9]+[.][0-9]+$' "$out" | tail -1)"
+  [[ -n "$py_blocked" ]] || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote python listed no stable CPython"; }
+  heavy_block "$MV_REG" python "$py_blocked"
+  mv_fresh
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${pyenv[@]}" "${mise[@]}" ls-remote python \
+    || { cat "$out" >&2; heavy_fail "mise-versions: ls-remote python failed with $py_blocked blocked"; }
+  grep -qx "$py_blocked" "$out" \
+    && { cat "$out" >&2; heavy_fail "mise-versions: ls-remote python still lists the blocked $py_blocked"; }
+  heavy_unblock "$MV_REG" python "$py_blocked"
+
+  heavy_log "CLOSED-WORLD-MISE-VERSIONS-OK (latest is $MV_PREV with $MV_NEWEST blocked or too young; python $py_blocked hidden from the precompiled index)"
   # 8. RFC 0045: the same tool through one auto-wire rule.
   mise_auto_wire_cases
 }

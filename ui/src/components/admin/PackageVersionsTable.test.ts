@@ -10,12 +10,14 @@ const {
   bulkBlockPackagesMock,
   bulkUnblockPackagesMock,
   invalidatePackageMock,
+  listRegistriesMock,
 } = vi.hoisted(() => ({
   blockPackageMock: vi.fn(),
   unblockPackageMock: vi.fn(),
   bulkBlockPackagesMock: vi.fn(),
   bulkUnblockPackagesMock: vi.fn(),
   invalidatePackageMock: vi.fn(),
+  listRegistriesMock: vi.fn(),
 }));
 
 vi.mock("@/client/sdk.gen", () => ({
@@ -24,6 +26,7 @@ vi.mock("@/client/sdk.gen", () => ({
   bulkBlockPackages: bulkBlockPackagesMock,
   bulkUnblockPackages: bulkUnblockPackagesMock,
   invalidatePackage: invalidatePackageMock,
+  listRegistries: listRegistriesMock,
 }));
 
 import PackageVersionsTable from "./PackageVersionsTable.vue";
@@ -48,7 +51,10 @@ function version(over: Partial<PackageVersionDetail> = {}): PackageVersionDetail
   } as PackageVersionDetail;
 }
 
-async function mountComp(versions: PackageVersionDetail[]) {
+async function mountComp(
+  versions: PackageVersionDetail[],
+  at: { registry: string; name: string } = { registry: "npm", name: "pkg" },
+) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -59,7 +65,7 @@ async function mountComp(versions: PackageVersionDetail[]) {
   await router.push("/");
   await router.isReady();
   const wrapper = mount(PackageVersionsTable, {
-    props: { registry: "npm", name: "pkg", versions },
+    props: { ...at, versions },
     attachTo: document.body,
     global: { plugins: [router] },
   });
@@ -109,6 +115,13 @@ describe("PackageVersionsTable", () => {
       .mockReset()
       .mockResolvedValue({ data: { succeeded_count: 1, failed_count: 0 } });
     invalidatePackageMock.mockReset().mockResolvedValue({});
+    listRegistriesMock.mockReset().mockResolvedValue({
+      data: [
+        { name: "npm", type: "npm" },
+        { name: "gh", type: "github" },
+        { name: "mv", type: "mise-versions" },
+      ],
+    });
   });
 
   afterEach(() => {
@@ -210,6 +223,59 @@ describe("PackageVersionsTable", () => {
     const shown = wrapper.findComponent(DestructiveConfirm).props("consequence") as string;
     expect(shown).toContain("hides the whole 1.0.0 version from version listings");
     expect(shown).toContain("stay downloadable by exact coordinate");
+  });
+
+  /* RFC 0043 decision 1: a forge release has a second name in mise's list. */
+  it("offers the matching mise block on a forge release, pre-filled and opt-in", async () => {
+    const { wrapper } = await mountComp([version({ version: "jq-1.8.2", artifact: null })], {
+      registry: "gh",
+      name: "jqlang/jq",
+    });
+    await press(wrapper, "Block");
+    const offer = document.querySelector<HTMLInputElement>("#mise-block-0");
+    expect(offer, "one offer for the one mise-versions registry").not.toBeNull();
+    expect(document.body.textContent).toContain("Also block it in mv");
+
+    // Unchosen, confirming blocks the forge release only.
+    await confirmDialog(wrapper, "CVE-2026-0000");
+    expect(blockPackageMock).toHaveBeenCalledTimes(1);
+
+    blockPackageMock.mockClear();
+    await press(wrapper, "Block");
+    document.querySelector<HTMLInputElement>("#mise-block-0")!.click();
+    await flushPromises();
+    expect(document.querySelector<HTMLInputElement>("#mise-block-tool-0")!.value).toBe("jq");
+    const ver = document.querySelector<HTMLInputElement>("#mise-block-version-0")!;
+    expect(ver.value).toBe("1.8.2");
+    ver.value = "1.8.2-edited";
+    ver.dispatchEvent(new Event("input"));
+    await confirmDialog(wrapper, "CVE-2026-0000");
+    expect(blockPackageMock).toHaveBeenNthCalledWith(2, {
+      body: { registry: "mv", name: "jq", version: "1.8.2-edited", reason: "CVE-2026-0000" },
+    });
+  });
+
+  it("offers no mise block outside a forge registry", async () => {
+    const { wrapper } = await mountComp([version()]);
+    await press(wrapper, "Block");
+    expect(document.querySelector("#mise-block-0")).toBeNull();
+  });
+
+  it("says which mise block was refused after the forge block landed", async () => {
+    blockPackageMock
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ error: { message: "forbidden" } });
+    const { wrapper } = await mountComp([version({ version: "v2.0.0", artifact: null })], {
+      registry: "gh",
+      name: "cli/cli",
+    });
+    await press(wrapper, "Block");
+    document.querySelector<HTMLInputElement>("#mise-block-0")!.click();
+    await confirmDialog(wrapper, "policy");
+    expect(blockPackageMock).toHaveBeenCalledTimes(2);
+    const dialog = wrapper.findComponent(DestructiveConfirm);
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("error")).toContain("mv refused");
   });
 
   it("does not block when the dialog is dismissed", async () => {

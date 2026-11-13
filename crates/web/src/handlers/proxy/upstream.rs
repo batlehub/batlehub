@@ -139,6 +139,21 @@ pub async fn cached_forward_with(
     out: Outbound,
     offline: bool,
 ) -> Result<HttpResponse, AppError> {
+    cached_forward_filtered(svc, http, registry, cache_key, out, offline, |body| body).await
+}
+
+/// [`cached_forward_with`], with `filter` applied to a `2xx` body on its way
+/// out. The cache keeps upstream's bytes; the filter runs on every answer, so
+/// a block or an age gate takes effect without a cache flush.
+pub async fn cached_forward_filtered(
+    svc: &Arc<ProxyService>,
+    http: &reqwest::Client,
+    registry: &str,
+    cache_key: &str,
+    out: Outbound,
+    offline: bool,
+    filter: impl FnOnce(Vec<u8>) -> Vec<u8>,
+) -> Result<HttpResponse, AppError> {
     let ttl = passthrough_ttl(svc, registry).await;
     let result = svc
         .cached_passthrough(registry, cache_key, Some(ttl), || async {
@@ -181,13 +196,18 @@ pub async fn cached_forward_with(
         .map_err(|e| AppError::bad_gateway(format!("upstream unavailable: {e}")))?;
 
     let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::OK);
+    let body = if status.is_success() {
+        filter(result.bytes.body)
+    } else {
+        result.bytes.body
+    };
     Ok(HttpResponse::build(status)
         .content_type(result.bytes.content_type.clone())
         // Rung 3 is visible rather than silent: a client (or an operator
         // reading logs) can tell an answer served during an upstream outage
         // from a live one.
         .insert_header(("X-BatleHub-Cache", result.freshness.header_value()))
-        .body(result.bytes.body))
+        .body(body))
 }
 
 /// A `GET` with its own total `timeout`, the body capped at `cap` bytes, and

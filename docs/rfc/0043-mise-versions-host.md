@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — signed off 2026-11-10 with every question of §11 resolved; implementation starts with phases 1–2 of §12 |
+| Status      | **Implemented** — signed off 2026-11-10; phases 1–3 landed 2026-11-11 in #311 (`04bd331f`), proven by `tests/heavy/closed_world.sh mise-versions` against mise 2026.9.5; phase 4 (the `python-precompiled` filter) and decision 1's block dialog landed 2026-11-13; §13 records 19 differences |
 | Short       | mise versions host                                            |
 | Settles     | Proxying mise-versions.jdx.dev as a registry kind: version lists filtered by the block list, the install beacon kept on site, and an air gap that answers rather than times out |
 | Author      | Sn0walice <snow.alice@pm.me>                                  |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-10                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, `tests/heavy`, docs |
+| Touches     | `crates/core`, `crates/adapters`, `crates/web`, `crates/config`, `server`, `cli`, `ui`, `perf`, `tests/heavy`, docs |
 
 ---
 
@@ -669,3 +669,126 @@ tag rather than by choice.
 | 2 | The `mise-versions` closed-world phase, the `airgap.sh` phase, `authz.sh` `live:`, the soak arm. |
 | 3 | `registry suggest` rule and ordering, the UI snippet, the registry page and `docs/use/mise.md`. Useful on its own once 1–2 have landed. |
 | 4 | The `python-precompiled` filter (§11, decision 3), after its format is read from mise's python plugin. |
+
+---
+
+## 13. Revision against the tree (2026-11-13)
+
+Phases 1, 2 and 3 of §12 landed in one pull request, #311, squashed on
+`main` as `04bd331f` (2026-11-11), without decision 1's block dialog. RFC
+0045 (#321, `860cb2f7`) later moved this kind's client rule into the core
+wire table. Phase 4 and the block dialog landed with this revision
+(2026-11-13). This RFC has no §13 to §16 of the newer template, so the
+revision takes the next free number.
+
+| Phase | State | Where it is in the tree |
+| --- | --- | --- |
+| 1 | done | `RegistryKind::MiseVersions` (`entities/registry_kind.rs`); the parser `services/mise_versions.rs` (`lines`, `versions`, `younger_than`); `blocking/mise_versions.rs::strip_versions_toml`; `upstream_detail/mise_versions.rs::read`; the adapter `registry/mise_versions.rs::MiseVersionsRegistryClient`; the handlers `handlers/proxy/mise_versions.rs` (`mise_versions_data`, `_tools`, `_beacon`, `_beacon_tools`, `_beacon_track`, `_github_api`, `_github_data`); `server/src/builders.rs`; `schema/tests.rs::mise_versions_is_proxy_only_and_takes_an_age_gate`; `crates/web/tests/mise_versions.rs` |
+| 2 | done, less the `airgap.sh` phase | `closed_world.sh::phase_mise-versions` with its `- phase: mise-versions` row in `test.yaml`; `authz.sh` `live_run_mise_versions` (`live:mise-versions`) plus a hermetic beacon row; the soak arms `mise_versions_list` and `mise_versions_beacon` in `perf/k6/soak_arms.js` with `perf/mock-upstream/src/protocols/mise_versions.rs` |
+| 3 | done | `core/src/services/mise_wire.rs::typed_rules` (the rule, since RFC 0045), `TYPED_HOSTS` in `cli/src/api/suggest.rs`, `"mise-versions"` first in `MISE_TYPES` (`cli/src/api/client_setup.rs`); `ui/src/config/registryTypes.ts`; `docs/registries/mise-versions.md` and `docs/use/mise.md` §1.1, with their French twins. The block dialog (2026-11-13): `ui/src/lib/miseBlock.ts::miseBlockGuess` and the offer in `components/admin/PackageVersionsTable.vue` (`offerMiseBlocks`, `blockOnMise`), tested by `miseBlock.test.ts` and `PackageVersionsTable.test.ts` ("offers the matching mise block on a forge release, pre-filled and opt-in", "offers no mise block outside a forge registry", "says which mise block was refused after the forge block landed") |
+| 4 | done (2026-11-13) | `services/mise_versions.rs::precompiled_entry`, `blocking/mise_versions.rs::strip_precompiled_index`, `ProxyService::mise_precompiled_hides` (`proxy/handle.rs`), the handler's `filter_precompiled` through `upstream.rs::cached_forward_filtered`; `listing_filter()` now lists the index as filtered. Unit tests `a_precompiled_line_is_read_as_mise_reads_it` and the four `precompiled_*` tests in `blocking/mise_versions.rs`; integration tests `the_python_index_is_byte_exact_with_nothing_hidden_under_both_prefixes`, `a_blocked_python_version_is_absent_from_the_index`, `an_age_gate_hides_the_young_python_builds_only`, `an_unreadable_python_index_is_relayed_untouched`; closed-world case 7b |
+
+### Where the build differs from the text
+
+1. **Phase 4 filters the index at its handler, gunzipped.** The format, read
+   from mise 2026.9.5's `src/plugins/core/python.rs`
+   (`fetch_precompiled_remote_versions`, `select_python_precompiled`): gzip
+   text, one python-build-standalone file name per line, of which mise reads
+   only the lines matching `^cpython-(\d+\.\d+\.[\da-z]+)\+(\d+)`. A block on
+   `python` removes every build of that version. The age gate judges each
+   *build* by its `+YYYYMMDD` release tag, so an older build of a gated
+   version stays, as the gate would let its archive through. A line mise does
+   not read is kept; an undated `cpython-…+` line follows
+   `deny_missing_timestamp`. The cache keeps upstream's bytes and the filter
+   runs on every answer; with nothing removed the bytes are upstream's. An
+   index that does not gunzip, or exceeds 16 MiB decompressed, is relayed
+   untouched, failing open like the TOML filter (§7).
+2. **mise 2026.9.5 asks for the index under `tools/`**, not `data/`
+   (`https://mise-versions.jdx.dev/tools/{url_path}`). Until this revision
+   `tools/` answered only `{tool}.toml`, so a `mise install python` through
+   the rule got a `404` for the index. Both prefixes now serve both
+   documents, from one cache entry fetched from upstream's `data/`, which
+   jdx.dev serves with the same `etag` (probed 2026-11-13).
+3. **The block dialog offers, does not pre-select.** On a `github`, `gitlab`
+   or `forgejo` registry, the single-version block dialog lists one opt-in
+   checkbox per `mise-versions` registry. Ticking it shows the tool (the last
+   segment of the repository) and the version (the tag without `<tool>-` or a
+   leading `v`), both editable. The mise block is sent after the forge block
+   succeeds, with the same reason. A refused mise block keeps the dialog open
+   and names that registry. The bulk block offers none.
+4. **No `airgap.sh` phase.** The air gap is proven by `air_gap.rs` only. The
+   `mise-auto-wire` cases in `airgap.sh` belong to RFC 0045 and do not run
+   `mise install jq` against a held asset.
+5. **The age gate does not ride on `ListingContext`.** `Rule::listing_age_gate`
+   (`rules/release_age.rs`) yields the gate, and `ProxyService` in
+   `proxy/handle.rs` adds `younger_than`'s versions to the `BlockedVersions`
+   (`BlockedVersions::extend`) when the kind is `MiseVersions`. The scoping
+   to this kind is the same; the field is not.
+6. **An unreadable line is always kept**, even under
+   `deny_missing_timestamp = true`, which §4.3 said would drop it. It has no
+   version to name; a `shortcut:` comment on `younger_than` records the limit.
+7. **No `DocumentKind::PYTHON_PRECOMPILED`.** The index goes through the web
+   passthrough cache (`cached_forward_filtered`, key
+   `mise-versions:{registry}:python-precompiled:{triple}`), authorized as the
+   package `python`, not through the adapter. In an air gap it is held-or-503
+   and no miss is recorded, where §4.3 said "the usual 503 miss".
+8. **The tool name is checked by `validate_path_safe`**, not
+   `validate_package_name`. The triple is checked as written: three or four
+   `[a-z0-9_]` words.
+9. **The beacon body is not read.** §6.4 said up to 4 KiB is read and
+   discarded; the handler returns `204` without touching it.
+10. **The `200` bodies declare `ProtocolDocument`**, not `UpstreamDocument`.
+11. **§4.4's two warnings are not emitted.** Neither "a rule other than
+    `release_age_gate` is inert" nor "`upstreams` not a host root" exists.
+    `path_allow` and `broker_url` are rejected by the generic checks
+    (`validate_registry_path_allow`, `validate_registry_broker_url`);
+    `index_url` is not rejected on this kind, nor on any other non-cargo kind.
+12. **The air-gap test is named**
+    `a_mise_versions_listing_is_a_404_and_not_a_recorded_miss`, without "in an
+    air gap".
+13. **The soak arms read `data/jq.toml` and the beacon**, from
+    `perf/k6/soak_arms.js`, not a `soak.sh` arm reading `data/node.toml`.
+14. **§6.8 case 3 asserts the asset aqua actually fetches.** Measured on mise
+    2026.9.5: aqua resolves jq through `releases/tags/jq-<v>` and downloads
+    through `releases/assets/{id}`, so the phase accepts that or
+    `releases/download/`.
+15. **Case 4 checks the beacon on the wire only.** It is asserted `204` when
+    mise sends it before exiting, and logged otherwise. The "upstream duration
+    does not move" half is the integration test
+    `every_beacon_shape_is_absorbed_and_nothing_reaches_upstream`
+    (`expect(0)` on the mock upstream).
+16. **Case 5 is not run.** Version documents are not metered, so there is no
+    cache-hit counter for it to read.
+17. **Case 7 uses a second registry, `mise-versions-gated-…`**, whose gate is
+    written at start-up from `jq.toml`, instead of a reload. It asserts
+    `ls-remote` only, not `mise latest`.
+18. **§10's test rows not written as such:** the adapter has no `etag` or
+    header-forwarding test (the client builds its own request, so no client
+    header reaches it); the integration suite does not prove that `tools/` and
+    `data/` share one cache entry, only that both are filtered; `%2F` in the
+    tool name is not tested, `..` is; no test pins other kinds' listings
+    byte-identical, the scoping being the `kind == MiseVersions` guard.
+19. **Added beyond the text:** a `releases:list` hermetic row in `authz.sh`,
+    `a_closed_registry_refuses_every_route` and
+    `the_routes_refuse_a_registry_of_another_kind`.
+
+### The proof, as observed
+
+`tests/heavy/closed_world.sh mise-versions` passed end to end against mise
+2026.9.5 when #311 landed (exit 0, 29 s, as its commit records), and again
+as the base of RFC 0045's cases. It observed cases 1, 2, 3, 6 and 7; case 4
+when the beacon reached the wire; case 5 not run (point 16). The refusal is
+case 3: no request named `jq-<newest>` while it was blocked. Not rerun for
+this revision.
+
+### Security, as tested
+
+| §7 claim | Test |
+| --- | --- |
+| No new authenticated surface | `a_closed_registry_refuses_every_route` (every route `403`); `authz.sh` `live:mise-versions` |
+| The beacon is not a log | `every_beacon_shape_is_absorbed_and_nothing_reaches_upstream`; the handler logs at `trace` only |
+| Attacker-controlled input validated | `an_unsafe_tool_name_is_refused_and_an_unknown_file_is_not_found`; the unit test on `precompiled_triple` (`../`, two-part triple) |
+| The filter fails open per line | `blocking/mise_versions.rs::an_unreadable_line_is_kept`, `a_blocked_entry_is_one_line_less_and_still_parses` |
+| Client headers not forwarded | by construction (the adapter builds its own request); no test |
+
+No dependency was added.
