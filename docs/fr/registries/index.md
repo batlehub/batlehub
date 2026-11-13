@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 4bed464921942c1e
+sourceHash: e252a40e5071aa2f
 ---
 
 # Registres
@@ -93,6 +93,7 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Hôte de versions de mise](./mise-versions) | `mise-versions` | Les listes de versions que mise lit avant tout backend (`data/<tool>.toml`, filtrées par la liste de blocage et le garde-fou d'âge) ; la balise d'installation répondue sur place | proxy seul | non | `mise-versions.jdx.dev` |
 | [Distributions Node](./nodedist) | `nodedist` | `index.tab`/`index.json`, archives de publication, `SHASUMS256.txt` octet pour octet (nvm, fnm, n, mise) | proxy seul | non | `nodejs.org/dist` |
+| [Chaîne d'outils Go](./godist) | `godist` | Archives de la chaîne d'outils Go et leur `.sha256`, chacune contrôlée contre le document de publication de `go.dev` et vérifiée avant mise en cache (mise) | proxy seul | non | `dl.google.com/go` et `go.dev/dl` |
 | [SDKMAN](./sdkman) | `sdkman` | API des candidats et courtier de téléchargement (le JDK, Gradle, Maven, Kotlin, …) ; le 302 du courtier est suivi côté serveur | proxy seul | non | `api.sdkman.io/2` et `broker.sdkman.io` |
 | [Chaîne d'outils Rust](./rustup) | `rustup` | Manifestes de canal (la liste filtrée), archives de composants par cible et leur `.sha256` ; le `.asc` est relayé octet pour octet | proxy seul | non | `static.rust-lang.org` |
 
@@ -259,6 +260,7 @@ bouton désactivé — voir
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
+| godist | a Go release is a set of archives and their checksums; the release document carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |

@@ -156,6 +156,11 @@ pub mod nodedist;
 #[cfg(feature = "registry-nodedist")]
 pub use nodedist::NodeDistRegistryClient;
 
+#[cfg(feature = "registry-godist")]
+pub mod godist;
+#[cfg(feature = "registry-godist")]
+pub use godist::GoDistRegistryClient;
+
 #[cfg(feature = "registry-sdkman")]
 pub mod sdkman;
 #[cfg(feature = "registry-sdkman")]

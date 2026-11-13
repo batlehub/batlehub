@@ -88,6 +88,10 @@ pub fn typed_rules(kind: RegistryKind) -> &'static [Rule] {
             "{proxy}/mise-versions/$1",
         )],
         RegistryKind::Npm => &[(r"^https://registry\.npmjs\.org/(.+)", "{proxy}/$1")],
+        // mise's `core:go` downloads `{go.download_mirror}/go{v}.{os}-{arch}.{ext}`
+        // and its `.sha256` (`go.rs:126-128`, `:384-387`); the default mirror is
+        // `https://dl.google.com/go`. Its listing is the versions host, or git.
+        RegistryKind::Godist => &[(r"^https://dl\.google\.com/go/(.+)", "{proxy}/$1")],
         RegistryKind::Cargo => &[(
             r"^https://static\.crates\.io/crates/([^/]+)/([^/]+)/.+\.crate",
             "{proxy}/$1/$2/download",
@@ -120,6 +124,7 @@ pub fn proxy_segment(kind: RegistryKind) -> Option<&'static str> {
         || matches!(
             kind,
             RegistryKind::Nodedist
+                | RegistryKind::Godist
                 | RegistryKind::Sdkman
                 | RegistryKind::Galaxy
                 | RegistryKind::Helm

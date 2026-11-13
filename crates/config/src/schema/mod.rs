@@ -2645,6 +2645,7 @@ impl AppConfig {
             Self::validate_registry_path_allow(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
+            Self::validate_registry_metadata_url(registry, kind)?;
             Self::validate_registry_deny_components(registry, kind)?;
             Self::validate_registry_roles(registry, kind)?;
             Self::validate_registry_oci_entries(registry, kind)?;
@@ -2927,6 +2928,29 @@ impl AppConfig {
         kind: batlehub_core::entities::RegistryKind,
     ) -> Result<()> {
         use batlehub_core::entities::RegistryKind;
+        // RFC 0048 §4.1: Go's release document carries no date at all, so a
+        // gate there would have nothing to read and would pass every version.
+        // Refused rather than left inert, so nobody believes Go is quarantined.
+        if kind == RegistryKind::Godist {
+            let namespace_rules = registry
+                .namespaces
+                .iter()
+                .filter_map(|ns| ns.rules.as_deref())
+                .flatten();
+            if registry
+                .rules
+                .iter()
+                .chain(namespace_rules)
+                .any(|r| matches!(r, RuleConfig::ReleaseAgeGate(_)))
+            {
+                bail!(
+                    "registry '{}': release_age_gate needs a release date, and the Go release \
+                     document has none — a gate here would pass every version",
+                    registry.name
+                );
+            }
+            return Ok(());
+        }
         // What an undated release *is* on each kind, for the error: on
         // `nodedist` it is the exception, on `sdkman` it is every artifact.
         let consequence = match kind {
@@ -3061,6 +3085,32 @@ impl AppConfig {
             bail!(
                 "registry '{}': 'broker_url' must be an absolute http(s) URL, got '{url}' — it \
                  is joined with '/download/{{candidate}}/{{version}}/{{platform}}' and fetched",
+                registry.name
+            );
+        }
+        Ok(())
+    }
+
+    /// RFC 0048 §4.1: `metadata_url` is godist's second host — Go's release
+    /// document — and nobody else's, for the reason `broker_url` is SDKMAN's.
+    fn validate_registry_metadata_url(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        let Some(url) = registry.metadata_url.as_deref() else {
+            return Ok(());
+        };
+        if kind != batlehub_core::entities::RegistryKind::Godist {
+            bail!(
+                "registry '{}': 'metadata_url' is only meaningful on a godist registry (it is \
+                 Go's release document), not {}",
+                registry.name,
+                kind
+            );
+        }
+        if !(url.starts_with("http://") || url.starts_with("https://")) || url.len() <= 8 {
+            bail!(
+                "registry '{}': 'metadata_url' must be an absolute http(s) URL, got '{url}'",
                 registry.name
             );
         }

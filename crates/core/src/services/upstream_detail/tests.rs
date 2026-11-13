@@ -82,6 +82,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Rubygems
                     | RegistryKind::Terraform
                     | RegistryKind::Nodedist
+                    | RegistryKind::Godist
                     | RegistryKind::Sdkman
                     | RegistryKind::Rustup
                     | RegistryKind::Galaxy
@@ -109,6 +110,7 @@ fn every_reader_belongs_to_a_kind_that_advertises_a_document() {
         RegistryKind::Rubygems,
         RegistryKind::Terraform,
         RegistryKind::Nodedist,
+        RegistryKind::Godist,
         RegistryKind::Sdkman,
         RegistryKind::Helm,
         RegistryKind::MiseVersions,
@@ -580,4 +582,18 @@ fn nodedist_reads_the_nine_column_iojs_table() {
     let detail = dispatch(RegistryKind::Nodedist, &doc);
     assert_eq!(versions_of(&detail), ["v3.3.1"]);
     assert!(detail.versions[0].published_at.is_some());
+}
+
+#[test]
+fn godist_lists_every_release_without_the_go_prefix() {
+    let detail = dispatch(
+        RegistryKind::Godist,
+        &json_doc(serde_json::json!([
+            {"version": "go1.25.4", "stable": true, "files": []},
+            {"version": "go1.26rc1", "stable": false, "files": []}
+        ])),
+    );
+    let versions: Vec<&str> = detail.versions.iter().map(|v| v.version.as_str()).collect();
+    assert_eq!(versions, ["1.25.4", "1.26rc1"]);
+    assert!(detail.versions.iter().all(|v| v.published_at.is_none()));
 }

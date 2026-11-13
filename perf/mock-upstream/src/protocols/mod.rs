@@ -26,6 +26,7 @@ mod marketplaces;
 mod maven;
 mod mise_versions;
 mod nix;
+mod godist;
 mod nodedist;
 mod npm;
 mod nuget;
@@ -53,6 +54,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     mise_versions::configure(cfg);
     nix::configure(cfg);
     nodedist::configure(cfg);
+    godist::configure(cfg);
     npm::configure(cfg);
     nuget::configure(cfg);
     openvsx::configure(cfg);

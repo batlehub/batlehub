@@ -238,6 +238,13 @@ pub struct RegistryConfig {
     /// bug (RFC 0010 §4.1, §4.5).
     #[serde(default)]
     pub broker_url: Option<String>,
+    /// godist only: Go's release document, read for which releases and files
+    /// exist and their `sha256`. Defaults to
+    /// `https://go.dev/dl/?mode=json&include=all`; `upstreams` is the archive
+    /// tree (`https://dl.google.com/go`). Rejected on any other type, for the
+    /// reason `broker_url` is (RFC 0048 §4.1).
+    #[serde(default)]
+    pub metadata_url: Option<String>,
     /// rustup only: components this registry never serves, whatever the
     /// channel manifest says.
     ///

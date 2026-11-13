@@ -613,6 +613,33 @@ const NODEDIST: &[Conformance] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// godist — mise's `core:go` (RFC 0048 §6.7)
+//
+// Both lines read from mise 2026.9.5's `src/plugins/core/go.rs`;
+// `tests/heavy/closed_world.sh godist` turns "read" into "observed". mise reads
+// no listing from this kind; `index.json` is Go's own document, and asking for
+// it proves it is a document and not a file name.
+// ─────────────────────────────────────────────────────────────────────────────
+const GODIST: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/godist/godist/go1.1.0.linux-amd64.tar.gz",
+        "/proxy/{registry}/godist/{file}",
+        "mise go.rs:384-387, `get_tarball_url` — `{go.download_mirror}/go{v}.{os}-{arch}.tar.gz`",
+    ),
+    Conformance::get(
+        "/proxy/godist/godist/go1.1.0.linux-amd64.tar.gz.sha256",
+        "/proxy/{registry}/godist/{file}",
+        "mise go.rs:126-128, `download` — `{tarball_url}.sha256`, read as the whole digest",
+    ),
+    Conformance::get(
+        "/proxy/godist/godist/index.json",
+        "/proxy/{registry}/godist/index.json",
+        "go.dev/dl/?mode=json&include=all — Go's release document, filtered",
+    )
+    .must_find("go1.1.0"),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // sdkman — the `sdk` shell function (RFC 0010)
 //
 // Every line is read from sdkman-cli 5.23.0's bash sources (the zip the
@@ -992,6 +1019,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("terraform", TERRAFORM),
     ("nuget", NUGET),
     ("nodedist", NODEDIST),
+    ("godist", GODIST),
     ("sdkman", SDKMAN),
     ("rustup", RUSTUP),
     ("galaxy", GALAXY),

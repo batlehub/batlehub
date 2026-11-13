@@ -142,6 +142,7 @@ export const sidebar = {
       text: "Chaînes d'outils",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
+        { text: "Chaîne d'outils Go (mise)", link: "/fr/registries/godist" },
         { text: "Hôte de versions de mise", link: "/fr/registries/mise-versions" },
         { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
         { text: "Registre devfile (Che, odo)", link: "/fr/registries/devfile" },

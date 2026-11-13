@@ -101,6 +101,20 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# ── Go distributions: dl.google.com/go (RFC 0048 §6.7) ──────────────────────
+[[registries]]
+type = "godist"
+name = "live-godist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 # ── mise's versions host (RFC 0043) ─────────────────────────────────────────
 [[registries]]
 type = "mise-versions"

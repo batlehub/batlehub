@@ -300,6 +300,17 @@ user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
 [[registries]]
+type = "godist"
+name = "perf-godist"
+upstreams = ["${SOAK_UPSTREAM_URL}/godist"]
+metadata_url = "${SOAK_UPSTREAM_URL}/godist/dl/?mode=json&include=all"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
 type = "mise-versions"
 name = "perf-mise-versions"
 upstreams = ["${SOAK_UPSTREAM_URL}/mise-versions"]

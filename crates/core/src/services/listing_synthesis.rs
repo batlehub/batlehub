@@ -609,6 +609,9 @@ pub fn render(
         (RegistryKind::Nodedist, k) if is(k, "index-json") => {
             VersionDocument::json(nodedist_index_json(held)?)
         }
+        (RegistryKind::Godist, DocumentKind::Versions) => {
+            VersionDocument::json(godist_releases(held)?)
+        }
         (RegistryKind::Sdkman, DocumentKind::Versions) => VersionDocument::text(
             "text/plain; charset=utf-8",
             sdkman_versions_all(name, held)?,
@@ -1283,6 +1286,51 @@ fn nodedist_index_tab(held: &[HeldVersion]) -> Option<String> {
         ));
     }
     Some(out)
+}
+
+/// Go's release document (`go.dev/dl/?mode=json`) for the held archives,
+/// newest first: each file's `sha256` is the held bytes' own digest, which is
+/// what the bundle verified at import. A `.sha256` row is not a file of the
+/// document, and a version with no archive held is not listed.
+fn godist_releases(held: &[HeldVersion]) -> Option<Value> {
+    use crate::services::godist::parse_file_name;
+    let mut versions: Vec<&str> = held.iter().map(|h| h.version.as_str()).collect();
+    versions.sort_by(|a, b| newest_first(a, b));
+    versions.dedup();
+    let releases: Vec<Value> = versions
+        .into_iter()
+        .filter_map(|v| {
+            let files: Vec<Value> = held
+                .iter()
+                .filter(|h| h.version == v)
+                .filter_map(|h| {
+                    let file = h.artifact.as_deref()?;
+                    let (_, _, is_checksum) = parse_file_name(file)?;
+                    if is_checksum {
+                        return None;
+                    }
+                    let platform = file
+                        .strip_prefix(&format!("go{v}."))?
+                        .trim_end_matches(".tar.gz")
+                        .trim_end_matches(".zip");
+                    let (os, arch) = platform.split_once('-')?;
+                    Some(json!({
+                        "filename": file,
+                        "os": os,
+                        "arch": arch,
+                        "version": format!("go{v}"),
+                        "sha256": h.checksum.as_deref().unwrap_or(""),
+                        "size": h.size.unwrap_or(0),
+                        "kind": "archive",
+                    }))
+                })
+                .collect();
+            (!files.is_empty()).then(|| {
+                json!({ "version": format!("go{v}"), "stable": !is_prerelease(v), "files": files })
+            })
+        })
+        .collect();
+    (!releases.is_empty()).then_some(Value::Array(releases))
 }
 
 fn nodedist_index_json(held: &[HeldVersion]) -> Option<Value> {
@@ -2160,6 +2208,25 @@ mod tests {
             "releases",
             None
         ));
+    }
+
+    #[test]
+    fn godist_lists_held_archives_with_their_digest_and_skips_checksum_files() {
+        let set = [
+            held("1.25.4", Some("go1.25.4.linux-amd64.tar.gz")),
+            held("1.25.4", Some("go1.25.4.linux-amd64.tar.gz.sha256")),
+            held("1.24.9", Some("go1.24.9.windows-arm64.zip")),
+            held("1.23.0", Some("go1.23.0.linux-amd64.tar.gz.sha256")),
+        ];
+        let doc = render(RegistryKind::Godist, DocumentKind::Versions, "go", &set, "").unwrap();
+        let rows = doc.body.as_json().unwrap().as_array().unwrap().clone();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0]["version"], "go1.25.4");
+        assert_eq!(rows[0]["files"].as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["files"][0]["os"], "linux");
+        assert_eq!(rows[0]["files"][0]["arch"], "amd64");
+        assert_eq!(rows[0]["files"][0]["sha256"], "ab".repeat(32));
+        assert_eq!(rows[1]["files"][0]["arch"], "arm64");
     }
 
     #[test]

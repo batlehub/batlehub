@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | Draft — phase 5 (`godist`) built ahead of sign-off, 2026-11-13; phases 1–4 not started |
 | Short       | mise core toolchains                                          |
 | Settles     | Which route each of mise's thirteen `core:` toolchains takes through BatleHub — a typed kind, a `generic` preset, or a stated refusal — with a `mise-java` kind for the one that has none and a `godist` kind for Go |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1194,6 +1194,7 @@ a second rule on a prefix one already claims, as for Node and Rust above.
 | Q10 (2026-11-13) | Default for weak and unverified Java rows | **Keep all rows** — `md5:` 180, none 101, `sha1:` 1 950. Against the draft's recommendation to drop `md5:` and empty rows. Recorded as an accepted residual in §7.1 T5: SHA-1 rows are verified with SHA-1, `md5:` and empty rows are cached unverified, and each such cache write is counted in `batlehub_mise_java_weak_downloads_total{checksum}` and logged at `INFO` with the coordinate (§6.3, §10.1). |
 | Q11 (2026-11-13) | A per-registry size limit? | **A per-registry `max_artifact_size_bytes` override** (§4.1, §6.6), in phase 1b; `suggest` writes it on `swift-dl`. As the draft's first option. |
 | Q12 (2026-11-13) | Mutable index files under a preset | **A per-glob `revalidate` list on `generic`, with stale-on-error** (§4.1, §6.6). As recommended. **Owned here, phase 1b**; RFC 0047 §15 Q10 links to it. |
+| Q13 (2026-11-13) | `mise ls-remote go` still lists blocked versions: mise reads them from the versions host, or `git ls-remote` of `MISE_GO_REPO` | **Both routes, by deployment.** With RFC 0045's auto-wiring, the versions host is served by the `mise-versions` kind and lists only allowed versions. Without it, `godist` exposes a git v0 ref list (`/proxy/{reg}/godist/info/refs`) built from the release document minus blocked versions, for `MISE_GO_REPO`. A follow-up to phase 5. |
 
 ### Still open
 
@@ -1212,7 +1213,7 @@ mise's source.
 | 2 | `mise-java` kind: core filter, cache-backed index, adapter with the https-only, `redirect_hosts`-checked redirect loop, routes, config validation, `vendor_hosts` and `redirect_hosts` in the registry DTO + `dump-spec` + `ui:generate`, `mise-java` before `github` (acceptance: `a_locked_blocked_temurin_via_the_rules_is_403`), weak-row counting, metrics, the gates with `AirGap::Gap`; heavy `mise-java` phase (obs. 3–6, 12, 14) | unit + integration + gates + heavy |
 | 3 | `mise-java` air gap: composed document, bundle import, `AirGap::Case` + `air_gap.rs` case; `airgap.sh` obs. 9 | heavy + gates |
 | 4 | move the rows into RFC 0045's `WIRE_RULES` once it lands, as RFC 0047 phase 4 does | unit |
-| 5 | `godist` kind (§6.7): core, adapter, route, config, fuzz target, CLI typed host and rule arm, the five per-kind gates and `profile_route_coverage.rs`, `AirGap::Case`; heavy `godist` phase (obs. 15) and its `authz.sh` live phase; `docs/registries/godist.md` | unit + integration + gates + heavy |
+| 5 | `godist` kind (§6.7): core, adapter, route, config, fuzz target, CLI typed host and rule arm, the five per-kind gates and `profile_route_coverage.rs`, `AirGap::Case`; heavy `godist` phase (obs. 15) and its `authz.sh` live phase; `docs/registries/godist.md`. **Built 2026-11-13**; the ref list of Q13 follows | unit + integration + gates + heavy |
 
 The security controls of §7 (host allowlist, redirect allowlist, download
 index, grant before fetch) land in phase 2 with the routes they protect;

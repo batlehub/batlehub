@@ -1188,6 +1188,9 @@ gems, archives, SSRF ranges):
 - `fuzz_gem_compact_index.rs` — a real `.gem` built from fuzzed fields, stored
   as publish does, read back from `/info`: one line per version, fields
   intact, no field carrying a delimiter.
+- `fuzz_godist_document.rs` — Go's release document round-trips through the
+  struct `index.json` is re-serialised from, and every file name the `godist`
+  route accepts is a separator-free `go{version}.…` with no `..`.
 - `fuzz_narinfo.rs` — narinfo round-trips, the fingerprint decodes back to
   exactly what the narinfo claims, re-signing leaves one valid `Sig`, and
   `rewrite_url` never moves the fingerprint.

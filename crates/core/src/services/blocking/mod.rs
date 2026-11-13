@@ -623,6 +623,13 @@ fn strip(
 
         RegistryKind::Nodedist => Some(strip_nodedist(ctx, doc, blocked)),
 
+        // Go's release document is the same shape as Node's `index.json` — an
+        // array of objects keyed by `version` (`go1.25.4`, matched through
+        // `normalize`) — so a blocked release leaves with every file it lists.
+        RegistryKind::Godist => Some(with_json(doc, |json| {
+            nodedist::strip_index_json(json, blocked)
+        })),
+
         RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
 
         RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
@@ -801,6 +808,12 @@ pub fn normalize(kind: RegistryKind, version: &str) -> Cow<'_, str> {
         | RegistryKind::Nodedist => {
             let v = version.trim();
             Cow::Borrowed(v.strip_prefix('v').unwrap_or(v))
+        }
+        // Go's release document spells `go1.25.4`; mise and a block say
+        // `1.25.4`.
+        RegistryKind::Godist => {
+            let v = version.trim();
+            Cow::Borrowed(crate::services::godist::bare_version(v))
         }
         // Helm compares Masterminds versions, so `v1.21.2`, `1.21.2` and
         // `1.21.2+build` are one release and `helm install --version 1.21.2`
@@ -1144,6 +1157,20 @@ mod tests {
         assert_eq!(norm(RegistryKind::Nodedist, "v22.11.0"), "22.11.0");
         let blocked = BlockedVersions::new(RegistryKind::Nodedist, vec!["22.11.0".to_owned()]);
         assert!(blocked.contains("v22.11.0"));
+    }
+
+    #[test]
+    fn godist_versions_compare_with_or_without_their_go_prefix() {
+        let blocked = BlockedVersions::new(RegistryKind::Godist, vec!["1.25.4".to_owned()]);
+        assert!(blocked.contains("go1.25.4"));
+        assert!(!blocked.contains("go1.25.3"));
+        let mut doc = VersionDocument::json(serde_json::json!([
+            {"version": "go1.25.4", "files": []},
+            {"version": "go1.25.3", "files": []}
+        ]));
+        let removed = dispatch(&ctx(RegistryKind::Godist), &mut doc, &blocked);
+        assert_eq!(removed, vec!["go1.25.4".to_owned()]);
+        assert_eq!(doc.body.as_json().unwrap().as_array().unwrap().len(), 1);
     }
 
     #[test]

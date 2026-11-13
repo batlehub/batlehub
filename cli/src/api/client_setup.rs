@@ -1459,7 +1459,7 @@ const ALL_TARGETS: [TargetId; 19] = [
 /// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules.
-const MISE_TYPES: [&str; 10] = [
+const MISE_TYPES: [&str; 11] = [
     "mise-versions",
     "github",
     "forgejo",
@@ -1469,6 +1469,7 @@ const MISE_TYPES: [&str; 10] = [
     "openvsx",
     "conda",
     "nodedist",
+    "godist",
     "generic",
 ];
 

@@ -12604,6 +12604,107 @@
         ]
       }
     },
+    "/proxy/{registry}/godist/index.json": {
+      "get": {
+        "tags": [
+          "proxy/godist"
+        ],
+        "summary": "Go's release document, blocked releases removed.",
+        "operationId": "godist_index_json",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Go's release document (go.dev/dl/?mode=json&include=all), blocked releases removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/godist/{file}": {
+      "get": {
+        "tags": [
+          "proxy/godist"
+        ],
+        "summary": "One archive of one Go release, or its `.sha256`.",
+        "operationId": "godist_file",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "go{version}.{os}-{arch}.{tar.gz|zip}, optionally with .sha256 (e.g. go1.25.4.linux-amd64.tar.gz)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive (cached, verified against the release document's sha256) or its sha256 as 64 hex digits",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Go archive file name"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not in the release document, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/helm/api/charts": {
       "get": {
         "tags": [
@@ -31561,6 +31662,10 @@
     {
       "name": "proxy/mise-versions",
       "description": "mise's versions host (mise-versions.jdx.dev) — tool version lists filtered by the block list and the age gate, the install beacon absorbed on site, the GitHub mirror refused so mise asks the rerouted GitHub API (RFC 0043)"
+    },
+    {
+      "name": "proxy/godist",
+      "description": "Go toolchain distribution (mise's core:go) — dl.google.com/go as a typed registry: each archive checked against go.dev's release document and verified at cache write, its .sha256 answered from that document, a blocked release refused on both, and the document served filtered as index.json"
     },
     {
       "name": "proxy/nodedist",

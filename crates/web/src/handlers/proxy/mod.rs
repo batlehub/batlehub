@@ -9,6 +9,7 @@ pub mod galaxy;
 pub mod generic;
 pub mod github;
 pub mod gitlab;
+pub mod godist;
 pub mod goproxy;
 pub mod helm;
 pub mod jetbrains;

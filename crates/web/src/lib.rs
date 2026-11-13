@@ -563,6 +563,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/mise-versions", description = "mise's versions host (mise-versions.jdx.dev) — tool version lists filtered by the block list and the age gate, the install beacon absorbed on site, the GitHub mirror refused so mise asks the rerouted GitHub API (RFC 0043)"),
+        (name = "proxy/godist",     description = "Go toolchain distribution (mise's core:go) — dl.google.com/go as a typed registry: each archive checked against go.dev's release document and verified at cache write, its .sha256 answered from that document, a blocked release refused on both, and the document served filtered as index.json"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
         (name = "proxy/devfile",    description = "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"),
@@ -781,6 +782,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gl_download_archive, gl_download_link, gl_download_raw, gl_get_release,
                 gl_list_releases, gl_packages,
             },
+            godist::{godist_file, godist_index_json},
             goproxy::{
                 goproxy_file, goproxy_latest, goproxy_list, goproxy_publish, goproxy_sumdb,
                 goproxy_vuln_entry, goproxy_vuln_index, goproxy_vuln_query,
@@ -904,6 +906,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     kind_scope(cfg, &[K::Jetbrains], &[jetbrains_routes]);
     kind_scope(cfg, &[K::Generic], &[generic_routes]);
     kind_scope(cfg, &[K::Nodedist], &[nodedist_routes]);
+    kind_scope(cfg, &[K::Godist], &[godist_routes]);
     kind_scope(cfg, &[K::MiseVersions], &[mise_versions_routes]);
     kind_scope(cfg, &[K::Nix], &[nix_routes]);
     kind_scope(cfg, &[K::Galaxy], &[galaxy_routes]);
@@ -1255,6 +1258,12 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
         cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
         cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
         cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
+    }
+    fn godist_routes(cfg: &mut UtoipaServiceConfig) {
+        // Go distribution (RFC 0048 §6.7): the document before `{file}`, so
+        // `index.json` is never read as a file name.
+        cfg.service(godist_index_json); // GET …/godist/index.json  (filtered document)
+        cfg.service(godist_file); // GET …/godist/{file}  (archive or .sha256)
     }
     fn nix_routes(cfg: &mut UtoipaServiceConfig) {
         // Nix binary cache (RFC 0028). One ordering rule and it is load-bearing:

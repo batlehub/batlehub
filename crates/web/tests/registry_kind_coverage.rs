@@ -127,6 +127,9 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     ),
     ("generic", Live::ClosedWorld("helm"), AirGap::Case),
     ("nodedist", Live::ClosedWorld("nvm"), AirGap::Case),
+    // mise installs a Go release through it with egress denied; the air gap
+    // serves held archives and their `.sha256` by path (RFC 0048 §6.5).
+    ("godist", Live::ClosedWorld("godist"), AirGap::Case),
     ("sdkman", Live::ClosedWorld("sdkman"), AirGap::Case),
     ("rustup", Live::Suite("tests/heavy/rustup.sh"), AirGap::Case),
     // Two suites drive this kind and the closed world is the one that counts

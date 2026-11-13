@@ -205,6 +205,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_godist_document"
+path = "fuzz_targets/fuzz_godist_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_narinfo"
 path = "fuzz_targets/fuzz_narinfo.rs"
 test = false

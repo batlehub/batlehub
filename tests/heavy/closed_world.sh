@@ -76,7 +76,7 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        mise-versions nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
+        mise-versions godist nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
         dnf pacman ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
@@ -112,6 +112,10 @@ ANSIBLE_CORE_VERSION="${HEAVY_CW_ANSIBLE:-2.19.3}"
 # like a server bug.
 NVM_VERSION="${HEAVY_CW_NVM:-0.40.3}"
 NODE_DIST_VERSION="${HEAVY_CW_NODE_DIST:-22.11.0}"
+# A Go release and the one before it: the first is installed, the second
+# blocked and refused. Both are in go.dev's release document for good.
+GODIST_GO="${HEAVY_CW_GODIST_GO:-1.25.4}"
+GODIST_BLOCKED="${HEAVY_CW_GODIST_BLOCKED:-1.25.3}"
 SDKMAN_CLI_VERSION="${HEAVY_CW_SDKMAN_CLI:-5.23.0}"
 # The java version is *not* pinned: the phase reads it from the instance's own
 # `candidates/default/java`, so it asks for whatever SDKMAN would have given a
@@ -177,6 +181,7 @@ CONDA_REG="conda-$HEAVY_RUN"
 TF_REG="tf-$HEAVY_RUN"
 GITHUB_REG="github-$HEAVY_RUN"
 NODEDIST_REG="nodedist-$HEAVY_RUN"
+GODIST_REG="godist-$HEAVY_RUN"
 SDKMAN_REG="sdkman-$HEAVY_RUN"
 OVSX_REG="ovsx-$HEAVY_RUN"
 VSCODE_REG="vscode-$HEAVY_RUN"
@@ -1552,6 +1557,90 @@ EOF
     || heavy_fail "mise-auto-wire: the two archive requests were not both 503"
   aw_reload "s|^registry_upstream = .*\$|$upstream_line|;s|^on_collision = \"overlay\"\$|on_collision = \"drop\"|"
   heavy_log "CLOSED-WORLD-MISE-AUTO-WIRE-OK (jq-$MV_PREV and acme-deploy-$AW_VERSION through one rule)"
+}
+
+# ── §26. godist ──────────────────────────────────────────────────────────────
+#
+# mise's `core:go` with egress denied (RFC 0048 §6.7, §6.P obs. 15). mise lists
+# Go through the versions host (`data/go.toml`, routed to the mise-versions
+# registry) and downloads `go{v}.linux-amd64.tar.gz` and its `.sha256` from
+# `go.download_mirror` (`go.rs:126-128`, `:384-387`), which a `url_replacements`
+# rule sends to the godist registry. What has to come out of the closed world
+# is a Go toolchain that compiles and runs a program — and, with the release
+# before it blocked, a refusal mise reports rather than an install.
+
+phase_godist() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/godist" dist="$HEAVY_TAP_BASE/proxy/$GODIST_REG/godist"
+  out="$(cw_out godist)"
+  local conf="$base/config"
+  mkdir -p "$conf" "$base/app"
+  {
+    printf '[settings.url_replacements]\n'
+    printf '"regex:^https://mise-versions\\\\.jdx\\\\.dev/(.+)" = "%s/$1"\n' \
+      "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions"
+    printf '"regex:^https://dl\\\\.google\\\\.com/go/(.+)" = "%s/$1"\n' "$dist"
+  } >"$conf/config.toml"
+  local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+  cat >"$base/app/main.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+// `runtime.Version()`: the claim of this phase is *which* toolchain compiled
+// the program, and that is the one thing only the installed toolchain knows.
+func main() { fmt.Println("CLOSED-WORLD-RAN", runtime.Version()) }
+EOF
+
+  heavy_mark godist-install
+  heavy_log "godist: mise install go@$GODIST_GO, egress denied"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "go@$GODIST_GO" \
+    || { cat "$out" >&2; heavy_fail "godist: the install failed inside the closed world"; }
+  heavy_wire_re_after godist-install "GET /proxy/$MV_REG/mise-versions/data/go[.]toml -> 200" \
+    "godist: mise did not list Go through the versions host registry"
+  heavy_wire_re_after godist-install \
+    "GET /proxy/$GODIST_REG/godist/go$GODIST_GO[.]linux-amd64[.]tar[.]gz -> 200" \
+    "godist: the Go archive did not come through the godist registry"
+  heavy_wire_re_after godist-install \
+    "GET /proxy/$GODIST_REG/godist/go$GODIST_GO[.]linux-amd64[.]tar[.]gz[.]sha256 -> 200" \
+    "godist: mise did not read the .sha256 through the godist registry — the install was not verified"
+
+  cw_step "$out" "$base/app" "${DENY[@]}" "${miseenv[@]}" GOTOOLCHAIN=local GOPROXY=off \
+    GOCACHE="$base/gocache" GOPATH="$base/gopath" \
+    "${mise[@]}" exec "go@$GODIST_GO" -- go run main.go \
+    || { cat "$out" >&2; heavy_fail "godist: the installed toolchain did not build and run a program"; }
+  cw_ran godist "$out" "go$GODIST_GO"
+  local ran
+  ran="$(grep CLOSED-WORLD-RAN "$out" | head -1)"
+
+  # A blocked release: gone from the release document, and refused on both
+  # files when mise asks for it by its exact version.
+  heavy_block "$GODIST_REG" go "$GODIST_BLOCKED"
+  curl -fsS "$HEAVY_BASE/proxy/$GODIST_REG/godist/index.json" -o "$base/index.json" \
+    || heavy_fail "godist: the release document did not answer"
+  grep -q "\"go$GODIST_GO\"" "$base/index.json" \
+    || heavy_fail "godist: the release document does not list go$GODIST_GO"
+  grep -q "\"go$GODIST_BLOCKED\"" "$base/index.json" \
+    && heavy_fail "godist: the release document still lists the blocked go$GODIST_BLOCKED"
+  heavy_mark godist-blocked
+  heavy_log "godist: mise install go@$GODIST_BLOCKED, blocked"
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "go@$GODIST_BLOCKED"; then
+    cat "$out" >&2
+    heavy_fail "godist: mise installed the blocked go@$GODIST_BLOCKED"
+  fi
+  heavy_wire_re_after godist-blocked \
+    "GET /proxy/$GODIST_REG/godist/go$GODIST_BLOCKED[.]linux-amd64[.]tar[.]gz(.sha256)? -> 403" \
+    "godist: the blocked release was not refused with a 403"
+  heavy_log "godist: with go@$GODIST_BLOCKED blocked, mise said:"
+  heavy_client_said "$out" '403|Forbidden|error' 3
+  heavy_unblock "$GODIST_REG" go "$GODIST_BLOCKED"
+
+  heavy_log "CLOSED-WORLD-GODIST-OK (the toolchain came from the instance: $ran)"
 }
 
 # ── §11. nvm ─────────────────────────────────────────────────────────────────

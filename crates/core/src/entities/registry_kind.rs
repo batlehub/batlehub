@@ -214,6 +214,11 @@ pub enum RegistryKind {
     /// (`node`), one version per release, one file per platform — so a Node
     /// release can be blocked rather than merely cached (RFC 0010).
     Nodedist,
+    /// Go's toolchain distribution (`dl.google.com/go`) as a *typed* registry:
+    /// one package (`go`), one version per release (`1.25.4`), one archive per
+    /// platform plus its `.sha256` — so a Go release can be blocked, and every
+    /// archive is verified against `go.dev`'s release document (RFC 0048 §6.7).
+    Godist,
     /// SDKMAN's candidates API and download broker as one registry: the JDK,
     /// Gradle, Maven-the-distribution, Kotlin — addressed by
     /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
@@ -297,6 +302,7 @@ impl RegistryKind {
         Self::JetbrainsMarketplace,
         Self::Generic,
         Self::Nodedist,
+        Self::Godist,
         Self::Sdkman,
         Self::Rustup,
         Self::Galaxy,
@@ -332,6 +338,7 @@ impl RegistryKind {
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
             Self::Nodedist => "nodedist",
+            Self::Godist => "godist",
             Self::Sdkman => "sdkman",
             Self::Rustup => "rustup",
             Self::Galaxy => "galaxy",
@@ -388,6 +395,7 @@ impl RegistryKind {
                 | Self::Jetbrains
                 | Self::Generic
                 | Self::Nodedist
+                | Self::Godist
                 | Self::Sdkman
                 | Self::Rustup
                 | Self::MiseVersions
@@ -547,6 +555,12 @@ impl RegistryKind {
         // the other would leave a second, unfiltered answer to the same
         // question (RFC 0010 §4.4). `SHASUMS256.txt` is deliberately not a
         // listing: it is signed by a sibling `.asc`/`.sig` and never rewritten.
+        // Go's release document, every release and every file's `sha256`.
+        // The `.sha256` beside each archive is an artifact, not a listing.
+        const GODIST: &[ListingDocument] = &[ListingDocument::filtered(
+            "the release document (`index.json`)",
+            &["versions"],
+        )];
         const NODEDIST: &[ListingDocument] = &[
             ListingDocument::filtered("`index.tab`", &["versions"]),
             ListingDocument::filtered("`index.json`", &["index-json"]),
@@ -670,6 +684,7 @@ impl RegistryKind {
             Self::Deb | Self::Rpm | Self::Pacman | Self::Apk => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
+            Self::Godist => GODIST,
             Self::Sdkman => SDKMAN,
             Self::Rustup => RUSTUP,
             Self::Galaxy => GALAXY,
@@ -757,6 +772,10 @@ impl RegistryKind {
             Self::Nodedist => ReadmeSupport::None(
                 "a Node release is a set of tarballs and a checksum file; the dist tree carries \
                  no prose",
+            ),
+            Self::Godist => ReadmeSupport::None(
+                "a Go release is a set of archives and their checksums; the release document \
+                 carries no prose",
             ),
             Self::Sdkman => ReadmeSupport::None(
                 "SDKMAN describes a distribution, not a package: no document in the protocol \
@@ -847,6 +866,8 @@ impl RegistryKind {
             ),
             // `index.tab`: one row per release, with its date and LTS codename.
             Self::Nodedist => UpstreamDetailSupport::Document("versions"),
+            // `go.dev`'s release document: every release, no dates.
+            Self::Godist => UpstreamDetailSupport::Document("versions"),
             // `versions/all` for the candidate on the default platform — the
             // identifiers and nothing else; SDKMAN publishes no dates.
             Self::Sdkman => UpstreamDetailSupport::Document("versions"),
@@ -909,6 +930,7 @@ impl RegistryKind {
             | Self::JetbrainsMarketplace
             | Self::Generic
             | Self::Nodedist
+            | Self::Godist
             | Self::Sdkman
             | Self::Rustup
             | Self::Galaxy
@@ -1015,6 +1037,10 @@ impl RegistryKind {
             Self::MiseVersions => FetchSupport::None(
                 "this kind lists versions; the bytes come from the backend's own registry",
             ),
+            Self::Godist => FetchSupport::None(
+                "a Go release is one archive per platform plus a checksum each, so \
+                 \"fetch this version\" has no single meaning",
+            ),
             Self::Nodedist => FetchSupport::None(
                 "a Node release is a set of files — one per platform, plus headers, source and \
                  checksums — so \"fetch this version\" has no single meaning",
@@ -1116,6 +1142,7 @@ impl RegistryKind {
             | Self::Nuget
             | Self::JetbrainsMarketplace
             | Self::Nodedist
+            | Self::Godist
             | Self::Sdkman
             | Self::Rustup
             | Self::Galaxy
@@ -1586,6 +1613,8 @@ mod tests {
                 "generic",
                 // Tarballs and a checksum file: no prose anywhere in the tree.
                 "nodedist",
+                // Archives and their `.sha256`: no prose in the release document.
+                "godist",
                 // A distribution, not a package: no document carries prose.
                 "sdkman",
                 // A manifest and a set of tarballs; the dist tree carries no

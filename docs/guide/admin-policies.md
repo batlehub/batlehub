@@ -290,6 +290,7 @@ protocol has one and editing it is safe:
 | generic | — | no listing document |
 | nodedist | `index.tab` | yes |
 | nodedist | `index.json` | yes |
+| godist | the release document (`index.json`) | yes |
 | sdkman | `versions/all` | yes |
 | sdkman | `candidates/default` | yes |
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |
