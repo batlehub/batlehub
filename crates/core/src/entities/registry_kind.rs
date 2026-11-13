@@ -578,15 +578,11 @@ impl RegistryKind {
         // The tool's version list, filtered by the block list and — the one
         // listing in the tree that does this — by the registry's own
         // `release_age_gate`, since this kind has no artifact for the gate to
-        // fire on. The python-build-standalone index is relayed byte-exact
-        // until its format is read (RFC 0043 §4.3, decision 3).
+        // fire on. The python-build-standalone index is filtered the same way
+        // at its handler, which gunzips it (RFC 0043 decision 3).
         const MISE_VERSIONS: &[ListingDocument] = &[
             ListingDocument::filtered("`data/<tool>.toml`", &["versions"]),
-            ListingDocument::unsupported(
-                "`data/python-precompiled-<triple>.gz`",
-                "relayed byte-exact until its format is read from mise's python plugin \
-                 (RFC 0043 decision 3); a blocked Python version is refused at its asset",
-            ),
+            ListingDocument::filtered("`python-precompiled-<triple>.gz`", &[]),
         ];
 
         const RUSTUP: &[ListingDocument] = &[

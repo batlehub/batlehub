@@ -10,8 +10,9 @@
 //!   a `404` at once and not a recorded miss — mise reads `404` as "use the
 //!   backend's own list", which RFC 0008-bis composes from held assets, and no
 //!   bundle could ever carry this document (§5.3).
-//! - **The python-build-standalone index**, `data/python-precompiled-*.gz`,
-//!   relayed byte-exact through the passthrough cache (decision 3).
+//! - **The python-build-standalone index**, `python-precompiled-*.gz` under
+//!   `data/` or `tools/`, through the passthrough cache, the builds of blocked
+//!   or too-young versions removed on the way out (decision 3).
 //! - **The install beacon**, in each of the three shapes mise has shipped:
 //!   `204`, forwarded nowhere, logged nowhere above `trace` (decision 7).
 //! - **The GitHub mirror**, `api/github/…` and `data/github/…`: `503`. mise asks
@@ -29,7 +30,7 @@ use batlehub_core::{
 };
 
 use super::common::{proxy_document, require_registry_type};
-use super::upstream::{cached_forward_with, Outbound};
+use super::upstream::{cached_forward_filtered, Outbound};
 use crate::handlers::schemas::{ProtocolDocument, UpstreamDocument};
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap, UpstreamMap};
 
@@ -116,8 +117,8 @@ async fn version_list(
     .await
 }
 
-/// A tool's version list, blocked and too-young versions removed — or a file
-/// of the python-build-standalone index, byte-exact.
+/// A tool's version list, blocked and too-young versions removed — or the
+/// python-build-standalone index, blocked and too-young builds removed.
 #[utoipa::path(
     get,
     path = "/proxy/{registry}/mise-versions/data/{file}",
@@ -127,7 +128,7 @@ async fn version_list(
         ("file" = String, Path, description = "`{tool}.toml`, or `python-precompiled-{triple}.gz`"),
     ),
     responses(
-        (status = 200, description = "The version list as TOML, filtered; or the gzipped python index, byte-exact", body = ProtocolDocument, content_type = "application/toml"),
+        (status = 200, description = "The version list as TOML, or the gzipped python index, both filtered", body = ProtocolDocument, content_type = "application/toml"),
         (status = 400, description = "Unsafe tool name"),
         (status = 403, description = "Access denied"),
         (status = 404, description = "Unknown tool or file, unknown registry, or an air-gapped listing"),
@@ -136,6 +137,51 @@ async fn version_list(
 )]
 #[get("/proxy/{registry}/mise-versions/data/{file}")]
 pub async fn mise_versions_data(
+    path: web::Path<(String, String)>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+    upstreams: web::Data<UpstreamMap>,
+    client: web::Data<reqwest::Client>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
+) -> Result<HttpResponse, AppError> {
+    data_file(path, identity, svc, map, upstreams, client, hosts).await
+}
+
+/// The same documents under the path mise 2026.1.0–2026.6.5 asks for its
+/// version lists (RFC 0043 §11, decision 4), and the one mise 2026.9.5 still
+/// asks for the python index (`fetch_precompiled_remote_versions`).
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/mise-versions/tools/{file}",
+    tag = "proxy/mise-versions",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("file" = String, Path, description = "`{tool}.toml`, or `python-precompiled-{triple}.gz`"),
+    ),
+    responses(
+        (status = 200, description = "The version list as TOML, or the gzipped python index, both filtered", body = ProtocolDocument, content_type = "application/toml"),
+        (status = 400, description = "Unsafe tool name"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Unknown tool or file, unknown registry, or an air-gapped listing"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/proxy/{registry}/mise-versions/tools/{file}")]
+pub async fn mise_versions_tools(
+    path: web::Path<(String, String)>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+    upstreams: web::Data<UpstreamMap>,
+    client: web::Data<reqwest::Client>,
+    hosts: Option<web::Data<crate::RegistryHostMap>>,
+) -> Result<HttpResponse, AppError> {
+    data_file(path, identity, svc, map, upstreams, client, hosts).await
+}
+
+/// `data/{file}` and `tools/{file}` answer the same two documents.
+async fn data_file(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -154,53 +200,66 @@ pub async fn mise_versions_data(
         .upstream_for(&registry)
         .unwrap_or_else(|| batlehub_adapters::registry::mise_versions::DEFAULT_BASE.to_owned());
     // Rebuilt from the validated triple (`[a-z0-9_]` parts), never from the
-    // request's own `file`.
+    // request's own `file`. Upstream serves the same bytes under both
+    // prefixes, so one cache entry answers both.
     let url = format!(
         "{}/data/python-precompiled-{triple}.gz",
         base.trim_end_matches('/')
     );
     let offline = air_gapped(&svc).await;
+    let (blocked, gate) = svc.mise_precompiled_hides(&registry, &identity.0).await;
     // shortcut: held-or-503 in an air gap, no miss recorded; a bundle cannot
     // carry this index yet (RFC 0043 §4.3).
-    cached_forward_with(
+    cached_forward_filtered(
         &svc,
         &client,
         &registry,
         &format!("mise-versions:{registry}:python-precompiled:{triple}"),
         Outbound::get(url),
         offline,
+        |gz| filter_precompiled(gz, &blocked, gate),
     )
     .await
 }
 
-/// The same version list under the path mise 2026.1.0–2026.6.5 asks for
-/// (RFC 0043 §11, decision 4).
-#[utoipa::path(
-    get,
-    path = "/proxy/{registry}/mise-versions/tools/{file}",
-    tag = "proxy/mise-versions",
-    params(
-        ("registry" = String, Path, description = "Registry name"),
-        ("file" = String, Path, description = "`{tool}.toml`"),
-    ),
-    responses(
-        (status = 200, description = "The version list as TOML, filtered", body = ProtocolDocument, content_type = "application/toml"),
-        (status = 400, description = "Unsafe tool name"),
-        (status = 403, description = "Access denied"),
-        (status = 404, description = "Unknown tool, unknown registry, or an air-gapped listing"),
-    ),
-    security(("bearer_token" = [])),
-)]
-#[get("/proxy/{registry}/mise-versions/tools/{file}")]
-pub async fn mise_versions_tools(
-    path: web::Path<(String, String)>,
-    identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
-    hosts: Option<web::Data<crate::RegistryHostMap>>,
-) -> Result<HttpResponse, AppError> {
-    let (registry, file) = path.into_inner();
-    version_list(registry, file, identity, svc, map, hosts).await
+/// The decompressed index is about 200 KB; anything past this is not one.
+const PRECOMPILED_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Gunzip, strip (RFC 0043 decision 3), re-gzip. Upstream's bytes go out
+/// untouched when nothing is removed, and when they cannot be read: the filter
+/// fails open like every listing filter (§7), and the archive is still judged
+/// by the registry that serves it.
+fn filter_precompiled(
+    gz: Vec<u8>,
+    blocked: &batlehub_core::services::BlockedVersions,
+    gate: Option<batlehub_core::rules::ListingAgeGate>,
+) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut text = String::new();
+    let read = flate2::read::GzDecoder::new(gz.as_slice())
+        .take(PRECOMPILED_MAX_BYTES + 1)
+        .read_to_string(&mut text);
+    if read.is_err() || text.len() as u64 > PRECOMPILED_MAX_BYTES {
+        tracing::warn!("python-precompiled index unreadable or oversized; served unfiltered");
+        return gz;
+    }
+    let removed = batlehub_core::services::blocking::mise_versions::strip_precompiled_index(
+        &mut text,
+        blocked,
+        gate,
+        chrono::Utc::now(),
+    );
+    if removed == 0 {
+        return gz;
+    }
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    match enc.write_all(text.as_bytes()).and_then(|()| enc.finish()) {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(error = %e, "python-precompiled index re-compression failed; served unfiltered");
+            gz
+        }
+    }
 }
 
 async fn beacon(

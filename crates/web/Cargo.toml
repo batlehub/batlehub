@@ -48,6 +48,9 @@ form_urlencoded.workspace = true
 # uncompressed transfer of a document fetched on every solve.
 zstd = "0.14.3"
 bzip2 = "0.6"
+# mise's python-build-standalone index is gzipped text, filtered line by line
+# (RFC 0043 decision 3). Already in the tree through `batlehub-adapters`.
+flate2 = "1"
 
 [dev-dependencies]
 batlehub-adapters = { path = "../adapters" }
@@ -58,7 +61,6 @@ actix-http = "3.20"
 ar = "0.9"
 # Test-only: build `.tar.bz2` conda package fixtures.
 bzip2 = "0.6"
-flate2 = "1"
 # Test-only: build `.rpm` fixtures via `rpm::PackageBuilder` (the `payload` feature).
 # No `rsa` — that only arrives via `signature-pgp`, which we never enable.
 rpm = { version = "0.30", default-features = false, features = ["payload", "gzip-compression"] }
