@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 1–5 built 2026-11-10 (§17.1–§17.5); aligned with RFC 0042 (§18); the real-client proof of §6.P not yet run |
+| Status      | Implemented — phases 1–5 built 2026-11-10 (§17.1–§17.5); aligned with RFC 0042 (§18); §6.P observations 3, 8 and 9 run by hand 2026-11-13, all passing, 9 after a reload fix (§17.6) |
 | Short       | Scan visibility and admin views                               |
 | Settles     | How a reader sees whether a version was scanned, and where an administrator follows scans, findings, rescans and one registry's configuration and health |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -2129,6 +2129,74 @@ absent in this workspace; CI runs it) and the rendered design gate
    over the API) are not automated.** Observation 9's rule is
    `monitoring_url_rejects_non_http_schemes`, run through the same
    `validate()` a reload calls.
+
+### 17.6 §6.P proof — run 2026-11-13
+
+The three observations no suite automates (§17.3 item 7, §17.5 item 7), run
+by hand against a real server: `batlehub` built from this tree, a fresh
+Postgres database, the embedded worker, `osv_fake.py`'s `/replay` answers,
+and two npm registries, `npm-q` and `npm-b`, with `[security]` as in
+`config.quarantine.toml`. A third token, `user:auditor-q` (role `user`),
+holds `findings:read` through `[registries.grants]` on `npm-q` only. A real
+`npm pack` caused the scans: `minimist@1.2.5` through both registries,
+`lodash@4.17.20` through `npm-b`, `left-pad@1.3.0` through `npm-q`. The
+worker denied the first three and allowed the fourth. The browser was the
+CDE's Chrome on CDP, in a tab of its own, on a front served at
+`localhost:5176` (`VITE_API_BASE_URL=http://localhost:8080`), so no other
+tab's storage was touched.
+
+- **Observation 3: passes.** The admin's `/api/v1/admin/findings` returned
+  6 rows: 5 on `npm-b` and 1 on `npm-q`. The auditor's call with no
+  `registry` returned `200`, `total 1`, every row `registry == "npm-q"`
+  (`GHSA-xvch-5gv4-984h`, `can_exempt: false`). The sqlx log for that
+  request shows the `WITH f AS (… WHERE f.registry = ANY($1) …)` statement
+  with `rows_returned=1`, against `rows_returned=6` for the admin's.
+  sqlx does not log bind values, so `{npm-q}` itself is not in the log; one
+  row coming back from the database is what shows the ceiling is in the
+  query. `?registry=npm-b` returned `200` with
+  `{"items":[],"total":0,"page":1,"per_page":50}` and ran **no** statement.
+  `?registry=npm-q` returned `200`. The `user` token got `403`, "findings:read
+  is held on no registry".
+- **Observation 8: passes.** `/admin/registry/npm-q`, read over CDP, renders
+  `<a href="https://grafana.test/d/x?var-registry=npm-q" target="_blank"
+  rel="noopener noreferrer" data-testid="monitoring">Monitoring ↗</a>`.
+  `grafana.test` does not resolve, so the click was measured with the link
+  hot-reloaded to `http://localhost:8131/d/x?var-registry={registry}`, a
+  listener that logs request headers (the reload raised
+  `stats.monitoring-url-http`, as §4.3 says). A real mouse click
+  (`Input.dispatchMouseEvent`) opened one new tab. Its navigation
+  `GET /d/x?var-registry=npm-q` carried **no `Referer`**
+  (`Sec-Fetch-Site: same-site`, `Sec-Fetch-User: ?1`). In the new tab,
+  `document.referrer === ""`, `window.opener === null`, and CDP reported
+  `canAccessOpener: false`. The only `Referer` the listener saw was on the
+  tab's own `/favicon.ico`, naming the tab's own URL. Note that
+  `element.click()` from `Runtime.evaluate` opens nothing: Chrome's popup
+  blocker wants a user gesture.
+- **Observation 9: passed after a fix.** A server started on the file with
+  `registry_dashboard_url = "javascript:alert(1)//{registry}"` exits `1` with
+  ``Error: loading config from … `stats.registry_dashboard_url`: scheme
+  `javascript` is not allowed (http or https only)``. On a running server,
+  the edited file was first seen by the watcher. It logged the same
+  rejection, and then `POST /admin/config/reload` answered **`400` "no
+  pending reload"**, not the validation error. `load_pending_by`
+  (`crates/web/src/services/reload/applier.rs`) skipped any file whose bytes
+  matched the last load *attempt*. The watcher's rejected attempt counts, so
+  an admin's reload never re-read the file, then `apply` found nothing staged.
+  This was not specific to this RFC. An editor who saves and then presses
+  reload loses the validation error for any invalid file, and a valid file
+  hit the same `400` in the ~90 ms while the watcher was still building the
+  pending (observed). The dedup is now applied to the watcher only
+  (`reload_after_the_watcher_rejected_the_file_names_the_error`). After the
+  fix, the same sequence answered `400` with
+  ``"`stats.registry_dashboard_url`: scheme `javascript` is not allowed (http
+  or https only)"``, and `/admin/registries/npm-q` still returned
+  `https://grafana.test/d/x?var-registry=npm-q`. `POST /admin/config/validate`
+  and `/from-content` with the same content answered that `400` before the fix
+  too.
+
+Observations 1, 2 and 4–7 are `quarantine.sh`'s (`FINDINGS-PAGE-OK`,
+`NEXT-RESCAN-OK`, `REGISTRY-VIEW-OK` and their neighbours) and were not
+re-run here.
 
 ---
 

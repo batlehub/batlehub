@@ -1330,3 +1330,22 @@ async fn a_rejected_candidate_names_the_admin_who_sent_it() {
     let rejected = |who: &str| (who.to_owned(), "rejected".to_owned());
     assert_eq!(rows, [rejected("alice"), rejected("bob")]);
 }
+
+/// RFC 0044 §6.P observation 9: the watcher sees an edit before the admin
+/// presses reload. The reload must still answer the file's own error, not
+/// "no pending reload" because the bytes were already seen.
+#[tokio::test]
+async fn reload_after_the_watcher_rejected_the_file_names_the_error() {
+    use std::io::Write as _;
+    let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+    tmp.write_all(b"not toml [").expect("write");
+    let builder: HotConfigBuilder = Arc::new(|_| anyhow::bail!("builder not used"));
+    let svc = ConfigReloadService::new(reload_params(
+        tmp.path().to_str().unwrap().to_owned(),
+        true,
+        builder,
+    ));
+    assert!(svc.load_pending(ReloadSource::FileWatcher).await.is_err());
+    let err = svc.reload_immediate("bob").await.unwrap_err().to_string();
+    assert!(!err.contains("no pending reload"), "{err}");
+}

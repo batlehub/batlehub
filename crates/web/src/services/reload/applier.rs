@@ -114,9 +114,14 @@ impl ConfigReloadService {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
         let content = self.config_file.read().await?;
-        if self.mark_seen_and_check_unchanged(&self.layered_fingerprint(&content).await) {
-            // File-watcher fired (touch/atomic-save rewrite) but no layer's bytes
-            // differ from the last load attempt — nothing to rebuild.
+        let unchanged =
+            self.mark_seen_and_check_unchanged(&self.layered_fingerprint(&content).await);
+        // File-watcher fired (touch/atomic-save rewrite) but no layer's bytes
+        // differ from the last load attempt — nothing to rebuild. An admin's
+        // reload always rebuilds: the watcher has usually seen the edit first,
+        // and skipping here answered a rejected file with "no pending reload"
+        // instead of its validation error (RFC 0044 §6.P observation 9).
+        if unchanged && matches!(source, ReloadSource::FileWatcher) {
             return Ok(ReloadDiff::default());
         }
         let result = match self.load_layers(&content).await {
