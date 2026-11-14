@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 8ee160d75baf39af
+sourceHash: 8d6f7cb339f371bc
 ---
 
 # Faire pointer mise vers BatleHub
@@ -455,7 +455,7 @@ Chacune des treize chaînes d'outils `core:` de mise a une seule route, et
 | elixir, erlang | le préréglage `generic` `hex-builds` (`builds.hex.pm`) ; erlang sous macOS vient de `erlef/otp_builds` sur GitHub |
 | swift | les préréglages `generic` `swift-dl` (`download.swift.org`, avec son propre `max_artifact_size_bytes`) et `swift-api` (l'index des versions) |
 | PyPy | le préréglage `generic` `pypy-dl` (`downloads.python.org/pypy`) |
-| java | aucune pour l'instant : le type `mise-java` est la phase 2 de la RFC 0048 |
+| java | le type `mise-java` : une règle pour `mise-java.jdx.dev` et une par hôte de fournisseur, écrites **avant** les règles `github`, afin qu'un JDK de `github.com/adoptium/` atteigne le type qui peut le bloquer |
 | dotnet | non routable, voir plus haut |
 
 Node et Rust recevaient auparavant des préréglages `generic` (`node-dist`,

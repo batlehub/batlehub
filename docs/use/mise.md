@@ -423,7 +423,7 @@ Each of mise's thirteen `core:` toolchains has one route, and
 | elixir, erlang | `generic` preset `hex-builds` (`builds.hex.pm`); erlang on macOS comes from `erlef/otp_builds` on GitHub |
 | swift | `generic` presets `swift-dl` (`download.swift.org`, its own `max_artifact_size_bytes`) and `swift-api` (the release index) |
 | PyPy | `generic` preset `pypy-dl` (`downloads.python.org/pypy`) |
-| java | none yet: the `mise-java` kind is RFC 0048 phase 2 |
+| java | the `mise-java` kind: one rule for `mise-java.jdx.dev` and one per vendor host, written **before** the `github` rules so a JDK on `github.com/adoptium/` reaches the kind that can block it |
 | dotnet | not routable, see above |
 
 Node and Rust used to get `generic` presets (`node-dist`, `rust-dist`); a

@@ -858,6 +858,7 @@ pub fn stores_files_under_version(kind: RegistryKind) -> bool {
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Godist
+        | RegistryKind::MiseJava
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         | RegistryKind::Galaxy

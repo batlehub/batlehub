@@ -76,7 +76,7 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        mise-versions godist mise-core mise-http mise-backends nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
+        mise-versions godist mise-java mise-core mise-http mise-backends nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
         dnf pacman ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
@@ -116,6 +116,13 @@ NODE_DIST_VERSION="${HEAVY_CW_NODE_DIST:-22.11.0}"
 # blocked and refused. Both are in go.dev's release document for good.
 GODIST_GO="${HEAVY_CW_GODIST_GO:-1.25.4}"
 GODIST_BLOCKED="${HEAVY_CW_GODIST_BLOCKED:-1.25.3}"
+# mise-java (RFC 0048 §6.P obs. 3-6, 12): one JDK installed, its neighbour
+# blocked — both Temurin 21 on github.com/adoptium, whose archives redirect to
+# release-assets.githubusercontent.com. The keys are mise's own
+# (`{vendor}-{version}`, java.rs:911-944), probed in the GA linux/x86_64
+# document on 2026-11-14.
+MJ_JDK="${HEAVY_CW_MJ_JDK:-temurin-21.0.6+7.0.LTS}"
+MJ_BLOCKED="${HEAVY_CW_MJ_BLOCKED:-temurin-21.0.5+11.0.LTS}"
 # mise's core toolchains (RFC 0048 §6.P): one release of each, every one
 # probed on its host on 2026-11-14. Elixir is built for the OTP it runs on.
 MC_ZIG="${HEAVY_CW_MC_ZIG:-0.15.2}"
@@ -206,6 +213,7 @@ TF_REG="tf-$HEAVY_RUN"
 GITHUB_REG="github-$HEAVY_RUN"
 NODEDIST_REG="nodedist-$HEAVY_RUN"
 GODIST_REG="godist-$HEAVY_RUN"
+MJ_REG="mise-java-$HEAVY_RUN"
 SDKMAN_REG="sdkman-$HEAVY_RUN"
 OVSX_REG="ovsx-$HEAVY_RUN"
 VSCODE_REG="vscode-$HEAVY_RUN"
@@ -1693,6 +1701,115 @@ EOF
   heavy_unblock "$GODIST_REG" go "$GODIST_BLOCKED"
 
   heavy_log "CLOSED-WORLD-GODIST-OK (the toolchain came from the instance: $ran)"
+}
+
+phase_mise-java() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-java" jvm="$HEAVY_TAP_BASE/proxy/$MJ_REG/mise-java"
+  out="$(cw_out mise-java)"
+  local conf="$base/config"
+  mkdir -p "$conf" "$base/app"
+
+  # The rules `client setup` writes (RFC 0048 §4.4): the metadata host, then
+  # one per vendor_hosts entry — read off the registry list, which is where
+  # setup reads them — onto `dl/`. Only these: no github rule, so a JDK that
+  # reached github.com would be refused by the closed world, not served.
+  curl -fsS "$HEAVY_BASE/api/v1/registries" -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -o "$base/registries.json" || heavy_fail "mise-java: the registry list did not answer"
+  python3 - "$base/registries.json" "$MJ_REG" "$jvm" >"$conf/config.toml" <<'PY' \
+    || heavy_fail "mise-java: the registry list carries no vendor_hosts for $MJ_REG"
+import json, sys
+regs, name, jvm = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+reg = next(r for r in regs if r["name"] == name)
+hosts = reg["vendor_hosts"]
+assert hosts, "no vendor_hosts"
+q = lambda s: s.replace("\\", "\\\\")
+print("[settings.url_replacements]")
+print(f'"{q(r"regex:^https://mise-java\.jdx\.dev/(.+)")}" = "{jvm}/$1"')
+for h in hosts:
+    h = h.rstrip("/")
+    print(f'"{q("regex:^https://" + h.replace(".", chr(92) + ".") + "/(.+)")}" = "{jvm}/dl/{h}/$1"')
+PY
+  local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+  local doc="$HEAVY_BASE/proxy/$MJ_REG/mise-java/jvm/ga/linux/x86_64.json"
+
+  # obs. 3 — a blocked JDK leaves the document; mise says it has no such
+  # version, and never asks for the archive.
+  heavy_block "$MJ_REG" java "$MJ_BLOCKED"
+  heavy_mark mise-java-blocked
+  heavy_log "mise-java: mise install java@$MJ_BLOCKED, blocked"
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "java@$MJ_BLOCKED"; then
+    cat "$out" >&2
+    heavy_fail "mise-java: mise installed the blocked java@$MJ_BLOCKED"
+  fi
+  heavy_wire_re_after mise-java-blocked "GET /proxy/$MJ_REG/mise-java/jvm/ga/linux/x86_64[.]json -> 200" \
+    "mise-java: mise did not read the metadata document through the registry"
+  [[ "$(heavy_wire_count_after mise-java-blocked "/proxy/$MJ_REG/mise-java/dl/")" == 0 ]] \
+    || heavy_fail "mise-java: mise asked for an archive of the blocked java@$MJ_BLOCKED"
+  heavy_client_must_say "$out" "no metadata found for version ${MJ_BLOCKED//+/[+]}" \
+    "mise-java: mise did not report the blocked version as absent"
+
+  # obs. 4 — the blocked row's URL, asked for directly as a lock would: 403
+  # with the block's reason. obs. 5 — a URL no document lists: 404.
+  curl -fsS "$doc" -o "$base/doc.json" || heavy_fail "mise-java: the document did not answer"
+  local blocked_url jdk_url jdk_sum
+  read -r blocked_url jdk_url jdk_sum < <(python3 - "$base/doc.json" "$MJ_BLOCKED" "$MJ_JDK" <<'PY'
+import json, sys
+rows, blocked, jdk = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+key = lambda r: f'{r["vendor"]}-{r["version"]}'
+plain = lambda r: r["image_type"] == "jdk" and not r["features"] and r["jvm_impl"] == "hotspot"
+# The JRE and feature builds of the same release are coordinates of their own
+# (`temurin-jre-…`), so only the plain JDK row is the blocked one.
+assert not any(key(r) == blocked and plain(r) for r in rows), "the blocked JDK is still listed"
+j = next(r for r in rows if key(r) == jdk and plain(r) and r["file_type"] == "tar.gz")
+print("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_linux_hotspot_21.0.5_11.tar.gz",
+      j["url"], j["checksum"].split(":", 1)[1])
+PY
+  ) || heavy_fail "mise-java: the document still lists $MJ_BLOCKED, or does not list $MJ_JDK"
+  local code
+  code="$(curl -s -o "$base/blocked.txt" -w '%{http_code}' "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/${blocked_url#https://}")"
+  [[ "$code" == 403 ]] || heavy_fail "mise-java: the blocked row's URL answered $code, not 403"
+  grep -q "heavy: administratively blocked" "$base/blocked.txt" \
+    || { cat "$base/blocked.txt" >&2; heavy_fail "mise-java: the 403 does not carry the block's reason"; }
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/169.254.169.254/latest/meta-data")"
+  [[ "$code" == 404 ]] || heavy_fail "mise-java: a URL no row names answered $code, not 404"
+
+  # obs. 12 — the document read, the server restarted, the archive asked for:
+  # the new process has no index and finds the row itself. github.com
+  # redirects to release-assets.githubusercontent.com (redirect_hosts).
+  heavy_stop_server
+  heavy_start_server "$CW_CONFIG"
+  curl -fsS "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/${jdk_url#https://}" -o "$base/jdk.tar.gz" \
+    || heavy_fail "mise-java: after a restart, the archive of $MJ_JDK did not come through"
+  [[ "$(sha256sum "$base/jdk.tar.gz" | cut -d' ' -f1)" == "$jdk_sum" ]] \
+    || heavy_fail "mise-java: the archive served is not the one its row names"
+  rm -f "$base/jdk.tar.gz"
+
+  # obs. 6 — the unblocked JDK installs through the instance with egress
+  # denied, verified by the server at cache write and by mise against the row.
+  cat >"$base/app/Main.java" <<'EOF'
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("CLOSED-WORLD-RAN " + System.getProperty("java.vendor.version"));
+    }
+}
+EOF
+  heavy_mark mise-java-install
+  heavy_log "mise-java: mise install java@$MJ_JDK, egress denied"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "java@$MJ_JDK" \
+    || { cat "$out" >&2; heavy_fail "mise-java: the install failed inside the closed world"; }
+  heavy_wire_re_after mise-java-install "GET /proxy/$MJ_REG/mise-java/dl/github[.]com/adoptium/[^ ]+[.]tar[.]gz -> 200" \
+    "mise-java: the JDK archive did not come through the mise-java registry"
+  cw_step "$out" "$base/app" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" exec "java@$MJ_JDK" -- java Main.java \
+    || { cat "$out" >&2; heavy_fail "mise-java: the installed JDK did not run a program"; }
+  cw_ran mise-java "$out" "Temurin-21.0.6"
+  local ran
+  ran="$(grep CLOSED-WORLD-RAN "$out" | head -1)"
+  heavy_unblock "$MJ_REG" java "$MJ_BLOCKED"
+
+  heavy_log "CLOSED-WORLD-MISE-JAVA-OK (the JDK came from the instance: $ran)"
 }
 
 # ── §27. mise core toolchains ────────────────────────────────────────────────

@@ -108,6 +108,10 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("api.github.com", "github", "github"),
     // mise's versions host (RFC 0043): every registry tool is listed through it.
     ("mise-versions.jdx.dev", "mise-versions", "mise-versions"),
+    // mise's JVM catalogue (RFC 0048 §6.3). Its archives live on vendor hosts,
+    // `github.com` among them, so a `core:java` lock entry is matched by its
+    // backend, not by its URL (`JAVA_BACKEND`).
+    ("mise-java.jdx.dev", "mise-java", "jdk"),
     ("github.com", "github", "github"),
     ("codeload.github.com", "github", "github"),
     ("raw.githubusercontent.com", "github", "github"),
@@ -433,6 +437,9 @@ pub(crate) fn proxy_path_for(
     // route is `/proxy/{name}/generic/v24/node.tar.gz`, and every seeded
     // entry 404s — the path-addressed kinds are exactly the ones RFC 0008's
     // toolchain estate leans on.
+    if registry_type == "mise-java" {
+        return mise_java_proxy_path(url, registry_name);
+    }
     let proxy = proxy_base_path(registry_name, registry_type);
     if registry_type == "generic" {
         let (host, path) = split_url(url)?;
@@ -574,9 +581,9 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
 /// no URL (`core:rust` and `core:swift` never do) or a `mise.toml` with no
 /// lock: resolved through [`registry_for_url`] like a locked URL (RFC 0048
 /// §4.2). Absent: `core:python`, `core:bun` and `core:ruby` resolve through
-/// their locked GitHub URLs, `core:java` waits for the `mise-java` kind
-/// (phase 2), `core:dotnet` is refused ([`core_refusal`]).
+/// their locked GitHub URLs, `core:dotnet` is refused ([`core_refusal`]).
 const CORE_ROUTES: &[(&str, &[&str])] = &[
+    (JAVA_BACKEND, &["https://mise-java.jdx.dev/jvm/"]),
     ("core:node", &["https://nodejs.org/dist/"]),
     ("core:rust", &["https://static.rust-lang.org/"]),
     ("core:go", &["https://dl.google.com/go/"]),
@@ -593,6 +600,22 @@ const CORE_ROUTES: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// mise's Java backend. Every URL its lock records is a vendor host's —
+/// `github.com/adoptium/…` included — and every one of them goes through the
+/// `mise-java` kind, which is the only place a JDK can be blocked (RFC 0048
+/// §15 Q1).
+pub(crate) const JAVA_BACKEND: &str = "core:java";
+
+/// A `mise-java` download through the registry: the URL minus its scheme
+/// under `dl/` (RFC 0048 §4.4).
+pub(crate) fn mise_java_proxy_path(url: &str, registry_name: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    Some(format!(
+        "{}/dl/{rest}",
+        proxy_base_path(registry_name, "mise-java")
+    ))
+}
 
 /// Why a `core:` toolchain cannot come through BatleHub at all.
 fn core_refusal(backend: &str) -> Option<&'static str> {
@@ -1340,6 +1363,16 @@ fn collect_from_mise_lock_entry(
     source: &str,
     acc: &mut Accumulator,
 ) {
+    let backend = table
+        .get("backend")
+        .and_then(|b| b.as_str())
+        .unwrap_or(tool_name);
+    if backend == JAVA_BACKEND {
+        for reg in registry_for_backend(backend, source) {
+            acc.add(reg);
+        }
+        return;
+    }
     let mut saw_url = false;
     let subprocess = table
         .get("backend")
@@ -1363,10 +1396,6 @@ fn collect_from_mise_lock_entry(
     }
     // No platform block (pure-source backends like `cargo:` / `pipx:`):
     // fall back to the backend prefix.
-    let backend = table
-        .get("backend")
-        .and_then(|b| b.as_str())
-        .unwrap_or(tool_name);
     if !acc.refuse(tool_name, backend) {
         for reg in registry_for_backend(backend, source) {
             acc.add(reg);
@@ -1719,27 +1748,39 @@ impl SuggestedRegistry {
             (pattern.to_owned(), replacement.replace("{proxy}", &proxy))
         };
 
-        if self.registry_type == "conda" {
-            // One channel, wired on its whole URL (RFC 0047 §6.1); the typed
-            // conda-forge rule only when no upstream is known.
-            if let Some(u) = self.upstreams.first() {
-                return mise_wire::conda_channel(u)
-                    .map(|u| vec![resolve(&format!("^{}/(.+)", regex_escape(u)), "{proxy}/$1")])
-                    .unwrap_or_default();
-            }
-        }
-        if self.registry_type == "generic" {
-            // A generic mirror is a 1:1 path passthrough, so its rule falls
-            // straight out of the configured upstream.
-            return self
-                .upstreams
+        // generic, conda and mise-java derive their rules from the registry
+        // itself, through the one table the server's wire and `setup` use
+        // (RFC 0047/0048 phase 4); a conda suggestion with no upstream keeps
+        // the typed conda-forge rule below.
+        let derived = match self.registry_type.as_str() {
+            "generic" => Some(RegistryKind::Generic),
+            "conda" if !self.upstreams.is_empty() => Some(RegistryKind::Conda),
+            "mise-java" => Some(RegistryKind::MiseJava),
+            _ => None,
+        };
+        if let Some(kind) = derived {
+            // A suggestion has no configured vendor list: the defaults, as
+            // `setup` writes them (RFC 0048 §4.1).
+            let vendor_hosts: Vec<String> = if kind == RegistryKind::MiseJava {
+                batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let wired = mise_wire::WireRegistry {
+                name: &self.name,
+                kind,
+                upstream: self.upstreams.first().map(String::as_str),
+                upstreams: &self.upstreams,
+                path_routing: true,
+                vendor_hosts: &vendor_hosts,
+            };
+            return mise_wire::select(&[wired], mise_wire::Mode::Classic)
+                .rules
                 .iter()
-                .map(|u| {
-                    resolve(
-                        &format!("^{}/(.+)", regex_escape(u.trim_end_matches('/'))),
-                        "{proxy}/$1",
-                    )
-                })
+                .map(|r| resolve(&r.pattern, &r.replacement))
                 .collect();
         }
         typed_url_replacements(&self.registry_type)
@@ -2359,8 +2400,7 @@ mod tests {
             ("python", &[], false),
             ("bun", &[], false),
             ("ruby", &[], false),
-            // The `mise-java` kind is phase 2.
-            ("java", &[], false),
+            ("java", &["mise-java:jdk"], false),
             ("dotnet", &[], true),
         ];
         for (tool, regs, refused) in table {
@@ -3061,6 +3101,52 @@ url = "https://get.helm.sh/helm-v4.2.3-linux-amd64.tar.gz"
         // helm's *binary* is a generic mirror even though the tool is installed
         // via the aqua backend — the URL wins over the backend prefix.
         assert_eq!(find(&regs, "helm-bin").registry_type, "generic");
+    }
+
+    /// RFC 0048 §15 Q1: a locked JDK on `github.com/adoptium/` is a
+    /// mise-java download, not a forge asset — the github kind would cache it
+    /// and never block it — and its rules are the metadata host's plus one
+    /// per default vendor host.
+    #[test]
+    fn a_locked_jdk_suggests_mise_java_and_not_github() {
+        let lock = r#"
+[[tools.java]]
+version = "temurin-21.0.5+11.0.LTS"
+backend = "core:java"
+[tools.java."platforms.linux-x64"]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/x.tar.gz"
+"#;
+        let mut acc = Accumulator::default();
+        collect_from_mise_lock(lock, &mut acc);
+        let regs = acc.finish();
+        assert_eq!(names(&regs), ["jdk"]);
+        let jdk = find(&regs, "jdk");
+        assert_eq!(jdk.registry_type, "mise-java");
+        let rules = jdk.mise_url_replacements("https://hub.example.com");
+        assert_eq!(
+            rules[0],
+            (
+                r"^https://mise-java\.jdx\.dev/(.+)".to_owned(),
+                "https://hub.example.com/proxy/jdk/mise-java/$1".to_owned()
+            )
+        );
+        assert!(rules.contains(&(
+            r"^https://github\.com/adoptium/(.+)".to_owned(),
+            "https://hub.example.com/proxy/jdk/mise-java/dl/github.com/adoptium/$1".to_owned()
+        )));
+        assert_eq!(
+            rules.len(),
+            1 + batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS.len()
+        );
+        assert_eq!(
+            proxy_path_for(
+                "https://github.com/adoptium/t/releases/download/x/a.tar.gz",
+                "jdk",
+                "mise-java"
+            )
+            .as_deref(),
+            Some("/proxy/jdk/mise-java/dl/github.com/adoptium/t/releases/download/x/a.tar.gz")
+        );
     }
 
     #[test]

@@ -135,6 +135,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
         { text: "Go toolchain (mise)", link: "/registries/godist" },
+        { text: "Java (mise)", link: "/registries/mise-java" },
         { text: "mise versions host", link: "/registries/mise-versions" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
         { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
@@ -392,14 +393,6 @@ export const sidebar = {
           text: "0041 — Test depth and gate scale",
           link: "/rfc/0041-test-depth-and-security-gate-scale",
         },
-        {
-          text: "0047 — mise backends coverage",
-          link: "/rfc/0047-mise-backends-coverage",
-        },
-        {
-          text: "0048 — mise core toolchains",
-          link: "/rfc/0048-mise-core-toolchains",
-        },
       ],
     },
     {
@@ -572,6 +565,14 @@ export const sidebar = {
         {
           text: "0046 — Admin red paths",
           link: "/rfc/0046-admin-red-paths",
+        },
+        {
+          text: "0047 — mise backends coverage",
+          link: "/rfc/0047-mise-backends-coverage",
+        },
+        {
+          text: "0048 — mise core toolchains",
+          link: "/rfc/0048-mise-core-toolchains",
         },
         {
           text: "0049 — Config JSON Schema",

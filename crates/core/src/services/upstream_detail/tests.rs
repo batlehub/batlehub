@@ -83,6 +83,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Terraform
                     | RegistryKind::Nodedist
                     | RegistryKind::Godist
+                    | RegistryKind::MiseJava
                     | RegistryKind::Sdkman
                     | RegistryKind::Rustup
                     | RegistryKind::Galaxy
@@ -111,6 +112,7 @@ fn every_reader_belongs_to_a_kind_that_advertises_a_document() {
         RegistryKind::Terraform,
         RegistryKind::Nodedist,
         RegistryKind::Godist,
+        RegistryKind::MiseJava,
         RegistryKind::Sdkman,
         RegistryKind::Helm,
         RegistryKind::MiseVersions,
@@ -596,4 +598,20 @@ fn godist_lists_every_release_without_the_go_prefix() {
     let versions: Vec<&str> = detail.versions.iter().map(|v| v.version.as_str()).collect();
     assert_eq!(versions, ["1.25.4", "1.26rc1"]);
     assert!(detail.versions.iter().all(|v| v.published_at.is_none()));
+}
+
+#[test]
+fn mise_java_lists_each_coordinate_once_with_its_date() {
+    let row = |file_type: &str| {
+        serde_json::json!({"vendor": "temurin", "version": "21.0.5+11.0.LTS",
+            "image_type": "jdk", "jvm_impl": "hotspot", "file_type": file_type,
+            "created_at": "2025-03-28T22:04:32.217430", "url": "https://x/y"})
+    };
+    let detail = dispatch(
+        RegistryKind::MiseJava,
+        &json_doc(serde_json::json!([row("tar.gz"), row("zip")])),
+    );
+    assert_eq!(detail.versions.len(), 1);
+    assert_eq!(detail.versions[0].version, "temurin-21.0.5+11.0.LTS");
+    assert!(detail.versions[0].published_at.is_some());
 }

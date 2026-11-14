@@ -132,6 +132,7 @@ default = [
   "registry-generic",
   "registry-nodedist",
   "registry-godist",
+  "registry-mise-java",
   "registry-mise-versions",
   "registry-sdkman",
   "registry-rustup",
@@ -215,6 +216,13 @@ registry-nodedist = []
 # Go toolchain archives (`dl.google.com/go`) checked against `go.dev`'s release
 # document (RFC 0048 §6.7).
 registry-godist = []
+# mise's JVM catalogue (`mise-java.jdx.dev`) and the vendor hosts its rows name
+# (RFC 0048 §6.4).
+registry-mise-java = []
+# Tests only: `MiseJavaRegistryClient::with_test_host`, which answers a vendor
+# host from a local mock. Enabled by `batlehub-web`'s dev-dependency, never by
+# a build of the server.
+test-transport = []
 # mise's versions host: the version lists mise asks for before any backend's,
 # filtered by the block list and the age gate (RFC 0043).
 registry-mise-versions = ["dep:zstd", "dep:tar", "dep:toml"]

@@ -153,6 +153,7 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Godist
+        | RegistryKind::MiseJava
         | RegistryKind::Sdkman
         // rustup prints the status and its reason phrase; text is what a
         // person sees when they curl the same URL.

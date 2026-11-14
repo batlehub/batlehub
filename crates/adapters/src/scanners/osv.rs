@@ -64,6 +64,7 @@ impl ArtifactScanner for OsvArtifactScanner {
                 | RegistryKind::Generic
                 | RegistryKind::Nodedist
                 | RegistryKind::Godist
+                | RegistryKind::MiseJava
                 | RegistryKind::Sdkman
                 | RegistryKind::JetbrainsMarketplace
                 | RegistryKind::Openvsx

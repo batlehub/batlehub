@@ -43,6 +43,15 @@ pub struct RegistryInfo {
     /// (RFC 0038 §6.4). Shown on the same terms as `upstream`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub upstreams: Vec<String>,
+    /// A `mise-java` registry's download allowlist, `host/prefix/` entries:
+    /// `batlehub-cli setup apply` writes one mise rule per entry, before the
+    /// `github` rules (RFC 0048 §4.4). Omitted for every other kind; shown on
+    /// the same terms as `upstream`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vendor_hosts: Vec<String>,
+    /// The hosts those vendors may redirect a download to (RFC 0048 §15 Q2).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub redirect_hosts: Vec<String>,
     /// Whether this registry mints signed download URLs (RFC 0012), and can
     /// therefore be closed to anonymous callers even though the client fetches
     /// artifacts without credentials.
@@ -153,7 +162,11 @@ pub async fn list_registries(
         .map(|(name, registry_type)| {
             let access = access(&name);
             let shown = upstreams.as_ref().filter(|_| access.upstreams);
+            let (vendor_hosts, redirect_hosts) =
+                shown.map(|u| u.mise_java_for(&name)).unwrap_or_default();
             RegistryInfo {
+                vendor_hosts,
+                redirect_hosts,
                 mode: modes.get(&name).as_str().to_owned(),
                 public_url: hosts.as_ref().and_then(|h| h.public_url_for(&name)),
                 upstream: shown

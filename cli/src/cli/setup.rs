@@ -979,6 +979,8 @@ mod tests {
             upstream: None,
             installable: None,
             upstreams: Vec::new(),
+            vendor_hosts: Vec::new(),
+            redirect_hosts: Vec::new(),
         }
     }
 

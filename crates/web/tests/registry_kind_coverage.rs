@@ -130,6 +130,10 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // mise installs a Go release through it with egress denied; the air gap
     // serves held archives and their `.sha256` by path (RFC 0048 §6.5).
     ("godist", Live::ClosedWorld("godist"), AirGap::Case),
+    // mise installs a JDK through it with egress denied, and a blocked one is
+    // refused; the air gap serves held archives by their vendor URL and
+    // composes the document from their rows (RFC 0048 §6.5).
+    ("mise-java", Live::ClosedWorld("mise-java"), AirGap::Case),
     ("sdkman", Live::ClosedWorld("sdkman"), AirGap::Case),
     ("rustup", Live::Suite("tests/heavy/rustup.sh"), AirGap::Case),
     // Two suites drive this kind and the closed world is the one that counts

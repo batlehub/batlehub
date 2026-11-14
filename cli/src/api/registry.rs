@@ -27,6 +27,13 @@ pub struct RegistryInfo {
     /// for path; empty for the other kinds and on older servers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upstreams: Vec<String>,
+    /// A `mise-java` registry's download allowlist (`host/prefix/` entries):
+    /// one mise rule each (RFC 0048 §4.4). Empty for the other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_hosts: Vec<String>,
+    /// The hosts those vendors may redirect to; informational.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redirect_hosts: Vec<String>,
 }
 
 impl RegistryInfo {
@@ -130,6 +137,8 @@ mod tests {
             upstream: None,
             installable: None,
             upstreams: Vec::new(),
+            vendor_hosts: Vec::new(),
+            redirect_hosts: Vec::new(),
         }
     }
 

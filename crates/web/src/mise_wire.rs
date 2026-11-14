@@ -87,8 +87,15 @@ impl MiseWire {
         }) else {
             return Ok(None);
         };
-        // (name, kind, first upstream, every upstream, path_routing)
-        type Owned = (String, RegistryKind, Option<String>, Vec<String>, bool);
+        // (name, kind, first upstream, every upstream, path_routing, vendor_hosts)
+        type Owned = (
+            String,
+            RegistryKind,
+            Option<String>,
+            Vec<String>,
+            bool,
+            Vec<String>,
+        );
         let owned: Vec<Owned> = cfg
             .registries
             .iter()
@@ -104,18 +111,22 @@ impl MiseWire {
                     upstreams.upstream_for(&r.name),
                     all,
                     r.path_routing,
+                    upstreams.mise_java_for(&r.name).0,
                 ))
             })
             .collect();
         let regs: Vec<WireRegistry<'_>> = owned
             .iter()
-            .map(|(name, kind, up, all, path_routing)| WireRegistry {
-                name,
-                kind: *kind,
-                upstream: up.as_deref(),
-                upstreams: all,
-                path_routing: *path_routing,
-            })
+            .map(
+                |(name, kind, up, all, path_routing, vendor_hosts)| WireRegistry {
+                    name,
+                    kind: *kind,
+                    upstream: up.as_deref(),
+                    upstreams: all,
+                    path_routing: *path_routing,
+                    vendor_hosts,
+                },
+            )
             .collect();
         let (table, warnings) = WireTable::build(&regs, None);
         let table = table.with_registry_archive(&registry);

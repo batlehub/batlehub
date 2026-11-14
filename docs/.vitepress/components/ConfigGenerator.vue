@@ -1453,6 +1453,7 @@ const composerAuthSnippet = `{
                 <option value="nix">Nix binary cache</option>
                 <option value="nodedist">Node.js distributions</option>
                 <option value="godist">Go distributions</option>
+                <option value="mise-java">Java (mise)</option>
                 <option value="mise-versions">mise versions host</option>
                 <option value="sdkman">SDKMAN</option>
                 <option value="rustup">Rust toolchain (rustup)</option>

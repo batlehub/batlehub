@@ -161,6 +161,11 @@ pub mod godist;
 #[cfg(feature = "registry-godist")]
 pub use godist::GoDistRegistryClient;
 
+#[cfg(feature = "registry-mise-java")]
+pub mod mise_java;
+#[cfg(feature = "registry-mise-java")]
+pub use mise_java::{MiseJavaOptions, MiseJavaRegistryClient};
+
 #[cfg(feature = "registry-sdkman")]
 pub mod sdkman;
 #[cfg(feature = "registry-sdkman")]

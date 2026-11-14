@@ -155,7 +155,7 @@ upstreams = ["https://conda.anaconda.org/conda-forge"]
 # `upstreams:read`: `setup` derives the mise rule from the channel the
 # registry names (RFC 0047 §6.2), and reads the registry list anonymously.
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 admin = ["*"]
 
@@ -168,7 +168,7 @@ mode = "proxy"
 upstreams = ["https://conda.anaconda.org/bioconda"]
 
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 admin = ["*"]
 
@@ -271,6 +271,19 @@ admin = ["*"]
 [[registries]]
 type = "godist"
 name = "godist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise-java: mise's JVM catalogue and its vendor hosts ────────────────────
+# RFC 0048 §6.3. Every list defaulted: the measured vendor_hosts and
+# redirect_hosts, GA only. The server keeps its egress; mise has none.
+[[registries]]
+type = "mise-java"
+name = "mise-java-${HEAVY_RUN}"
 mode = "proxy"
 
 [registries.rbac]

@@ -239,6 +239,90 @@ const GODIST: RegistryTypeDef = {
   ],
 };
 
+// The default vendor_hosts (RFC 0048 §6.1): one mise rule each, onto `dl/`.
+// `batlehub-cli setup apply --only mise` writes the registry's own list.
+const MISE_JAVA_VENDOR_HOSTS = [
+  "aka.ms/download-jdk",
+  "cache-redirector.jetbrains.com/intellij-jbr",
+  "cdn.azul.com/zulu",
+  "cdn.azul.com/zulu-embedded",
+  "corretto.aws/downloads",
+  "d3pxv6yz143wms.cloudfront.net",
+  "developers.redhat.com/content-gateway",
+  "download.bell-sw.com/vm",
+  "download.java.net/java",
+  "download.oracle.com/graalvm",
+  "download.oracle.com/java",
+  "gds.oracle.com/download",
+  "github.com/SAP",
+  "github.com/Tencent",
+  "github.com/TravaOpenJDK",
+  "github.com/adoptium",
+  "github.com/bell-sw",
+  "github.com/dragonwell-project",
+  "github.com/graalvm",
+  "github.com/ibmruntimes",
+];
+
+const tomlRegex = (s: string) => s.replace(/[.]/g, "\\\\.");
+
+const miseJavaClientSetup = (ctx: SnippetContext) =>
+  [
+    "# ~/.config/mise/config.toml — mise reads its JVM catalogue from",
+    "# mise-java.jdx.dev and downloads each row's URL from its vendor; these rules",
+    "# send both here. Keep them BEFORE any github rules: mise applies the first",
+    "# match, and only this registry can block a JDK.",
+    "[settings.url_replacements]",
+    `"regex:^https://mise-java\\\\.jdx\\\\.dev/(.+)" = "${ctx.registryUrl}/mise-java/$1"`,
+    ...MISE_JAVA_VENDOR_HOSTS.map(
+      (h) => `"regex:^https://${tomlRegex(h)}/(.+)" = "${ctx.registryUrl}/mise-java/dl/${h}/$1"`,
+    ),
+  ].join("\n");
+
+const miseJavaServerConfig = (ctx: SnippetContext) => `[[registries]]
+name = "${ctx.registryName}"
+type = "mise-java"
+mode = "proxy"                              # the only mode: no publish protocol
+# upstreams = ["https://mise-java.jdx.dev"]  # the default
+# release_types = ["ga"]                     # the default; "ea" is opt-in
+# vendor_hosts / redirect_hosts default to the measured vendor set
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]`;
+
+const MISE_JAVA: RegistryTypeDef = {
+  id: "mise-java",
+  label: "Java (mise)",
+  fileHint: "mise.toml",
+  description:
+    `mise's JVM catalogue (<code>mise-java.jdx.dev</code>) as a typed registry, so a JDK can ` +
+    `be <em>blocked</em> and age-gated: each metadata document is filtered by vendor host, ` +
+    `block list and age gate, and each archive is fetched from its vendor over https and ` +
+    `verified against its row before it is cached. Read by mise's <code>core:java</code>. ` +
+    `Proxy-only: there is no publish protocol.`,
+  snippets: [
+    {
+      key: "mise-java-mise",
+      label: "Client setup",
+      lang: "toml",
+      template: miseJavaClientSetup,
+      note: (ctx: SnippetContext) =>
+        (ctx.isAuthenticated
+          ? `mise sends the <code>~/.netrc</code> entry for this host on every URL a rule ` +
+            `rewrote, so a <code>machine</code> line with your token is the credential. `
+          : ``) +
+        `A blocked JDK leaves the document, so mise answers <code>no metadata found</code>; ` +
+        `a lock that pins its URL is refused with a <code>403</code> at the download.`,
+    },
+    {
+      key: "mise-java-config",
+      label: "Server config",
+      lang: "toml",
+      template: miseJavaServerConfig,
+    },
+  ],
+};
+
 export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── mise (composite: github + npm + cargo) ─────────────────────────────────
   {
@@ -2200,6 +2284,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   GODIST,
+  MISE_JAVA,
   {
     id: "nodedist",
     label: "Node (nvm, fnm, n, mise)",

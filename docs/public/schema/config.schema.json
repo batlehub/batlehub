@@ -2032,9 +2032,23 @@
           "$ref": "#/$defs/ReadmeConfig",
           "description": "Optional README capture configuration.\n\nUnlike [`Self::sbom`], **absent means enabled**: for the metadata-borne\nregistry kinds the text is a field of a document the proxy already\nfetches and parses, so the default costs one deserialised field\n(RFC 0007 §4.1)."
         },
+        "redirect_hosts": {
+          "description": "mise-java only: hosts a vendor host may redirect a download to. Every\nhop must be `https://` and land on `vendor_hosts` or here, or the\ndownload is a `502` and nothing is cached (RFC 0048 §15 Q2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "refs": {
           "$ref": "#/$defs/RefsConfig",
           "description": "`[registries.refs]` — how long a forge ref → commit resolution is\ntrusted (RFC 0019 §4.1). Forge kinds only; validation refuses it\nelsewhere. Absent means the defaults: branches every minute, tags every\nhour."
+        },
+        "release_types": {
+          "description": "mise-java only: the release types served, `ga` and/or `ea`. Default\n`[\"ga\"]` (RFC 0048 §4.1).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "repo_signing": {
           "$ref": "#/$defs/RepoSigningConfig",
@@ -2115,6 +2129,13 @@
         "upstreams": {
           "default": [],
           "description": "Upstream URLs tried in order; if a registry returns 404 the next one is tried.\nWhen empty the adapter's built-in default (e.g. registry.npmjs.org) is used.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "vendor_hosts": {
+          "description": "mise-java only: where a download may come from, as `host/prefix/`\nentries (a bare host only where it is single-tenant). A metadata row\nwhose URL is under none of them is dropped from the served document and\nnever fetched. Defaults to the set measured in RFC 0048 §6.1.",
           "items": {
             "type": "string"
           },

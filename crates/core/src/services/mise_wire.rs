@@ -92,6 +92,9 @@ pub fn typed_rules(kind: RegistryKind) -> &'static [Rule] {
         // and its `.sha256` (`go.rs:126-128`, `:384-387`); the default mirror is
         // `https://dl.google.com/go`. Its listing is the versions host, or git.
         RegistryKind::Godist => &[(r"^https://dl\.google\.com/go/(.+)", "{proxy}/$1")],
+        // mise's `core:java` metadata (`java.rs:381`); its downloads are one
+        // rule per `vendor_hosts` entry, added by `registry_rules`.
+        RegistryKind::MiseJava => &[(r"^https://mise-java\.jdx\.dev/(.+)", "{proxy}/$1")],
         // mise's `core:node`: `nodejs.org/dist/v{v}/…`, `SHASUMS256.txt` and its
         // `.sig` (`node.rs:397-439`), the same tree the kind serves.
         RegistryKind::Nodedist => &[(r"^https://nodejs\.org/dist/(.+)", "{proxy}/$1")],
@@ -128,6 +131,7 @@ pub fn proxy_segment(kind: RegistryKind) -> Option<&'static str> {
             kind,
             RegistryKind::Nodedist
                 | RegistryKind::Godist
+                | RegistryKind::MiseJava
                 | RegistryKind::Sdkman
                 | RegistryKind::Galaxy
                 | RegistryKind::Helm
@@ -200,6 +204,9 @@ pub struct WireRegistry<'a> {
     pub upstreams: &'a [String],
     /// `false` for a host-only registry (RFC 0001): it contributes nothing.
     pub path_routing: bool,
+    /// `mise-java` only: its `vendor_hosts`, one download rule each
+    /// (RFC 0048 §4.1). Empty for every other kind.
+    pub vendor_hosts: &'a [String],
 }
 
 /// Who calls the selection: the two differ on one point only.
@@ -372,6 +379,24 @@ fn registry_rules(r: &WireRegistry<'_>, mode: Mode) -> Result<Vec<(String, Strin
                 .unwrap_or_default()),
             Some(why) => Err(vec![why]),
         };
+    }
+    if r.kind == RegistryKind::MiseJava {
+        // The metadata host, then one rule per vendor prefix onto `dl/`: the
+        // row URLs are served unchanged (RFC 0048 §15 R1), so each vendor host
+        // needs its own rule, and the download route only answers a
+        // `(host, path)` the documents named.
+        let mut rules: Vec<(String, String)> = typed_rules(r.kind)
+            .iter()
+            .map(|(p, rep)| ((*p).to_owned(), (*rep).to_owned()))
+            .collect();
+        for entry in r.vendor_hosts {
+            let entry = entry.trim_end_matches('/');
+            rules.push((
+                format!("^https://{}/(.+)", regex_escape(entry)),
+                format!("{{proxy}}/dl/{entry}/$1"),
+            ));
+        }
+        return Ok(rules);
     }
     let typed = typed_rules(r.kind);
     if typed.is_empty() {
@@ -821,6 +846,7 @@ mod tests {
             upstream,
             upstreams: &[],
             path_routing: true,
+            vendor_hosts: &[],
         }
     }
 
@@ -852,6 +878,7 @@ mod tests {
             upstream: Some("http://127.0.0.1:8189/a"),
             upstreams: &up,
             path_routing: true,
+            vendor_hosts: &[],
         }];
         let (t, _) = WireTable::build(&regs, None);
         assert_eq!(

@@ -40,6 +40,18 @@ miss_retention_days = 90
 # The suite runs the server on a copy of this file and rewrites the copy.
 synthesise_listings = false
 
+# mise's JVM catalogue (RFC 0048 §6.5): a JRE locked by URL, carried with its
+# row so the disconnected side can compose the document.
+[[registries]]
+type = "mise-java"
+name = "mise-java-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 [[registries]]
 type = "github"
 name = "github-${HEAVY_RUN}"

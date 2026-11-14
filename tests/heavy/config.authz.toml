@@ -742,6 +742,22 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# RFC 0048 §6.3: the metadata host unreachable, so the reader passes the gate
+# and stops at the document lookup, and nothing leaves the machine.
+[[registries]]
+type = "mise-java"
+name = "authz-mise-java-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/mise-java"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 # RFC 0048 §6.7: both hosts unreachable, so the reader passes the gate and
 # stops at the release document, and nothing leaves the machine.
 [[registries]]

@@ -212,6 +212,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_mise_java_filter"
+path = "fuzz_targets/fuzz_mise_java_filter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_narinfo"
 path = "fuzz_targets/fuzz_narinfo.rs"
 test = false

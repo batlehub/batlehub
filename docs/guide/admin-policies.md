@@ -291,6 +291,7 @@ protocol has one and editing it is safe:
 | nodedist | `index.tab` | yes |
 | nodedist | `index.json` | yes |
 | godist | the release document (`index.json`) | yes |
+| mise-java | `jvm/{type}/{os}/{arch}.json` | yes |
 | sdkman | `versions/all` | yes |
 | sdkman | `candidates/default` | yes |
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |

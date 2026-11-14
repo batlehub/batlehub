@@ -260,7 +260,19 @@ impl RegistryClient for FixedRegistry {
     /// The v1 role surface is addressed by a numeric id the client learns from
     /// the search document, and the proxy resolves it to the name a block is
     /// written on before anything else runs (RFC 0031 §6.2).
+    ///
+    /// mise-java's download route resolves a URL to its row's coordinate
+    /// first; here the coordinate is the file name's stem
+    /// (`…/temurin-1.1.0.tar.gz` → `java@temurin-1.1.0`).
     async fn canonical_coordinate(&self, pkg: &PackageId) -> Result<Option<PackageId>, CoreError> {
+        if self.registry_type == "mise-java" && pkg.version == "_" {
+            let artifact = pkg.artifact.as_deref().unwrap_or("");
+            let file = artifact.rsplit('/').next().unwrap_or("");
+            return Ok(Some(
+                PackageId::new(&pkg.registry, &pkg.name, file.trim_end_matches(".tar.gz"))
+                    .with_artifact(artifact),
+            ));
+        }
         if self.registry_type != "galaxy" {
             return Ok(None);
         }
@@ -626,6 +638,19 @@ impl RegistryClient for FixedRegistry {
                 { "version": "go1.0.0", "stable": true, "files": [
                     { "filename": "go1.0.0.linux-amd64.tar.gz", "os": "linux", "arch": "amd64",
                       "version": "go1.0.0", "sha256": "bb", "size": 1, "kind": "archive" } ] }
+            ]))),
+
+            // mise's JVM catalogue (RFC 0048 §6.3): one row per build, keyed by
+            // `{vendor}-{version}`, URLs on a vendor host.
+            ("mise-java", DocumentKind::Versions) => Ok(VersionDocument::json(serde_json::json!([
+                { "vendor": "temurin", "version": "1.1.0", "image_type": "jdk",
+                  "jvm_impl": "hotspot", "java_version": "1.1.0", "file_type": "tar.gz",
+                  "created_at": "2020-02-01T00:00:00", "checksum": "sha256:aa",
+                  "url": "https://github.com/adoptium/t/temurin-1.1.0.tar.gz" },
+                { "vendor": "temurin", "version": "1.0.0", "image_type": "jdk",
+                  "jvm_impl": "hotspot", "java_version": "1.0.0", "file_type": "tar.gz",
+                  "created_at": "2020-01-02T00:00:00", "checksum": "sha256:bb",
+                  "url": "https://github.com/adoptium/t/temurin-1.0.0.tar.gz" }
             ]))),
 
             // The Rust dist tree (RFC 0024). `manifests.txt` is the list; a
@@ -1912,6 +1937,10 @@ pub async fn make_app_with_defaults_and_access(
             FixedRegistry::new("godist") as Arc<dyn RegistryClient>,
         ),
         (
+            "mise-java".to_owned(),
+            FixedRegistry::new("mise-java") as Arc<dyn RegistryClient>,
+        ),
+        (
             "sdkman".to_owned(),
             FixedRegistry::new("sdkman") as Arc<dyn RegistryClient>,
         ),
@@ -1981,6 +2010,10 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "godist".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "mise-java".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
         (
@@ -2072,6 +2105,7 @@ pub async fn make_app_with_defaults_and_access(
         ("composer", "composer"),
         ("nodedist", "nodedist"),
         ("godist", "godist"),
+        ("mise-java", "mise-java"),
         ("sdkman", "sdkman"),
         ("rustup", "rustup"),
         ("galaxy", "galaxy"),

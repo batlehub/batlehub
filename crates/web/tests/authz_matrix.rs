@@ -612,6 +612,22 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── mise-java (RFC 0048 §6.3) ────────────────────────────────────────
+        // Proxy-only: a download URL resolves to its row's coordinate
+        // (`java` / `temurin-9.8.7`) after the registry grant and before any
+        // fetch. A metadata document is per platform, every vendor's builds.
+        Row::new(
+            "mise-java",
+            "/proxy/reg/mise-java/dl/github.com/adoptium/t/temurin-9.8.7.tar.gz",
+        )
+        .coord("java", "temurin-9.8.7")
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed from upstream and no local package is read",
+        )),
+        Row::new("mise-java", "/proxy/reg/mise-java/jvm/ga/linux/x86_64.json")
+            .coord("java", "temurin-9.8.7")
+            .token("temurin")
+            .vis(WHOLE_REGISTRY),
         // ── godist (RFC 0048 §6.7) ───────────────────────────────────────────
         // Proxy-only like `nodedist`: the version comes out of the file name,
         // so a Go release is a real coordinate (`go` / `9.8.7`). The release
@@ -1210,6 +1226,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/mise-versions/data/github/{tail}", Coverage::NoRow("always 503, never reads a package (RFC 0043 decision 5); `mise_versions.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/_registry/latest.tar.zst", Coverage::NoRow("mise's registry archive with the overlay merged, no package read (RFC 0045, proxy-only kind); `mise_auto_wire.rs` asserts it")),
     ("/proxy/{registry}/mise-versions/_wire-answer/{outcome}", Coverage::NoRow("the wire's own answer, reached only as a rewrite and 404 without one (RFC 0045); `mise_auto_wire.rs` asserts the refusals and `wire_answer_without_extension_is_404`")),
+    ("/proxy/{registry}/mise-java/dl/{path}", Coverage::Row),
+    (
+        "/proxy/{registry}/mise-java/jvm/{release_type}/{os}/{arch}.json",
+        Coverage::Row,
+    ),
     ("/proxy/{registry}/godist/index.json", Coverage::Row),
     ("/proxy/{registry}/godist/info/refs", Coverage::Row),
     ("/proxy/{registry}/godist/{file}", Coverage::Row),

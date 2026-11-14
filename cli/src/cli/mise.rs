@@ -257,6 +257,13 @@ async fn export_one(
     // composed without the keys leads the client to a refusal. Read off
     // the connected instance's own document, carried as evidence.
     let facts = match terraform_provider_facts(client, registry, path).await {
+        Ok(None) => match mise_java_facts(client, registry, entry).await {
+            Ok(facts) => facts,
+            Err(note) => {
+                skipped.push(format!("{} [{}]: {note}", entry.tool, entry.platform));
+                None
+            }
+        },
         Ok(facts) => facts,
         Err(note) => {
             skipped.push(format!("{} [{}]: {note}", entry.tool, entry.platform));
@@ -836,6 +843,102 @@ fn print_summary(plan: &MisePlan, out: Option<&std::path::Path>) {
     }
     if let Some(path) = out {
         println!("plan written to {}", path.display());
+    }
+}
+
+// ── mise-java row facts (RFC 0048 §6.5) ──────────────────────────────────────
+
+/// mise's platform key (`linux-x64`, `macos-arm64`, `linux-x64-musl`) as the
+/// `{os}/{arch}` of a mise-java document (`java_os`, `java_arch`,
+/// mise 2026.11.3 `java.rs:813-833`).
+fn mise_java_platform(key: &str) -> Option<(&'static str, String)> {
+    let mut parts = key.split('-');
+    let os = parts.next()?;
+    let arch = parts.next()?;
+    let musl = parts.any(|p| p == "musl");
+    let os = match os {
+        "linux" | "freebsd" if musl => "alpine-linux",
+        "linux" | "freebsd" => "linux",
+        "macos" | "darwin" => "macosx",
+        "windows" => "windows",
+        _ => return None,
+    };
+    let arch = match arch {
+        "x64" => "x86_64".to_owned(),
+        "arm64" => "aarch64".to_owned(),
+        "arm" => "arm32-vfp-hflt".to_owned(),
+        other => other.to_owned(),
+    };
+    Some((os, arch))
+}
+
+/// The metadata row a JDK archive was listed under, read off the connected
+/// instance's own document for the entry's platform, so the disconnected one
+/// can list what it holds (`mise ls-remote java`). `Ok(None)` for every entry
+/// that is not a mise-java archive; `Err` with the note to print when no
+/// document names it — the archive is still carried, and a lock-driven
+/// install still works.
+async fn mise_java_facts(
+    client: &BatleHubClient,
+    registry: &crate::api::mise_plan::PlanRegistry,
+    entry: &crate::api::mise_plan::PlanEntry,
+) -> std::result::Result<Option<serde_json::Value>, String> {
+    if registry.registry_type != "mise-java" {
+        return Ok(None);
+    }
+    let Some((os, arch)) = mise_java_platform(&entry.platform) else {
+        return Err(format!(
+            "'{}' is no platform mise-java knows; the archive is carried unlisted",
+            entry.platform
+        ));
+    };
+    let base = crate::api::suggest::proxy_base_path(&registry.name, "mise-java");
+    // shortcut: one document fetch per JDK entry; a bundle carries a handful.
+    for release_type in ["ga", "ea"] {
+        let path = format!("{base}/jvm/{release_type}/{os}/{arch}.json");
+        let Ok(rows) = client.get::<Vec<serde_json::Value>>(&path).await else {
+            continue;
+        };
+        if let Some(row) = rows
+            .into_iter()
+            .find(|r| r.get("url").and_then(|u| u.as_str()) == Some(entry.url.as_str()))
+        {
+            return Ok(Some(serde_json::json!({ "mise-java": {
+                "row": row,
+                "platforms": [format!("{release_type}/{os}/{arch}")],
+            }})));
+        }
+    }
+    Err(format!(
+        "no {os}/{arch} mise-java document of {} lists {}; the archive is carried, and \
+         `mise ls-remote java` will not offer it on the disconnected side",
+        registry.name, entry.url
+    ))
+}
+
+#[cfg(test)]
+mod mise_java_facts_tests {
+    use super::mise_java_platform;
+
+    #[test]
+    fn mise_platform_keys_map_to_document_platforms() {
+        assert_eq!(
+            mise_java_platform("linux-x64"),
+            Some(("linux", "x86_64".into()))
+        );
+        assert_eq!(
+            mise_java_platform("linux-arm64-musl"),
+            Some(("alpine-linux", "aarch64".into()))
+        );
+        assert_eq!(
+            mise_java_platform("macos-arm64"),
+            Some(("macosx", "aarch64".into()))
+        );
+        assert_eq!(
+            mise_java_platform("windows-x64"),
+            Some(("windows", "x86_64".into()))
+        );
+        assert_eq!(mise_java_platform("plan9-x64"), None);
     }
 }
 

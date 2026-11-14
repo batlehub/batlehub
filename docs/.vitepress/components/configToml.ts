@@ -31,6 +31,7 @@ export type RegistryType =
   | "nix"
   | "nodedist"
   | "godist"
+  | "mise-java"
   | "mise-versions"
   | "sdkman"
   | "rustup"
@@ -492,6 +493,9 @@ export const defaultUpstream: Record<RegistryType, string> = {
   // The archives; versions and checksums come from go.dev/dl's release
   // document (`metadata_url`, RFC 0048 §6.7).
   godist: "https://dl.google.com/go",
+  // mise's JVM catalogue; the archives come from each row's vendor host
+  // (RFC 0048 §4.1).
+  "mise-java": "https://mise-java.jdx.dev",
   // mise asks this host for a tool's versions before any other (RFC 0043).
   "mise-versions": "https://mise-versions.jdx.dev",
   // `upstreams` is the candidates API; the download broker is the second host
@@ -534,6 +538,7 @@ export const PROXY_ONLY_TYPES = new Set<RegistryType>([
   "generic",
   "nodedist",
   "godist",
+  "mise-java",
   "sdkman",
   "rustup",
   "mise-versions",

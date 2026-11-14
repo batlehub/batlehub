@@ -187,6 +187,13 @@ TOOL_VERSION="${HEAVY_MISE_VERSION:-2.60.0}"
 TOOL_UNHELD_VERSION="${HEAVY_MISE_UNHELD_VERSION:-2.59.0}"
 OWNER_REPO="${TOOL#github:}"
 AIRGAP_PORT="${HEAVY_AIRGAP_PORT:-8120}"
+# RFC 0048 §6.P obs. 9: a Temurin JRE (52 MB, github.com → release-assets),
+# locked by URL as `mise lock` writes it; probed in the GA linux/x86_64
+# document on 2026-11-14.
+MJ_REG="mise-java-$HEAVY_RUN"
+MJ_JRE="${HEAVY_MJ_JRE:-temurin-jre-21.0.6+7.0.LTS}"
+MJ_URL="${HEAVY_MJ_URL:-https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.6%2B7/OpenJDK21U-jre_x64_linux_hotspot_21.0.6_7.tar.gz}"
+MJ_SHA="${HEAVY_MJ_SHA:-7fc9d6837da5fa1f12e0f41901fd70a73154914b8c8ecbbcad2d44176a989937}"
 
 # apk: the kind whose *listing* the estate can compose and sign (RFC 0026
 # §6.10). The coordinate is the file name, so the held package and the one the
@@ -284,6 +291,14 @@ backend = "$TOOL"
 
 [tools."$TOOL"."platforms.linux-x64"]
 url = "$ASSET_URL"
+
+[[tools.java]]
+version = "$MJ_JRE"
+backend = "core:java"
+
+[tools.java."platforms.linux-x64"]
+checksum = "sha256:$MJ_SHA"
+url = "$MJ_URL"
 EOF
 "$CLI" mise plan --lock "$HEAVY_WORK/mise.lock" --platform linux-x64 \
   -o "$HEAVY_WORK/plan.json" >"$HEAVY_WORK/plan.txt" 2>"$HEAVY_WORK/plan.err" \
@@ -431,7 +446,7 @@ head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
   --bundle-id "heavy-airgap-$HEAVY_RUN" >"$HEAVY_WORK/export.json" 2>"$HEAVY_WORK/export.err" \
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
-[[ "$BLOBS" -eq 20 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 20 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, a chart archive and its .prov, and mise's raw registry archive — RFC 0045 §15 Q3)"; }
+[[ "$BLOBS" -eq 21 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 21 (asset, the JRE, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, a chart archive and its .prov, and mise's raw registry archive — RFC 0045 §15 Q3)"; }
 # `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
 # redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
 # download that goes straight into `tar`. A wrapper rather than the flags
@@ -459,6 +474,20 @@ facts = archives[0].get("facts", {}).get("terraform", {})
 keys = facts.get("signing_keys", {}).get("gpg_public_keys", [])
 assert keys and all(k.get("key_id") and k.get("ascii_armor") for k in keys), facts
 print(f"provider facts: protocols={facts.get('protocols')} keys={[k['key_id'] for k in keys]}")
+PY
+# …and read the JRE's row off the mise-java document, so the disconnected side
+# can list what it holds (RFC 0048 §6.5).
+python3 - "$HEAVY_WORK/estate.bhub" "$MJ_REG" "$MJ_URL" <<'PY' || heavy_fail "the manifest does not carry the JRE's mise-java row"
+import json, sys, tarfile
+bundle, reg, url = sys.argv[1:]
+with tarfile.open(bundle) as t:
+    entries = json.load(t.extractfile("manifest.json"))["entries"]
+jres = [e for e in entries if e["registry"] == reg]
+assert len(jres) == 1, [e["key"] for e in jres]
+facts = jres[0].get("facts", {}).get("mise-java", {})
+assert facts.get("row", {}).get("url") == url, facts
+assert facts.get("platforms") == ["ga/linux/x86_64"], facts
+print(f"mise-java facts: {jres[0]['version']} on {facts['platforms']}")
 PY
 export HEAVY_BUNDLE_PUBKEY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["signer_key"])' "$HEAVY_WORK/export.json")"
 heavy_log "AIRGAP-EXPORT-OK ($BLOBS blobs, signed by ${HEAVY_BUNDLE_PUBKEY:0:8}…)"
@@ -564,13 +593,14 @@ for p in "/proxy/$NPM_REG/$NPM_PKG/$NPM_VERSION/tarball" \
          "/proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/$MVN_VERSION/$MVN_ARTIFACT-$MVN_VERSION.pom" \
          "/proxy/$NUGET_REG/nuget/v3/flat/$NUGET_PKG/$NUGET_VERSION/$NUGET_PKG.$NUGET_VERSION.nupkg" \
          "/proxy/$GEMS_REG/gems/$GEM-$GEM_VERSION.gem" \
-         "/proxy/$CONDA_REG/$CONDA_SUBDIR/$CONDA_FILE"; do
+         "/proxy/$CONDA_REG/$CONDA_SUBDIR/$CONDA_FILE" \
+         "/proxy/$MJ_REG/mise-java/dl/${MJ_URL#https://}"; do
   # (the devfile stack is asserted in §7f, where the listing its routes read
   # through exists — both of them resolve the version through the index)
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE$p")"
   [[ "$code" == "200" ]] || heavy_fail "the disconnected instance answered $code on $p, which the bundle carried"
 done
-heavy_log "AIRGAP-HELD-OK (all twelve artifacts 200 on the disconnected instance)"
+heavy_log "AIRGAP-HELD-OK (all thirteen artifacts 200 on the disconnected instance)"
 
 NPM_URL="$HEAVY_TAP_BASE/proxy/$NPM_REG/"
 PIP_SIMPLE="$HEAVY_TAP_BASE/proxy/$PIP_REG/simple/"
@@ -927,6 +957,53 @@ MISE_INSTALLED="$(cd "$SYNTHTOOL" && "${DENY[@]}" "${MISE[@]}" exec -- gh --vers
 MISE_ASKED="$(awk -v mark="### mise-synth" 'index($0, mark) == 1 { seen = 1; next } seen && /GET \/proxy/ { sub(/ -> .*/, ""); print }' "$HEAVY_LOG" | sed "s|GET /proxy/$GH_REG/$OWNER_REPO||" | tr '\n' ' ')"
 measure "mise | install $TOOL@$TOOL_VERSION, no lock, synthesis on | asked:$MISE_ASKED| exit 0 after ${CLIENT_SECS}s | $MISE_INSTALLED"
 heavy_log "MISE-SYNTH-OK ($MISE_INSTALLED, with no lock and no route off the host)"
+
+# ── 6c. mise-java: a JRE from the lock, and the document composed ──────────
+#
+# RFC 0048 §6.P obs. 9. mise installs a locked Java by its URL and never reads
+# the document (java.rs:615-634), so the one request is the archive — the row's
+# own URL, rewritten onto `dl/` — answered from what the bundle carried. Then
+# the document, composed from the held rows for this platform only.
+MJ_PROJECT="$HEAVY_WORK/mise-java"
+mkdir -p "$MJ_PROJECT/config"
+cat > "$MJ_PROJECT/config/config.toml" <<EOF
+[settings.url_replacements]
+"regex:^https://mise-java\\\\.jdx\\\\.dev/(.+)" = "$HEAVY_TAP_BASE/proxy/$MJ_REG/mise-java/\$1"
+"regex:^https://github\\\\.com/adoptium/(.+)" = "$HEAVY_TAP_BASE/proxy/$MJ_REG/mise-java/dl/github.com/adoptium/\$1"
+EOF
+cat > "$MJ_PROJECT/mise.toml" <<EOF
+[settings]
+lockfile = true
+
+[tools]
+java = "$MJ_JRE"
+EOF
+cat > "$MJ_PROJECT/mise.lock" <<EOF
+[[tools.java]]
+version = "$MJ_JRE"
+backend = "core:java"
+
+[tools.java."platforms.linux-x64"]
+checksum = "sha256:$MJ_SHA"
+url = "$MJ_URL"
+EOF
+heavy_mark "mise-java-lock"
+heavy_log "mise install java@$MJ_JRE from the lock, against the disconnected instance"
+run_client "mise install java (lock)" "$HEAVY_WORK/mise-java-lock.txt" \
+  bash -c "cd '$MJ_PROJECT' && MISE_CONFIG_DIR='$MJ_PROJECT/config' ${MISE[*]} install"
+[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/mise-java-lock.txt" >&2; heavy_fail "mise install java from the lock failed against the disconnected instance"; }
+heavy_wire_re_after "mise-java-lock" "GET /proxy/$MJ_REG/mise-java/dl/github[.]com/adoptium/[^ ]+jre_x64_linux[^ ]* -> 200" \
+  "the locked JRE did not come from the held archive"
+[[ "$(heavy_wire_count_after "mise-java-lock" "/proxy/$MJ_REG/mise-java/")" == 1 ]] \
+  || heavy_fail "mise asked the mise-java registry for more than the one locked archive"
+MJ_RAN="$(cd "$MJ_PROJECT" && MISE_CONFIG_DIR="$MJ_PROJECT/config" "${DENY[@]}" "${MISE[@]}" exec -- java -version 2>&1 | head -1 || true)"
+[[ "$MJ_RAN" == *21.0.6* ]] || heavy_fail "java -version answered '$MJ_RAN' after the locked install, expected 21.0.6"
+MJ_DOC="$(curl -s -D - -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE/proxy/$MJ_REG/mise-java/jvm/ga/linux/x86_64.json")"
+grep -qi '^X-BatleHub-Listing: synthesised' <<<"$MJ_DOC" \
+  || heavy_fail "the mise-java document was not composed from the held set"
+grep -qF "\"$MJ_URL\"" <<<"$MJ_DOC" || heavy_fail "the composed mise-java document does not list the held JRE"
+measure "mise | install java@$MJ_JRE from the lock, synthesis on | the archive -> 200, nothing else | exit 0 after ${CLIENT_SECS}s | $MJ_RAN"
+heavy_log "MISE-JAVA-LOCK-OK ($MJ_RAN, one archive, the document composed)"
 
 # RFC 0045 §6.P (air gap): the same install through `--mise-catch-all`'s one
 # rule, every host to the wire. The project file carries the rule, so it

@@ -247,6 +247,21 @@ pub struct RegistryConfig {
     /// reason `broker_url` is (RFC 0048 §4.1).
     #[serde(default)]
     pub metadata_url: Option<String>,
+    /// mise-java only: where a download may come from, as `host/prefix/`
+    /// entries (a bare host only where it is single-tenant). A metadata row
+    /// whose URL is under none of them is dropped from the served document and
+    /// never fetched. Defaults to the set measured in RFC 0048 §6.1.
+    #[serde(default)]
+    pub vendor_hosts: Option<Vec<String>>,
+    /// mise-java only: hosts a vendor host may redirect a download to. Every
+    /// hop must be `https://` and land on `vendor_hosts` or here, or the
+    /// download is a `502` and nothing is cached (RFC 0048 §15 Q2).
+    #[serde(default)]
+    pub redirect_hosts: Option<Vec<String>>,
+    /// mise-java only: the release types served, `ga` and/or `ea`. Default
+    /// `["ga"]` (RFC 0048 §4.1).
+    #[serde(default)]
+    pub release_types: Option<Vec<String>>,
     /// rustup only: components this registry never serves, whatever the
     /// channel manifest says.
     ///

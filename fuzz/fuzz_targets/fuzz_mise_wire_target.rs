@@ -21,17 +21,34 @@ fuzz_target!(|data: (&str, &str, bool)| {
         upstream,
         upstreams: &[],
         path_routing: true,
+        vendor_hosts: &[],
     };
+    let vendors: Vec<String> = batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
     let regs = [
         reg("gh", RegistryKind::Github, Some("https://api.github.com")),
-        reg("fj", RegistryKind::Forgejo, Some("https://git.corp.example/forge")),
+        reg(
+            "fj",
+            RegistryKind::Forgejo,
+            Some("https://git.corp.example/forge"),
+        ),
         reg("gl", RegistryKind::Gitlab, Some("https://gitlab.com")),
         reg("mv", RegistryKind::MiseVersions, None),
         reg("npm", RegistryKind::Npm, Some("https://registry.npmjs.org")),
-        reg("cf", RegistryKind::Conda, Some("https://conda.anaconda.org/conda-forge")),
+        reg(
+            "cf",
+            RegistryKind::Conda,
+            Some("https://conda.anaconda.org/conda-forge"),
+        ),
         WireRegistry {
             upstreams: &generic,
             ..reg("gen", RegistryKind::Generic, None)
+        },
+        WireRegistry {
+            vendor_hosts: &vendors,
+            ..reg("jdk", RegistryKind::MiseJava, None)
         },
     ];
     let (table, _) = WireTable::build(&regs, Some("hub.example.com"));

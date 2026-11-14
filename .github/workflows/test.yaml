@@ -1379,6 +1379,7 @@ jobs:
           - kind: goproxy
           - kind: nodedist
           - kind: godist
+          - kind: mise-java
           - kind: sdkman
           - kind: github
           - kind: forgejo
@@ -1421,7 +1422,7 @@ jobs:
       # mise is the client for all three forge kinds — one binary, three
       # backends — and it is the client whose `netrc` setting the phases rely on.
       - name: Install mise
-        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions' || matrix.kind == 'mise-auto-wire' || matrix.kind == 'godist'
+        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab' || matrix.kind == 'mise-versions' || matrix.kind == 'mise-auto-wire' || matrix.kind == 'godist' || matrix.kind == 'mise-java'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
@@ -1513,6 +1514,9 @@ jobs:
           # Go's toolchain through `godist` (RFC 0048 §6.7): mise lists it
           # through the versions host, downloads the archive and `.sha256` here.
           - phase: godist
+          # A JDK through `mise-java` (RFC 0048 §6.P obs. 3-6, 12): one
+          # blocked and refused, one installed after a server restart.
+          - phase: mise-java
           # mise's core toolchains (RFC 0048 §6.P): zig, deno, erlang,
           # elixir, swift (~1 GB), node and rust through the config
           # `registry suggest --mise` generates; dotnet refused as planned.
@@ -1610,7 +1614,7 @@ jobs:
       # one (`forgejo`), a GitLab one (`gitlab`) and its own versions host
       # (`mise-versions`). Same binary, four backends.
       - name: Install mise
-        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'godist' || matrix.phase == 'mise-core' || matrix.phase == 'mise-http' || matrix.phase == 'mise-backends' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
+        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'godist' || matrix.phase == 'mise-java' || matrix.phase == 'mise-core' || matrix.phase == 'mise-http' || matrix.phase == 'mise-backends' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"

@@ -1167,6 +1167,7 @@ fn wire_registry<'a>(ty: &str, r: &'a RegistryInfo) -> Option<WireRegistry<'a>> 
         upstream: r.upstream.as_deref(),
         upstreams: &r.upstreams,
         path_routing: true,
+        vendor_hosts: &r.vendor_hosts,
     })
 }
 
@@ -1460,8 +1461,12 @@ const ALL_TARGETS: [TargetId; 19] = [
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules. `nuget` is a
 /// setting, `dotnet.registry_url`, not a rule (RFC 0047 §6.2).
-const MISE_TYPES: [&str; 12] = [
+const MISE_TYPES: [&str; 13] = [
     "mise-versions",
+    // Before `github`: the classic block is first-match, and a JDK on
+    // `github.com/adoptium/` must reach the kind that can block it, not the
+    // forge (RFC 0048 §15 Q1, T4).
+    "mise-java",
     "github",
     "forgejo",
     "gitlab",
@@ -3572,6 +3577,15 @@ mod tests {
             },
             installable: None,
             upstreams: Vec::new(),
+            vendor_hosts: if ty == "mise-java" {
+                batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            redirect_hosts: Vec::new(),
         }
     }
 
@@ -4822,6 +4836,39 @@ mod tests {
             find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).state,
             State::Conflict
         );
+    }
+
+    /// RFC 0048 §15 Q1: the mise-java rules — the metadata host, then one per
+    /// vendor_hosts entry — come before the github rules, so a JDK locked on
+    /// `github.com/adoptium/` reaches the kind that can block it.
+    #[test]
+    fn mise_java_rules_precede_the_github_rules() {
+        assert!(
+            MISE_TYPES.iter().position(|t| *t == "mise-java")
+                < MISE_TYPES.iter().position(|t| *t == "github")
+        );
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let regs = vec![
+            reg("github", "github", "proxy"),
+            reg("jdk", "mise-java", "proxy"),
+        ];
+        let next = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise)
+            .next
+            .clone()
+            .unwrap();
+        let at = |needle: &str| {
+            next.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {next}"))
+        };
+        let adoptium = at("/proxy/jdk/mise-java/dl/github.com/adoptium/$1");
+        assert!(adoptium < at("/proxy/github/"), "{next}");
+        assert!(at("/proxy/jdk/mise-java/$1") < adoptium, "{next}");
+        assert_eq!(
+            next.matches("/proxy/jdk/mise-java/dl/").count(),
+            batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS.len()
+        );
+        toml::from_str::<toml::Table>(&next).unwrap();
     }
 
     /// RFC 0048 §6.2: a zig mirror brings the setting that keeps mise off

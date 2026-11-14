@@ -613,6 +613,28 @@ const NODEDIST: &[Conformance] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// mise-java — mise's `core:java` (RFC 0048 §6.3)
+//
+// Read from mise 2026.11.3's `src/plugins/core/java.rs`; `tests/heavy/
+// closed_world.sh mise-java` turns "read" into "observed". The download line
+// is a row URL behind the rewrite rule, resolved to its coordinate before the
+// funnel.
+// ─────────────────────────────────────────────────────────────────────────────
+const MISE_JAVA: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/mise-java/mise-java/jvm/ga/linux/x86_64.json",
+        "/proxy/{registry}/mise-java/jvm/{release_type}/{os}/{arch}.json",
+        "mise java.rs:375-395, `download_java_metadata` — `jvm/{type}/{os}/{arch}.json`",
+    )
+    .must_find("temurin"),
+    Conformance::get(
+        "/proxy/mise-java/mise-java/dl/github.com/adoptium/t/temurin-1.1.0.tar.gz",
+        "/proxy/{registry}/mise-java/dl/{path:.*}",
+        "mise java.rs:207-234, `download` — the row's `url`, rewritten onto `dl/{host}/{path}`",
+    ),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // godist — mise's `core:go` (RFC 0048 §6.7)
 //
 // Both lines read from mise 2026.9.5's `src/plugins/core/go.rs`;
@@ -1026,6 +1048,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("nuget", NUGET),
     ("nodedist", NODEDIST),
     ("godist", GODIST),
+    ("mise-java", MISE_JAVA),
     ("sdkman", SDKMAN),
     ("rustup", RUSTUP),
     ("galaxy", GALAXY),

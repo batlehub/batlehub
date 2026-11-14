@@ -166,6 +166,7 @@ pub fn plan_from_lock(
         .cloned()
         .unwrap_or_default();
 
+    let mut java_tools: BTreeSet<&str> = BTreeSet::new();
     for (tool_name, value) in &tools {
         // `[[tools.x]]` yields an array; a bare table is tolerated, as the
         // suggest path already tolerates it.
@@ -175,6 +176,12 @@ pub fn plan_from_lock(
             _ => continue,
         };
         for table in tables {
+            let backend = table.get("backend").and_then(|b| b.as_str());
+            if backend.unwrap_or(tool_name) == crate::api::suggest::JAVA_BACKEND
+                || (backend.is_none() && tool_name == "java")
+            {
+                java_tools.insert(tool_name);
+            }
             plan_one_tool(
                 tool_name,
                 table,
@@ -195,7 +202,14 @@ pub fn plan_from_lock(
         let Some((host, path)) = split_url(&entry.url) else {
             continue;
         };
-        let found = registry_kinds_for_host(host, path)
+        // A JDK's URL is on a vendor host, `github.com` among them; it goes
+        // through `mise-java` or nowhere (RFC 0048 §15 Q1).
+        let kinds = if java_tools.contains(entry.tool.as_str()) {
+            vec!["mise-java"]
+        } else {
+            registry_kinds_for_host(host, path)
+        };
+        let found = kinds
             .into_iter()
             .find_map(|kind| known.iter().find(|r| r.registry_type == kind));
         let Some(r) = found else {
@@ -808,5 +822,39 @@ url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/9
         // different thing and not an error.
         let plan = plan_from_lock("mise.lock", "", &[], &[]).unwrap();
         assert!(plan.entries.is_empty());
+    }
+
+    /// A JDK's URL is on `github.com`, and still plans through mise-java
+    /// when one is configured: only that kind can block it (RFC 0048 §15 Q1).
+    #[test]
+    fn a_locked_jdk_plans_through_mise_java() {
+        let lock = r#"
+[[tools.java]]
+version = "temurin-21.0.5+11.0.LTS"
+backend = "core:java"
+[tools.java."platforms.linux-x64"]
+url = "https://github.com/adoptium/t/releases/download/x/a.tar.gz"
+"#;
+        let known = vec![
+            KnownRegistry {
+                name: "gh".into(),
+                registry_type: "github".into(),
+            },
+            KnownRegistry {
+                name: "jdk".into(),
+                registry_type: "mise-java".into(),
+            },
+        ];
+        let plan = plan_from_lock("mise.lock", lock, &[], &known).unwrap();
+        let e = &plan.entries[0];
+        assert_eq!(e.registry.as_ref().unwrap().name, "jdk");
+        assert_eq!(
+            e.proxy_path.as_deref(),
+            Some("/proxy/jdk/mise-java/dl/github.com/adoptium/t/releases/download/x/a.tar.gz")
+        );
+        // Without a mise-java registry, the host is unmirrored, not github's.
+        let plan = plan_from_lock("mise.lock", lock, &[], &known[..1]).unwrap();
+        assert!(plan.entries[0].registry.is_none());
+        assert_eq!(plan.unmirrored_hosts, ["github.com"]);
     }
 }

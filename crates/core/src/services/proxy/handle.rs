@@ -1322,8 +1322,35 @@ impl ProxyService {
             }
         }
 
-        crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
+        // `mise-java` rows carry `created_at`: a too-young build leaves the
+        // document, so mise never picks a version the download would refuse
+        // (RFC 0048 §5.2).
+        let mut too_young = 0;
+        if kind == crate::entities::RegistryKind::MiseJava {
+            let gate = prelude.policy.as_ref().and_then(|p| {
+                p.rules
+                    .iter()
+                    .find_map(|r| r.listing_age_gate(&req.identity))
+            });
+            if let (Some(gate), Some(body)) = (gate, doc.body.as_json()) {
+                let young =
+                    crate::services::mise_java::younger_than(body, gate, chrono::Utc::now());
+                too_young = young.len();
+                blocked.extend(young);
+            }
+        }
+
+        let removed = crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
         crate::services::blocking::rewrite_urls(&ctx, &mut doc);
+        if kind == crate::entities::RegistryKind::MiseJava {
+            crate::services::mise_java::record_served(
+                &req.package_id.registry,
+                name,
+                &doc,
+                removed.len(),
+                too_young,
+            );
+        }
 
         // An allowed listing is counted, not filed. `StatsRollupService` turns
         // this into one durable row per registry per hour, so a `cargo build`

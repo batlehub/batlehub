@@ -63,8 +63,8 @@
 #               run publishes its own fixture and reads it back
 #   live:<kind> the same pull boundary for a kind with **no local mode**, which
 #               therefore needs a real upstream for its positive arm: goproxy,
-#               nodedist, godist, sdkman, github, forgejo, gitlab, generic, deb,
-#               rpm, pacman, rustup. The one family here that reaches the internet;
+#               nodedist, godist, mise-java, sdkman, github, forgejo, gitlab,
+#               generic, deb, rpm, pacman, rustup. The one family here that reaches the internet;
 #               CI runs it nightly rather than per-PR
 #
 # One target per invocation, like every other heavy suite: each starts its own
@@ -141,6 +141,7 @@ FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
 NODEDIST_R="authz-nodedist-$HEAVY_RUN"
 GODIST_R="authz-godist-$HEAVY_RUN"
+MISE_JAVA_R="authz-mise-java-$HEAVY_RUN"
 MV_R="authz-mise-versions-$HEAVY_RUN"
 DEVFILE_R="authz-devfile-$HEAVY_RUN"
 NIX_R="authz-nix-$HEAVY_RUN"
@@ -3310,12 +3311,16 @@ some other reason, which is exactly what the warmed repository exists to prevent
 # the part worth reading — three of these four mechanisms are not what this
 # project's setup snippets said they were before the phases were written.
 
-AUTHZ_LIVE_KINDS=(goproxy nodedist godist sdkman github forgejo gitlab generic deb rpm pacman rustup
+AUTHZ_LIVE_KINDS=(goproxy nodedist godist mise-java sdkman github forgejo gitlab generic deb rpm pacman rustup
                   mise-versions mise-auto-wire)
 
 LIVE_GO="live-go-$HEAVY_RUN"
 LIVE_NODEDIST="live-nodedist-$HEAVY_RUN"
 LIVE_GODIST="live-godist-$HEAVY_RUN"
+LIVE_MISE_JAVA="live-mise-java-$HEAVY_RUN"
+# A Temurin JRE (52 MB, github.com → release-assets.githubusercontent.com),
+# mise's own key for its row.
+LIVE_MISE_JAVA_JRE="${HEAVY_AUTHZ_MISE_JAVA_JRE:-temurin-jre-21.0.6+7.0.LTS}"
 LIVE_SDKMAN="live-sdkman-$HEAVY_RUN"
 LIVE_GH="live-github-$HEAVY_RUN"
 LIVE_FJ="live-forgejo-$HEAVY_RUN"
@@ -3469,6 +3474,30 @@ live_run_nodedist() {
       source "$1"
       nvm install "$2"
     ' _ "$sh" "$LIVE_NODE_VERSION"
+  return $?
+}
+
+# ── mise-java — mise, and `~/.netrc` ────────────────────────────────────────
+#
+# The forges' mechanism once more: mise sends the netrc stanza on every URL a
+# rule rewrote, the metadata document and the archive alike. Two rules, the
+# metadata host and the one vendor prefix the JRE lives under, so the denied
+# arm is refused at the document and cannot fail anywhere else (RFC 0048 §7.2).
+live_run_mise_java() {
+  local suffix="$1" login="$2" token="$3"
+  local root="$HEAVY_WORK/live-mise-java-$suffix"
+  local jvm="$HEAVY_TAP_BASE/proxy/$LIVE_MISE_JAVA/mise-java"
+  mkdir -p "$root"/{data,cache,config,state,home}
+  authz_live_netrc "$root/home" "$login" "$token"
+  cat >"$root/config/config.toml" <<EOF
+[settings.url_replacements]
+"regex:^https://mise-java\\\\.jdx\\\\.dev/(.+)" = "$jvm/\$1"
+"regex:^https://github\\\\.com/adoptium/(.+)" = "$jvm/dl/github.com/adoptium/\$1"
+EOF
+  HOME="$root/home" \
+  MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
+  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
+    "${HEAVY_RUNNER[@]}" mise install "java@$LIVE_MISE_JAVA_JRE"
   return $?
 }
 
@@ -3877,6 +3906,9 @@ phase_live() {
       authz_live_pair goproxy "go mod download through the proxy" live_run_goproxy ;;
     nodedist)
       authz_live_pair nodedist "nvm install, credential in NVM_AUTH_HEADER" live_run_nodedist ;;
+    mise-java)
+      heavy_runner_for mise "$AUTHZ_MISE"
+      authz_live_pair mise-java "mise install java@…, credential in ~/.netrc" live_run_mise_java ;;
     godist)
       heavy_runner_for mise "$AUTHZ_MISE"
       heavy_need git "git"
@@ -4063,6 +4095,7 @@ forgejo|releases:read|GET|/proxy/$FJ_R/probe-owner/probe-repo/releases/download/
 gitlab|releases:read|GET|/proxy/$GL_R/probe-group/probe-project/-/releases/v1.0.0/downloads/probe.bin|a release download link
 nodedist|releases:read|GET|/proxy/$NODEDIST_R/nodedist/v1.0.0/node-v1.0.0-linux-x64.tar.gz|a Node tarball
 godist|releases:read|GET|/proxy/$GODIST_R/godist/go1.0.0.linux-amd64.tar.gz|a Go archive, its version read from the file name
+mise-java|releases:read|GET|/proxy/$MISE_JAVA_R/mise-java/dl/github.com/adoptium/probe.tar.gz|a JDK by its vendor URL, refused before the URL is looked up
 mise-versions|releases:list|GET|/proxy/$MV_R/mise-versions/t?tool=probe|the install beacon. This kind has no artifact (RFC 0043), and the beacon is the one route that answers without an upstream: 204 for the reader, a refusal for the rest
 nix|releases:read|GET|/proxy/$NIX_R/nix/nar/0001npbf2n4z3pjy6vm2mw8ywkqixxs6/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst|a NAR under its coordinate. Two gates, not one: the store hash is resolved to a package through its narinfo (releases:list) before the bytes are read (releases:read), so a caller holding neither is refused at the first
 sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linuxx64|a candidate through the broker

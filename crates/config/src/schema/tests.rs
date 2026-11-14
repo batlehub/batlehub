@@ -5420,3 +5420,119 @@ fn a_raw_ceiling_is_checked_against_the_registry_limit() {
     );
     assert!(err.contains("raw.max_size_bytes"), "{err}");
 }
+
+/// RFC 0048 §4.3: a mise-java registry loads bare, with every default.
+#[test]
+fn mise_java_loads_bare_and_its_fields_are_its_own() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        vendor_hosts = ["github.com/adoptium/", "aka.ms/download-jdk/", "d3pxv6yz143wms.cloudfront.net"]
+        redirect_hosts = ["release-assets.githubusercontent.com"]
+        release_types = ["ga", "ea"]
+        "#,
+    )
+    .validate()
+    .expect("a mise-java registry loads");
+    for field in [
+        r#"vendor_hosts = ["cdn.azul.com/zulu/"]"#,
+        r#"redirect_hosts = ["x.example"]"#,
+        r#"release_types = ["ga"]"#,
+    ] {
+        let err = validation_error(
+            &format!("[[registries]]\ntype = \"npm\"\nname = \"npm\"\n{field}\n"),
+            "a mise-java field on npm must not load",
+        );
+        assert!(err.contains("mise-java"), "{err}");
+    }
+    validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        mode = "hybrid"
+        "#,
+        "mise-java has no publish protocol",
+    );
+}
+
+/// RFC 0048 §15 Q8: `github.com` alone would admit every account's assets.
+#[test]
+fn bare_github_vendor_host_is_rejected() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        vendor_hosts = ["github.com"]
+        "#,
+        "a bare github.com must not load",
+    );
+    assert!(err.contains("github.com/adoptium/"), "{err}");
+    for bad in [
+        r#"["*"]"#,
+        "[]",
+        r#"["https://cdn.azul.com/zulu/"]"#,
+        r#"["cdn.azul.com:443/zulu/"]"#,
+        r#"["cdn.azul.com/zulu"]"#,
+        r#"["cdn.azul.com/zulu/../"]"#,
+        r#"["*.azul.com/"]"#,
+        r#"["127.0.0.1/x/"]"#,
+    ] {
+        validation_error(
+            &format!(
+                "[[registries]]\ntype = \"mise-java\"\nname = \"jdk\"\nvendor_hosts = {bad}\n"
+            ),
+            bad,
+        );
+    }
+}
+
+/// RFC 0048 §4.3: a redirect host is compared exactly against each hop's host.
+#[test]
+fn redirect_host_with_scheme_is_rejected() {
+    for bad in [
+        r#""http://cdn.example""#,
+        r#""cdn.example/path""#,
+        r#""cdn.example:8443""#,
+        r#""*.cdn.example""#,
+        r#""169.254.169.254""#,
+    ] {
+        let err = validation_error(
+            &format!(
+                "[[registries]]\ntype = \"mise-java\"\nname = \"jdk\"\nredirect_hosts = [{bad}]\n"
+            ),
+            bad,
+        );
+        assert!(err.contains("host name only"), "{err}");
+    }
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        release_types = ["nightly"]
+        "#,
+        "an unknown release type must not load",
+    );
+    assert!(err.contains("not one of ga, ea"), "{err}");
+}
+
+/// Every mise-java row is dated, so the gate must say what an undated one is.
+#[test]
+fn mise_java_age_gate_names_its_missing_timestamp_posture() {
+    validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 604800
+        "#,
+        "deny_missing_timestamp must be explicit",
+    );
+}

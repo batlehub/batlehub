@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: fbe9483f2e9e5a6c
+sourceHash: 0475ff2106ce5269
 ---
 
 # Politiques et paquets
@@ -333,6 +333,7 @@ sans danger :
 | nodedist | `index.tab` | yes |
 | nodedist | `index.json` | yes |
 | godist | the release document (`index.json`) | yes |
+| mise-java | `jvm/{type}/{os}/{arch}.json` | yes |
 | sdkman | `versions/all` | yes |
 | sdkman | `candidates/default` | yes |
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |
