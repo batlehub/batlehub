@@ -607,16 +607,30 @@ script running `python`) is a subprocess, outside the rewriter (§7, T5).
   path plus the `version_list_url` the registry TOML names, instead of the
   single file — and checks that `version_list_url` is on the same host and
   bucket before admitting it.
-- `dl.google.com` carries **two `generic` registries on one host** (§15 Q3):
-  `go-dl` (upstream `https://dl.google.com/go`, `go*`, RFC 0048 owns it) and
-  a new `android-dl` (upstream `https://dl.google.com/android`, for
-  android-sdk, aapt2 and android-cli), each wired on
-  its `(host, prefix)` pair the way RFC 0045 §15 Q10 settled for the server
-  wire. Presets are therefore keyed by host **and** path prefix:
-  `generic_preset`, `proxy_path_for` and `registry_kind_for_host` (`:137`,
-  `:214`, `:277`) take the URL's path and pick the longest matching prefix,
-  where they assume one preset per host today. `android-dl`'s `path_allow`
-  is probed in phase 2 before the preset is written, like every preset.
+- `dl.google.com` carries **two registries on one host** (§15 Q3, revised
+  2026-11-14): the typed `godist` under `/go/` (RFC 0048 phase 5, shipped in
+  #338 and #339; the `go-dl` generic preset it replaced was removed in #355)
+  and a new `generic` preset `android-dl` under `/android/` (upstream
+  `https://dl.google.com/android`, for android-sdk, aapt2 and android-cli).
+  Each is wired on its `(host, prefix)` pair, the way RFC 0045 §15 Q10
+  settled for the server wire.
+  **Today the host alone decides, and it decides wrong for Android.**
+  `TYPED_HOSTS` maps the whole of `dl.google.com` to `godist`
+  (`cli/src/api/suggest.rs:120`), and `registry_for_url` and
+  `registry_kind_for_host` match on the host only (`:945`, `:249`). So a lock
+  URL under `dl.google.com/android/` is suggested as a `godist` registry,
+  which serves Go's release document and archives and nothing else: every
+  Android download planned through it is a 404.
+  The fix keys both tables by host **and** path prefix. `TYPED_HOSTS`
+  gains a prefix column (`("dl.google.com", "/go/", "godist", "godist")`,
+  every other row `"/"`), `generic_preset` takes the path, and
+  `registry_for_url`, `proxy_path_for` and `registry_kind_for_host` pick
+  the longest matching prefix across both. The typed half lands in phase 1
+  on its own: an Android URL then matches no typed row, so `suggest` offers
+  the narrow `generic` every unknown host gets (that one file) and the plan
+  names no kind for it, both true, until phase 2 adds `android-dl`. Its
+  `path_allow` is probed in phase 2 before the preset is written, like every
+  preset.
 - `mise_url_replacements` (`cli/src/api/suggest.rs:1342-1366`) derives the
   conda rule from the registry's upstream, next to the generic derivation,
   until RFC 0045 phase 1 moves the table. `typed_url_replacements("conda")`
@@ -919,7 +933,10 @@ CPU path.
   `.` and `+`, and derives nothing from a channel-less upstream; a lock-less
   `conda:` keeps the conda-forge rule; `spm:` GitLab form → `gitlab`; the
   bucket-host allowlist widening and its same-bucket check; `dl.google.com`
-  URLs under `/go/` and `/android/` pick `go-dl` and `android-dl` (§15 Q3);
+  URLs under `/go/` pick `godist` and, before phase 2, a URL under
+  `/android/` gets the one-file `generic` and no plan kind; from phase 2 it
+  picks `android-dl`
+  (§15 Q3);
   each `VFOX_SUBPROCESS_PLUGINS` entry carries its note, an embedded plugin
   outside the list does not (§15 Q4).
 - **Unit** (`crates/adapters/src/registry/path_proxy.rs`, §15 Q7):
@@ -952,7 +969,7 @@ CPU path.
 | 1 | Is conda-forge-only routing acceptable as a first step? | **Yes, as the baseline shipped in #318 (`234b095c`).** It closed the "unsupported" verdict for the 20 conda tools at once; this RFC generalises it. |
 | Q1 (2026-11-13) | The mise pin: bump in phase 1, or in its own PR first? | **Inside this RFC's phase 1**, from 2026.9.5 to the current 2026.11.x (2026.11.3 or later), all four pins (§6.5). Against the draft's recommendation of a separate PR: the user keeps one PR, and phase 1 runs every existing mise phase under the new pin before it merges, so a regression elsewhere is still seen, in the same CI run. |
 | Q2 (2026-11-13) | aqua without a lock: note or refusal? | **A note** (§4.2). As recommended: a refusal would break the lock-less path for 648 GitHub packages to warn about 48. |
-| Q3 (2026-11-13) | `dl.google.com` serves Go and Android: one preset or two? | **Two `generic` registries on one host**, `go-dl` and `android-dl`, wired on `(host, prefix)` as RFC 0045 §15 Q10 settled; presets are keyed by host and path prefix (§6.1). As recommended. |
+| Q3 (2026-11-13) | `dl.google.com` serves Go and Android: one preset or two? | **Two registries on one host**, wired on `(host, prefix)` as RFC 0045 §15 Q10 settled, with the host tables keyed by host and path prefix (§6.1). As recommended. **Revised 2026-11-14:** decided as two `generic` presets, `go-dl` and `android-dl`; RFC 0048 phase 5 then shipped `godist` for `/go/` (#338, #339) and #355 removed `go-dl`, so the pair is now the typed `godist` and the `generic` `android-dl`. The prefix keying stays and gains a reason: without it the host-only `TYPED_HOSTS` row already sends Android URLs to `godist`. |
 | Q4 (2026-11-13) | vfox subprocesses (T5): document only, or also flag the known shell-out plugins? | **Both**: documented per plugin in `docs/use/mise.md`, and the plan and `suggest` flag `php`, `poetry`, `pipenv` from `VFOX_SUBPROCESS_PLUGINS` (§4.2, §6.1). Against the draft's "document only": the user wants the warning where the operator reads the plan. The list drifts; it is re-measured on each mise pin bump (§6.5), and a missing entry costs a warning, not a route. |
 | Q5 (2026-11-13) | Does packslip's `trusted_root(None)` fetch a TUF root online? | **No — it uses a root embedded at build time.** mise calls `packslip::sigstore::trusted_root(None)` (`src/backend/packslip.rs:1032`, mise 2026.11.3, which locks packslip 1.11.3); packslip's `trusted_root` is `TrustedRoot::from_json(json.unwrap_or(SIGSTORE_PRODUCTION_TRUSTED_ROOT))` (`packslip-1.11.3/src/sigstore.rs:546-551`), and that constant is `include_str!("trusted_root.json")` (`sigstore-trust-root-0.15.1/src/trusted_root.rs:359`). packslip's only network client, `RekorClient`, is used by `sign` (`sigstore.rs:293`), not on the verify path. So packslip tools install air-gapped with nothing extra for the trust root; what they need is the documents they verify, held like any artifact. Residual: the root is frozen at the mise build, so a Sigstore root rotation needs a newer mise, not a network. A research answer, not a user decision. |
 | Q6 (2026-11-13) | Do presets grow by measurement only, or on request too? | **Both.** The §2.7 threshold is re-measured on each pin bump (§6.5), and an operator's request adds a preset after the same path-layout probe and refusal-corpus test. Against the draft's "by measurement" alone. awscli.amazonaws.com and releases.crossplane.io are probed in phase 2. |
@@ -972,7 +989,7 @@ packslip's source.
 
 | Phase | Content |
 | --- | --- |
-| 1 | The mise pin bump, all four pins, to the current 2026.11.x with every existing mise phase run under it (§15 Q1). Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, `VFOX_SUBPROCESS_PLUGINS` and its note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions and the subprocess plugins. Useful alone: the plan stops lying about 40 tools. |
-| 2 | After RFC 0048 phase 1b. `require_literal_separator` in `path_proxy.rs` with its test and migration note (§15 Q7); presets keyed by host and prefix, `android-dl` beside `go-dl` (§15 Q3), the awscli and crossplane probes (§15 Q6), each preset's revalidate globs, the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
+| 1 | The mise pin bump, all four pins, to the current 2026.11.x with every existing mise phase run under it (§15 Q1). Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, `VFOX_SUBPROCESS_PLUGINS` and its note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions and the subprocess plugins. The host tables keyed by `(host, prefix)` with `dl.google.com/go/` → `godist` only (§6.1, §15 Q3), so an Android URL is no longer suggested as `godist`. Useful alone: the plan stops lying about 40 tools. |
+| 2 | After RFC 0048 phase 1b. `require_literal_separator` in `path_proxy.rs` with its test and migration note (§15 Q7); `android-dl` under `/android/` beside the typed `godist` (§15 Q3), the awscli and crossplane probes (§15 Q6), each preset's revalidate globs, the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
 | 3 | `dotnet.registry_url` in the mise target, conda rule derived from the upstream, `foreign_upstream` per channel, the per-rule floor in `setup`'s output; §6.P 1, 2, 5, 8; `registries/conda.md`, `registries/nuget.md`. |
 | 4 | Move the presets and the conda derivation into `WIRE_RULES` once RFC 0045 phase 1 is on `main` (or nothing, if RFC 0045 phase 1 moved them). |
