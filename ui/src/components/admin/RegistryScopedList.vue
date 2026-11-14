@@ -133,9 +133,7 @@ function closeAdd() {
     <template #title>{{ dialogTitle }}</template>
     <template #description>
       <i18n-t :keypath="dialogDescriptionKey" tag="span">
-        <template #registry
-          ><span class="font-mono">{{ selectedRegistry }}</span></template
-        >
+        <template #registry><span class="font-mono">{{ selectedRegistry }}</span></template>
       </i18n-t>
     </template>
     <div class="space-y-4">

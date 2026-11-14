@@ -84,9 +84,7 @@ const expiresIn = computed(() => {
               ><strong>{{ t("adminConfigReload.createdLabel") }}</strong>
               {{ formatDate(pendingReload.created_at) }}</span
             >
-            <span
-              ><strong>{{ t("adminConfigReload.expiresIn") }}</strong> {{ expiresIn }}</span
-            >
+            <span><strong>{{ t("adminConfigReload.expiresIn") }}</strong> {{ expiresIn }}</span>
           </div>
 
           <!--

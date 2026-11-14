@@ -68,9 +68,7 @@ function selectNamespace(ns: TeamNamespaceDto) {
     <template v-else>
       <!-- Groups -->
       <Card>
-        <CardHeader
-          ><CardTitle>{{ t("myNamespace.yourGroups") }}</CardTitle></CardHeader
-        >
+        <CardHeader><CardTitle>{{ t("myNamespace.yourGroups") }}</CardTitle></CardHeader>
         <CardContent>
           <div class="flex flex-wrap gap-2">
             <Badge v-for="g in groups" :key="g" variant="secondary" class="font-mono text-xs">

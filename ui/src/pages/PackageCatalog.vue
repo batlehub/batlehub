@@ -229,9 +229,7 @@ const tableCaption = computed(() =>
                ascenders and descenders a reader recognises words by. The
                tracking goes with it: letterspacing is a small-caps device. -->
           <caption v-if="!error" class="caption-top pb-3 text-left text-xs text-muted-foreground">
-            {{
-              tableCaption
-            }}
+            {{ tableCaption }}
           </caption>
           <TableHeader>
             <!-- The one solid rule in the table, under the header: the proof
