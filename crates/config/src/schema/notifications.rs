@@ -25,7 +25,7 @@ use super::registry::default_true;
 /// name = "ci-scanner"
 /// secret = "verify-me"
 /// ```
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone, schemars::JsonSchema)]
 pub struct NotificationsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -36,7 +36,7 @@ pub struct NotificationsConfig {
 }
 
 /// A single outbound notification channel.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NotificationChannelConfig {
     Webhook(WebhookChannelConfig),
@@ -57,7 +57,7 @@ impl NotificationChannelConfig {
 }
 
 /// Generic outbound HTTP webhook channel.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct WebhookChannelConfig {
     pub name: String,
     pub url: String,
@@ -69,7 +69,7 @@ pub struct WebhookChannelConfig {
 }
 
 /// Slack Incoming Webhook channel.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct SlackChannelConfig {
     pub name: String,
     pub url: String,
@@ -78,7 +78,7 @@ pub struct SlackChannelConfig {
 }
 
 /// Microsoft Teams Incoming Webhook channel.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct TeamsChannelConfig {
     pub name: String,
     pub url: String,
@@ -87,7 +87,7 @@ pub struct TeamsChannelConfig {
 }
 
 /// SMTP email channel.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct EmailChannelConfig {
     pub name: String,
     pub smtp_host: String,
@@ -112,7 +112,7 @@ fn default_smtp_port() -> u16 {
 }
 
 /// Configuration for a single inbound webhook endpoint.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct InboundWebhookConfig {
     pub name: String,
     /// Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header.

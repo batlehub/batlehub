@@ -11,6 +11,9 @@ helm = "latest"
 # `task helm:docs` produce the same file; a source build has no version, so the
 # README's version footer renders empty.
 "go:github.com/norwoodj/helm-docs/cmd/helm-docs" = "a5573af096a4b526dcbc3c896c220b1714a0765b"
+# RFC 0049: validates the shipped configs against the config JSON Schema, as
+# the editors built on it would (`task docs:config-schema:check`).
+taplo = "0.10.0"
 k6 = "latest"
 # The S3 client, for `task compose:s3:bucket:create` and `task perf:s3:infra:up`.
 # RustFS's `rc` rather than MinIO's `mc`, because `mc` can no longer be

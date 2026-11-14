@@ -36,7 +36,7 @@ pub const ALL: &str = "all";
 /// combined rate of every import sharing a `from` (RFC 0021 §11 q6).
 pub const MIN_IMPORT_INTERVAL_SECS: u64 = 300;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ReleaseImportConfig {
     /// The registry published into. Local or hybrid mode: a publish into a
     /// proxy-mode registry is a `404` at request time, and failing at load is
@@ -71,7 +71,7 @@ pub struct ReleaseImportConfig {
 /// is always `user` and an admin would skip the namespace check outright; and
 /// no provider, because nothing authenticated this principal — the server
 /// constructs it for its own action.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ImportPrincipalConfig {
     /// What grants name: `user:<user_id>`. Also what quota is charged to and
     /// what the audit row records.

@@ -277,6 +277,7 @@ impl std::fmt::Display for ReasonCode {
 /// group on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum FindingKind {
     Vulnerability,
     MalwareSignal,
@@ -582,6 +583,7 @@ impl Verdict {
 /// `mode` — what findings at or above the threshold do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SecurityMode {
     Block,
     Warn,
@@ -590,6 +592,7 @@ pub enum SecurityMode {
 /// `scanner_error` — what a scanner that crashed or timed out does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ScannerErrorMode {
     Quarantine,
     Warn,
@@ -599,6 +602,7 @@ pub enum ScannerErrorMode {
 /// `deny_install_hooks` — what an install hook finding does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InstallHookMode {
     Deny,
     Warn,

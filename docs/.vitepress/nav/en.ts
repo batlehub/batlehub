@@ -573,6 +573,10 @@ export const sidebar = {
           text: "0046 — Admin red paths",
           link: "/rfc/0046-admin-red-paths",
         },
+        {
+          text: "0049 — Config JSON Schema",
+          link: "/rfc/0049-config-json-schema",
+        },
       ],
     },
     // END rfc-sidebar

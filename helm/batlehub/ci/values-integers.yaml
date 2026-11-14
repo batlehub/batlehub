@@ -1,0 +1,68 @@
+# Fixture for helm-lint.yaml's "Integer fields render as integers" step, not an
+# example: integer fields across every shape the config has (top-level tables,
+# nested tables, lists of tables, a map of tables, a list of integers, the
+# credentials layer), set from a values file — where Helm reads each number as
+# a float64 and toToml would write `30.0`, which the server refuses for a u32.
+# `outage_ratio` keeps its fraction: only a float with none becomes an int.
+# It validates against config-layer.schema.json (task docs:config-schema:check)
+# but is not a loadable config: its registry carries fields of several kinds.
+config:
+  config_version: 1
+  server:
+    signed_urls: {ttl_seconds: 300}
+  database: {max_connections: 20, min_connections: 2, acquire_timeout_secs: 5}
+  audit:
+    access_retention_days: 30
+    security_retention_days: 365
+    pseudonymise_after_days: 7
+    seal_interval_secs: 3600
+  air_gap: {miss_retention_days: 30}
+  stats: {history_retention_days: 90}
+  vulnerability_scan: {interval_secs: 3600, batch_size: 50}
+  upstream_audit: {interval_secs: 3600, confirm_after: 3, confirm_min_age_secs: 600, outage_ratio: 0.5}
+  cache_coherence: {interval_secs: 300}
+  limits: {max_artifact_size_bytes: 524288000, versions_per_page: 100, packages_per_page: 50}
+  ip_blocking: {violation_threshold: 10, violation_window_secs: 300, ban_duration_secs: 3600, trigger_on_status: [401, 403]}
+  worker:
+    max_concurrent: 2
+    max_attempts: 3
+    job_timeout_secs: 600
+    sandbox: {memory_limit_mb: 512, cpu_seconds: 60, max_extracted_mb: 1024, max_entries: 10000}
+  notifications:
+    channels:
+      - {type: email, name: mail, smtp_host: smtp.example.com, from: bh@example.com, to: [ops@example.com], smtp_port: 587, timeout_secs: 10}
+  flag_sources:
+    - {name: feed, secret: "${FLAG_SECRET}", max_flags_per_minute: 60}
+  release_imports:
+    - {into: npm, from: github, repo: acme/tool, assets: ["*.tgz"], interval_secs: 3600}
+  scanners:
+    trivy: {type: trivy, endpoint: "http://trivy:4954", timeout_secs: 120, escalation: {count: 2}}
+  registries:
+    - name: npm
+      type: npm
+      pending_nar_ttl_secs: 600
+      max_pending_nars: 10
+      cache: {metadata_ttl_secs: 300, artifact_ttl_secs: 86400, warm_latest_n: 3}
+      rate_limit:
+        requests_per_window: 100
+        window_secs: 60
+        groups: [{name: "oidc:ci", requests_per_window: 5000, window_secs: 60}]
+      quota: {max_storage_bytes_per_user: 1073741824, max_packages_per_user: 100, warn_threshold_pct: 80}
+      retention: {keep_versions: 5, keep_for_days: 30, reclaim_delay_ms: 100}
+      repo_signing: {created: 1700000000}
+      readme: {max_bytes: 65536, image_max_bytes: 1048576}
+      upstream_detail: {max_versions: 20, negative_ttl_secs: 300}
+      security: {min_age_secs: 3600, mature_age_secs: 86400, pullers_window_days: 30, rescan: {interval_secs: 86400}}
+      refs: {branch_ttl_secs: 300, tag_ttl_secs: 3600}
+      raw: {max_size_bytes: 1048576}
+      rules:
+        - {kind: release_age_gate, min_age_secs: 86400}
+      namespaces:
+        - match: "@team/"
+          quota: {max_packages_per_user: 10}
+          rules: [{kind: release_age_gate, min_age_secs: 3600}]
+credentials:
+  enabled: true
+  config:
+    database: {max_connections: 20}
+    audit: {access_retention_days: 30}

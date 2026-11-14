@@ -23,7 +23,7 @@ use serde::Deserialize;
 use batlehub_core::entities::FlagEffect;
 use batlehub_core::services::FlagSourceLimits;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct FlagSourceConfig {
     /// The path segment of the push endpoint: `[a-z0-9][a-z0-9_-]*`.
     pub name: String,

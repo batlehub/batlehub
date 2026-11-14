@@ -13,6 +13,7 @@ pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, CoreError>> + Send
 /// (rather than `crates/config`, which re-exports it) so `adapters` doesn't
 /// need a dependency on the `config` crate.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct S3StorageConfig {
     pub bucket: String,
     pub region: String,

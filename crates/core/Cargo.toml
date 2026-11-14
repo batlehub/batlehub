@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Derives `schemars::JsonSchema` on the config types owned here; only
+# `batlehub-config` turns it on (RFC 0049 §6.1).
+schema = ["dep:schemars"]
+
 [dependencies]
+# RFC 0049: the config types this crate owns appear in the config JSON Schema.
+schemars = { workspace = true, optional = true }
 async-trait.workspace = true
 thiserror.workspace = true
 chrono.workspace = true

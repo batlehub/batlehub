@@ -21,7 +21,7 @@ use batlehub_core::entities::{
 pub const MIN_AGE_FLOOR_SECS: u64 = 3600;
 
 /// `[registries.security]`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct SecurityConfig {
     /// `"block"` (default) or `"warn"`.
     #[serde(default = "default_mode")]
@@ -124,7 +124,7 @@ impl SecurityConfig {
 /// has the rescan scheduler queue a `Rescan` for every verdict of the
 /// registry whose last scan is older than that; `on_webhook` is whether an
 /// inbound `security.rescan` is honoured regardless of the interval.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
 pub struct SecurityRescanConfig {
     #[serde(default)]
     pub interval_secs: u64,
@@ -133,7 +133,7 @@ pub struct SecurityRescanConfig {
 }
 
 /// `[scanners.<name>.escalation]` (RFC 0018 §4.2).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct EscalationConfig {
     pub kinds: Vec<FindingKind>,
     pub count: usize,
@@ -159,7 +159,7 @@ impl EscalationConfig {
 /// Phase 1 ships `osv`; the archive and external scanners arrive with phases
 /// 3 and 5, and a registry that lists one before then is refused at startup
 /// rather than silently scanned with nothing.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScannerConfig {
     Osv {
@@ -294,7 +294,7 @@ impl ScannerConfig {
 }
 
 /// What a process does (`[server].roles`, RFC 0018 §4.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessRole {
     Proxy,
@@ -319,7 +319,7 @@ pub fn default_roles() -> Vec<ProcessRole> {
 }
 
 /// `[worker]`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct WorkerConfig {
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
@@ -347,7 +347,7 @@ impl Default for WorkerConfig {
 }
 
 /// `[worker.sandbox]` — parsed now, enforced by phase 3's subprocess runner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SandboxConfig {
     #[serde(default = "default_runtime")]
     pub runtime: String,

@@ -23,6 +23,7 @@ use utoipa::ToSchema;
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize, ToSchema,
 )]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Visibility {
     /// Anyone, including anonymous users, may download.
     #[default]

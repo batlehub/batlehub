@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 51e54b52410c16db
+sourceHash: b5c1d3d4d3df6784
 ---
 
 # Référence de configuration
@@ -204,6 +204,41 @@ Ce qui exigera d'incrémenter `CURRENT_CONFIG_VERSION` (dans
 existant, ou changer le sens du défaut d'un champ existant. Ce qui ne l'exige
 **pas** : ajouter un nouveau champ facultatif (le cas courant de l'évolution de
 ce code jusqu'ici — voir `CHANGELOG.md` pour les changements de chaque version).
+
+### La prise en charge par l'éditeur
+
+Le fichier de configuration a un schéma JSON, généré à partir des structures
+dans lesquelles le serveur le lit. Un éditeur fondé sur
+[taplo](https://taplo.tamasfe.dev/) (Even Better TOML dans VS Code, et les
+autres intégrations de taplo) complète les clés et signale une clé mal
+orthographiée à la saisie, dès que la première ligne du fichier désigne le
+schéma de la version en service :
+
+```toml
+#:schema https://github.com/batlehub/batlehub/releases/download/v1.11.0/config.schema.json
+```
+
+- **Quel fichier.** `config.schema.json` pour un fichier complet ou la
+  première couche `--config` ; `config-layer.schema.json` pour une
+  [couche suivante](#layered-config-files), comme un fichier d'identifiants,
+  qui ne porte qu'une partie de la configuration : rien n'y est obligatoire,
+  sauf l'étiquette d'une énumération.
+- **Quelle version.** L'asset de la version en service. Les fichiers
+  `config.example*.toml` pointent vers
+  `https://batlehub.dev/schema/config.schema.json`, le schéma de `main` : avec
+  un binaire plus ancien, il accepte des clés que ce binaire ignore. Épinglez
+  donc la version avant de vous y fier.
+- **Hors ligne.** `batlehub dump-config-schema > config.schema.json`
+  (`--layer` pour la variante de couche) affiche le schéma du binaire exact ;
+  `#:schema` le désigne alors par un chemin relatif.
+- **Ce qu'il ne détecte pas.** `30.0` là où un entier est attendu (le type
+  `integer` de JSON Schema admet un flottant sans partie décimale ; le serveur
+  le refuse), et les règles croisées que vérifie `explain-config`. Une
+  étiquette d'énumération mal orthographiée (`type = "tokn"`) est refusée avec
+  un message générique, *valid under more than one of the schemas*, plutôt
+  qu'avec un renvoi à l'étiquette.
+- **Rien à voir avec `config_version`.** Ce champ fixe un fichier à un format
+  de configuration du serveur ; le schéma décrit les clés, pour les éditeurs.
 
 ---
 

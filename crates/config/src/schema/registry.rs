@@ -32,7 +32,7 @@ use batlehub_core::entities::Visibility;
 /// Presence is the flag. There is deliberately no `enabled = false` spelling: a
 /// block that says it does nothing is one more thing to misread on the page
 /// listing everything currently failing open.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrantsShadowConfig {
     /// The date the shadow stops applying. **Required**, and config load refuses
@@ -56,7 +56,7 @@ pub struct GrantsShadowConfig {
 /// `deny_unknown_fields` stays, and is now what stops a `retention` block from
 /// being silently ignored — an operator who writes a policy and gets no error
 /// concludes it is in force.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NamespaceConfig {
     /// The namespace prefix, in the ecosystem's own spelling.
@@ -115,7 +115,7 @@ pub struct NamespaceConfig {
 
 /// Controls whether a registry acts as a caching proxy, a private authoritative
 /// registry, or both.
-#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RegistryMode {
     /// Forward all requests to upstream registries and cache responses.
@@ -145,7 +145,7 @@ impl RegistryMode {
 
 // ── Registry config ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RegistryConfig {
     #[serde(rename = "type")]
     pub registry_type: String,
@@ -600,7 +600,7 @@ pub struct RegistryConfig {
 /// version is for every configured condition to decline to keep it. Wrong
 /// configuration therefore fails toward keeping, which is the direction that is
 /// recoverable (RFC 0016 §4.2).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RetentionConfig {
     /// Keep the newest N versions of every package, by publish date.
@@ -730,7 +730,7 @@ impl Default for RetentionConfig {
 /// require_metadata = false  # block downloads with no advertised checksum
 /// bypass_roles = ["admin"]  # roles exempt from the require_metadata gate
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct IntegrityConfig {
     /// Master switch. When `false`, no verification is performed.
     #[serde(default = "default_true")]
@@ -782,7 +782,7 @@ impl Default for IntegrityConfig {
 /// [registries.feature_flags]
 /// socket_badge = false   # hide the socket.dev badge for this registry
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct FeatureFlagsConfig {
     /// Show a [socket.dev](https://socket.dev) supply-chain badge/link for each
     /// package version in the UI (for registry types socket.dev supports, e.g.
@@ -808,7 +808,7 @@ impl Default for FeatureFlagsConfig {
 /// most of the value on its own, since a policy that is right for
 /// `com.acme.internal` is rarely right for the vendored third-party namespace
 /// beside it, and one setting per registry forces the looser of the two.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct VersioningPolicy {
     /// Reject publish if the version string is not a valid semver (e.g. `1.2.3`, `1.0.0-beta.1`).
     #[serde(default)]
@@ -872,7 +872,7 @@ pub fn default_true() -> bool {
 // ── Artifact signing ──────────────────────────────────────────────────────────
 
 /// Per-registry artifact signing configuration.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct SigningConfig {
     /// When `true`, reject publish requests that do not include an `X-Artifact-Signature` header.
     #[serde(default)]
@@ -905,7 +905,7 @@ pub struct SigningConfig {
 /// user_id  = "BatleHub Repo <repo@example.com>"
 /// created  = 1700000000      # key creation unix time (stable across restarts)
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct RepoSigningConfig {
     /// Hex-encoded 32-byte Ed25519 seed.
     pub seed_hex: String,
@@ -936,7 +936,7 @@ pub struct RepoSigningConfig {
 /// RSA rather than Ed25519 because no shipping apk accepts Ed25519 for a v2
 /// index, and without the banned `rsa` crate: the signing goes through
 /// `aws-lc-rs`, already this tree's TLS provider (RFC 0026 §2.4, decision 2).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct ApkSigningConfig {
     /// The `.rsa.pub` file name the public half lands under in
     /// `/etc/apk/keys/`. Alpine's own convention is `<email>-<8 hex>.rsa.pub`.
@@ -965,7 +965,7 @@ pub struct ApkSigningConfig {
 /// seed_hex = "${VSX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex-encoded
 /// key_id   = "2026-09"               # optional; default: 16 hex chars of SHA-256(public key)
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct VsxSigningConfig {
     /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
     /// `repo_signing.seed_hex`: keep it out of the file with `${VAR}`.
@@ -990,7 +990,7 @@ pub struct VsxSigningConfig {
 /// across restarts and unique among the caches a client trusts — hence a
 /// default carrying the registry name, and a `-1` suffix an operator bumps on
 /// rotation exactly as `cache.nixos.org-1` does.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct NixSigningConfig {
     /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
     /// `vsx_signing.seed_hex`: keep it out of the file with `${VAR}`.
@@ -1025,7 +1025,7 @@ fn default_sbom_formats() -> Vec<String> {
 /// required       = false   # deny publish when no manifest found
 /// fetch_upstream = true    # try GitHub/npm upstream SBOM APIs first
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct SbomConfig {
     /// Enable SBOM generation for this registry.
     #[serde(default)]
@@ -1072,7 +1072,7 @@ fn default_image_max_bytes() -> usize {
 /// is the one part of that default that is not free: it rides the artifact read
 /// SBOM already performs when SBOM is on, and adds one storage read per
 /// newly-cached version when it is not.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ReadmeConfig {
     /// Store and serve READMEs for this registry.
     #[serde(default = "default_true")]
@@ -1164,7 +1164,7 @@ fn default_upstream_negative_ttl_secs() -> u64 {
 /// Inert on a `local`-mode registry — there is no upstream to ask — and on the
 /// path-addressed kinds, which have no package identity to ask about. Both are
 /// warned about rather than rejected.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct UpstreamDetailConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -1193,7 +1193,7 @@ impl Default for UpstreamDetailConfig {
 // ── Quota management ──────────────────────────────────────────────────────────
 
 /// How to enforce quota violations.
-#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum QuotaEnforcement {
     /// Reject the publish request with HTTP 429 when the quota is exceeded.
@@ -1213,7 +1213,7 @@ pub enum QuotaEnforcement {
 /// warn_threshold_pct         = 80
 /// enforcement                = "block"
 /// ```
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct QuotaConfig {
     /// Maximum cumulative bytes a single user may publish to this registry.
     pub max_storage_bytes_per_user: Option<u64>,
@@ -1245,7 +1245,7 @@ fn default_warn_pct() -> u8 {
 /// [registries.beta_channel]
 /// enabled = true
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct BetaChannelConfig {
     /// Enable pre-release gating for this registry.
     #[serde(default)]
@@ -1254,7 +1254,7 @@ pub struct BetaChannelConfig {
 
 // ── Cache policy ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CachePolicy {
     /// TTL for metadata (version lists, release info) in seconds.
     #[serde(default = "default_metadata_ttl")]

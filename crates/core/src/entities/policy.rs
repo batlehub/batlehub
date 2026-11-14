@@ -65,6 +65,7 @@ use super::{Tier, Visibility};
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
 )]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Immutable {
     /// Any version may be replaced by a caller holding `releases:overwrite`.
     ///

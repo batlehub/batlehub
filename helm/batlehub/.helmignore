@@ -6,3 +6,4 @@
 *.bak
 # The source of README.md, not part of the chart a user installs.
 README.md.gotmpl
+ci/

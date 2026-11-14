@@ -312,6 +312,18 @@ config:
   # limits:
   #   max_artifact_size_bytes: 524288000  # 500 MiB
 
+  # ── [audit] ─────────────────────────────────────────────────────────────────
+  # The audit trail's lifecycle (RFC 0036). Absent means nothing expires, is
+  # pseudonymised or sealed. `0` disables each one. The keys are 32-byte hex
+  # secrets: keep them in `credentials.config`, not here.
+  # audit:
+  #   access_retention_days: 30      # download / view_metadata rows
+  #   security_retention_days: 365   # admin actions, sign-ins, purges
+  #   pseudonymise_after_days: 7     # truncate the IP, drop the user agent
+  #   seal_interval_secs: 3600       # how often a sealing window closes
+  #   seal_signing_key: "<ed25519 seed, hex>"
+  #   erasure_key: "<hex>"
+
   # ── [ip_blocking] ───────────────────────────────────────────────────────────
   # ip_blocking:
   #   enabled: true

@@ -88,7 +88,7 @@ use serde::Deserialize;
 /// "Config versioning" in `docs/guide/configuration.md`.
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AppConfig {
     /// Config schema version. Optional; absent is treated as
     /// [`CURRENT_CONFIG_VERSION`] so every existing config file keeps working
@@ -217,7 +217,7 @@ fn batlehub_adapters_text_config() -> &'static str {
 /// because it costs one already-parsed field. This builds an index over prose,
 /// and the cost is storage plus write amplification on every capture. An
 /// operator should choose it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchConfig {
     /// Match README prose as well as package names.
@@ -274,7 +274,7 @@ fn default_history_retention_days() -> u32 {
 /// # The Prometheus recorder and the /metrics endpoint.
 /// metrics_enabled        = true   # default: today's behaviour
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatsConfig {
     /// Record the hourly cache-statistics rollup that backs the admin
@@ -370,7 +370,7 @@ fn default_vuln_batch_size() -> usize {
 /// osv_api_url   = "https://api.osv.dev"
 /// batch_size    = 100
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct VulnerabilityScanConfig {
     /// Enable the periodic background scan.
     #[serde(default)]
@@ -428,7 +428,7 @@ fn default_true_audit() -> bool {
 /// skip_recently_seen   = true
 /// registries           = []
 /// ```
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamAuditConfig {
     /// Nothing sweeps unless asked: scheduled outbound traffic to third
@@ -521,7 +521,7 @@ fn default_coherence_interval_secs() -> u64 {
 /// the grace window a cache write in flight gets: shortening it buys faster
 /// collection of bytes nobody can reach, at the cost of narrowing the margin on
 /// the one thing this must never delete.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CacheCoherenceConfig {
     /// Enable the periodic background sweep.
     #[serde(default)]
@@ -541,7 +541,7 @@ pub struct CacheCoherenceConfig {
 /// versions_per_page       = 100        # rows in one package-detail answer
 /// packages_per_page       = 20         # rows in one catalog answer
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct LimitsConfig {
     /// Maximum artifact size for proxy downloads and local publishes.

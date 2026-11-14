@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ServerConfig {
     /// What this process does (RFC 0018 §4.1): `proxy` serves requests and
     /// enqueues scan jobs, `worker` dequeues and scans. Default both — the
@@ -82,7 +82,7 @@ pub struct ServerConfig {
 /// key, or keyless on a host the bundle calls local (`localhost`, `127.0.0.1`,
 /// `[::1]`, …). A keyless agent anywhere else stays hidden, so that page keeps
 /// the strict policy rather than paying the price for nothing.
-#[derive(Debug, Default, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApiDocsConfig {
     #[serde(default)]
@@ -112,7 +112,7 @@ pub struct ApiDocsConfig {
 /// # an entry that interpolates to empty is dropped.
 /// previous_secrets = ["${BATLEHUB_URL_SIGNING_SECRET_OLD}"]
 /// ```
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignedUrlsConfig {
     /// HMAC signing secret, 32 bytes minimum.
@@ -180,7 +180,7 @@ pub(super) fn default_port() -> u16 {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DatabaseConfig {
     #[serde(rename = "type")]
     pub db_type: String,
@@ -233,7 +233,7 @@ pub(super) fn default_acquire_timeout_secs() -> u64 {
 /// # Required when type = "redis":
 /// url = "redis://localhost:6379"
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CacheConfig {
     /// `"memory"` (default) uses an in-process HashMap; no persistence between restarts.
     /// `"postgres"` stores entries in the `metadata_cache` table; survives restarts and
@@ -263,7 +263,7 @@ impl Default for CacheConfig {
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 /// `[logging]` (RFC 0036 §4.1).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     #[serde(default)]
@@ -271,7 +271,7 @@ pub struct LoggingConfig {
 }
 
 /// How the process writes its log lines on stdout.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     /// Human-readable lines — the default, unchanged from before `[logging]`
@@ -285,7 +285,7 @@ pub enum LogFormat {
 
 // ── OTel ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OtelConfig {
     /// OTLP endpoint, e.g. `http://localhost:4317`.
     pub endpoint: String,

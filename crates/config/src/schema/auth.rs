@@ -12,7 +12,7 @@ pub use batlehub_core::ports::{
     OidcAuthConfig, RuleMatch,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AuthConfig {
     Token(TokenAuthConfig),
@@ -22,13 +22,13 @@ pub enum AuthConfig {
     ActionsOidc(ActionsOidcAuthConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TokenAuthConfig {
     #[serde(default)]
     pub tokens: Vec<TokenEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TokenEntry {
     pub value: String,
     pub role: String,

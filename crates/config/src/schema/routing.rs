@@ -21,7 +21,7 @@ use serde::Deserialize;
 /// base_domain = "hub.example.com"   # npm1.hub.example.com -> registry "npm1"
 /// scheme      = "https"             # only used to render public URLs
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct SubdomainRoutingConfig {
     /// Derive a host for every registry from its name. When `false` (or the
     /// whole section is absent) only explicit `hosts` entries route.

@@ -16,7 +16,7 @@ pub const DEFAULT_REGISTRY_UPSTREAM: &str = "https://mise.jdx.dev";
 /// files, so the overlay is bounded well clear of the sum (§4.3).
 pub const MAX_OVERLAY_TOOLS: usize = 1000;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct AutoWireConfig {
     /// The wire: rewrite `…/_wire/{host}/{rest}`. Default off.
     #[serde(default)]
@@ -43,7 +43,7 @@ impl AutoWireConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct MiseToolConfig {
     pub name: String,
     #[serde(default)]
@@ -66,7 +66,7 @@ fn default_version_order() -> String {
     "semver".to_owned()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct MiseToolSource {
     pub registry: String,
     pub repo: String,
@@ -74,13 +74,15 @@ pub struct MiseToolSource {
 
 /// A backend as mise's registry files write it: a string, or a table with
 /// `full` and backend options.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum MiseBackendConfig {
     Plain(String),
     Full {
         full: String,
         #[serde(default)]
+        // `toml::Table` has no `JsonSchema`; to a schema it is any table.
+        #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
         options: toml::Table,
     },
 }
@@ -95,7 +97,7 @@ impl MiseBackendConfig {
 }
 
 /// What the overlay does when a name is in the upstream archive too (§4.2).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OnCollision {
     /// Both entries removed: the name installs nowhere until an operator acts.

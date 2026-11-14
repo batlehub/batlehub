@@ -1,3 +1,4 @@
+#:schema https://batlehub.dev/schema/config.schema.json
 # batlehub — the Eclipse Che workspace configuration (`task run:space`).
 #
 # This is config.example.toml with the parts a workspace changes: the auth stack

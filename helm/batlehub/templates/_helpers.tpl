@@ -125,96 +125,56 @@ false
 Render config.toml by serializing .Values.config as TOML.
 Keys must be snake_case throughout to match batlehub's field names.
 
-Helm loads all YAML numbers as float64 internally, so toToml would emit
-"8080.0" for port — which toml 0.8 / serde reject for integer fields.
-This helper coerces all known integer fields back to Go int/int64 before
-calling toToml so the TOML output contains bare integers (e.g. 8080).
+Helm loads every YAML number as a float64, so toToml would emit "8080.0" for
+port, which serde refuses for an integer field and the server does not start.
+`batlehub.wholeFloatsToInts` turns every float with no fractional part back
+into an int64 before toToml. That is safe for the real f64 fields too
+(`upstream_audit.outage_ratio`): serde reads `1` as `1.0` for an f64, while it
+refuses `30.0` for a u32. A float with a fraction is left alone, so `30.5` on
+an integer field still reaches the server and is refused there, not truncated.
 */}}
 {{- define "batlehub.config" -}}
 {{- $c := .Values.config | deepCopy -}}
-{{- /* server */ -}}
-{{- if $c.server -}}
-  {{- $_ := set $c.server "port" (int $c.server.port) -}}
-{{- end -}}
-{{- /* database */ -}}
-{{- if $c.database -}}
-  {{- if hasKey $c.database "max_connections" -}}
-    {{- $_ := set $c.database "max_connections" (int (index $c.database "max_connections")) -}}
-  {{- end -}}
-{{- end -}}
-{{- /* limits */ -}}
-{{- if $c.limits -}}
-  {{- if hasKey $c.limits "max_artifact_size_bytes" -}}
-    {{- $_ := set $c.limits "max_artifact_size_bytes" (int64 (index $c.limits "max_artifact_size_bytes")) -}}
-  {{- end -}}
-{{- end -}}
-{{- /* ip_blocking */ -}}
-{{- if $c.ip_blocking -}}
-  {{- range $f := list "violation_threshold" "violation_window_secs" "ban_duration_secs" -}}
-    {{- if hasKey $c.ip_blocking $f -}}
-      {{- $_ := set $c.ip_blocking $f (int64 (index $c.ip_blocking $f)) -}}
-    {{- end -}}
-  {{- end -}}
-  {{- if hasKey $c.ip_blocking "trigger_on_status" -}}
-    {{- $converted := list -}}
-    {{- range $s := index $c.ip_blocking "trigger_on_status" -}}
-      {{- $converted = append $converted (int $s) -}}
-    {{- end -}}
-    {{- $_ := set $c.ip_blocking "trigger_on_status" $converted -}}
-  {{- end -}}
-{{- end -}}
-{{- /* per-registry integer fields */ -}}
-{{- range $reg := $c.registries -}}
-  {{- if $reg.cache -}}
-    {{- range $f := list "metadata_ttl_secs" "artifact_ttl_secs" "idle_days" "max_size_bytes" "keep_latest_n" "warm_latest_n" "warm_concurrency" -}}
-      {{- if hasKey $reg.cache $f -}}
-        {{- $_ := set $reg.cache $f (int64 (index $reg.cache $f)) -}}
-      {{- end -}}
-    {{- end -}}
-  {{- end -}}
-  {{- if $reg.rate_limit -}}
-    {{- range $f := list "requests_per_window" "window_secs" -}}
-      {{- if hasKey $reg.rate_limit $f -}}
-        {{- $_ := set $reg.rate_limit $f (int (index $reg.rate_limit $f)) -}}
-      {{- end -}}
-    {{- end -}}
-  {{- end -}}
-  {{- if $reg.quota -}}
-    {{- range $f := list "max_storage_bytes_per_user" "max_packages_per_user" -}}
-      {{- if hasKey $reg.quota $f -}}
-        {{- $_ := set $reg.quota $f (int64 (index $reg.quota $f)) -}}
-      {{- end -}}
-    {{- end -}}
-  {{- end -}}
-  {{- range $rule := $reg.rules -}}
-    {{- if hasKey $rule "min_age_secs" -}}
-      {{- $_ := set $rule "min_age_secs" (int64 (index $rule "min_age_secs")) -}}
-    {{- end -}}
-  {{- end -}}
-{{- end -}}
+{{- include "batlehub.wholeFloatsToInts" $c -}}
 {{- $c | toToml -}}
+{{- end }}
+
+{{/*
+  In place, through every nested map and list: a float64 with no fractional
+  part becomes an int64. A list is rebuilt and set back on its parent, because
+  a template cannot assign to a list element; a nested list goes through a
+  one-key wrapper map so it reuses the map case.
+*/}}
+{{- define "batlehub.wholeFloatsToInts" -}}
+{{- $m := . -}}
+{{- range $k, $v := $m -}}
+  {{- if and (kindIs "float64" $v) (eq $v (floor $v)) -}}
+    {{- $_ := set $m $k (int64 $v) -}}
+  {{- else if kindIs "map" $v -}}
+    {{- include "batlehub.wholeFloatsToInts" $v -}}
+  {{- else if kindIs "slice" $v -}}
+    {{- $out := list -}}
+    {{- range $e := $v -}}
+      {{- $w := dict "e" $e -}}
+      {{- include "batlehub.wholeFloatsToInts" $w -}}
+      {{- $out = append $out $w.e -}}
+    {{- end -}}
+    {{- $_ := set $m $k $out -}}
+  {{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/*
   The credentials layer, as TOML.
 
   `credentials.config` has the same shape as `config` and is serialised the same
-  way, so a section written in one is written the same in the other. It runs
-  through the same integer coercions because `toToml` renders an unmarked Helm
-  number as a float, and `port = 8080.0` is not a port.
+  way, so a section written in one is written the same in the other — the same
+  float-to-int pass included, because `toToml` renders an unmarked Helm number
+  as a float, and `port = 8080.0` is not a port.
 */}}
 {{- define "batlehub.credentialsConfig" -}}
 {{- $c := .Values.credentials.config | deepCopy -}}
-{{- if $c.server -}}
-  {{- if hasKey $c.server "port" -}}
-    {{- $_ := set $c.server "port" (int $c.server.port) -}}
-  {{- end -}}
-{{- end -}}
-{{- if $c.database -}}
-  {{- if hasKey $c.database "max_connections" -}}
-    {{- $_ := set $c.database "max_connections" (int (index $c.database "max_connections")) -}}
-  {{- end -}}
-{{- end -}}
+{{- include "batlehub.wholeFloatsToInts" $c -}}
 {{- toToml $c -}}
 {{- end }}
 

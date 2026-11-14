@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/install/helm.md
-sourceHash: d83bda93d063bf15
+sourceHash: 57ab3fb3d09a13dc
 ---
 
 # Chart Helm
@@ -15,8 +15,9 @@ plutôt qu'un fragment, et chacun est un fichier du dépôt, sous `deploy/helm/`
 exemples — secrets externes, tous les types de registre, et une configuration
 permissive face à une configuration verrouillée.
 
-**Prérequis :** Helm 3+, un cluster Kubernetes en fonctionnement, PostgreSQL
-joignable depuis le cluster.
+**Prérequis :** Helm 3.15 ou plus récent (la plus ancienne version sur laquelle
+le [schéma des valeurs](#helm-values-schema) du chart est testé), un cluster
+Kubernetes en fonctionnement, PostgreSQL joignable depuis le cluster.
 
 ## Installation rapide
 
@@ -412,6 +413,34 @@ redéploiement des pods, via l'annotation `checksum/config` présente sur les de
 Deployments. La couche `credentials` en est délibérément exclue : elle ne porte
 pas d'annotation de checksum, donc sa rotation recharge sur place. Voir
 [Un fichier de configuration séparé pour les identifiants](#helm-credentials).
+
+### Le schéma des valeurs {#helm-values-schema}
+
+Le chart livre un `values.schema.json` généré à partir des structures de
+configuration du serveur : `helm install`, `helm upgrade` et `helm template`
+refusent donc un `config:` ou un `credentials.config:` que le serveur
+refuserait ou ignorerait en silence, avant tout déploiement :
+
+```text
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+batlehub:
+- at '/config/audit': additional properties 'acess_retention_days' not allowed
+```
+
+- **Ce qu'il vérifie.** Les noms de clés (là où le serveur refuse les clés
+  inconnues), les types, les valeurs et étiquettes d'énumération, et les
+  entiers : `30.5` pour un champ en secondes entières échoue ici plutôt qu'au
+  démarrage du serveur. Rien n'est *obligatoire* : chacun des deux fichiers de
+  configuration peut laisser une partie à l'autre, et seule la configuration
+  fusionnée peut être complète, ce que vérifie le serveur.
+- **Ce qu'il laisse de côté.** Toute valeur hors de `config` et de
+  `credentials.config`.
+- **Le désactiver**, pour un fichier de valeurs que le schéma refuse à tort
+  (signalez-le) : `--skip-schema-validation` à partir de Helm 3.16, ou dans
+  une Application Argo CD (à partir d'Argo CD 2.14)
+  `spec.source.helm.skipSchemaValidation: true`. Helm 3.15, et les Argo CD
+  2.12 et 2.13 qui l'embarquent, n'ont pas d'interrupteur : épinglez la
+  version précédente du chart.
 
 ## Worker d'analyse (RFC 0018) {#helm-worker}
 
