@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | Draft — phase 1 built ahead of sign-off, 2026-11-14; phases 2–4 not started |
 | Short       | mise backends coverage                                        |
 | Settles     | Which mise backends reach BatleHub, how the CLI tells a covered backend from one that is not, and how the gaps close: aqua's `http` packages, the `http:` backend, the vfox plugins mise embeds, `dotnet:`, `packslip:` and conda channels other than conda-forge |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -989,7 +989,7 @@ packslip's source.
 
 | Phase | Content |
 | --- | --- |
-| 1 | The mise pin bump, all four pins, to the current 2026.11.x with every existing mise phase run under it (§15 Q1). Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, `VFOX_SUBPROCESS_PLUGINS` and its note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions and the subprocess plugins. The host tables keyed by `(host, prefix)` with `dl.google.com/go/` → `godist` only (§6.1, §15 Q3), so an Android URL is no longer suggested as `godist`. Useful alone: the plan stops lying about 40 tools. |
+| 1 | The mise pin bump, all four pins, to the current 2026.11.x with every existing mise phase run under it (§15 Q1). Verdicts: `BACKEND_REGISTRIES` rows (`dotnet:`, `packslip:`) and the `packslip`/`spm` predicates, the `vfox:` note, `VFOX_SUBPROCESS_PLUGINS` and its note, the `aqua:` note, `MisePlan.notes` (`serde(default)`, `PLAN_VERSION` 2), unit tests, `docs/use/mise.md` §5 corrected with the minimum mise versions and the subprocess plugins. The host tables keyed by `(host, prefix)` with `dl.google.com/go/` → `godist` only (§6.1, §15 Q3), so an Android URL is no longer suggested as `godist`. Useful alone: the plan stops lying about 40 tools. **Built 2026-11-14**, with three deltas: mise was pinned in seven places, not four (`mutants.yaml` twice and the `postmortem-gate` action too), and all seven moved to 2026.11.3; the per-rule floor `docs/use/mise.md` states is the release the rules were verified against, 2026.11.3, since earlier releases were not measured; and the subprocess table names the program each plugin runs but not what it fetches, which was not read from the plugins' Lua. |
 | 2 | After RFC 0048 phase 1b. `require_literal_separator` in `path_proxy.rs` with its test and migration note (§15 Q7); `android-dl` under `/android/` beside the typed `godist` (§15 Q3), the awscli and crossplane probes (§15 Q6), each preset's revalidate globs, the bucket widening, with the T2 test; §6.P 3, 4, 6, 7; `registries/generic.md`. |
 | 3 | `dotnet.registry_url` in the mise target, conda rule derived from the upstream, `foreign_upstream` per channel, the per-rule floor in `setup`'s output; §6.P 1, 2, 5, 8; `registries/conda.md`, `registries/nuget.md`. |
 | 4 | Move the presets and the conda derivation into `WIRE_RULES` once RFC 0045 phase 1 is on `main` (or nothing, if RFC 0045 phase 1 moved them). |

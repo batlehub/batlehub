@@ -57,7 +57,7 @@ runs:
     # the ceiling says so explicitly. mise.lock's checksum is verified.
     - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
       with:
-        version: 2026.9.5
+        version: 2026.11.3
         working_directory: ${{ inputs.trusted }}
         install: true
         install_args: github:mlab-sh/postmortem

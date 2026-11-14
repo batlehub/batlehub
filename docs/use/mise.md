@@ -291,9 +291,40 @@ would be undoing the block by accident.
 
 ## 5. What will not work
 
-- **`asdf:` and `vfox:` plugin backends.** mise fetches those over git, and
-  there is no HTTP path through a proxy. `mise plan` lists them under
-  `unsupported`, with the backend named.
+- **`asdf:` plugins.** mise fetches them over git, and there is no HTTP
+  path through a proxy. `mise plan` lists them under `unsupported`, with
+  the backend named.
+- **A `vfox:` plugin mise clones.** The plugins built into mise download
+  over HTTP, so the rewrite rules cover them once `mise lock` has recorded
+  the URL; without a lock `mise plan` prints a `note:` asking for one. A
+  plugin named by URL, or one mise does not embed, is cloned over git and
+  cannot come through.
+- **The subprocesses of a few vfox plugins.** Three embedded plugins run a
+  program whose own downloads never see `url_replacements`: connected they
+  go direct, air-gapped they fail. `mise plan` and `registry suggest` flag
+  them with a note.
+
+  | Plugin | Subprocess |
+  | --- | --- |
+  | `php` | `configure`, `make` |
+  | `poetry` | the installer script, run by python |
+  | `pipenv` | `pip` |
+
+  The list is re-measured on each mise pin bump; a plugin missing from it
+  loses the warning, not a route.
+- **`packslip:` on its own host.** `packslip:{owner}/{repo}` and
+  `packslip:github.com/…` come through the `github` kind; a
+  `packslip:{host}` tool reads `https://{host}/.well-known/packslip.json`,
+  which no registry mirrors, and the plan says so.
+- **`dotnet:` tools, for now.** `registry suggest` names the `nuget`
+  registry they need, but `setup` does not yet write mise's
+  `dotnet.registry_url` ([RFC 0047](/rfc/0047-mise-backends-coverage)
+  phase 3), and the install is a `dotnet tool install` that reads
+  NuGet.config, not mise: run `batlehub-cli setup apply --only nuget` as well.
+- **An older mise.** The rules on this page are verified against mise
+  2026.11.3, the release the heavy suites pin. Earlier releases are not
+  measured, and one that does not know a setting only warns and lets the
+  tool go direct, so keep clients at 2026.11.3 or later.
 - **A host you have no registry for.** The plan says so; add a registry or
   drop the tool.
 - **Live signature verification on the disconnected side.** It cannot run

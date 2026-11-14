@@ -1021,7 +1021,7 @@ jobs:
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.16.2"
-      MISE_VERSION: "2026.9.5"
+      MISE_VERSION: "2026.11.3"
       ANSIBLE_CORE_VERSION: "2.19.3"
       UV_VERSION: "0.9.7"
     steps:
@@ -1401,7 +1401,7 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
-      MISE_VERSION: "2026.9.5"
+      MISE_VERSION: "2026.11.3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -1553,7 +1553,7 @@ jobs:
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.16.2"
-      MISE_VERSION: "2026.9.5"
+      MISE_VERSION: "2026.11.3"
       UV_VERSION: "0.9.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

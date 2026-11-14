@@ -831,6 +831,9 @@ fn print_summary(plan: &MisePlan, out: Option<&std::path::Path>) {
     for tool in &plan.unsupported {
         println!("  unsupported: {}", tool.reason);
     }
+    for note in &plan.notes {
+        println!("  note: {note}");
+    }
     if let Some(path) = out {
         println!("plan written to {}", path.display());
     }

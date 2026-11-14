@@ -71,7 +71,7 @@ jobs:
           shared-key: mutants
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.9.5
+          version: 2026.11.3
           install: true
           install_args: github:sourcefrog/cargo-mutants github:VirusTotal/yara-x
           add_shims_to_path: false
@@ -211,7 +211,7 @@ jobs:
       # verified.
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.9.5
+          version: 2026.11.3
           working_directory: ${{ steps.pins.outputs.dir }}
           install: true
           install_args: github:sourcefrog/cargo-mutants github:VirusTotal/yara-x
