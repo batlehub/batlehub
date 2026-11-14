@@ -1520,6 +1520,9 @@ jobs:
           # RFC 0047 phase 2's generic presets: kubectl (aqua `http`), ant
           # (an embedded vfox plugin), and consul refused by the allowlist.
           - phase: mise-http
+          # RFC 0047 phase 3: conda-forge and bioconda through their own
+          # registries, a `dotnet:` tool through nuget, and `mise plan`.
+          - phase: mise-backends
           # The tool installers and the galleries. `jbplugin` downloads a
           # ~1.5 GB IDE and `vscode` a ~300 MB editor, both cached below.
           - phase: nvm
@@ -1589,7 +1592,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install the .NET SDK
-        if: matrix.phase == 'dotnet'
+        if: matrix.phase == 'dotnet' || matrix.phase == 'mise-backends'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' \
             https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
@@ -1607,7 +1610,7 @@ jobs:
       # one (`forgejo`), a GitLab one (`gitlab`) and its own versions host
       # (`mise-versions`). Same binary, four backends.
       - name: Install mise
-        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'godist' || matrix.phase == 'mise-core' || matrix.phase == 'mise-http' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
+        if: matrix.phase == 'mise' || matrix.phase == 'mise-versions' || matrix.phase == 'godist' || matrix.phase == 'mise-core' || matrix.phase == 'mise-http' || matrix.phase == 'mise-backends' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
             "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"

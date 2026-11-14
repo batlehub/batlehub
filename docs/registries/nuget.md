@@ -172,6 +172,7 @@ Pass the BatleHub token as the source password (username `__token__`), or as `--
 
 - `dotnet list package --vulnerable` works automatically — BatleHub advertises a `VulnerabilitiesUrl` resource in the v3 service index and proxies the upstream vulnerability catalogue. See [Using BatleHub → security auditing](/use/#security-audit).
 - A `401` on push usually means the token lacks `releases:publish` (or admin) on the registry.
+- mise's `dotnet:` tools (`dotnet:dotnet-outdated-tool`, …) list their versions from mise's `dotnet.registry_url` and install with `dotnet tool install`, which reads NuGet.config. `batlehub-cli setup apply` writes the first into the mise file and the second into the user NuGet.config; with only the first, the listing comes through BatleHub and the package does not. Needs mise 2026.9.5 or later. See [Pointing mise at BatleHub](/use/mise#conda-and-dotnet).
 
 ## Search
 

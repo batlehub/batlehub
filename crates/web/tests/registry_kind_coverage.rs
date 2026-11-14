@@ -245,6 +245,9 @@ fn every_live_claim_names_a_phase_that_exists() {
     // `mise-http` drives RFC 0047's `generic` presets with mise; `generic` is
     // claimed above.
     claimed.insert("mise-http".to_owned());
+    // `mise-backends` drives conda and nuget through mise (RFC 0047 phase 3);
+    // both kinds are claimed above.
+    claimed.insert("mise-backends".to_owned());
 
     // And the other direction: a phase nobody claims is a phase whose kind was
     // removed, or a row that was never written.

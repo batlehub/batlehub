@@ -152,9 +152,24 @@ name = "conda-${HEAVY_RUN}"
 mode = "proxy"
 upstreams = ["https://conda.anaconda.org/conda-forge"]
 
+# `upstreams:read`: `setup` derives the mise rule from the channel the
+# registry names (RFC 0047 §6.2), and reads the registry list anonymously.
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read"]
-user = ["releases:read", "releases:list", "source:read"]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+admin = ["*"]
+
+# A second channel on the same host, for the `mise-backends` phase (RFC 0047
+# §6.P case 2): its own rule, and none of conda-forge's reads.
+[[registries]]
+type = "conda"
+name = "conda-bio-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/bioconda"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 admin = ["*"]
 
 # ── Terraform: registry.terraform.io ─────────────────────────────────────────

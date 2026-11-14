@@ -76,7 +76,7 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        mise-versions godist mise-core mise-http nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
+        mise-versions godist mise-core mise-http mise-backends nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
         dnf pacman ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
@@ -131,6 +131,14 @@ MC_DOTNET="${HEAVY_CW_MC_DOTNET:-9.0.100}"
 MH_KUBECTL="${HEAVY_CW_MH_KUBECTL:-1.31.0}"
 MH_ANT="${HEAVY_CW_MH_ANT:-1.10.15}"
 MH_CONSUL="${HEAVY_CW_MH_CONSUL:-1.20.1}"
+# RFC 0047 §6.P cases 1, 2, 5: a conda-forge tool, a bioconda one with no
+# dependency outside its channel (mise solves against one channel only,
+# `conda.rs` `solve_packages`), and a `dotnet:` tool, each checked upstream on
+# 2026-11-14.
+MB_CONDA_JQ="${HEAVY_CW_MB_CONDA_JQ:-1.7.1}"
+MB_BIO_MOSDEPTH="${HEAVY_CW_MB_BIO_MOSDEPTH:-0.3.3}"
+MB_DOTNET_TOOL="${HEAVY_CW_MB_DOTNET_TOOL:-dotnet-outdated-tool}"
+MB_DOTNET_TOOL_VERSION="${HEAVY_CW_MB_DOTNET_TOOL_VERSION:-4.6.4}"
 SDKMAN_CLI_VERSION="${HEAVY_CW_SDKMAN_CLI:-5.23.0}"
 # The java version is *not* pinned: the phase reads it from the instance's own
 # `candidates/default/java`, so it asks for whatever SDKMAN would have given a
@@ -193,6 +201,7 @@ GEMS_REG="gems-$HEAVY_RUN"
 NUGET_REG="nuget-$HEAVY_RUN"
 COMPOSER_REG="composer-$HEAVY_RUN"
 CONDA_REG="conda-$HEAVY_RUN"
+CONDA_BIO_REG="conda-bio-$HEAVY_RUN"
 TF_REG="tf-$HEAVY_RUN"
 GITHUB_REG="github-$HEAVY_RUN"
 NODEDIST_REG="nodedist-$HEAVY_RUN"
@@ -2041,6 +2050,160 @@ open(sys.argv[2], "w").write(d["mise_toml"])' "$HEAVY_CLI_OUT" "$base/generated.
     || heavy_fail "mise-http: the 403 is not the allowlist's: $body"
 
   heavy_log "CLOSED-WORLD-MISE-HTTP-OK (kubectl through k8s-dl, ant through apache-archive with no clone, consul refused 403 by the allowlist)"
+}
+
+# ── §10f. mise conda channels and `dotnet:` (RFC 0047 §6.P 1, 2, 5, 8) ──────
+#
+# The block is the one `batlehub-cli setup apply --only mise --only nuget`
+# writes, not a hand-written one: each conda registry's rule derived from its
+# channel, `dotnet.registry_url`, and the NuGet.config `dotnet tool install`
+# reads. Case 8 is `mise plan` on a lock, no install.
+
+phase_mise-backends() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise HEAVY_RUNNER_MISE=("${HEAVY_RUNNER[@]}")
+  heavy_runner_for dotnet "dotnet@$DOTNET_VERSION"
+  local out base="$HEAVY_WORK/mise-backends"
+  out="$(cw_out mise-backends)"
+  local home="$base/home" tools="$base/tools"
+  mkdir -p "$home" "$tools"
+  heavy_cli "$ADMIN_TOKEN" --version   # sets HEAVY_CLI, building it if needed
+  # `setup` finds a client by its binary on PATH. dotnet with invariant
+  # globalization: a runner may have no libicu, and a tool install needs none.
+  local dotnet_bin
+  dotnet_bin="$("${HEAVY_RUNNER[@]}" bash -c 'command -v dotnet')" \
+    || heavy_fail "mise-backends: no dotnet binary"
+  printf '#!/bin/sh\nDOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 exec %q "$@"\n' \
+    "$dotnet_bin" >"$tools/dotnet"
+  # By absolute path: with $tools first on PATH, a bare `mise` would be this
+  # wrapper calling itself.
+  local mise_bin
+  mise_bin="$("${HEAVY_RUNNER_MISE[@]}" bash -c 'command -v mise')" || heavy_fail "mise-backends: no mise binary"
+  printf '#!/bin/sh\nexec %q "$@"\n' "$mise_bin" >"$tools/mise"
+  chmod +x "$tools/dotnet" "$tools/mise"
+  mise=("$tools/mise")
+  local menv=(HOME="$home" XDG_CONFIG_HOME="$home/.config" PATH="$tools:$PATH")
+
+  # The kinds the mise block would find two of here, picked.
+  local code=0
+  env "${menv[@]}" "$HEAVY_CLI" --server "$HEAVY_TAP_BASE" setup apply --yes \
+    --only mise --only nuget \
+    --pick "mise-versions=$MV_REG" --pick "nodedist=$NODEDIST_REG" \
+    >"$base/setup.out" 2>&1 </dev/null || code=$?
+  [[ "$code" == 0 ]] || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup apply exited $code"; }
+  local conf="$home/.config/mise/conf.d/batlehub.toml" nugetconf="$home/.nuget/NuGet/NuGet.Config"
+  [[ -f "$conf" ]] || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup wrote no mise file"; }
+  local want
+  for want in "conda-forge/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_REG/\$1\"" \
+              "bioconda/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_BIO_REG/\$1\"" \
+              "registry_url = \"$HEAVY_TAP_BASE/proxy/$NUGET_REG/nuget/v3/index.json\""; do
+    grep -qF "$want" "$conf" || { cat "$conf" >&2; heavy_fail "mise-backends: the mise file lacks: $want"; }
+  done
+  if grep -q '"regex:[^"]*nuget' "$conf"; then
+    cat "$conf" >&2; heavy_fail "mise-backends: the mise file carries a rule on nuget.org"
+  fi
+  grep -q "mise ≥ 2026.9.5 for .*$CONDA_BIO_REG" "$base/setup.out" \
+    || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup did not print the conda floor"; }
+  grep -q "$NUGET_REG" "$nugetconf" || heavy_fail "mise-backends: setup wrote no NuGet.config source"
+  # The block already carries the versions host (`mise-versions` is a typed
+  # rule), so mise lists through it as in `mise-core`.
+  grep -qF "/proxy/$MV_REG/mise-versions/" "$conf" \
+    || { cat "$conf" >&2; heavy_fail "mise-backends: the mise file does not list through $MV_REG"; }
+
+  # mb_env <arm> — mise and NuGet state of its own per arm.
+  mb_env() {
+    MB_ENV=("${menv[@]}" MISE_DATA_DIR="$base/$1/data" MISE_CACHE_DIR="$base/$1/cache"
+            MISE_STATE_DIR="$base/$1/state" MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS="$base"
+            NUGET_PACKAGES="$base/$1/nuget-packages" NUGET_HTTP_CACHE_PATH="$base/$1/nuget-http")
+  }
+  local refused since
+
+  # Case 1: a conda-forge tool — repodata and package under $CONDA_REG, and
+  # nothing to conda.anaconda.org.
+  mb_env jq; heavy_mark mb-conda; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "conda:jq@$MB_CONDA_JQ" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: conda:jq did not install through $CONDA_REG"; }
+  heavy_wire_re_after mb-conda "GET /proxy/$CONDA_REG/(linux-64|noarch)/repodata[^ ]* -> 200" \
+    "mise-backends: conda-forge's repodata did not come through $CONDA_REG"
+  heavy_wire_re_after mb-conda "GET /proxy/$CONDA_REG/linux-64/jq-$MB_CONDA_JQ-[^ ]* -> 200" \
+    "mise-backends: the jq package did not come through $CONDA_REG"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q '^conda[.]anaconda[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: conda:jq reached for conda.anaconda.org past the rule"
+  fi
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" exec "conda:jq@$MB_CONDA_JQ" -- jq --version \
+    || { cat "$out" >&2; heavy_fail "mise-backends: the installed jq did not run"; }
+  grep -q "jq-$MB_CONDA_JQ" "$out" || { cat "$out" >&2; heavy_fail "mise-backends: the jq that ran is not $MB_CONDA_JQ"; }
+
+  # Case 2: a bioconda tool — its reads land on $CONDA_BIO_REG and none on
+  # $CONDA_REG: each registry answers only the channel it fronts (T1).
+  mb_env bio; heavy_mark mb-bio; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  mkdir -p "$base/bio"
+  printf '[tools]\n"conda:mosdepth" = { version = "%s", channel = "bioconda" }\n' "$MB_BIO_MOSDEPTH" \
+    >"$base/bio/mise.toml"
+  cw_step "$out" "$base/bio" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install \
+    || { cat "$out" >&2; heavy_fail "mise-backends: conda:mosdepth did not install through $CONDA_BIO_REG"; }
+  heavy_wire_re_after mb-bio "GET /proxy/$CONDA_BIO_REG/[^ ]*mosdepth-$MB_BIO_MOSDEPTH-[^ ]* -> 200" \
+    "mise-backends: the mosdepth package did not come through $CONDA_BIO_REG"
+  [[ "$(heavy_wire_count_after mb-bio "/proxy/$CONDA_REG/")" == 0 ]] \
+    || heavy_fail "mise-backends: a bioconda read landed on the conda-forge registry"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q '^conda[.]anaconda[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: conda:mosdepth reached for conda.anaconda.org past the rule"
+  fi
+
+  # Case 5: a `dotnet:` tool — mise lists through `dotnet.registry_url`, and
+  # `dotnet tool install` fetches the package through the NuGet.config setup
+  # wrote; nothing reaches nuget.org.
+  mb_env dotnet; heavy_mark mb-dotnet; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" ls-remote "dotnet:$MB_DOTNET_TOOL" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: mise could not list dotnet:$MB_DOTNET_TOOL"; }
+  heavy_wire_re_after mb-dotnet "GET /proxy/$NUGET_REG/nuget/v3/query[?][^ ]*q=$MB_DOTNET_TOOL[^ ]* -> 200" \
+    "mise-backends: mise did not list dotnet:$MB_DOTNET_TOOL through $NUGET_REG"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: dotnet:$MB_DOTNET_TOOL did not install through $NUGET_REG"; }
+  heavy_wire_re_after mb-dotnet "GET /proxy/$NUGET_REG/[^ ]*$MB_DOTNET_TOOL[.]$MB_DOTNET_TOOL_VERSION[.]nupkg -> 200" \
+    "mise-backends: the $MB_DOTNET_TOOL package did not come through $NUGET_REG"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q 'nuget[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: dotnet:$MB_DOTNET_TOOL reached for nuget.org past the settings"
+  fi
+
+  # Case 5, negative arm (T7): the version blocked, a cold install fails and
+  # the package is not served.
+  heavy_block "$NUGET_REG" "$MB_DOTNET_TOOL" "$MB_DOTNET_TOOL_VERSION"
+  mb_env dotnet-blocked; heavy_mark mb-dotnet-blocked
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION"; then
+    cat "$out" >&2
+    heavy_fail "mise-backends: the blocked dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION installed"
+  fi
+  [[ "$(heavy_wire_count_after mb-dotnet-blocked "$MB_DOTNET_TOOL[.]$MB_DOTNET_TOOL_VERSION[.]nupkg -> 200")" == 0 ]] \
+    || heavy_fail "mise-backends: the blocked package was served"
+
+  # Case 8: the plan — asdf unsupported with the git reason, the embedded vfox
+  # plugin planned with its archive URL rather than called unsupported.
+  local lockdir="$base/lock"
+  mkdir -p "$lockdir"
+  printf '%s\n' '[[tools.postgres]]' 'version = "17.2"' 'backend = "asdf:mise-plugins/mise-postgres"' '' \
+    '[[tools.ant]]' "version = \"$MH_ANT\"" 'backend = "vfox:jdx/vfox-ant"' \
+    '[tools.ant."platforms.linux-x64"]' \
+    "url = \"https://archive.apache.org/dist/ant/binaries/apache-ant-$MH_ANT-bin.tar.gz\"" \
+    >"$lockdir/mise.lock"
+  heavy_cli "$ADMIN_TOKEN" mise plan --lock "$lockdir/mise.lock" --platform linux-x64 -o "$base/plan.json"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan exited $HEAVY_CLI_CODE"; }
+  grep -q "unsupported: asdf:mise-plugins/mise-postgres: a git-fetched plugin backend" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan did not name asdf unsupported"; }
+  if grep -q "unsupported: vfox" "$HEAVY_CLI_OUT"; then
+    cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan called the embedded vfox plugin unsupported"
+  fi
+  python3 -c 'import json, sys
+p = json.load(open(sys.argv[1]))
+ant = [e for e in p["entries"] if e["tool"] == "ant"]
+assert ant and ant[0]["url"].startswith("https://archive.apache.org/dist/ant/"), ant
+assert not [e for e in p["entries"] if e["tool"] == "postgres"]' "$base/plan.json" \
+    || { cat "$base/plan.json" >&2; heavy_fail "mise-backends: the plan did not carry ant's archive URL"; }
+
+  heavy_log "CLOSED-WORLD-MISE-BACKENDS-OK (conda-forge and bioconda each through their own registry; dotnet: listed and installed through nuget, refused once blocked; asdf unsupported, ant planned)"
 }
 
 # ── §11. nvm ─────────────────────────────────────────────────────────────────

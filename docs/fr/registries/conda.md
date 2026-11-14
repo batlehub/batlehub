@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/conda.md
-sourceHash: 54ad35c537c928c6
+sourceHash: cc520ee3923aa111
 ---
 
 # Conda
@@ -102,12 +102,14 @@ password <your-token>
   dans `repodata.json`. Les paquets dont les métadonnées amont n'ont pas
   d'horodatage ne peuvent pas être filtrés par âge : le garde-fou est donc sauté
   pour eux.
-- Le backend `conda:` de mise (ffmpeg, postgres, ghc, …) passe par un registre
-  dont l'amont est `https://conda.anaconda.org/conda-forge` :
-  `batlehub-cli registry suggest --mise` écrit la règle `url_replacements`
-  correspondante. Un outil configuré sur un autre canal (`channel = "bioconda"`,
-  ou `conda.channel` défini globalement) n'est pas réécrit et part en direct.
-  Voir [Pointer mise vers BatleHub](/fr/use/mise).
+- Le backend `conda:` de mise (ffmpeg, postgres, ghc, …) passe par le registre
+  du canal qu'il lit : `batlehub-cli registry suggest --mise` et
+  `batlehub-cli setup` écrivent une règle `url_replacements` par registre
+  conda, dérivée de son amont ; un outil `channel = "bioconda"` aboutit donc
+  au registre dont l'amont est `https://conda.anaconda.org/bioconda`. Un
+  registre sur l'hôte nu `https://conda.anaconda.org` ne nomme aucun canal et
+  ne reçoit aucune règle. Exige mise 2026.9.5 ou plus récent. Voir
+  [Pointer mise vers BatleHub](/fr/use/mise#conda-and-dotnet).
 
 ## Voir aussi
 

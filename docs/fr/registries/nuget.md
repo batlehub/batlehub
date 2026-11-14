@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nuget.md
-sourceHash: 143df3f89f205013
+sourceHash: 766d7a77390ab150
 ---
 
 # NuGet (.NET)
@@ -200,6 +200,13 @@ normalisé en `Authorization: Bearer` en interne, donc
   [Utiliser BatleHub → audit de sécurité](/fr/use/#security-audit).
 - Un `401` à la publication signifie en général que le token n'a pas
   `releases:publish` (ni admin) sur le registre.
+- Les outils `dotnet:` de mise (`dotnet:dotnet-outdated-tool`, …) lisent leurs
+  versions depuis le réglage `dotnet.registry_url` de mise et s'installent par
+  `dotnet tool install`, qui lit NuGet.config. `batlehub-cli setup apply`
+  écrit le premier dans le fichier mise et le second dans le NuGet.config de
+  l'utilisateur ; avec le premier seul, la liste passe par BatleHub et le
+  paquet non. Exige mise 2026.9.5 ou plus récent. Voir
+  [Pointer mise vers BatleHub](/fr/use/mise#conda-and-dotnet).
 
 ## Recherche
 

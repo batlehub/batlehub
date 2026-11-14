@@ -659,12 +659,20 @@ pub(crate) fn vfox_subprocess_note(backend: &str) -> Option<String> {
 /// The note for a backend the plan resolved without a URL: a `vfox:` plugin
 /// downloads over HTTP once the lock names the URL.
 pub(crate) fn lockless_backend_note(backend: &str) -> Option<String> {
+    if backend.starts_with("dotnet:") {
+        return Some(format!("{backend}: {DOTNET_INSTALL_NOTE}"));
+    }
     backend.starts_with("vfox:").then(|| {
         format!(
             "{backend}: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL"
         )
     })
 }
+
+/// `dotnet:`'s install is a subprocess outside mise's rewriter (RFC 0047 T7):
+/// only the version list follows `dotnet.registry_url`.
+const DOTNET_INSTALL_NOTE: &str = "installed by `dotnet tool install`, which reads NuGet.config, \
+     not mise; run `batlehub-cli setup apply --only nuget` too";
 
 /// The caveat a lock-less suggestion carries above its registry.
 fn backend_suggestion_note(backend: &str) -> Option<String> {
@@ -674,6 +682,9 @@ fn backend_suggestion_note(backend: &str) -> Option<String> {
              run `mise lock` to see which."
                 .to_owned(),
         );
+    }
+    if backend.starts_with("dotnet:") {
+        return Some(format!("{DOTNET_INSTALL_NOTE}."));
     }
     if backend.starts_with("spm:") {
         return Some(
@@ -1368,10 +1379,20 @@ fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
     let (host, path) = split_url(url)?;
 
     if let Some((_, registry_type, name)) = typed_host(host, path) {
+        // A conda registry is one channel, the URL's first segment: a
+        // bioconda URL gets a registry of its own, not conda-forge's.
+        let channel = (*registry_type == "conda")
+            .then(|| path.split('/').next().filter(|c| !c.is_empty()))
+            .flatten();
         return Some(SuggestedRegistry {
-            name: (*name).to_owned(),
+            name: match channel {
+                Some(c) if c != "conda-forge" => format!("conda-{}", slug_from_bucket(c)),
+                _ => (*name).to_owned(),
+            },
             registry_type: (*registry_type).to_owned(),
-            upstreams: Vec::new(),
+            upstreams: channel
+                .map(|c| vec![format!("https://{host}/{c}")])
+                .unwrap_or_default(),
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: typed_client_env(registry_type),
@@ -1483,7 +1504,12 @@ fn registry_for_backend(backend: &str, source: &str) -> Vec<SuggestedRegistry> {
         return vec![SuggestedRegistry {
             name: name.to_owned(),
             registry_type: registry_type.to_owned(),
-            upstreams: Vec::new(),
+            // mise's default `conda.channel`: the rule is derived from it.
+            upstreams: if registry_type == "conda" {
+                vec![CONDA_FORGE.to_owned()]
+            } else {
+                Vec::new()
+            },
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: Vec::new(),
@@ -1665,6 +1691,9 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
     })
 }
 
+/// mise's default `conda.channel`, the channel a lock-less `conda:` tool reads.
+const CONDA_FORGE: &str = "https://conda.anaconda.org/conda-forge";
+
 // ── mise url_replacements ─────────────────────────────────────────────────────
 
 /// The curated rules of a registry type: [`mise_wire::typed_rules`], read by
@@ -1690,6 +1719,15 @@ impl SuggestedRegistry {
             (pattern.to_owned(), replacement.replace("{proxy}", &proxy))
         };
 
+        if self.registry_type == "conda" {
+            // One channel, wired on its whole URL (RFC 0047 §6.1); the typed
+            // conda-forge rule only when no upstream is known.
+            if let Some(u) = self.upstreams.first() {
+                return mise_wire::conda_channel(u)
+                    .map(|u| vec![resolve(&format!("^{}/(.+)", regex_escape(u)), "{proxy}/$1")])
+                    .unwrap_or_default();
+            }
+        }
         if self.registry_type == "generic" {
             // A generic mirror is a 1:1 path passthrough, so its rule falls
             // straight out of the configured upstream.
@@ -1820,12 +1858,26 @@ pub fn render_mise_toml(
 }
 
 /// mise settings a rewrite rule needs beside it, as `(table, key, value, why)`
-/// under `[settings]`, from the `generic` upstreams wired (RFC 0048 §6.2).
-/// The one place such settings are decided, for `suggest` and `setup` alike.
+/// under `[settings]` with `value` already TOML, from the `generic` upstreams
+/// wired (RFC 0048 §6.2) and the `nuget` registry's proxy base, if one is
+/// chosen (RFC 0047 §6.2). The one place such settings are decided, for
+/// `suggest` and `setup` alike.
 pub(crate) fn mise_settings_for<'a>(
     generic_upstreams: impl IntoIterator<Item = &'a str>,
-) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+    nuget_base: Option<&str>,
+) -> Vec<(&'static str, &'static str, String, &'static str)> {
     let mut out = Vec::new();
+    // `dotnet:` lists versions from this service index through mise's own
+    // client (`dotnet.rs`, `nuget_search_url`). A setting, not a rule: a rule
+    // on api.nuget.org would also catch reads that are not mise's.
+    if let Some(base) = nuget_base {
+        out.push((
+            "dotnet",
+            "registry_url",
+            toml_quote(&format!("{base}/nuget/v3/index.json")),
+            "the service index `dotnet:` lists versions from",
+        ));
+    }
     // mise tries 17 community mirrors before ziglang.org (`zig.rs:151-170`),
     // so the rule on ziglang.org is reached only once they have all failed.
     if generic_upstreams
@@ -1835,7 +1887,7 @@ pub(crate) fn mise_settings_for<'a>(
         out.push((
             "zig",
             "use_community_mirrors",
-            "false",
+            "false".to_owned(),
             "community mirrors are tried before ziglang.org",
         ));
     }
@@ -1849,7 +1901,11 @@ fn push_mise_settings(body: &mut String, regs: &[SuggestedRegistry], server_url:
         .iter()
         .filter(|r| r.registry_type == "generic")
         .flat_map(|r| r.upstreams.iter().map(String::as_str));
-    for (table, key, value, why) in mise_settings_for(generic) {
+    let nuget = regs
+        .iter()
+        .find(|r| r.registry_type == "nuget")
+        .map(|r| r.proxy_url(server_url));
+    for (table, key, value, why) in mise_settings_for(generic, nuget.as_deref()) {
         body.push_str(&format!(
             "\n[settings.{table}]\n{key} = {value}   # {why}\n"
         ));
@@ -3478,6 +3534,9 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             .unwrap()
             .contains("mise lock"));
         assert!(lockless_backend_note("aqua:x/y").is_none());
+        assert!(lockless_backend_note("dotnet:x")
+            .unwrap()
+            .contains("setup apply --only nuget"));
         let php = vfox_subprocess_note("vfox:mise-plugins/vfox-php").unwrap();
         assert!(php.contains("configure, make"), "{php}");
         assert!(vfox_subprocess_note("vfox:poetry").is_some());
@@ -3518,6 +3577,59 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             ),
             None
         );
+    }
+
+    /// RFC 0047 §6.1: a locked conda URL names its channel's registry, whose
+    /// rule is derived from its upstream (escaped, T1), while the typed
+    /// conda-forge rule stays the plan's fallback; a channel-less upstream
+    /// derives nothing.
+    #[test]
+    fn a_conda_rule_is_derived_from_the_channel_upstream() {
+        let reg = registry_for_url(
+            "https://conda.anaconda.org/bioconda/noarch/samtools-1.21-h0_0.conda",
+            "mise.lock: samtools",
+        )
+        .unwrap();
+        assert_eq!(reg.name, "conda-bioconda");
+        assert_eq!(reg.upstreams, ["https://conda.anaconda.org/bioconda"]);
+        assert_eq!(
+            reg.mise_url_replacements("https://hub.example.com"),
+            [(
+                r"^https://conda\.anaconda\.org/bioconda/(.+)".to_owned(),
+                "https://hub.example.com/proxy/conda-bioconda/$1".to_owned()
+            )]
+        );
+        let cf = registry_for_url(
+            "https://conda.anaconda.org/conda-forge/linux-64/ffmpeg-7.1.1-h0_0.conda",
+            "mise.lock: ffmpeg",
+        )
+        .unwrap();
+        assert_eq!(cf.name, "conda");
+        let mut own = cf.clone();
+        own.upstreams = vec!["https://conda.corp.example/c++.x/".to_owned()];
+        assert_eq!(
+            own.mise_url_replacements("https://hub.example.com")[0].0,
+            r"^https://conda\.corp\.example/c\+\+\.x/(.+)"
+        );
+        own.upstreams = vec!["https://conda.anaconda.org".to_owned()];
+        assert!(own
+            .mise_url_replacements("https://hub.example.com")
+            .is_empty());
+    }
+
+    /// RFC 0047 §6.2: a `nuget` suggestion writes mise's `dotnet.registry_url`
+    /// through `mise_settings_for`, and no rule.
+    #[test]
+    fn a_nuget_suggestion_writes_dotnet_registry_url() {
+        let regs = registry_for_backend("dotnet:dotnet-outdated-tool", "mise.toml: x");
+        let out = render_mise_toml(&regs, "https://hub.example.com", false, false);
+        assert!(
+            out.contains("[settings.dotnet]\nregistry_url = \"https://hub.example.com/proxy/nuget/nuget/v3/index.json\""),
+            "{out}"
+        );
+        assert!(regs[0]
+            .mise_url_replacements("https://hub.example.com")
+            .is_empty());
     }
 
     #[test]

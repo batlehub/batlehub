@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 47ff00db95f8767c
+sourceHash: 8ee160d75baf39af
 ---
 
 # Faire pointer mise vers BatleHub
@@ -129,6 +129,49 @@ les clients reprennent le registre public à leur prochain rafraîchissement.
 Les noms que vous cessez de servir vont dans `retired`, qui continue d'y
 répondre ici ; un client abandonne son archive en cache avec
 `rm -rf ~/.cache/mise/mise-registry`.
+
+### 1.3 Canaux conda et outils `dotnet:` {#conda-and-dotnet}
+
+**`conda:`.** Le backend conda de mise fait passer chaque requête de
+repodata et de paquet par `url_replacements`, et un
+[registre conda](/fr/registries/conda) sert un seul canal. Chaque registre
+reçoit la règle du canal que nomme son amont ; deux registres de deux canaux
+reçoivent donc deux règles :
+
+```toml
+[settings.url_replacements]
+"regex:^https://conda\\.anaconda\\.org/conda-forge/(.+)" = "https://hub.example.com/proxy/conda/$1"
+"regex:^https://conda\\.anaconda\\.org/bioconda/(.+)" = "https://hub.example.com/proxy/conda-bio/$1"
+```
+
+Un outil lit le canal de sa propre option `channel`, sinon `conda.channel`
+(par défaut `conda-forge`). Un registre laissé sur l'amont par défaut du
+serveur, l'hôte nu `https://conda.anaconda.org`, ne nomme aucun canal et ne
+reçoit aucune règle : elle prendrait tous les canaux de l'hôte. Deux
+registres d'un même canal laisseraient la seconde règle sans effet ; `setup`
+refuse donc le fichier mise tant que `--pick conda=<nom>` ne désigne pas
+l'un des deux.
+
+**`dotnet:`.** mise lit lui-même la liste des versions, depuis
+`dotnet.registry_url`, et installe par `dotnet tool install`, un
+sous-processus qui lit NuGet.config et ne voit jamais `url_replacements`.
+Un [registre nuget](/fr/registries/nuget) se traduit donc par deux réglages,
+pas par une règle :
+
+```toml
+[settings.dotnet]
+registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
+```
+
+et par la source NuGet.config qu'écrit
+`batlehub-cli setup apply --only nuget`. `setup` écrit le premier dans le
+fichier mise et rappelle le second quand il ne configure pas NuGet dans le
+même passage ; sans lui, la liste passe par BatleHub et le paquet non, si
+bien qu'une version bloquée s'installe quand même. La réponse de recherche
+liste la seule version que nomme chaque résultat : `mise ls-remote dotnet:…`
+via BatleHub montre cette version, pas tout l'historique ; une version exacte
+(`dotnet:tool@4.6.4`) n'est pas listée du tout, et s'installe depuis le
+flux.
 
 ## 2. Ce qu'exige une coupure réseau
 
@@ -342,12 +385,10 @@ reviendrait à défaire le blocage par accident.
   `packslip:github.com/…` passent par le type `github` ; un outil
   `packslip:{host}` lit `https://{host}/.well-known/packslip.json`, qu'aucun
   registre ne met en miroir, et le plan le dit.
-- **Les outils `dotnet:`, pour l'instant.** `registry suggest` nomme le
-  registre `nuget` dont ils ont besoin, mais `setup` n'écrit pas encore le
-  réglage `dotnet.registry_url` de mise
-  ([RFC 0047](/rfc/0047-mise-backends-coverage), phase 3), et l'installation
-  est un `dotnet tool install` qui lit NuGet.config, pas mise : lancez aussi
-  `batlehub-cli setup apply --only nuget`.
+- **Un outil `dotnet:` avec le seul bloc mise.** L'installation est un
+  `dotnet tool install` qui lit NuGet.config, pas mise
+  ([§1.3](#conda-and-dotnet)) : lancez aussi
+  `batlehub-cli setup apply --only nuget`, sinon le paquet part en direct.
 - **`core:dotnet`.** mise lance le `dotnet-install.sh` de Microsoft, dont le
   flux de téléchargement est codé en dur et ne se règle que par
   `--azure-feed`, que mise ne passe pas. Aucune règle de réécriture ne
@@ -359,11 +400,20 @@ reviendrait à défaire le blocage par accident.
   verrou `core:node`, `core:python`, `core:ruby` ou `core:erlang` sans URL
   est lue comme telle, et `mise plan` la liste sous `unsupported` ; lancez
   `mise lock` si l'installation est en réalité précompilée.
-- **Un mise plus ancien.** Les règles de cette page sont vérifiées avec mise
-  2026.11.3, la version qu'épinglent les suites heavy. Les versions
-  antérieures ne sont pas mesurées, et une version qui ne connaît pas un
-  réglage se contente d'avertir et laisse l'outil partir en direct : gardez
-  les clients en 2026.11.3 ou plus récent.
+- **Un mise plus ancien.** Une version qui ne connaît pas un réglage se
+  contente d'avertir et laisse l'outil partir en direct. Le plancher de
+  chaque règle est la plus ancienne version dans laquelle son câblage a été
+  lu, et `setup` l'affiche à côté de la règle :
+
+  | Règle | mise ≥ |
+  | --- | --- |
+  | `conda:` (le middleware `url_replacements` de rattler) | 2026.9.5 |
+  | `dotnet.registry_url` | 2026.9.5 |
+  | toutes les autres règles de cette page | 2026.11.3 |
+
+  2026.11.3 est la version qu'épinglent les suites heavy ; rien d'antérieur
+  à 2026.9.5 n'a été lu, si bien que les deux premiers planchers sont ce qui
+  a été vérifié, pas la première version qui offrait la fonction.
 - **Un hôte pour lequel vous n'avez pas de registre.** Le plan le dit ; ajoutez
   un registre ou renoncez à l'outil.
 - **La vérification de signature en direct du côté coupé.** Elle ne peut pas y

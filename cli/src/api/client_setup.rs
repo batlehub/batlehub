@@ -1458,8 +1458,9 @@ const ALL_TARGETS: [TargetId; 19] = [
 /// mise fetches itself, plus `generic`, one rule per upstream the registry
 /// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
-/// `https://github.com` must not shadow the typed github rules.
-const MISE_TYPES: [&str; 11] = [
+/// `https://github.com` must not shadow the typed github rules. `nuget` is a
+/// setting, `dotnet.registry_url`, not a rule (RFC 0047 §6.2).
+const MISE_TYPES: [&str; 12] = [
     "mise-versions",
     "github",
     "forgejo",
@@ -1470,8 +1471,20 @@ const MISE_TYPES: [&str; 11] = [
     "conda",
     "nodedist",
     "godist",
+    "nuget",
     "generic",
 ];
+
+/// The oldest mise release each kind's mise wiring was verified in, by
+/// reading its source (RFC 0047 §15 Q8): the conda `url_replacements`
+/// middleware and `dotnet.registry_url` are both in 2026.9.5; every other
+/// rule was verified against 2026.11.3 only.
+fn mise_floor(ty: &str) -> &'static str {
+    match ty {
+        "conda" | "nuget" => "2026.9.5",
+        _ => "2026.11.3",
+    }
+}
 
 /// The plan for every file, from the registry list and the machine. Fails only
 /// on a `--pick` the server does not list (used or not): everything else that goes
@@ -1770,7 +1783,7 @@ impl<'a> PlanCtx<'a> {
         }
 
         let (chosen, ambiguous, notes, gone) =
-            self.resolve_types(&target_types(id, &installed), &read)?;
+            self.resolve_types(id, &target_types(id, &installed), &read)?;
         let mut marker = Marker {
             registries: chosen
                 .iter()
@@ -1920,6 +1933,7 @@ impl<'a> PlanCtx<'a> {
 
     fn resolve_types(
         &self,
+        id: TargetId,
         types: &[&'static str],
         read: &ReadTarget,
     ) -> Result<(Chosen<'a>, Vec<String>, Vec<String>, bool)> {
@@ -1929,27 +1943,29 @@ impl<'a> PlanCtx<'a> {
         let mut gone = false;
         for ty in types {
             // Every generic mirror at once: each fronts its own upstreams, so
-            // two are not candidates for one place, and none is ambiguous.
-            if *ty == "generic" {
+            // two are not candidates for one place, and none is ambiguous. The
+            // same for mise's conda registries, one rule per channel (RFC 0047
+            // §6.2).
+            if *ty == "generic" || (*ty == "conda" && id == TargetId::Mise) {
                 let mut all: Vec<&'a RegistryInfo> = self
                     .registries
                     .iter()
-                    .filter(|r| r.registry_type == "generic" && is_candidate(r))
+                    .filter(|r| r.registry_type == *ty && is_candidate(r))
                     .collect();
                 // `--pick generic=b` puts b's rules first: mise stops at the
                 // first match, so b wins every upstream two mirrors share.
-                if let Some(pick) = self.opts.picks.get("generic") {
+                if let Some(pick) = self.opts.picks.get(*ty) {
                     all.sort_by_key(|r| &r.name != pick);
                 }
                 for (t, n) in read.managed.iter().flat_map(|m| &m.registries) {
-                    if t == "generic" && !all.iter().any(|r| &r.name == n) {
+                    if t == ty && !all.iter().any(|r| &r.name == n) {
                         gone = true;
                         notes.push(format!(
-                            "generic registry {n} is no longer listed; `setup remove` to stop using the instance"
+                            "{ty} registry {n} is no longer listed; `setup remove` to stop using the instance"
                         ));
                     }
                 }
-                chosen.extend(all.into_iter().map(|r| ("generic", r)));
+                chosen.extend(all.into_iter().map(|r| (*ty, r)));
                 continue;
             }
             let own = read.managed.as_ref().and_then(|m| m.name_for(ty));
@@ -1994,6 +2010,7 @@ impl<'a> PlanCtx<'a> {
             TargetId::Mise => {
                 let mut node = None;
                 let mut go_repo = None;
+                let mut nuget = None;
                 let mut bases: BTreeMap<&str, String> = BTreeMap::new();
                 let mut wired = Vec::new();
                 for (ty, r) in chosen {
@@ -2008,8 +2025,29 @@ impl<'a> PlanCtx<'a> {
                         // versions host (RFC 0048 §15 Q13).
                         go_repo = Some(format!("{base}/godist"));
                     }
+                    if *ty == "nuget" {
+                        nuget = Some(base.clone());
+                    }
                     wired.extend(wire_registry(ty, r));
                     bases.insert(&r.name, base);
+                }
+                // Two conda registries of one channel: mise applies the first
+                // rule only, so the second would be configured and dead.
+                // Refused unless a pick says which (RFC 0047 §4.3).
+                if !self.opts.picks.contains_key("conda") {
+                    let mut by_channel: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+                    for (_, r) in chosen.iter().filter(|(ty, _)| *ty == "conda") {
+                        if let Some(Ok(ch)) = r.upstream.as_deref().map(mise_wire::conda_channel) {
+                            by_channel.entry(ch).or_default().push(&r.name);
+                        }
+                    }
+                    if let Some((ch, names)) = by_channel.iter().find(|(_, n)| n.len() > 1) {
+                        bail!(
+                            "conda registries {} both front {ch}; mise applies the first rule only — \
+                             choose one with --pick conda=<name>",
+                            names.join(" and ")
+                        );
+                    }
                 }
                 // The same selection the server's wire makes (RFC 0045 §6.1).
                 let selection = select(&wired, Mode::Classic);
@@ -2050,14 +2088,46 @@ impl<'a> PlanCtx<'a> {
                     .iter()
                     .filter(|(ty, _)| *ty == "generic")
                     .flat_map(|(_, r)| r.upstreams.iter().map(String::as_str));
-                for (table, key, value, _) in mise_settings_for(generic) {
+                for (table, key, value, _) in mise_settings_for(generic, nuget.as_deref()) {
                     if !body.is_empty() {
                         body.push('\n');
                     }
                     body.push_str(&format!("[settings.{table}]\n{key} = {value}\n"));
                 }
+                let mut notes = Vec::new();
                 if !skipped.is_empty() {
-                    let note = format!("no mise rules for {}", skipped.join("; "));
+                    notes.push(format!("no mise rules for {}", skipped.join("; ")));
+                }
+                // An older mise only warns on what it does not know, and the
+                // tool goes direct: the floor is printed beside what needs it.
+                let mut floors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+                for rule in &selection.rules {
+                    let names = floors.entry(mise_floor(rule.kind.as_str())).or_default();
+                    if !names.contains(&rule.registry.as_str()) {
+                        names.push(&rule.registry);
+                    }
+                }
+                if let Some((_, r)) = chosen.iter().find(|(ty, _)| *ty == "nuget") {
+                    floors.entry(mise_floor("nuget")).or_default().push(&r.name);
+                    // `dotnet tool install` reads NuGet.config, not mise: with
+                    // only the listing proxied the bytes would go direct (T7).
+                    if !touches(&self.opts.only, &self.opts.skip, &[ClientId::Nuget])
+                        || !self.env.installed.contains(&ClientId::Nuget)
+                    {
+                        notes.push(
+                            "also run `batlehub-cli setup apply --only nuget`: `dotnet tool \
+                             install` reads NuGet.config, not mise"
+                                .to_owned(),
+                        );
+                    }
+                }
+                notes.extend(
+                    floors
+                        .iter()
+                        .map(|(v, names)| format!("mise ≥ {v} for {}", names.join(", "))),
+                );
+                if !notes.is_empty() {
+                    let note = notes.join("; ");
                     p.detail = Some(match p.detail.take() {
                         Some(d) => format!("{d}; {note}"),
                         None => note,
@@ -3532,41 +3602,94 @@ mod tests {
         assert!(!p.writes(), "{:?}", p.state);
     }
 
-    /// mise's `conda:` backend reads conda-forge: only a registry of that
-    /// channel gets the rule, and one of another channel on the same host is
-    /// refused rather than allowed to answer every conda-forge read.
+    /// RFC 0047 §6.2, T1: each conda registry is wired on its own channel,
+    /// two channels are two rules, a channel-less upstream gets none, and the
+    /// floor is printed beside what needs it.
     #[test]
-    fn conda_gets_a_mise_rule_only_for_the_conda_forge_channel() {
+    fn conda_gets_one_mise_rule_per_channel() {
         let dir = TempDir::new().unwrap();
         let env = env_in(dir.path(), &[ClientId::Mise]);
         let mut cf = reg("cf", "conda", "proxy");
         cf.upstream = Some("https://conda.anaconda.org/conda-forge/".to_owned());
-        let p = find(&plan(&[cf], &opts(), &env).unwrap(), TargetId::Mise).clone();
-        let next = p.next.clone().unwrap();
-        assert!(
-            next.contains("conda\\\\.anaconda\\\\.org/conda-forge/"),
-            "{next}"
-        );
-        assert!(next.contains("/proxy/cf/$1"), "{next}");
-
         let mut bio = reg("bio", "conda", "proxy");
         bio.upstream = Some("https://conda.anaconda.org/bioconda".to_owned());
-        let p = find(&plan(&[bio], &opts(), &env).unwrap(), TargetId::Mise).clone();
-        assert!(!p.writes(), "{:?}", p.state);
+        let regs = [cf, bio, reg("dflt", "conda", "proxy")];
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).clone();
+        assert!(p.writes(), "{:?} {:?}", p.state, p.detail);
+        let next = p.next.clone().unwrap();
+        assert!(
+            next.contains(r#""regex:^https://conda\\.anaconda\\.org/conda-forge/(.+)" = "https://hub.example.com/proxy/cf/$1""#),
+            "{next}"
+        );
+        assert!(
+            next.contains(r#""regex:^https://conda\\.anaconda\\.org/bioconda/(.+)" = "https://hub.example.com/proxy/bio/$1""#),
+            "{next}"
+        );
+        assert!(!next.contains("/proxy/dflt/"), "{next}");
         let detail = p.detail.unwrap();
         assert!(
-            detail.contains("proxies https://conda.anaconda.org/bioconda"),
+            detail.contains("dflt (it proxies https://conda.anaconda.org, which names no channel"),
             "{detail}"
         );
+        assert!(detail.contains("mise ≥ 2026.9.5 for cf, bio"), "{detail}");
+    }
 
-        // Left on the server's default — the bare host, no channel — it is
-        // not conda-forge's registry either, so it gets no rule.
-        let p = find(
-            &plan(&[reg("dflt", "conda", "proxy")], &opts(), &env).unwrap(),
-            TargetId::Mise,
-        )
-        .clone();
-        assert!(!p.writes(), "{:?}", p.state);
+    /// RFC 0047 §4.3: two conda registries of one channel would leave the
+    /// second rule dead, so the mise file is refused until a pick says which.
+    #[test]
+    fn two_conda_registries_of_one_channel_are_refused_without_a_pick() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let mut a = reg("conda", "conda", "proxy");
+        a.upstream = Some("https://conda.anaconda.org/conda-forge".to_owned());
+        let mut b = reg("conda-mirror", "conda", "proxy");
+        b.upstream = Some("https://conda.anaconda.org/conda-forge/".to_owned());
+        let regs = [a, b];
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).clone();
+        assert_eq!(p.state, State::Conflict);
+        assert!(
+            p.detail.as_deref().unwrap().contains(
+                "conda registries conda and conda-mirror both front https://conda.anaconda.org/conda-forge"
+            ),
+            "{:?}",
+            p.detail
+        );
+        let picks = parse_picks(&["conda=conda-mirror".to_owned()]).unwrap();
+        let o = Options { picks, ..opts() };
+        let p = find(&plan(&regs, &o, &env).unwrap(), TargetId::Mise).clone();
+        let next = p.next.clone().unwrap();
+        assert!(next.contains("/proxy/conda-mirror/$1"), "{next}");
+        assert!(!next.contains("/proxy/conda/$1"), "{next}");
+    }
+
+    /// RFC 0047 §6.2, T7: a nuget registry is `dotnet.registry_url`, no rule,
+    /// and the NuGet.config `dotnet tool install` reads is asked for when the
+    /// nuget target is not configured beside it.
+    #[test]
+    fn nuget_is_mise_dotnet_registry_url_and_no_rule() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let regs = [reg("n", "nuget", "proxy")];
+        let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).clone();
+        let next = p.next.clone().unwrap();
+        assert!(
+            next.contains("[settings.dotnet]\nregistry_url = \"https://hub.example.com/proxy/n/nuget/v3/index.json\"\n"),
+            "{next}"
+        );
+        assert!(!next.contains("url_replacements"), "{next}");
+        let detail = p.detail.unwrap();
+        assert!(
+            detail.contains("also run `batlehub-cli setup apply --only nuget`"),
+            "{detail}"
+        );
+        assert!(detail.contains("mise ≥ 2026.9.5 for n"), "{detail}");
+
+        // dotnet installed and selected: the NuGet target writes the source.
+        let env = env_in(dir.path(), &[ClientId::Mise, ClientId::Nuget]);
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        let detail = find(&plans, TargetId::Mise).detail.clone().unwrap();
+        assert!(!detail.contains("also run"), "{detail}");
+        assert!(find(&plans, TargetId::Nuget).writes());
     }
 
     /// Every generic mirror gets a rule per upstream, after the typed rules;
