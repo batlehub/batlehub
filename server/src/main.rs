@@ -130,6 +130,14 @@ enum Command {
         /// Config file to read. Defaults to the `--config` argument.
         path: Option<String>,
     },
+    /// Print the JSON Schema of the config file and exit (RFC 0049): what an
+    /// editor validates `config.toml` against through a `#:schema` line.
+    DumpConfigSchema {
+        /// The schema of one layer of a layered config: nothing is required,
+        /// for a credentials file or any other overlay.
+        #[arg(long)]
+        layer: bool,
+    },
 }
 
 // ── Startup steps ─────────────────────────────────────────────────────────────
@@ -154,6 +162,16 @@ fn run_subcommand(cli: &Cli) -> Result<bool> {
                 None => config_paths(cli),
             };
             explain_config(&paths)?;
+        }
+        Some(Command::DumpConfigSchema { layer }) => {
+            use std::io::Write;
+            let text = batlehub_config::json_schema_text(*layer);
+            // `| head` closing the pipe is a reader that has what it wanted,
+            // not a failure; `println!` would panic on it.
+            match std::io::stdout().lock().write_all(text.as_bytes()) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.into()),
+                _ => {}
+            }
         }
         None => return Ok(false),
     }

@@ -34,7 +34,7 @@ pub use batlehub_core::ports::S3StorageConfig;
 /// endpoint_url = "http://localhost:9900"
 /// force_path_style = true
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum StoragesConfig {
     /// Legacy single backend (no `default` or `backends` keys).
@@ -43,27 +43,27 @@ pub enum StoragesConfig {
     Multi(MultiStorageConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MultiStorageConfig {
     pub default: String,
     pub backends: Vec<NamedStorageConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NamedStorageConfig {
     pub name: String,
     #[serde(flatten)]
     pub config: StorageBackendConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum StorageBackendConfig {
     Filesystem(FilesystemStorageConfig),
     S3(S3StorageConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FilesystemStorageConfig {
     pub path: String,
 }

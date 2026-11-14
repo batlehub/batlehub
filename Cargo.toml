@@ -111,6 +111,8 @@ reqwest = { version = "0.13", features = ["json", "stream", "form"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# RFC 0049: the config JSON Schema (editor support, `dump-config-schema`).
+schemars = { version = "1.2.3", features = ["chrono04"] }
 toml = "1"
 
 # OpenAPI

@@ -98,6 +98,7 @@ jobs:
             docs/use/refused-downloads.md docs/fr/use/refused-downloads.md \
             docs/use/cli.md docs/fr/use/cli.md docs/operations/incident-response.md \
             'docs/rfc/0002-*.md' 'config.example*.toml' 'perf/**' ui/openapi.json \
+            'docs/public/schema/**' \
             'tests/fixtures/**' 'examples/**' \
             '**/Cargo.toml' '**/Cargo.lock' .github/workflows/test.yaml \
             .github/scripts/merge_coverage.py .github/scripts/required_gate.py \

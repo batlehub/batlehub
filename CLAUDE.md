@@ -120,6 +120,12 @@ layer is the only one the config editor reads or rewrites; every layer is
 watched and re-read on reload. See `docs/guide/configuration.md § Layered config
 files`.
 
+The config has a JSON Schema (RFC 0049), derived by `schemars` from the
+`schema/` structs and committed as `docs/public/schema/config*.schema.json`:
+after changing a config struct, run `task docs:config-schema` and commit the
+two files, or `cargo test` fails. A new `Deserialize` type in the config tree
+also derives `schemars::JsonSchema` (behind the `schema` feature in `core`).
+
 The file watcher watches each layer's **directory**, not the file: an atomic
 rename and a Kubernetes `..data` symlink swap both replace the inode, so a
 file watch is attached to something nothing writes to again. `is_relevant` in

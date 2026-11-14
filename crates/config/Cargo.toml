@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-batlehub-core = { path = "../core" }
+batlehub-core = { path = "../core", features = ["schema"] }
 # RFC 0015 §4.7's `grants_shadow.until` is a date, and making it a date rather
 # than a string is what stops an unparseable one reaching the resolver.
 chrono.workspace = true
@@ -15,6 +15,9 @@ regex.workspace = true
 serde.workspace = true
 toml.workspace = true
 utoipa.workspace = true
+# RFC 0049: `json_schema()` and the committed schema files.
+schemars.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 # RFC 0044 §6.6: the `[stats]` monitoring links are parsed and substituted.
 form_urlencoded.workspace = true

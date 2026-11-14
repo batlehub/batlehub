@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConditionMatchType {
     #[default]
     Auto,
@@ -17,6 +18,7 @@ pub enum ConditionMatchType {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Condition {
     pub claim: String,
     pub pattern: String,
@@ -26,6 +28,7 @@ pub struct Condition {
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RuleMatch {
     #[default]
     All,
@@ -33,6 +36,7 @@ pub enum RuleMatch {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ActionsGroupRule {
     pub group: Option<String>,
     /// Template rendered from JWT claims, e.g. `"{name}/{repository}/{ref_name}"`.
@@ -50,6 +54,7 @@ pub struct ActionsGroupRule {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ActionsOidcAuthConfig {
     #[serde(default = "default_actions_oidc_name")]
     pub name: String,
@@ -86,6 +91,7 @@ fn default_actions_oidc_name() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OidcAuthConfig {
     /// Unique name for this provider instance.
     /// Used as the prefix for unmapped groups: e.g. `name = "oidc1"` → group `"oidc1:team-a"`.
@@ -168,6 +174,7 @@ fn default_role_claim() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KubernetesAuthConfig {
     /// Unique name for this provider instance.
     /// Used as the prefix for unmapped groups: e.g. `name = "k8s-prod"` → group `"k8s-prod:team-a"`.

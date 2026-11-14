@@ -7,7 +7,7 @@ use super::registry::default_true;
 
 // ── RBAC ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct RbacConfig {
     #[serde(default)]
     pub anonymous: Vec<String>,
@@ -34,7 +34,7 @@ pub struct RbacConfig {
 /// user = false        # regular users cannot search (proxy-only)
 /// admin = true        # admins can browse
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ExploreRbacConfig {
     #[serde(default = "default_true")]
     pub anonymous: bool,
@@ -56,7 +56,7 @@ impl Default for ExploreRbacConfig {
 
 // ── Rules ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuleConfig {
     ReleaseAgeGate(ReleaseAgeGateConfig),
@@ -68,7 +68,7 @@ pub enum RuleConfig {
     TrustedPublisher(TrustedPublisherConfig),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReleaseAgeGateConfig {
     /// Minimum age in seconds before a release is downloadable.
     #[serde(default = "default_min_age")]
@@ -112,7 +112,7 @@ fn default_min_age() -> u64 {
 /// for their ecosystem (npm, PyPI, crates.io, Maven, …) report `is_signed =
 /// None`, which this rule allows through by default (see
 /// `deny_missing_signature`).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RequireSignedReleaseConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -126,7 +126,7 @@ pub struct RequireSignedReleaseConfig {
     pub deny_missing_signature: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DenyLatestConfig {
     /// Roles that may bypass the restriction (e.g. `["admin"]`).
     /// The least-privileged listed role is the floor: a higher role bypasses too.
@@ -144,7 +144,7 @@ pub struct DenyLatestConfig {
 /// block = true                 # false (default) = warn-only, surfaced in UI but never blocked
 /// bypass_roles = ["admin"]
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CveGateConfig {
     /// Lowest severity that triggers the gate. One of
     /// `unknown | low | medium | high | critical`. Defaults to `high`.
@@ -204,7 +204,7 @@ fn default_cve_min_severity() -> String {
 /// does not match `MIT OR Apache-2.0`, since a compound expression is a
 /// different declaration and silently accepting it would let a package opt out
 /// of the gate by adding an alternative.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LicenseGateConfig {
     /// Approved licences. When non-empty, a declared licence matching none of
     /// these is refused.
@@ -239,7 +239,7 @@ pub struct LicenseGateConfig {
 /// block = ["1.4.7", "1.5.0"]    # specific versions with known issues
 /// bypass_roles = ["admin"]
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct VersionGateConfig {
     /// Approved-version allowlist. When non-empty, a version that matches none of
     /// these entries is rejected.
@@ -270,7 +270,7 @@ pub struct VersionGateConfig {
 /// allow = ["my-org", "trusted-user"]
 /// bypass_roles = ["admin"]
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TrustedPublisherConfig {
     /// Allowed publisher identifiers (org/user/scope). When non-empty, a
     /// package whose derived publisher matches none of these is rejected.

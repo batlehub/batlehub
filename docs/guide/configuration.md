@@ -172,6 +172,37 @@ config_version = 1   # optional; absent means "current"
 
 What requires bumping `CURRENT_CONFIG_VERSION` (in `crates/config/src/schema/mod.rs`) when it eventually happens: removing or renaming an existing field, or changing what an existing field's default means. What does **not** require a bump: adding a new optional field (the common case for this codebase's evolution so far — see `CHANGELOG.md` for what changed in each release).
 
+### Editor support
+
+The config file has a JSON Schema, generated from the structs the server
+deserializes it into. An editor built on [taplo](https://taplo.tamasfe.dev/)
+(Even Better TOML in VS Code, and the other taplo integrations) completes keys
+and flags a mistyped one as you type, once the file's first line names the
+schema of the version you run:
+
+```toml
+#:schema https://github.com/batlehub/batlehub/releases/download/v1.11.0/config.schema.json
+```
+
+- **Which file.** `config.schema.json` for a complete file or the first
+  `--config` layer; `config-layer.schema.json` for a [later layer](#layered-config-files)
+  such as a credentials file, which holds only part of the config — nothing
+  is required in it but an enum's tag.
+- **Which version.** The asset of the release you run. The `config.example*.toml`
+  files point at `https://batlehub.dev/schema/config.schema.json`, which is
+  the schema of `main`: with an older binary it accepts keys that binary
+  ignores, so pin the release before relying on it.
+- **Offline.** `batlehub dump-config-schema > config.schema.json` (add
+  `--layer` for the layer variant) prints the schema of the exact binary;
+  point `#:schema` at the file by relative path.
+- **What it does not catch.** `30.0` where an integer is expected (JSON
+  Schema's `integer` admits a float with no fraction; the server refuses it),
+  and the cross-field rules `explain-config` checks. A mistyped enum tag
+  (`type = "tokn"`) is refused with a generic *valid under more than one of
+  the schemas* message rather than a pointer at the tag.
+- **Not `config_version`.** That field pins a file to the server's config
+  format; this is a description of the keys, for editors.
+
 ---
 
 ## 3. Full Reference

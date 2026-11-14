@@ -27,7 +27,7 @@ use serde::Deserialize;
 /// longer window would lose its count mid-window and never ban.
 pub const MAX_VIOLATION_WINDOW_SECS: u32 = 30 * 24 * 3600;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct IpBlockingConfig {
     /// Enable IP-based blocking.
     #[serde(default)]
@@ -93,7 +93,7 @@ fn default_trigger_on_status() -> Vec<u16> {
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 /// How to enforce rate-limit violations.
-#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RateLimitEnforcement {
     /// Reject requests that exceed the rate limit with HTTP 429.
@@ -117,7 +117,7 @@ pub enum RateLimitEnforcement {
 /// requests_per_window = 5000   # shared pool for all ci-bots members combined
 /// window_secs         = 60
 /// ```
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct RateLimitConfig {
     /// Maximum number of requests a single user (or IP for anonymous) may make within the window.
     pub requests_per_window: u32,
@@ -146,7 +146,7 @@ pub struct RateLimitConfig {
 /// window_secs         = 60
 /// enforcement         = "block"   # optional; inherits parent enforcement when omitted
 /// ```
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct GroupRateLimitConfig {
     /// Group name to match against `Identity.groups` (exact string match).
     pub name: String,
@@ -160,7 +160,7 @@ pub struct GroupRateLimitConfig {
 
 // ── Upstream auth ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum UpstreamAuthConfig {
     Bearer(BearerAuthConfig),
@@ -168,12 +168,12 @@ pub enum UpstreamAuthConfig {
     Header(HeaderAuthConfig),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BearerAuthConfig {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BasicAuthConfig {
     pub username: String,
     pub password: String,
@@ -181,13 +181,13 @@ pub struct BasicAuthConfig {
 
 /// Sends a single custom HTTP header on every upstream request.
 /// Useful for registries that use `X-API-Key` or similar schemes.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HeaderAuthConfig {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, schemars::JsonSchema)]
 pub struct UpstreamTlsConfig {
     /// Path to a PEM-encoded CA certificate to trust for this registry's upstream.
     pub ca_cert_path: Option<String>,
@@ -202,7 +202,7 @@ pub struct UpstreamTlsConfig {
 /// # password = "proxypass"   # optional
 /// # no_proxy = "localhost,internal.example.com"
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct UpstreamProxyConfig {
     /// Proxy URL. Supports `http://`, `https://`, and `socks5://` schemes.
     /// Credentials can be embedded: `http://user:pass@proxy:3128`.
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn rate_limit_enforcement_default_and_parse() {
         assert_eq!(RateLimitEnforcement::default(), RateLimitEnforcement::Block);
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
         struct W {
             e: RateLimitEnforcement,
         }

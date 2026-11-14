@@ -31,6 +31,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 | **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
 | **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
+| **Config schema** | `crates/config/tests/config_schema.rs`, `.tasks/scripts/config_schema_check.sh` | none for the drift test; taplo and helm for the check | `cargo test -p batlehub-config --test config_schema` (regenerate: `task docs:config-schema`), `task docs:config-schema:check` |
 | **Gate scripts** | `.github/scripts/tests/test_*.py` | none — stdlib `unittest`, fixtures recorded from the real scanners | `task test:scripts` (CI: `scripts-test.yaml`) |
 
 The in-process layer is the workhorse: every test there spins up a real

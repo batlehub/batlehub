@@ -1,7 +1,9 @@
+mod json_schema;
 pub mod reload_keys;
 mod render;
 pub mod schema;
 
+pub use json_schema::{json_schema, json_schema_text};
 pub use schema::AppConfig;
 
 use anyhow::{bail, Context, Result};

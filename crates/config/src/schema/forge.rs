@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// numbers decide how often the forge is asked again, and so how quickly a
 /// moved tag or an advanced branch is noticed — and how many API calls a
 /// busy registry spends noticing.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct RefsConfig {
     /// How long a branch → commit resolution is trusted. Default 60 s.
     #[serde(default = "default_branch_ttl_secs")]
@@ -89,7 +89,7 @@ pub const MIN_BRANCH_TTL_SECS: u64 = 10;
 /// `raw.githubusercontent.com`, Forgejo's `raw/`, GitLab's `/-/raw/`. Turning
 /// it off by default is the behaviour change RFC 0019 §9 states, and the
 /// first refused request answers with a body that says exactly this.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct RawConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -160,7 +160,7 @@ impl RawConfig {
 
 /// `[registries.api_reads]` — the typed read-only JSON routes to add beside
 /// the release listing (RFC 0019 §4.1).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ApiReadsConfig {
     /// `tags`, `commits`, `branches`. Nothing else is accepted: `contents`
     /// and `git/blobs` are raw by another door, and an unknown family would

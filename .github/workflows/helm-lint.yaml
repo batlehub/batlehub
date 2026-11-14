@@ -31,6 +31,10 @@ jobs:
         with:
           paths: |
             helm/**
+            deploy/helm/**
+            config.example*.toml
+            docs/public/schema/**
+            .tasks/scripts/config_schema_check.sh
             .github/workflows/helm-lint.yaml
             .github/scripts/required_gate.py
             .github/actions/required-gate/action.yml
@@ -188,6 +192,41 @@ jobs:
             echo "::error::writableConfig renders with writableConfig.enabled=false"
             exit 1
           fi
+
+      # Helm reads every number of a values file as a float64, and toToml then
+      # writes `access_retention_days = 30.0`, which the server refuses for an
+      # integer field and does not start. `--set` hides it (it types the value
+      # itself), so this renders from a file. Both config files are read, and
+      # `outage_ratio = 0.5` proves a float with a fraction is left alone.
+      - name: Integer fields render as integers
+        run: |
+          helm template batlehub helm/batlehub -f helm/batlehub/ci/values-integers.yaml > /tmp/ints.yaml
+          python3 - /tmp/ints.yaml <<'PY'
+          import re, sys, yaml
+          docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d.get("kind") == "Secret"]
+          tomls = {k: v for d in docs for k, v in (d.get("stringData") or {}).items() if k.endswith(".toml")}
+          assert set(tomls) >= {"config.toml", "credentials.toml"}, f"rendered: {sorted(tomls)}"
+          bad = [f"{k}: {l.strip()}" for k, t in tomls.items() for l in t.splitlines() if re.search(r'=[^"]*(?<![\w.])\d+\.0(?![\w.])', l)]
+          assert not bad, "integer fields rendered as floats:\n" + "\n".join(bad)
+          for k in ("access_retention_days = 30", "security_retention_days = 365", "outage_ratio = 0.5"):
+              assert k in tomls["config.toml"], f"missing {k!r}"
+          assert "access_retention_days = 30" in tomls["credentials.toml"]
+          print("every integer field renders as an integer")
+          PY
+
+      # RFC 0049: the example configs and every deploy/helm render validate
+      # against the committed config JSON Schema, checked by taplo — the
+      # engine the editors run. The schema itself is held current by
+      # `cargo test` (crates/config/tests/config_schema.rs).
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          version: 2026.9.5
+          install: true
+          install_args: taplo
+          add_shims_to_path: false
+          cache: false
+      - name: Example configs and chart renders validate against the schema
+        run: mise exec taplo -- bash .tasks/scripts/config_schema_check.sh
 
       # Rendering with a non-default combination catches template errors that
       # the default path never reaches (ingress rules, PDB, extra manifests).

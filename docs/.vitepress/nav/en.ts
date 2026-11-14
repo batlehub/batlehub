@@ -400,6 +400,10 @@ export const sidebar = {
           text: "0048 — mise core toolchains",
           link: "/rfc/0048-mise-core-toolchains",
         },
+        {
+          text: "0049 — Config JSON Schema",
+          link: "/rfc/0049-config-json-schema",
+        },
       ],
     },
     {

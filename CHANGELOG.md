@@ -43,6 +43,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A JSON Schema for the config file, for editors** (RFC 0049). One
+  `#:schema` line at the top of `config.toml` and an editor built on taplo
+  (Even Better TOML in VS Code) completes keys and flags a mistyped one as you
+  type. Each release attaches `config.schema.json` (a complete file) and
+  `config-layer.schema.json` (a credentials file or any other layer, where
+  nothing but an enum's tag is required), covered by `checksums.txt`;
+  `batlehub dump-config-schema [--layer]` prints the schema of the exact
+  binary. The example configs carry the line, and CI checks them and every
+  `deploy/helm` render against the schema with taplo.
+
 - **Scan visibility and admin views (RFC 0044).** Lists and the package page
   show where each version stands in scanning (`scan_status`: queued, scanning,
   failed, scanned · verdict), at the caller's tier; the package page has
@@ -69,6 +79,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gains a `registry` variable; re-importing it overwrites local edits.
 
 ### Fixed
+
+- **Helm chart: an integer set from a values file rendered as a float, and the
+  server refused to start.** Helm reads every YAML number as a float64, so
+  `config.audit.access_retention_days: 30` reached `config.toml` as `30.0`.
+  The chart turned back only the integer fields it listed, and 58 of 77 were
+  missing (`audit.*`, `worker.*`, `database.min_connections`,
+  `registries[].retention.*`, `security.*`, notification timeouts and more);
+  `credentials.config` was converted for two fields only. Both files now go
+  through one pass that turns every float with no fractional part into an
+  integer, so there is no list left to fall behind the config. The one real
+  f64 (`upstream_audit.outage_ratio`) is unaffected, since serde reads `1` as
+  `1.0`, and a float with a fraction (`30.5`) is no longer truncated but
+  reaches the server, which refuses it. A `--set` workaround can be dropped;
+  `helm-lint.yaml` renders a values file across every shape the config has
+  to keep it so.
 
 - **A personal access token sent over HTTP Basic resolved to anonymous.**
   pip, and mise reading `~/.netrc` for a GitHub/Forgejo/GitLab registry, send

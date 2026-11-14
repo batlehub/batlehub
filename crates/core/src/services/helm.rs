@@ -40,6 +40,7 @@ pub const PROV_SIGNATURE_TYPE: &str = "pgp";
 /// on every index request, the way `GalaxyRoleMode` is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OciEntries {
     /// Omitted: an entry this instance cannot serve is one its policy cannot
     /// reach, so it is not advertised.
@@ -54,6 +55,7 @@ pub enum OciEntries {
 /// chart of the same name. Read off `HotConfig` for `OciEntries`' reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum HybridMerge {
     /// A chart name published here takes the whole name: the upstream chart's
     /// entries are dropped and its archives are never fetched. The rule every

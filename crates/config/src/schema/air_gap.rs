@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::registry::default_true;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct AirGapConfig {
     /// The whole switch. `false` — the default, and the value in every
     /// existing config — leaves every code path as it is today.

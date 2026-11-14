@@ -57,6 +57,13 @@ jobs:
         run: chmod 0755 dist/server/batlehub
       # CycloneDX SBOM of the Rust workspace — lets a future-disclosed crate CVE
       # be matched against this exact shipped build (`trivy sbom sbom-rust.cdx.json`).
+      # RFC 0049: the config JSON Schema of this exact binary, the URL the
+      # docs give an editor's `#:schema` line. Taken from the shipped build
+      # rather than the tree, so the two cannot disagree.
+      - name: Dump the config JSON Schema
+        run: |
+          dist/server/batlehub dump-config-schema > config.schema.json
+          dist/server/batlehub dump-config-schema --layer > config-layer.schema.json
       - name: Generate Rust SBOM (CycloneDX)
         shell: bash
         run: |
@@ -122,6 +129,7 @@ jobs:
             - 🐕 **Worker image + GuardDog** (the optional Python scanner) — `ghcr.io/${{ github.repository }}-worker-guarddog:${{ needs.meta.outputs.version }}`
             - ⎈ **Helm chart** — `${{ env.CHART_NAMESPACE }}`
             - 🛡️ **SBOMs** (CycloneDX) attached & attested — the binary and all three images
+            - 📐 **Config JSON Schema** — `config.schema.json` and `config-layer.schema.json`, for an editor's `#:schema` line
             - 🧾 **VEX** (OpenVEX) — `batlehub.openvex.json`, what the standing CVE findings mean for these images
             - 🔏 **`checksums.txt`** + a Sigstore bundle covering every asset here
 
@@ -161,6 +169,8 @@ jobs:
           files: |
             dist/server/batlehub
             sbom-rust.cdx.json
+            config.schema.json
+            config-layer.schema.json
           fail_on_unmatched_files: true
   cli:
     name: CLI — ${{ matrix.name }}

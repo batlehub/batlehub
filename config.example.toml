@@ -1,3 +1,4 @@
+#:schema https://batlehub.dev/schema/config.schema.json
 # batlehub — example configuration
 # Copy this file to config.toml and edit as needed.
 

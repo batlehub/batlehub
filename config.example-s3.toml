@@ -1,3 +1,4 @@
+#:schema https://batlehub.dev/schema/config.schema.json
 # batlehub — RustFS + Authentik + Jaeger example configuration
 #
 # Use this file when running the server locally against the infrastructure

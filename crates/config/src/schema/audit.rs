@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::air_gap::valid_ed25519_hex_key;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AuditConfig {
     /// Days a `download` / `view_metadata` row is kept. `0` never expires.

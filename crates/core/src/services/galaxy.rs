@@ -40,6 +40,7 @@ use crate::error::CoreError;
 /// upstream document expired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum GalaxyRoleMode {
     /// Serve the v1 reads and route role bytes through this instance.
     #[default]
