@@ -495,7 +495,7 @@ cat > "$AG_PROJECT/mise.toml" <<EOF
 lockfile = true
 
 [tools]
-"$TOOL" = { version = "$VERSION", exe = "gh" }
+"$TOOL" = "$VERSION"
 EOF
 cat > "$AG_PROJECT/mise.lock" <<EOF
 [[tools."$TOOL"]]
