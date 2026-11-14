@@ -729,7 +729,7 @@ NOLOCK="$HEAVY_WORK/${MARK_MISE_NOLOCK}"
 mkdir -p "$NOLOCK"
 cat > "$NOLOCK/mise.toml" <<EOF
 [tools]
-"$TOOL" = { version = "$TOOL_VERSION", exe = "gh" }
+"$TOOL" = "$TOOL_VERSION"
 EOF
 heavy_log "mise install $TOOL@$TOOL_VERSION with no lock, against the disconnected instance"
 run_client "mise install" "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" \
@@ -944,7 +944,7 @@ github_attestations = false
 "regex:^https?://([^/]+)/(.*)" = "$HEAVY_TAP_BASE/proxy/$AW_REG/mise-versions/_wire/\$1/\$2"
 
 [tools]
-"$TOOL" = { version = "$TOOL_VERSION", exe = "gh" }
+"$TOOL" = "$TOOL_VERSION"
 EOF
 heavy_log "mise install $TOOL@$TOOL_VERSION through the auto-wire catch-all, against the disconnected instance"
 run_client "mise install (auto-wire)" "$HEAVY_WORK/mise-auto-wire.txt" \
@@ -1012,7 +1012,7 @@ UNHELDTOOL="$HEAVY_WORK/mise-unheld"
 mkdir -p "$UNHELDTOOL"
 cat > "$UNHELDTOOL/mise.toml" <<EOF
 [tools]
-"$TOOL" = { version = "$TOOL_UNHELD_VERSION", exe = "gh" }
+"$TOOL" = "$TOOL_UNHELD_VERSION"
 EOF
 heavy_log "mise install $TOOL@$TOOL_UNHELD_VERSION — a tag the instance does not hold"
 run_client "mise install (unheld tag)" "$HEAVY_WORK/mise-unheld.txt" \

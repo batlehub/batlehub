@@ -1388,13 +1388,15 @@ mise_auto_wire_cases() {
     || { cat "$out.reg" >&2; heavy_fail "mise-auto-wire: mise registry jq failed"; }
   heavy_client_must_say "$out.reg" "aqua:jqlang/jq" \
     "mise-auto-wire: the upstream entries did not survive the merge"
-  # mise 2026.9.5 reads the floated aqua registry through the contents API,
-  # not raw.githubusercontent.com as RFC 0045 §4.1 expected. The github kind
-  # serves no `contents/` route, so it answers 404 and mise keeps the aqua
-  # registry baked into it (`fallback_on_error`): jq above installed anyway.
-  # Asserted as observed, so a change on either side shows up here (§17).
+  # mise 2026.11.3 reads the floated aqua registry from
+  # raw.githubusercontent.com/{owner}/{repo}/HEAD/registry.yaml, then .yml
+  # (`github_registry_file_url`, src/aqua/aqua_registry_wrapper.rs:425), as
+  # RFC 0045 §4.1 expected; 2026.9.5 used the contents API instead. The github
+  # kind serves neither, so it answers 404 and mise keeps the aqua registry
+  # baked into it (`fallback_on_error`): jq above installed anyway. Asserted
+  # as observed, so a change on either side shows up here (§17).
   heavy_wire_re_after aw-install \
-    "$wire_re/api[.]github[.]com/repos/aquaproj/aqua-registry/contents/registry[.]ya?ml -> 404" \
+    "$wire_re/raw[.]githubusercontent[.]com/aquaproj/aqua-registry/HEAD/registry[.]ya?ml -> 404" \
     "mise-auto-wire: the floated aqua registry request did not reach the github kind through the wire"
 
   # 4. The overlay tool from emptied caches: its listing is answered here and

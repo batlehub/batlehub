@@ -282,12 +282,24 @@ pub(crate) fn unsupported_backend_reason(backend: &str) -> Option<String> {
     if BACKEND_REGISTRIES
         .iter()
         .any(|(prefix, _, _)| backend.starts_with(prefix))
+        || predicate_registry(backend).is_some()
     {
         return None;
     }
-    if backend.starts_with("asdf:") || backend.starts_with("vfox:") {
+    if let Some(host) = packslip_host(backend) {
         return Some(format!(
-            "{backend}: a git-fetched plugin backend; mise clones it, and there is no HTTP path              through BatleHub"
+            "{backend}: reads https://{host}/.well-known/packslip.json; no registry mirrors {host}"
+        ));
+    }
+    // vfox plugins built into mise download over HTTP, so the URL rules
+    // cover them; the plan carries a note instead (RFC 0047 §4.2).
+    if backend.starts_with("vfox:") {
+        return None;
+    }
+    if backend.starts_with("asdf:") {
+        return Some(format!(
+            "{backend}: a git-fetched plugin backend; mise clones it, and there is no HTTP path \
+             through BatleHub"
         ));
     }
     if backend.starts_with("core:") {
@@ -297,7 +309,8 @@ pub(crate) fn unsupported_backend_reason(backend: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{backend}: no registry kind fronts this backend, and it downloads nothing over HTTP that          a rewrite rule could catch"
+        "{backend}: no registry kind fronts this backend, and it downloads nothing over HTTP that \
+         a rewrite rule could catch"
     ))
 }
 
@@ -316,7 +329,90 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     ("aqua:", "github", "github"),
     ("ubi:", "github", "github"),
     ("github:", "github", "github"),
+    // mise reads the version list itself and installs with `dotnet tool
+    // install` (RFC 0047 §4.2), both against a NuGet feed.
+    ("dotnet:", "nuget", "nuget"),
+    ("packslip:github.com/", "github", "github"),
 ];
+
+/// Backends whose registry is not a prefix of the name: `packslip:{owner}/{repo}`
+/// is GitHub (no dot in the first segment, so not a host), and `spm:` is
+/// GitLab when the name says so (mise tests `contains("gitlab.com")`,
+/// `src/backend/spm.rs:812`), GitHub otherwise.
+fn predicate_registry(backend: &str) -> Option<&'static str> {
+    if let Some(rest) = backend.strip_prefix("packslip:") {
+        let first = rest.split('/').next().unwrap_or_default();
+        return (rest.contains('/') && !first.contains('.')).then_some("github");
+    }
+    if let Some(rest) = backend.strip_prefix("spm:") {
+        return Some(if rest.contains("gitlab.com") {
+            "gitlab"
+        } else {
+            "github"
+        });
+    }
+    None
+}
+
+/// The host of a `packslip:{host}[/…]` backend, which mirrors nothing here.
+fn packslip_host(backend: &str) -> Option<&str> {
+    let rest = backend.strip_prefix("packslip:")?;
+    if rest.starts_with("github.com/") || predicate_registry(backend).is_some() {
+        return None;
+    }
+    let host = rest.split('/').next().unwrap_or_default();
+    (!host.is_empty()).then_some(host)
+}
+
+/// vfox plugins built into mise that shell out, and what the subprocess
+/// fetches past `url_replacements` (RFC 0047 §4.2, §15 Q4). Keyed by the
+/// plugin's short name. shortcut: a list that drifts; re-measure it on every
+/// mise pin bump by grepping the embedded plugins' Lua for `os.execute` and
+/// `cmd.exec` — a missing entry loses the warning, never a route.
+const VFOX_SUBPROCESS_PLUGINS: &[(&str, &str)] = &[
+    ("php", "configure, make"),
+    ("poetry", "the installer script, run by python"),
+    ("pipenv", "pip"),
+];
+
+/// The note for a `vfox:` plugin known to shell out, locked or not.
+pub(crate) fn vfox_subprocess_note(backend: &str) -> Option<String> {
+    let plugin = backend.strip_prefix("vfox:")?;
+    let short = plugin.rsplit('/').next().unwrap_or(plugin);
+    let short = short.strip_prefix("vfox-").unwrap_or(short);
+    let (_, what) = VFOX_SUBPROCESS_PLUGINS.iter().find(|(p, _)| *p == short)?;
+    Some(format!(
+        "{backend}: runs a subprocess ({what}) whose own downloads bypass url_replacements; \
+         connected they go direct, air-gapped they fail"
+    ))
+}
+
+/// The note for a backend the plan resolved without a URL: a `vfox:` plugin
+/// downloads over HTTP once the lock names the URL.
+pub(crate) fn lockless_backend_note(backend: &str) -> Option<String> {
+    backend.starts_with("vfox:").then(|| {
+        format!(
+            "{backend}: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL"
+        )
+    })
+}
+
+/// The caveat a lock-less suggestion carries above its registry.
+fn backend_suggestion_note(backend: &str) -> Option<String> {
+    if backend.starts_with("aqua:") {
+        return Some(
+            "aqua packages of type `http` download from their vendor's host, not GitHub; \
+             run `mise lock` to see which."
+                .to_owned(),
+        );
+    }
+    if backend.starts_with("spm:") {
+        return Some(
+            "spm builds from source and clones over git, which does not route.".to_owned(),
+        );
+    }
+    None
+}
 
 // ── Accumulation ──────────────────────────────────────────────────────────────
 
@@ -351,6 +447,9 @@ impl Accumulator {
         merge_new(&mut existing.upstreams, reg.upstreams.drain(..));
         merge_new(&mut existing.client_env, reg.client_env.drain(..));
         merge_new(&mut existing.warm_packages, reg.warm_packages.drain(..));
+        if existing.note.is_none() {
+            existing.note = reg.note.take();
+        }
     }
 
     fn finish(self) -> Vec<SuggestedRegistry> {
@@ -930,13 +1029,20 @@ fn collect_from_mise_lock_entry(
     acc: &mut Accumulator,
 ) {
     let mut saw_url = false;
+    let subprocess = table
+        .get("backend")
+        .and_then(|b| b.as_str())
+        .and_then(vfox_subprocess_note);
     // Every `platforms.*` sub-table carries a `url` for one platform.
     for sub in table.values() {
         let Some(url) = sub.get("url").and_then(|u| u.as_str()) else {
             continue;
         };
         saw_url = true;
-        if let Some(reg) = registry_for_url(url, source) {
+        if let Some(mut reg) = registry_for_url(url, source) {
+            if reg.note.is_none() {
+                reg.note.clone_from(&subprocess);
+            }
             acc.add(reg);
         }
     }
@@ -1043,19 +1149,21 @@ fn generic_from_unknown_url(host: &str, path: &str, source: &str) -> SuggestedRe
 /// Map a mise backend string (`"aqua:cli/tool"`, `"cargo:ripgrep"`, `"core:rust"`)
 /// onto a registry, for entries whose lock records no URL.
 fn registry_for_backend(backend: &str, source: &str) -> Option<SuggestedRegistry> {
-    if let Some((_, registry_type, name)) = BACKEND_REGISTRIES
+    let typed = BACKEND_REGISTRIES
         .iter()
         .find(|(prefix, _, _)| backend.starts_with(prefix))
-    {
+        .map(|(_, ty, name)| (*ty, *name))
+        .or_else(|| predicate_registry(backend).map(|ty| (ty, ty)));
+    if let Some((registry_type, name)) = typed {
         return Some(SuggestedRegistry {
-            name: (*name).to_owned(),
-            registry_type: (*registry_type).to_owned(),
+            name: name.to_owned(),
+            registry_type: registry_type.to_owned(),
             upstreams: Vec::new(),
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: Vec::new(),
             warm_packages: Vec::new(),
-            note: None,
+            note: backend_suggestion_note(backend),
         });
     }
 
@@ -2450,6 +2558,69 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             "https://hub.example.com/proxy/forgejo/attachments/$1"
         );
         assert_eq!(rules.len(), 3);
+    }
+
+    /// RFC 0047 phase 1: each backend gets the verdict its download path
+    /// earns — a registry, a note, or a reason naming what it reads.
+    #[test]
+    fn backend_verdicts_of_rfc_0047_phase_1() {
+        let ty = |b: &str| registry_for_backend(b, "s").map(|r| r.registry_type);
+        assert_eq!(ty("dotnet:dotnet-outdated-tool").as_deref(), Some("nuget"));
+        assert_eq!(
+            ty("packslip:github.com/acme/tool").as_deref(),
+            Some("github")
+        );
+        assert_eq!(ty("packslip:acme/tool").as_deref(), Some("github"));
+        assert_eq!(ty("spm:gitlab.com/acme/pkg").as_deref(), Some("gitlab"));
+        assert_eq!(ty("spm:acme/pkg").as_deref(), Some("github"));
+        for supported in [
+            "dotnet:x",
+            "packslip:acme/tool",
+            "spm:acme/pkg",
+            "vfox:jdx/vfox-ant",
+        ] {
+            assert_eq!(unsupported_backend_reason(supported), None, "{supported}");
+        }
+
+        // A packslip host is read for its `.well-known` document, which
+        // nothing here mirrors.
+        assert_eq!(ty("packslip:tool.example.com"), None);
+        let reason = unsupported_backend_reason("packslip:tool.example.com").unwrap();
+        assert!(
+            reason.contains("https://tool.example.com/.well-known/packslip.json"),
+            "{reason}"
+        );
+
+        // asdf keeps its reason, now on one line.
+        let asdf = unsupported_backend_reason("asdf:mise-plugins/mise-postgres").unwrap();
+        assert!(
+            asdf.contains("git-fetched") && !asdf.contains("  "),
+            "{asdf}"
+        );
+
+        // The caveats ride the suggestion.
+        let aqua = registry_for_backend("aqua:kubernetes/kubectl", "s").unwrap();
+        assert!(aqua.note.unwrap().contains("type `http`"));
+        assert!(registry_for_backend("spm:acme/pkg", "s")
+            .unwrap()
+            .note
+            .unwrap()
+            .contains("git"));
+        assert!(registry_for_backend("cargo:ripgrep", "s")
+            .unwrap()
+            .note
+            .is_none());
+
+        // vfox: a lock-less plugin is a note, and the known shell-outs carry
+        // their own, whatever the plugin's spelling.
+        assert!(lockless_backend_note("vfox:jdx/vfox-ant")
+            .unwrap()
+            .contains("mise lock"));
+        assert!(lockless_backend_note("aqua:x/y").is_none());
+        let php = vfox_subprocess_note("vfox:mise-plugins/vfox-php").unwrap();
+        assert!(php.contains("configure, make"), "{php}");
+        assert!(vfox_subprocess_note("vfox:poetry").is_some());
+        assert!(vfox_subprocess_note("vfox:jdx/vfox-ant").is_none());
     }
 
     /// mise's `conda:` backend runs rattler in-process, so unlike `pipx:` it

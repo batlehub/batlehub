@@ -38,8 +38,9 @@ mise 2026.11.3 source:
 - **Five already route** through an existing kind — Node (`nodedist`), Rust
   (`rustup`), Python, Bun and Ruby (`github`) — and the CLI is taught to say so
   with the *typed* kind rather than a `generic` preset.
-- **Six get a `generic` preset**: Deno, Zig, Elixir, Erlang and Swift are new;
-  Go keeps the `go-dl` preset it has until phase 5. Cached and counted, no
+- **Five get a `generic` preset**: Deno, Zig, Elixir, Erlang and Swift, all
+  new. (Go had a `go-dl` preset; phase 5 replaced it with `godist` and #355
+  removed it, revised 2026-11-14.) Cached and counted, no
   per-version policy — the same bargain `generic` is documented to be. (PyPy,
   a Python *flavour* rather than a toolchain, gets one too.)
 - **Go then gets a `godist` kind** (phase 5), modelled on `nodedist`, so a Go
@@ -61,7 +62,7 @@ mise 2026.11.3 source:
 ```toml
 # today — `registry suggest --mise` on a project pinning java, zig and go
 [settings.url_replacements]
-"regex:^https://dl\\.google\\.com/go/(.+)" = "https://hub.example.com/proxy/go-dl/generic/$1"
+"regex:^https://dl\\.google\\.com/go/(.+)" = "https://hub.example.com/proxy/godist/godist/$1"
 # java, zig: nothing. `mise plan` lists both as supported; the install goes
 # to cdn.azul.com and ziglang.org's community mirrors, or times out air-gapped.
 ```
@@ -82,7 +83,7 @@ zig.use_community_mirrors = false
 # … one line per remaining vendor_hosts entry (§6.1 lists the measured set) …
 "regex:^https://api\\.github\\.com/repos/(.+)" = "https://hub.example.com/proxy/github/$1"   # github rules after
 "regex:^https://ziglang\\.org/(.+)" = "https://hub.example.com/proxy/zig-dl/generic/$1"
-"regex:^https://dl\\.google\\.com/go/(.+)" = "https://hub.example.com/proxy/go-dl/generic/$1"
+"regex:^https://dl\\.google\\.com/go/(.+)" = "https://hub.example.com/proxy/godist/godist/$1"
 ```
 
 ```text
@@ -288,7 +289,7 @@ everything mise fetches itself and nothing a subprocess fetches.
 | ruby (compiled) | — | ruby-build git clone + `cache.ruby-lang.org` by subprocess | no | **unsupported** |
 | erlang | versions host | Linux: `builds.hex.pm/builds/otp/{arch}/{os}/OTP-{v}.tar.gz` + `builds.txt` (`erlang.rs:204-224`); macOS: `otp-{arch}-apple-darwin.tar.gz` (`erlang.rs:283-289`) from the GitHub releases of **`erlef/otp_builds`** (`erlang.rs:457`, `:665`, `:774`); Windows: `erlang/otp` (`:520`) | yes | **preset `hex-builds`** + `github` |
 | elixir | versions host | `builds.hex.pm/builds/elixir/{v}.zip` + `builds.txt` checksum (`elixir.rs:63-76`) | yes | **preset `hex-builds`** |
-| go | versions host; fallback `git ls-remote github.com/golang/go` (`go.rs:268`) | `dl.google.com/go/go{v}.{os}-{arch}.tar.gz` + `.sha256` (`go.rs:128`, `:389`) | yes | **preset `go-dl`** (exists); **`godist`** from phase 5 |
+| go | versions host; fallback `git ls-remote github.com/golang/go` (`go.rs:268`) | `dl.google.com/go/go{v}.{os}-{arch}.tar.gz` + `.sha256` (`go.rs:128`, `:389`) | yes | **`godist`** (phase 5, built; the `go-dl` preset it replaced is removed) |
 | deno | versions host; fallback `deno.com/versions.json` (`deno.rs:139`) | `dl.deno.land/release/v{v}/…zip` + `.sha256sum` (`deno.rs:80`, `:212`) | yes | **preset `deno-dl`** |
 | zig | versions host; fallback `ziglang.org/download/index.json` (`zig.rs:378`) | 17 community mirrors, then `ziglang.org`; minisign-verified (`zig.rs:151-238`) | yes, **only with mirrors off** | **preset `zig-dl`** + `zig.use_community_mirrors = false` |
 | swift | versions host | `www.swift.org/api/v1/install/releases.json` then `download.swift.org/…` + `.sig`, GPG-verified (`swift.rs:136-144`, `:543`, `:931`) | yes | **presets `swift-dl` + `swift-api`** |
@@ -365,7 +366,7 @@ not by `explain-config`:
 | Condition | Behaviour |
 | --- | --- |
 | a `zig-dl` preset exists and the generated block omits `zig.use_community_mirrors = false` | `suggest` and `setup` always write the setting; a hand-written block is not checked by anything, so `mise plan` adds a line to `MisePlan.notes` (the field RFC 0047 §6.3 adds): "zig: community mirrors are tried before ziglang.org" |
-| a `go-dl` preset exists | `mise plan` adds a `notes` line: `go`'s fallback listing is git and does not route; connected, the versions host answers first |
+| a `godist` registry exists | no note: `go`'s git fallback listing routes through the registry's ref list (§6.7, §15 Q13), and `setup` writes `[settings.go] repo` to it. Revised 2026-11-14: this row warned that the listing did not route while Go went through the `go-dl` preset |
 | a locked `java` entry whose coordinate is blocked on the instance | `mise plan` asks the registry for the coordinate and prints `blocked: java@temurin-21.0.5+11.0.LTS (CVE-2026-…)` — the reason mise itself cannot show (§4.5) |
 | `core:dotnet`, compiled ruby/python/node/erlang in the lock | `mise plan` lists them under `unsupported` with the reason (§4.5) |
 
@@ -643,7 +644,7 @@ Java rows by download host: `github.com` 3 459, `cdn.azul.com` 1 802,
   not lose Node or Rust (regression test: a `node-dist`-only estate plans
   Node).
 - `registry_for_backend`'s `core:` arm becomes a table: `core:node →
-  nodedist`, `core:rust → rustup`, `core:go → go-dl`, `core:deno → deno-dl`,
+  nodedist`, `core:rust → rustup`, `core:go → godist`, `core:deno → deno-dl`,
   `core:zig → zig-dl`, `core:elixir → hex-builds`, `core:erlang → hex-builds`
   (plus `github` on macOS locks, which carry the URL), `core:swift → swift-dl`
   and `swift-api`, `core:java → mise-java`. Swift needs two registries, so
@@ -799,9 +800,12 @@ Built now rather than on demand (§15 Q3), modelled on `nodedist` (RFC 0010):
 - The CLI: `TYPED_HOSTS` gains the `(dl.google.com, /go/)` prefix → `godist`,
   `typed_url_replacements` a `godist` arm
   (`^https://dl\.google\.com/go/(.+)` → `{proxy}/$1`), and
-  `registry_kind_for_host` accepts `go-dl` or `godist` for that prefix, as it
-  does for Node and Rust (§13). `android-dl` (RFC 0047 §15 Q3) keeps the
-  `/android/` prefix of the same host.
+  `registry_kind_for_host` answers `godist` for that prefix only (revised
+  2026-11-14). Unlike Node and Rust, no generic estate is accepted there:
+  #355 removed the `go-dl` preset. The prefix keying itself landed in #358:
+  `TYPED_HOSTS` matched the bare host, and so sent Android URLs to `godist`.
+  `android-dl` (RFC 0047 §15 Q3) keeps the `/android/` prefix of the same
+  host.
 - The five per-kind gates of `CLAUDE.md` step 9 — `authz.sh`'s
   `authz_check_kinds_covered`, `registry_kind_coverage.rs` (live phase and
   air-gap claim), `soak_kind_coverage.rs`, `authz_matrix.rs` (both route
@@ -1126,9 +1130,11 @@ instance limit (Swift refused again: closed) and to cache-forever for the
 revalidated paths (stale "latest" again). The release notes say so.
 
 Phase 5 changes what the CLI suggests for Go: `godist` instead of the
-`go-dl` preset. An estate's existing `go-dl` registry keeps working —
-`mise plan` accepts either kind for `dl.google.com/go/`, and `setup` refuses
-a second rule on a prefix one already claims, as for Node and Rust above.
+`go-dl` preset, which #355 removed (revised 2026-11-14). A `go-dl` generic
+registry an estate already declared keeps serving on the server, but the
+CLI no longer recognises it: `mise plan` maps `dl.google.com/go/` to
+`godist` only, so its bundles lose Go until the registry is migrated
+(`docs/registries/godist.md`, *Migrating from a `go-dl` generic mirror*).
 
 ---
 

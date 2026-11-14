@@ -34,11 +34,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::suggest::{
-    proxy_path_for, registry_kind_for_host, split_url, unsupported_backend_reason,
+    lockless_backend_note, proxy_path_for, registry_kind_for_host, split_url,
+    unsupported_backend_reason, vfox_subprocess_note,
 };
 
 /// The plan format's own version, so a reader can refuse one it predates.
-pub const PLAN_VERSION: u32 = 1;
+/// 2 added `notes`; a version-1 plan reads with none.
+pub const PLAN_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MisePlan {
@@ -50,6 +52,10 @@ pub struct MisePlan {
     pub unsupported: Vec<UnsupportedTool>,
     /// Hosts in the lock that no configured registry mirrors.
     pub unmirrored_hosts: Vec<String>,
+    /// Caveats that are not refusals: a vfox plugin the lock gave no URL
+    /// for, one known to shell out (RFC 0047 §6.3).
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +156,7 @@ pub fn plan_from_lock(
         toml::from_str(content).with_context(|| format!("{file_name} is not valid TOML"))?;
     let mut entries: Vec<PlanEntry> = Vec::new();
     let mut unsupported: Vec<UnsupportedTool> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     let mut hosts: BTreeSet<String> = BTreeSet::new();
     let mut seen_platforms: BTreeSet<String> = BTreeSet::new();
 
@@ -174,6 +181,7 @@ pub fn plan_from_lock(
                 platforms,
                 &mut entries,
                 &mut unsupported,
+                &mut notes,
                 &mut seen_platforms,
             );
         }
@@ -239,6 +247,7 @@ pub fn plan_from_lock(
         entries,
         unsupported,
         unmirrored_hosts: hosts.into_iter().collect(),
+        notes,
     })
 }
 
@@ -248,6 +257,7 @@ fn plan_one_tool(
     platforms: &[String],
     entries: &mut Vec<PlanEntry>,
     unsupported: &mut Vec<UnsupportedTool>,
+    notes: &mut Vec<String>,
     seen_platforms: &mut BTreeSet<String>,
 ) {
     let version = table
@@ -327,8 +337,12 @@ fn plan_one_tool(
                 tool: tool_name.to_owned(),
                 reason,
             });
+        } else {
+            notes.extend(lockless_backend_note(backend));
         }
     }
+    notes.extend(vfox_subprocess_note(backend));
+    notes.dedup();
 }
 
 /// The `platforms.*` sub-tables, or the top-level ones on an older lock.
@@ -580,6 +594,28 @@ url = "https://binaries.sonarsource.com/Distribution/sonar-scanner/sonar-scanner
             "the message names the backend, not the symptom: {}",
             plan.unsupported[0].reason
         );
+    }
+
+    /// RFC 0047 §6.3: a lock-less vfox plugin is a note, not a refusal, and
+    /// one known to shell out says so; a version-1 plan still reads.
+    #[test]
+    fn vfox_entries_land_in_notes_and_a_version_1_plan_reads() {
+        let lock = r#"
+[[tools.php]]
+version = "8.4.0"
+backend = "vfox:mise-plugins/vfox-php"
+"#;
+        let plan = plan_from_lock("mise.lock", lock, &[], &known()).unwrap();
+        assert!(plan.unsupported.is_empty(), "{:?}", plan.unsupported);
+        assert_eq!(plan.notes.len(), 2, "{:?}", plan.notes);
+        assert!(plan.notes[0].contains("mise lock"));
+        assert!(plan.notes[1].contains("configure, make"));
+
+        let mut v1 = serde_json::to_value(&plan).unwrap();
+        v1["plan_version"] = 1.into();
+        v1.as_object_mut().unwrap().remove("notes");
+        let read: MisePlan = serde_json::from_value(v1).unwrap();
+        assert!(read.notes.is_empty());
     }
 
     #[test]

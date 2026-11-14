@@ -222,7 +222,7 @@ overlay = true
 
 [[registries.auto_wire.tools]]
 name = "acme-gh"
-backends = [{ full = "github:cli/cli", options = { exe = "gh" } }]
+backends = ["github:cli/cli"]
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]

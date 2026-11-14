@@ -3894,7 +3894,7 @@ fn mise_plan_names_the_downloads_the_unsupported_and_the_unmirrored() {
     );
     assert!(ok, "mise plan should succeed: {stderr}");
     let plan: serde_json::Value = serde_json::from_str(&stdout).expect("a plan is JSON");
-    assert_eq!(plan["plan_version"], 1);
+    assert_eq!(plan["plan_version"], 2);
     assert_eq!(plan["platforms"][0], "linux-x64");
 
     let entries = plan["entries"].as_array().unwrap();

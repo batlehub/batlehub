@@ -61,9 +61,11 @@ TOOL="${HEAVY_MISE_TOOL:-github:cli/cli}"
 VERSION="${HEAVY_MISE_VERSION:-2.60.0}"
 BRANCH="${HEAVY_MISE_BRANCH:-trunk}"
 OWNER_REPO="${TOOL#github:}"
-# The binary inside cli/cli's archive is `gh`, not `cli`: told to mise as a
-# tool option, the way its own docs spell it.
-TOOL_SPEC="${TOOL}[exe=gh]@$VERSION"
+# No tool option: `exe` is ubi's, which mise 2026.9.5 ignored on `github:`
+# and 2026.11.3 refuses ("option `exe` is not used by the github backend").
+# The github backend finds the archive's `bin/gh` itself (discover_bin_paths,
+# src/backend/github.rs:2201-2248 at 2026.11.3).
+TOOL_SPEC="${TOOL}@$VERSION"
 
 # mise is a binary, so `heavy_need` applies — through the runner probe, because
 # this repository pins tools per directory through mise itself.
@@ -493,7 +495,7 @@ cat > "$AG_PROJECT/mise.toml" <<EOF
 lockfile = true
 
 [tools]
-"$TOOL" = { version = "$VERSION", exe = "gh" }
+"$TOOL" = "$VERSION"
 EOF
 cat > "$AG_PROJECT/mise.lock" <<EOF
 [[tools."$TOOL"]]

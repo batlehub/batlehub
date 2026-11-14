@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 2cf7959df236a094
+sourceHash: 9ede8a9f2787d6f2
 ---
 
 # Faire pointer mise vers BatleHub
@@ -317,9 +317,42 @@ reviendrait à défaire le blocage par accident.
 
 ## 5. Ce qui ne fonctionnera pas
 
-- **Les backends de plugins `asdf:` et `vfox:`.** mise les récupère par git, et
-  il n'y a pas de chemin HTTP à travers un proxy. `mise plan` les liste sous
-  `unsupported`, en nommant le backend.
+- **Les plugins `asdf:`.** mise les récupère par git, et il n'y a pas de
+  chemin HTTP à travers un proxy. `mise plan` les liste sous `unsupported`,
+  en nommant le backend.
+- **Un plugin `vfox:` que mise clone.** Les plugins intégrés à mise
+  téléchargent en HTTP : les règles de réécriture les couvrent dès que
+  `mise lock` a enregistré l'URL ; sans verrou, `mise plan` affiche une
+  `note:` qui en demande un. Un plugin désigné par URL, ou que mise n'intègre
+  pas, est cloné par git et ne peut pas passer.
+- **Les sous-processus de quelques plugins vfox.** Trois plugins intégrés
+  lancent un programme dont les téléchargements ne voient jamais
+  `url_replacements` : connectés, ils partent en direct ; coupés, ils
+  échouent. `mise plan` et `registry suggest` les signalent par une note.
+
+  | Plugin | Sous-processus |
+  | --- | --- |
+  | `php` | `configure`, `make` |
+  | `poetry` | le script d'installation, lancé par python |
+  | `pipenv` | `pip` |
+
+  La liste est remesurée à chaque montée de version de mise ; un plugin qui
+  en manque perd l'avertissement, pas une route.
+- **`packslip:` sur son propre hôte.** `packslip:{owner}/{repo}` et
+  `packslip:github.com/…` passent par le type `github` ; un outil
+  `packslip:{host}` lit `https://{host}/.well-known/packslip.json`, qu'aucun
+  registre ne met en miroir, et le plan le dit.
+- **Les outils `dotnet:`, pour l'instant.** `registry suggest` nomme le
+  registre `nuget` dont ils ont besoin, mais `setup` n'écrit pas encore le
+  réglage `dotnet.registry_url` de mise
+  ([RFC 0047](/rfc/0047-mise-backends-coverage), phase 3), et l'installation
+  est un `dotnet tool install` qui lit NuGet.config, pas mise : lancez aussi
+  `batlehub-cli setup apply --only nuget`.
+- **Un mise plus ancien.** Les règles de cette page sont vérifiées avec mise
+  2026.11.3, la version qu'épinglent les suites heavy. Les versions
+  antérieures ne sont pas mesurées, et une version qui ne connaît pas un
+  réglage se contente d'avertir et laisse l'outil partir en direct : gardez
+  les clients en 2026.11.3 ou plus récent.
 - **Un hôte pour lequel vous n'avez pas de registre.** Le plan le dit ; ajoutez
   un registre ou renoncez à l'outil.
 - **La vérification de signature en direct du côté coupé.** Elle ne peut pas y
