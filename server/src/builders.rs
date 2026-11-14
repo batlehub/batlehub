@@ -347,7 +347,9 @@ fn make_one(
         RegistryKind::Rubygems => Arc::new(RubyGemsRegistryClient::new(url, opts)?),
         RegistryKind::Composer => Arc::new(ComposerRegistryClient::new(url, opts)?),
         RegistryKind::Pypi => Arc::new(PypiRegistryClient::new(url, opts)?),
-        RegistryKind::Conda => Arc::new(CondaRegistryClient::new(url, opts)?),
+        RegistryKind::Conda => {
+            Arc::new(CondaRegistryClient::new(url, opts)?.with_index_ttl(metadata_ttl))
+        }
         RegistryKind::JetbrainsMarketplace => {
             Arc::new(JetbrainsMarketplaceRegistryClient::new(url, opts)?)
         }

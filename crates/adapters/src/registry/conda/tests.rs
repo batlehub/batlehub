@@ -505,3 +505,209 @@ async fn a_head_the_channel_refuses_falls_back_instead_of_failing() {
         );
     }
 }
+
+// ── CEP-16 shards (resolve_metadata of a package file) ─────────────────────
+
+/// msgpack `bin`, which is how a shard spells a digest.
+struct Bin(Vec<u8>);
+impl serde::Serialize for Bin {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(&self.0)
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ShardEntryFixture {
+    name: &'static str,
+    version: &'static str,
+    build: &'static str,
+    sha256: Bin,
+    timestamp: i64,
+}
+
+fn msgpack_zst<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    zstd::encode_all(&rmp_serde::to_vec_named(value).unwrap()[..], 3).unwrap()
+}
+
+/// A shard index mapping each name to a digest of that one byte repeated.
+fn shard_index(names: &[(&str, u8)]) -> Vec<u8> {
+    let shards: std::collections::HashMap<&str, Bin> =
+        names.iter().map(|(n, b)| (*n, Bin(vec![*b; 32]))).collect();
+    msgpack_zst(&std::collections::HashMap::from([("shards", shards)]))
+}
+
+fn shard(filename: &'static str, name: &'static str) -> Vec<u8> {
+    let entry = ShardEntryFixture {
+        name,
+        version: "1.7.1",
+        build: "hd590300_0",
+        sha256: Bin(vec![0xab; 32]),
+        timestamp: 1_697_145_600_000,
+    };
+    let packages: std::collections::HashMap<&str, ShardEntryFixture> =
+        std::collections::HashMap::from([(filename, entry)]);
+    msgpack_zst(&std::collections::HashMap::from([(
+        "packages.conda",
+        packages,
+    )]))
+}
+
+async fn mock_bytes(
+    server: &mut mockito::ServerGuard,
+    path: &str,
+    body: Vec<u8>,
+    hits: usize,
+) -> mockito::Mock {
+    server
+        .mock("GET", path)
+        .with_status(200)
+        .with_body(body)
+        .expect(hits)
+        .create_async()
+        .await
+}
+
+fn file_pkg(name: &str, filename: &str) -> PackageId {
+    PackageId::new("reg", name, "1.7.1").with_artifact(format!("linux-64/{filename}"))
+}
+
+#[tokio::test]
+async fn a_package_file_is_resolved_from_its_shard_and_never_from_repodata() {
+    let mut server = mockito::Server::new_async().await;
+    let index = mock_bytes(
+        &mut server,
+        "/linux-64/repodata_shards.msgpack.zst",
+        shard_index(&[("jq", 0x11), ("jql", 0x22)]),
+        1,
+    )
+    .await;
+    let file = "jq-1.7.1-hd590300_0.conda";
+    let shard_path = format!("/linux-64/{}.msgpack.zst", "11".repeat(32));
+    let shard_mock = mock_bytes(&mut server, &shard_path, shard(file, "jq"), 2).await;
+    let repodata = server
+        .mock("GET", mockito::Matcher::Regex("repodata\\.json".into()))
+        .expect(0)
+        .create_async()
+        .await;
+
+    let client = CondaRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+    let meta = client
+        .resolve_metadata(&file_pkg("jq", file))
+        .await
+        .unwrap();
+    assert_eq!(meta.checksum.as_deref(), Some("ab".repeat(32).as_str()));
+    assert_eq!(meta.published_at.unwrap().timestamp(), 1_697_145_600);
+    assert!(meta
+        .download_url
+        .unwrap()
+        .ends_with("/linux-64/jq-1.7.1-hd590300_0.conda"));
+    // The second file of the subdir reuses the cached index.
+    client
+        .resolve_metadata(&file_pkg("jq", file))
+        .await
+        .unwrap();
+
+    index.assert_async().await;
+    shard_mock.assert_async().await;
+    repodata.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_name_with_a_hyphen_finds_its_own_shard_not_a_prefix() {
+    let mut server = mockito::Server::new_async().await;
+    let _index = mock_bytes(
+        &mut server,
+        "/linux-64/repodata_shards.msgpack.zst",
+        shard_index(&[("ruamel", 0x11), ("ruamel-yaml", 0x22)]),
+        1,
+    )
+    .await;
+    let file = "ruamel-yaml-0.17.21-py311_0.conda";
+    let wrong = mock_bytes(
+        &mut server,
+        &format!("/linux-64/{}.msgpack.zst", "11".repeat(32)),
+        vec![],
+        0,
+    )
+    .await;
+    let right = mock_bytes(
+        &mut server,
+        &format!("/linux-64/{}.msgpack.zst", "22".repeat(32)),
+        shard(file, "ruamel-yaml"),
+        1,
+    )
+    .await;
+
+    let client = CondaRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+    let meta = client
+        .resolve_metadata(&file_pkg("ruamel-yaml", file))
+        .await
+        .unwrap();
+    assert_eq!(meta.checksum.as_deref(), Some("ab".repeat(32).as_str()));
+    wrong.assert_async().await;
+    right.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_file_its_shard_does_not_list_is_not_found() {
+    let mut server = mockito::Server::new_async().await;
+    let _index = mock_bytes(
+        &mut server,
+        "/linux-64/repodata_shards.msgpack.zst",
+        shard_index(&[("jq", 0x11)]),
+        1,
+    )
+    .await;
+    let _shard = mock_bytes(
+        &mut server,
+        &format!("/linux-64/{}.msgpack.zst", "11".repeat(32)),
+        shard("jq-1.7-hd590300_0.conda", "jq"),
+        1,
+    )
+    .await;
+
+    let client = CondaRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+    let missing_build = file_pkg("jq", "jq-1.7.1-hd590300_0.conda");
+    let err = client.resolve_metadata(&missing_build).await.unwrap_err();
+    assert!(matches!(err, CoreError::NotFound(_)), "{err:?}");
+    let unknown_name = file_pkg("yq", "yq-3.0-h0_0.conda");
+    let err = client.resolve_metadata(&unknown_name).await.unwrap_err();
+    assert!(matches!(err, CoreError::NotFound(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_channel_without_shards_falls_back_to_the_compressed_repodata_once_asked() {
+    let mut server = mockito::Server::new_async().await;
+    let index = server
+        .mock("GET", "/linux-64/repodata_shards.msgpack.zst")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+    let file = "jq-1.7.1-hd590300_0.conda";
+    let repodata = serde_json::json!({
+        "info": {"subdir": "linux-64"},
+        "packages": {"jq-1.5-1.tar.bz2": {"name": "jq", "sha256": "00"}},
+        "packages.conda": {file: {"name": "jq", "version": "1.7.1", "sha256": "cafe"}},
+        "removed": []
+    });
+    let zst = mock_bytes(
+        &mut server,
+        "/linux-64/repodata.json.zst",
+        zstd::encode_all(repodata.to_string().as_bytes(), 3).unwrap(),
+        2,
+    )
+    .await;
+
+    let client = CondaRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+    for _ in 0..2 {
+        let meta = client
+            .resolve_metadata(&file_pkg("jq", file))
+            .await
+            .unwrap();
+        assert_eq!(meta.checksum.as_deref(), Some("cafe"));
+    }
+    // The absence of shards is cached like the index itself.
+    index.assert_async().await;
+    zst.assert_async().await;
+}
