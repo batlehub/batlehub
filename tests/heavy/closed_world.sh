@@ -2214,7 +2214,7 @@ phase_mise-backends() {
   for want in "conda-forge/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_REG/\$1\"" \
               "bioconda/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_BIO_REG/\$1\"" \
               "registry_url = \"$HEAVY_TAP_BASE/proxy/$NUGET_REG/nuget/v3/index.json\""; do
-    grep -qF "$want" "$conf" || { cat "$conf" >&2; heavy_fail "mise-backends: the mise file lacks: $want"; }
+    grep -qF "$want" "$conf" || { cat "$conf" "$base/setup.out" >&2; heavy_fail "mise-backends: the mise file lacks: $want"; }
   done
   if grep -q '"regex:[^"]*nuget' "$conf"; then
     cat "$conf" >&2; heavy_fail "mise-backends: the mise file carries a rule on nuget.org"

@@ -380,6 +380,15 @@ fn registry_rules(r: &WireRegistry<'_>, mode: Mode) -> Result<Vec<(String, Strin
             Some(why) => Err(vec![why]),
         };
     }
+    if r.kind == RegistryKind::MiseJava && r.vendor_hosts.is_empty() {
+        // The document rule alone would list JDKs through the instance and
+        // download them straight from the vendors: skip it, and say why.
+        return Err(vec![format!(
+            "mise-java registry {} (the server does not say which vendor hosts it serves: \
+             that needs `upstreams:read` granted to `*` on it)",
+            r.name
+        )]);
+    }
     if r.kind == RegistryKind::MiseJava {
         // The metadata host, then one rule per vendor prefix onto `dl/`: the
         // row URLs are served unchanged (RFC 0048 §15 R1), so each vendor host
@@ -1014,6 +1023,19 @@ mod tests {
     /// RFC 0047 §6.1, T1: each conda registry is wired on the whole URL of
     /// the channel it fronts, escaped, and two registries of one channel are
     /// one claim.
+    /// A mise-java registry whose vendor hosts the caller cannot see wires
+    /// nothing rather than a document rule whose downloads go direct.
+    #[test]
+    fn a_mise_java_registry_without_vendor_hosts_is_skipped_with_its_reason() {
+        let sel = select(&[reg("jdk", RegistryKind::MiseJava, None)], Mode::Classic);
+        assert!(sel.rules.is_empty(), "{:?}", sel.rules);
+        assert!(
+            sel.skipped.iter().any(|s| s.contains("vendor hosts")),
+            "{:?}",
+            sel.skipped
+        );
+    }
+
     #[test]
     fn a_conda_rule_is_derived_from_the_registry_channel() {
         let regs = [
