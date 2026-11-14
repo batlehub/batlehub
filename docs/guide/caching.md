@@ -30,7 +30,58 @@ flowchart TD
 - **RBAC check** validates the registry permissions for the caller's role.
 - **Rules check** runs the release-age gate, `deny_latest` and `require_signed_release`.
 - **Metadata cache** lives in the cache backend (memory / postgres / redis). A HIT proceeds with the cached metadata; a MISS fetches from upstream and stores it with a TTL.
-- **Artifact storage** lives in blob storage (filesystem / S3). A HIT streams from storage; a MISS fetches from upstream, stores the blob and streams it to the client.
+- **Artifact storage** lives in blob storage (filesystem / S3). A HIT streams from storage; a MISS fetches from upstream, stores the blob and streams it to the client while it is stored — see [A cold miss](#cold-fill).
+
+### A cold miss {#cold-fill}
+
+A miss starts one **fill** for the artifact's storage key, detached from the
+request that started it:
+
+- **The bytes reach the client as they arrive.** A 475 MB archive behind a
+  slow vendor link no longer has to be stored whole before the first byte,
+  so it does not outlive a client's read timeout (mise's is 30 s).
+- **One upstream fetch per artifact.** Every concurrent or retried request
+  for the same artifact joins the running fill: it is served the bytes
+  already received, then the rest. `batlehub_proxy_fill_joined_total{registry}`
+  counts the joins.
+- **A client that disconnects drops its own response, never the fill.** The
+  next request is a cache hit.
+- **A complete body is a verified one.** The newest chunk is held back until
+  the fill has checked the digest and stored the artifact; on a mismatch, an
+  oversize body or an upstream error the response is cut short with an error
+  and nothing is cached.
+- **A registry with `[registries.security]` keeps store-then-serve**: it
+  serves nothing it has not judged, so its clients wait for the fill to end.
+
+The fill spools what it streams to a scratch file in the temp directory
+(`TMPDIR`, else `/tmp`), so a 1 GB fill costs one chunk of memory rather than
+1 GB. The Helm chart mounts an `emptyDir` there (`fillScratch.sizeLimit`, 2 GiB
+by default) to keep the root filesystem read-only. When the scratch file
+cannot be written, the fill still runs and is still shared, and is served
+once it has ended.
+
+### Revalidated paths {#revalidated-paths}
+
+A `generic` mirror caches each path forever, which is right for a versioned
+archive and wrong for the document that says which version is current. The
+registry's `revalidate` list names those documents:
+
+```toml
+[[registries]]
+type       = "generic"
+name       = "zig-dl"
+upstreams  = ["https://ziglang.org"]
+path_allow = ["download/**"]
+revalidate = ["download/index.json"]
+```
+
+A cached path that matches is refetched upstream on every read. If upstream
+answers, the new copy is stored and served; if it fails, the cached copy is
+served stale rather than an error.
+`batlehub_generic_revalidate_total{registry, outcome}` counts each read as
+`fresh` (unchanged), `updated` or `stale_served`, so a vendor outage shows as
+a rising `stale_served`. Paths that do not match keep today's
+cache-forever behaviour.
 
 ### Two layers of state
 

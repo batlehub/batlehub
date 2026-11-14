@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: b5c1d3d4d3df6784
+sourceHash: 02c352f3c203ce53
 ---
 
 # Référence de configuration
@@ -1184,6 +1184,8 @@ deny_missing_timestamp = false   # true pour refuser les paquets sans horodatage
 | `max_pending_nars` | entier | non | **nix uniquement.** `64`. Le nombre de NAR non réclamés qu'un même publieur peut détenir à la fois ; le suivant reçoit un `429`. Le plancher qui compte est la concurrence de `nix copy` elle-même (`http-connections`, 25 par défaut) : en dessous, des copies légitimes sont refusées. |
 | `apk_unsigned` | booléen | non | **apk uniquement.** `false`. Publier un dépôt `apk` local ou hybride dont l'index n'est pas signé. Tout `apk` standard le refuse sans `--allow-untrusted`, qui désactive aussi le contrôle d'identité des paquets — c'est donc un choix consigné, jamais hérité ([RFC 0026](/rfc/0026-alpine-apk) §4.1). |
 | `path_allow` | chaîne[] | non | Liste d'autorisation, en motifs glob, des chemins amont que ce registre peut servir. Valide uniquement pour les types adressés par chemin (`deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `generic`) — l'employer ailleurs est une erreur de configuration. **Obligatoire et non vide pour `generic`.** Employez `["**"]` pour tout autoriser délibérément. |
+| `revalidate` | chaîne[] | non | **generic uniquement.** Chemins redemandés en amont à chaque lecture au lieu d'être mis en cache pour toujours — les documents modifiables d'une arborescence par ailleurs immuable (`release/stable.txt`, `builds.txt`). Motifs glob comme `path_allow`, sauf que `*` reste dans un seul segment de chemin ; chacun doit aussi être admis par `path_allow`. Sur une erreur amont, la copie en cache est servie périmée et comptée dans `batlehub_generic_revalidate_total{outcome="stale_served"}`. Voir [Cache](/fr/guide/caching#revalidated-paths) ([RFC 0048](/rfc/0048-mise-core-toolchains) §15 Q12). |
+| `max_artifact_size_bytes` | u64 | non | La taille maximale d'un artefact pour ce registre, qui remplace pour lui seul `[limits] max_artifact_size_bytes` (500 Mio par défaut), au-dessus ou en dessous. `0` est une erreur de configuration. Relevez-la sur le seul registre qui a besoin d'archives de 1 Go plutôt que sur toute l'instance ([RFC 0048](/rfc/0048-mise-core-toolchains) §15 Q11). |
 | `on_confirmed` | chaîne | non | RFC 0014 §13 O6 — ce que fait l'audit amont d'une disparition confirmée sur *ce* registre : `"audit"` ou `"block"`. Remplace `[upstream_audit] on_confirmed` pour ce seul registre ; absent, la clé du parc s'applique. `"block"` exige que l'audit soit actif et que ce registre soit audité, sans quoi la configuration est refusée. |
 | `vuln_db_url` | chaîne | non | **goproxy uniquement.** L'URL amont de la base de vulnérabilités Go. Défaut : `https://vuln.go.dev`. Mettre `""` désactive les endpoints `/v1/`. Voir [Proxy de vulnérabilités](/fr/use/vulnerability-proxy#_1-go-govulncheck). |
 | `sumdb_url` | chaîne | non | **goproxy uniquement.** L'URL amont de la base de sommes de contrôle Go. Défaut : `https://sum.golang.org`. Mettre `""` désactive `/sumdb/{path}` — faites-le pour un registre qui ne sert que des modules privés, où une consultation divulguerait des chemins de modules privés à un journal public. |
@@ -1895,10 +1897,13 @@ compris) et imprime à la fois les blocs `[[registries]]` et les variables
 d'environnement client correspondantes — voir les
 [sous-commandes du binaire serveur](/fr/guide/server-cli).
 
-**La taille des artefacts :** les archives répliquées sont souvent volumineuses
-et le proxy met un artefact en tampon avant de le mettre en cache : relevez donc
-`limits.max_artifact_size_bytes` (500 Mio par défaut) quand vous répliquez des
-chaînes d'outils ou des téléchargements de la taille d'un IDE.
+**La taille des artefacts :** les archives répliquées sont souvent
+volumineuses : réglez donc `max_artifact_size_bytes` sur le registre qui
+réplique des chaînes d'outils ou des téléchargements de la taille d'un IDE,
+plutôt que de relever `limits.max_artifact_size_bytes` (500 Mio par défaut)
+pour tous les registres. Un téléchargement à froid est diffusé au client
+pendant sa mise en cache : sa taille ne fait plus la course avec le délai de
+lecture du client ([Cache](/fr/guide/caching#cold-fill)).
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 256bfa5d67209a3a
+sourceHash: f1c957c08200d1e3
 ---
 
 # Miroir générique
@@ -110,10 +110,17 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
   renvoie `403`, pas 404 — c'est la liste d'autorisation qui la rejette
   localement, avant toute requête amont. Élargissez les motifs si
   `mise install` signale un 403.
-- Les archives répliquées sont souvent volumineuses ; le proxy met tout
-  l'artefact en mémoire tampon avant de le mettre en cache : relevez donc
-  `limits.max_artifact_size_bytes` (500 Mio par défaut) pour des archives de
-  chaînes d'outils.
+- Les archives répliquées sont souvent volumineuses ; réglez
+  `max_artifact_size_bytes` sur ce registre pour des archives de chaînes
+  d'outils au-delà des 500 Mio par défaut de l'instance. Un téléchargement à
+  froid est diffusé au client pendant sa mise en cache, et une nouvelle
+  tentative rejoint la récupération en cours au lieu d'en lancer une autre
+  ([Cache](/fr/guide/caching#cold-fill)).
+- Une arborescence immuable à quelques documents près — un
+  `release/stable.txt`, un `index.json` qui liste les versions — les nomme
+  dans `revalidate`. Ils sont redemandés à chaque lecture, et servis périmés si
+  l'amont est en panne ; tout autre chemin reste en cache pour toujours
+  ([Cache](/fr/guide/caching#revalidated-paths)).
 - Les registres adressés par chemin se préchauffent sur des **chemins**
   précis, par `[registries.cache] warm_paths`, et non par `warm_packages`.
 
