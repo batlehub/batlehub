@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — every question resolved; phases 0 to 2 built together in #359 |
+| Status      | **Implemented** — signed off 2026-11-14; phases 0 to 2 landed together in #359; §17 records where the build differs |
 | Short       | Config JSON Schema                                            |
 | Settles     | How the config schema is published for editors and for Helm, and why the chart needs no list of integer fields |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -678,3 +678,71 @@ None.
 | 0 | phase 0: `batlehub.wholeFloatsToInts`, the `helm-lint.yaml` step, the `audit` block in `values.yaml`. Ships alone. |
 | 1 | The derive, `json_schema(layer)`, `dump-config-schema`, the two committed files, `schema_is_current`, the taplo tasks, the path filter, the release assets, *Editor support*. Useful alone. |
 | 2 | `values.schema.json` with the layer variant, its two `helm-lint.yaml` steps, the Helm floor and skip options in the install guide. |
+
+---
+
+## 17. Revision against the tree (2026-11-14)
+
+Phases 0 to 2 landed together in #359 (`89aac113`, `54794c4c`), on the day
+the RFC was written; the sections above were revised as the build taught
+them, so this is the record of where the build moved the design.
+
+### Where the build differs from the first draft
+
+- **No integer list, generated or not.** The draft generated
+  `_int_fields.tpl` from the schema. The review found the premise behind it
+  false: serde reads an integer into an `f64` (toml 1.2.0), so a generic
+  whole-float pass is correct for every field. Phase 0 is that pass; the
+  walker and its template were never built (§15 question 1).
+- **`$ref` beside validation keywords becomes `allOf`.** Not in any draft.
+  The first `taplo check` refused all three example configs: schemars puts a
+  tagged variant's tag beside its `$ref`, and taplo ignores it there
+  (§6.P observation 9).
+- **The layer variant keeps enum tags required.** The draft removed every
+  `required`; the corrected fixture's rules then matched several variants.
+- **schemars emits `default` for primitive fields.** The draft said it
+  emitted none; the spike showed `access_retention_days` with `default: 0`.
+  §3 and §7.4 were corrected; no secret-bearing field has a default.
+- **18 core types, not 16 or 17**, `Immutable` the one first missed;
+  **six new crates**, `ref-cast-impl` the one first missed.
+- **`fuzz/Cargo.lock` does not change.** The draft expected the optional
+  dependency to enter it; `cargo metadata --locked` passes untouched.
+- **The fixture was wrong twice** (`type` for the rules' `kind`, `name` for
+  a namespace's `match`), found by the schema it was meant to exercise. It is
+  not a loadable config, which observation 10's first wording assumed.
+- **The taplo check runs in `helm-lint.yaml`**, not a new workflow (a new
+  required check), and the render check lives in the same script rather than
+  in `task helm:examples`.
+
+### The proof, as observed
+
+§6.P observations 1 to 13 are all observed, none predicted: taplo 0.10.0
+on the hand probe and on the generated schema; Helm 3.15.2 to 4.3.1 on the
+chart; Argo CD's `tool-versions.sh` and `types.go` from v2.12.0 to v3.6.1.
+
+### Threats, as tested
+
+| §7.1 row | Test |
+| --- | --- |
+| Hand edit of a generated file | `schema_is_current` (`crates/config/tests/config_schema.rs`), red on any value difference in the three files; `BLESS` only on `1`; `test.yaml` and `helm-lint.yaml` path filters include `docs/public/schema/**` and `values.schema.json` |
+| Compromised docs host | release assets dumped from the shipped binary in `build.yaml` and hashed by its `checksums` job; *Editor support* names the release URL first |
+| Doc comments published | holds: public source, placeholders only |
+| Phase 2 refuses a valid install | `helm-lint.yaml` *The documented credentials layer passes the schema*; `task docs:config-schema:check` renders the seven `deploy/helm` files; observation 11 on seven Helm versions |
+| Phase 0 changes an opaque value | observation 7 (`[[1, 2.5], [3]]`); residual accepted as written |
+
+### Supply chain and gates, as shipped
+
+`schemars` 1.2.3 with `schemars_derive` 1.2.3, `serde_derive_internals`
+0.30.0, `dyn-clone` 1.0.20, `ref-cast`/`ref-cast-impl` 1.0.27: `cargo deny
+check` advisories, bans, licenses, sources ok. taplo 0.10.0 pinned in
+`mise.toml` and `mise.lock`.
+
+CI on `54794c4c` (2026-11-14): *Lint (clippy + fmt)*, *Unit tests (+
+coverage)*, *Integration tests (+ coverage)* (`cargo test --workspace`),
+*Fuzz targets* (`task fuzz:check`, which the authoring environment could not
+run for want of a C++ compiler), *helm lint + rendered-manifest assertions*
+(the integer step, the taplo step, the schema's must-refuse and must-pass
+steps), the docs gates, the dependency audits and SonarCloud all green; 83
+checks passed, none failed. The heavy client matrix was still queued when
+this was written; §6.N is why it is not this RFC's evidence, and the merge
+waits for it like any other PR.
