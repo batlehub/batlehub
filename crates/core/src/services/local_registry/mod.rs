@@ -385,7 +385,7 @@ pub async fn check_team_visibility(
         {
             Ok(())
         }
-        Some(ns) => Err(CoreError::AccessDenied(format!(
+        Some(ns) => Err(CoreError::credential_denied(format!(
             "package visibility is 'team'; must be a member of group '{}'",
             ns.group_id
         ))),

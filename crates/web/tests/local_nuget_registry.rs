@@ -155,7 +155,7 @@ async fn nuget_publish_requires_auth() {
         .set_payload(body)
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

@@ -216,7 +216,7 @@ async fn cargo_publish_duplicate_version_returns_409() {
 }
 
 #[actix_web::test]
-async fn cargo_publish_anonymous_returns_403() {
+async fn cargo_publish_anonymous_returns_401() {
     let app = make_local_registry_app(RegistryMode::Local).await;
     let req = TestRequest::put()
         .uri("/proxy/local-cargo/api/v1/crates/new")
@@ -224,7 +224,7 @@ async fn cargo_publish_anonymous_returns_403() {
         .set_payload(make_publish_payload("my-crate", "0.1.0"))
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

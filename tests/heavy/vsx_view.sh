@@ -155,7 +155,7 @@ curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: appli
 # been running since before the extension existed cannot be holding a stale
 # answer about one that did not. Publishing it early costs nothing — the
 # searches below are free text that does not match it, and `browse` is
-# unauthenticated, where the registry answers 403 and the proxy synthesises the
+# unauthenticated, where the registry answers 401 and the proxy synthesises the
 # sign-in entry alone.
 SVG_VSIX="$HEAVY_WORK/svg-icon.vsix"
 python3 tests/heavy/make_svg_icon_vsix.py "$SVG_VSIX" "$SVG_ID" "$SVG_VERSION"
@@ -167,8 +167,8 @@ curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: appli
 SEARCH_BODY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"weebo"}],"pageNumber":1,"pageSize":50}],"flags":950}'
 ANON_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
   "$REGISTRY_BASE/vscode/gallery/extensionquery")"
-[[ "$ANON_CODE" == "403" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 403 — this suite proves nothing against an open registry"
-heavy_log "REGISTRY-OK (anonymous: 403 — the credential is what the proxy has to add)"
+[[ "$ANON_CODE" == "401" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 401 — this suite proves nothing against an open registry"
+heavy_log "REGISTRY-OK (anonymous: 401 — the credential is what the proxy has to add)"
 
 # ── 2. The proxy, and the editor pointed at it ──────────────────────────────
 

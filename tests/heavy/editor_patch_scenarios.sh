@@ -18,7 +18,7 @@
 # request, header included:
 #
 #   1. No credential anywhere: an install by id fails, the registry saw the
-#      query and answered 403, and no request carried an Authorization.
+#      query and answered 401, and no request carried an Authorization.
 #   2. `VSX_REGISTRY_AUTH_TOKEN` with the gallery named by $GALLERY_ENV_NAME:
 #      the install succeeds; every request that reached the registry carried
 #      `Authorization: Bearer`.
@@ -84,11 +84,11 @@ curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: appli
 
 SEARCH_BODY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"weebo"}],"pageNumber":1,"pageSize":50}],"flags":950}'
 ANON_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" "$GALLERY_URL/extensionquery")"
-[[ "$ANON_CODE" == "403" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 403 — it must require a credential for this suite to prove anything"
+[[ "$ANON_CODE" == "401" ]] || heavy_fail "the registry answered an anonymous search with $ANON_CODE, expected 401 — it must require a credential for this suite to prove anything"
 AUTHED="$(curl -sS -X POST -H "$HDR_JSON" -H "Authorization: Bearer $USER_TOKEN" -d "$SEARCH_BODY" "$GALLERY_URL/extensionquery" \
   | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d["results"][0]["extensions"]))' || echo "?")"
 [[ "$AUTHED" == "1" ]] || heavy_fail "the registry answered a user's search with $AUTHED extension(s), expected the fixture"
-heavy_log "REGISTRY-OK (anonymous: 403; a user: $EXT_ID — the credential is what the editor has to send)"
+heavy_log "REGISTRY-OK (anonymous: 401; a user: $EXT_ID — the credential is what the editor has to send)"
 
 heavy_log "Pointing $EDITOR_LABEL's product.json at $GALLERY_URL"
 python3 - "$PRODUCT_JSON" "$REGISTRY_BASE" <<'PY'
@@ -150,10 +150,10 @@ if editor "$P" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/anon.txt" 2>&1; th
 grep -q "gallery credential patch armed" "$HEAVY_WORK/anon.txt" \
   || { cat "$HEAVY_WORK/anon.txt" >&2; heavy_fail "the preload did not run inside $EDITOR_LABEL (no 'patch armed' line)"; }
 [[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/anon.txt" >&2; heavy_fail "$EDITOR_LABEL installed $EXT_ID with no credential anywhere"; }
-heavy_wire_re_after "anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 403" \
+heavy_wire_re_after "anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 401" \
   "the editor's lookup did not reach the registry, or was not refused"
 [[ "$(credentialed_after anon)" == "0" ]] || heavy_fail "a request carried a credential the editor was never given"
-heavy_log "ANON-OK (patch armed, nothing to send: 403 on the editor's own query, $(bare_requests_after anon) request(s), none with a credential)"
+heavy_log "ANON-OK (patch armed, nothing to send: 401 on the editor's own query, $(bare_requests_after anon) request(s), none with a credential)"
 
 # ── 3. The environment variable, with the gallery named the launcher's way ──
 
@@ -239,7 +239,7 @@ PY
 heavy_mark "source-anon"
 if editor "$P3" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/source-anon.txt" 2>&1; then RC=0; else RC=$?; fi
 [[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/source-anon.txt" >&2; heavy_fail "the editor resolved a token *source* — the patch must not"; }
-heavy_wire_re_after "source-anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 403"
+heavy_wire_re_after "source-anon" "POST /proxy/$REG/vscode/gallery/extensionquery -> 401"
 [[ "$(credentialed_after source-anon)" == "0" ]] || heavy_fail "a source entry produced a credential"
 heavy_mark "source-env"
 editor "$P3" "$GALLERY_ENV_NAME=$REGISTRY_BASE" VSX_REGISTRY_AUTH_TOKEN="$USER_TOKEN" -- --install-extension "$EXT_ID" >"$HEAVY_WORK/source-env.txt" 2>&1 \
@@ -255,5 +255,5 @@ fi
 heavy_log "REDACTION-OK (the credential is in none of the editor's output)"
 
 heavy_log "Measurement: $EDITOR_LABEL with patches/che-code loaded at the process boundary, gallery $GALLERY_URL named by $GALLERY_ENV_NAME"
-heavy_log "  no credential: 403 on the editor's own query, 0 credentialed requests; the variable alone: nothing sent"
+heavy_log "  no credential: 401 on the editor's own query, 0 credentialed requests; the variable alone: nothing sent"
 heavy_log "  variable / file / file-over-variable / source-then-variable: installed by id, $(grep -c 'Authorization: Bearer' "$HEAVY_LOG") registry requests with a Bearer in the run"

@@ -235,7 +235,7 @@ impl Authorizer {
                 // why; answering it as an allow would be the survey's finding
                 // class with a new door. Refusing loudly is the only reading
                 // that cannot become a silent grant.
-                None => Err(CoreError::AccessDenied(
+                None => Err(CoreError::access_denied(
                     "internal: full-chain authorization requires resolved metadata".to_owned(),
                 )),
             },
@@ -308,8 +308,8 @@ impl Authorizer {
                 if identity.has_role_at_least(&Role::User) {
                     Ok(())
                 } else {
-                    Err(CoreError::AccessDenied(
-                        "package is internal; authentication required".into(),
+                    Err(CoreError::credential_denied(
+                        "package is internal; authentication required",
                     ))
                 }
             }
@@ -339,8 +339,8 @@ impl Authorizer {
                 {
                     Ok(())
                 } else {
-                    Err(CoreError::AccessDenied(
-                        "package is private; only grants written on it apply".into(),
+                    Err(CoreError::credential_denied(
+                        "package is private; only grants written on it apply",
                     ))
                 }
             }

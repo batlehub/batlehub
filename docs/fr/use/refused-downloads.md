@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: 529f9b3b9dc21735
+sourceHash: c8904d09d04abfd1
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -17,7 +17,18 @@ décrite sur la page de l'opérateur, [Contrôles de sécurité](/fr/guide/secur
 
 ## Ce que vous voyez {#what-you-see}
 
-Un refus revient sous l'une de trois formes.
+Un refus revient sous l'une de quatre formes.
+
+**Un `401` qui demande une identité.** Vous n'en avez envoyé aucune, ou le
+serveur a refusé celle que vous avez envoyée, et le registre n'ouvre pas cette
+lecture aux appelants anonymes. La réponse porte
+`WWW-Authenticate: Basic realm="BatleHub"`. C'est cet en-tête qui pousse git,
+`dotnet restore` et Maven à envoyer l'identité qu'ils détiennent déjà, depuis un
+*credential helper*, `~/.netrc`, `packageSourceCredentials` ou `settings.xml`.
+Tout client peut envoyer le jeton comme mot de passe HTTP Basic ou en
+`Authorization: Bearer`. Un appelant authentifié qui ne détient pas la
+permission reçoit un `403`, sans demande d'identité. Seules les routes
+`/proxy/…` envoient cette demande.
 
 **Un `403` qui contient une raison.** Le registre exécute ses contrôles pendant
 la requête. Le message nomme le contrôle :

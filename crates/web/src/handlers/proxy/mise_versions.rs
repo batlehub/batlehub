@@ -446,7 +446,18 @@ pub async fn wire_refusal(
         .await
     {
         Ok(()) => not_wired(host).error_response(),
-        Err(e) => AppError::from(e).error_response(),
+        // Built after the auth middleware has run, so its challenge is applied
+        // here too: an anonymous caller must get the sink's `401`, not a `403`
+        // that tells a wired host from an unwired one.
+        Err(e) => {
+            let mut answer = HttpResponse::from_error(AppError::from(e));
+            if identity.user_id.is_none()
+                && identity.role == batlehub_core::entities::Role::Anonymous
+            {
+                crate::middleware::auth::challenge_anonymous(&mut answer);
+            }
+            answer
+        }
     }
 }
 

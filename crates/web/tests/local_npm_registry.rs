@@ -91,14 +91,14 @@ async fn npm_publish_duplicate_version_returns_409() {
 }
 
 #[actix_web::test]
-async fn npm_publish_anonymous_returns_403() {
+async fn npm_publish_anonymous_returns_401() {
     let app = make_local_npm_app(RegistryMode::Local).await;
     let req = TestRequest::put()
         .uri("/proxy/local-npm/my-package")
         .set_json(make_npm_publish_payload("my-package", "1.0.0"))
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

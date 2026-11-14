@@ -136,6 +136,9 @@ pub enum ProxyResponse {
     Denied {
         reason: String,
         verdict: Option<Box<crate::entities::Verdict>>,
+        /// A credential might lift it (a grant refusal), as against a rule's
+        /// refusal — see [`crate::error::Denial`].
+        credential: bool,
     },
     /// A served response under a `warned` verdict (RFC 0018 §4.2): the same
     /// bytes, plus the verdict so the handler can say so in the
@@ -174,7 +177,9 @@ impl ProxyResponse {
                 Ok(Box::pin(futures::stream::once(async move { Ok(bytes) })))
             }
             Self::Warned { response, .. } => response.into_stream(),
-            Self::Denied { reason, verdict } => Err((reason, verdict)),
+            Self::Denied {
+                reason, verdict, ..
+            } => Err((reason, verdict)),
         }
     }
 }

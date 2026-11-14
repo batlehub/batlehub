@@ -1612,7 +1612,7 @@ impl LocalRegistryService {
         if outcome.versions.is_empty() {
             // Only consulted on the empty path, so the common case pays nothing.
             if self.emptied_by_blocking(registry, name).await {
-                return Err(CoreError::AccessDenied(format!(
+                return Err(CoreError::access_denied(format!(
                     "every version of {entity_label} '{name}' in registry '{registry}' \
                      is administratively blocked"
                 )));

@@ -215,7 +215,7 @@ impl LocalRegistryService {
         )
         .await
         {
-            return Err(CoreError::AccessDenied(format!(
+            return Err(CoreError::credential_denied(format!(
                 "no grant for 'releases:publish' on registry '{registry}'. A NAR arrives before \
                  the narinfo that names it, so this upload is authorized against the registry \
                  and its namespaces — a grant scoped to one package cannot reach it, because at \

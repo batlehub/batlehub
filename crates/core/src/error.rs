@@ -61,7 +61,7 @@ pub enum CoreError {
     Cache(String),
 
     #[error("Access denied: {0}")]
-    AccessDenied(String),
+    AccessDenied(Denial),
 
     #[error("Conflict: {0}")]
     Conflict(String),
@@ -92,4 +92,69 @@ pub enum CoreError {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl CoreError {
+    /// A refusal no credential would change (a rule, a block, a signature).
+    pub fn access_denied(message: impl Into<Denial>) -> Self {
+        Self::AccessDenied(message.into())
+    }
+
+    /// A refusal a credential might lift: a missing grant, a package audience.
+    pub fn credential_denied(message: impl Into<String>) -> Self {
+        Self::AccessDenied(Denial::credential(message))
+    }
+}
+
+/// Why an [`CoreError::AccessDenied`] was refused, and whether a credential
+/// could change the answer: a missing grant or a package audience can be met
+/// by authenticating, a rule refusal (age, block, seal) cannot. The web layer
+/// answers an anonymous caller's `credential` denial on `/proxy/…` with `401`
+/// and a `WWW-Authenticate` challenge, because git, NuGet and Maven only send
+/// the credential they hold after one.
+///
+/// Derefs to the message, so `AccessDenied(ref m) if m.contains(..)` reads as
+/// it did when the payload was a `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Denial {
+    pub message: String,
+    pub credential: bool,
+}
+
+impl Denial {
+    /// A refusal an authenticated caller might not get.
+    pub fn credential(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            credential: true,
+        }
+    }
+}
+
+impl From<String> for Denial {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            credential: false,
+        }
+    }
+}
+
+impl From<&str> for Denial {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for Denial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::ops::Deref for Denial {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
 }

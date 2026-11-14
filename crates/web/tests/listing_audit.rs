@@ -109,7 +109,7 @@ async fn a_denied_listing_writes_exactly_one_view_metadata_row() {
         .uri("/proxy/local-npm/lodash")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403, "anonymous must not read this registry");
+    assert_eq!(resp.status(), 401, "anonymous must not read this registry");
 
     let rows = audit_rows(&app).await;
     assert_eq!(rows.len(), 1, "one denial, one row: {rows:?}");

@@ -14,7 +14,17 @@ configured is on the operator's page, [Security gates](/guide/security-gates).
 
 ## What you see {#what-you-see}
 
-A refusal comes back in one of three shapes.
+A refusal comes back in one of four shapes.
+
+**A `401` asking for a credential.** You sent none, or the server did not
+accept the one you sent, and the registry does not let anonymous callers read
+this. The response carries `WWW-Authenticate: Basic realm="BatleHub"`. That
+header is what makes git, `dotnet restore` and Maven send a credential they
+already hold, from a credential helper, `~/.netrc`, `packageSourceCredentials`
+or `settings.xml`. Any client may send the token as the password of HTTP Basic
+or as `Authorization: Bearer`. A caller who did authenticate and still holds no
+permission gets a `403`, and no challenge. Only `/proxy/…` routes send the
+challenge.
 
 **A `403` with a reason in it.** The registry runs its checks as the request
 happens. The message names the check:

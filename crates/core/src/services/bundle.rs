@@ -185,7 +185,7 @@ pub fn verify_manifest_signature(
     manifest_bytes: &[u8],
 ) -> Result<(), CoreError> {
     if trusted_keys.is_empty() {
-        return Err(CoreError::AccessDenied(
+        return Err(CoreError::access_denied(
             "no bundle_trusted_keys are configured, so no bundle can be authenticated: an \
              air-gapped instance whose only content path is unauthenticated is worse than one \
              with no content path"
@@ -195,7 +195,7 @@ pub fn verify_manifest_signature(
     if crate::services::signature::verify_ed25519(trusted_keys, signature, manifest_bytes) {
         Ok(())
     } else {
-        Err(CoreError::AccessDenied(
+        Err(CoreError::access_denied(
             "the bundle's signature does not verify against any configured trusted key".to_owned(),
         ))
     }

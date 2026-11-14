@@ -75,7 +75,11 @@ pub(crate) async fn require_verb(
 /// e.g. deb/rpm repo publish, per-artifact SBOM reads.
 pub(crate) fn require_authenticated(identity: &AuthIdentity) -> Result<(), AppError> {
     if identity.role == Role::Anonymous {
-        Err(AppError::forbidden("authentication required"))
+        // A credential answers it; only `/proxy/…` turns that into a challenge.
+        Err(AppError {
+            credential: true,
+            ..AppError::forbidden("authentication required")
+        })
     } else {
         Ok(())
     }

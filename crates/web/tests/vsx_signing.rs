@@ -590,7 +590,7 @@ async fn a_provided_archive_is_checked_against_the_stored_bytes_and_gated_like_a
     publish(&app, "ms.thing", "3.0.0", &bytes).await;
     let good = provided_archive(&bytes);
     // Anonymous: the publish gate.
-    assert_eq!(attach(&app, "ms.thing", "3.0.0", &good, None).await, 403);
+    assert_eq!(attach(&app, "ms.thing", "3.0.0", &good, None).await, 401);
     // A version that is not here.
     assert_eq!(
         attach(&app, "ms.thing", "9.9.9", &good, Some(USER_TOKEN)).await,

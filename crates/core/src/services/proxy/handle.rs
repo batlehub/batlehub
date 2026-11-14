@@ -393,7 +393,7 @@ impl ProxyService {
         if let (RuleDecision::Deny { reason }, _) =
             evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await
         {
-            return Err(CoreError::AccessDenied(reason));
+            return Err(CoreError::access_denied(reason));
         }
 
         Ok(metadata)
@@ -531,7 +531,7 @@ impl ProxyService {
         // that has already failed — and it changes the *answer* too, which
         // is the half that matters to the operator reading the `503`.
         if let Some(reason) = self.blocked_reason(coordinate).await {
-            return CoreError::AccessDenied(reason);
+            return CoreError::access_denied(reason);
         }
         let recorder = {
             let hot = self.hot.read().await;
@@ -763,6 +763,7 @@ impl ProxyService {
         )
         .await
         {
+            let credential = matches!(&e, CoreError::AccessDenied(d) if d.credential);
             let reason = e.to_string();
             super::warn_if_audit_failed(
                 self.repo
@@ -782,6 +783,7 @@ impl ProxyService {
             return Ok(ProxyResponse::Denied {
                 reason,
                 verdict: None,
+                credential,
             });
         }
         // ── 2. Resolve metadata (cache-first) ─────────────────────────────────
@@ -853,6 +855,7 @@ impl ProxyService {
             return Ok(ProxyResponse::Denied {
                 reason,
                 verdict: verdict.map(Box::new),
+                credential: false,
             });
         }
         let warned = verdict
@@ -1076,7 +1079,7 @@ impl ProxyService {
                             req.package_id.clone(),
                             req.identity.user_id.clone(),
                             req.identity.role.clone(),
-                            reason.clone(),
+                            reason.message.clone(),
                         )
                         .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
                     )
@@ -1386,6 +1389,7 @@ impl ProxyService {
                 .await
         {
             return Some(ProxyResponse::Denied {
+                credential: matches!(&e, CoreError::AccessDenied(d) if d.credential),
                 reason: e.to_string(),
                 verdict: None,
             });
@@ -1394,6 +1398,7 @@ impl ProxyService {
             return Some(ProxyResponse::Denied {
                 reason,
                 verdict: None,
+                credential: false,
             });
         }
         let metadata = crate::entities::PackageMetadata::minimal(
@@ -1420,6 +1425,7 @@ impl ProxyService {
             return Some(ProxyResponse::Denied {
                 reason,
                 verdict: verdict.map(Box::new),
+                credential: false,
             });
         }
         tracing::info!(

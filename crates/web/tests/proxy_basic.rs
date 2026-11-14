@@ -40,7 +40,7 @@ async fn proxy_github_tarball_is_blocked_for_anonymous() {
         .to_request();
     let resp = call_service(&app, req).await;
     // Anonymous lacks source:read
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -76,7 +76,7 @@ async fn proxy_forgejo_tarball_blocked_for_anonymous_allowed_for_user() {
             .to_request(),
     )
     .await;
-    assert_eq!(anon.status(), 403);
+    assert_eq!(anon.status(), 401);
 
     let user = call_service(
         &app,
@@ -131,7 +131,7 @@ async fn proxy_gitlab_archive_blocked_for_anonymous_allowed_for_user() {
             .to_request(),
     )
     .await;
-    assert_eq!(anon.status(), 403);
+    assert_eq!(anon.status(), 401);
 
     let user = call_service(
         &app,
@@ -322,7 +322,7 @@ async fn denied_proxy_access_is_recorded_as_denied_in_audit_log() {
         .uri("/proxy/npm/lodash/4.17.21/tarball")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 
     // The denied event should appear in the audit log
     let audit_req = TestRequest::get()

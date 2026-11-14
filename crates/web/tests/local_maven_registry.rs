@@ -124,7 +124,7 @@ async fn maven_put_jar_before_pom_is_accepted() {
 }
 
 #[actix_web::test]
-async fn maven_put_jar_anonymous_returns_403() {
+async fn maven_put_jar_anonymous_returns_401() {
     let app = make_local_maven_app(RegistryMode::Local).await;
 
     // No Authorization header at all — must be rejected by enforce_publish_policy
@@ -134,7 +134,7 @@ async fn maven_put_jar_anonymous_returns_403() {
         .set_payload(b"fake-jar-bytes".as_slice())
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 
     // Nothing must have been stored under that coordinate.
     let req = TestRequest::get()

@@ -141,7 +141,7 @@ async fn deb_publish_requires_authentication() {
             .to_request(),
     )
     .await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -610,7 +610,7 @@ async fn pacman_publish_requires_authentication() {
             .to_request(),
     )
     .await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -876,7 +876,7 @@ async fn proxy_npm_tarball_blocked_for_anonymous() {
         .uri("/proxy/npm/lodash/4.17.21/tarball")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]
@@ -894,7 +894,7 @@ async fn proxy_cargo_download_blocked_for_anonymous() {
         .uri("/proxy/cargo/serde/1.0.0/download")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 #[actix_web::test]

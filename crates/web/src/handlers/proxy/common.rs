@@ -551,7 +551,12 @@ pub async fn proxy_stream(
             &verdict,
         )
         .await),
-        ProxyResponse::Denied { reason, .. } => Err(AppError::forbidden(reason)),
+        ProxyResponse::Denied {
+            reason, credential, ..
+        } => Err(AppError {
+            credential,
+            ..AppError::forbidden(reason)
+        }),
         ProxyResponse::Stream(stream) => {
             let mut builder = HttpResponse::Ok();
             builder.content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE));

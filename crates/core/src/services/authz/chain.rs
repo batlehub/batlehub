@@ -277,7 +277,7 @@ async fn authorize_grants(
         return Ok(());
     }
 
-    Err(CoreError::AccessDenied(format!(
+    Err(CoreError::credential_denied(format!(
         "no grant for '{action}' on registry '{}'",
         package_id.registry
     )))
@@ -487,7 +487,7 @@ pub async fn authorize_control(
     if crate::entities::resolve(&path, &subject).holds(action) {
         return Ok(());
     }
-    Err(CoreError::AccessDenied(match registry {
+    Err(CoreError::credential_denied(match registry {
         Some(r) => format!("no grant for '{action}' on registry '{r}'"),
         None => format!("no grant for '{action}'"),
     }))
@@ -884,7 +884,7 @@ pub async fn authorize_read_against_coded(
             verdict.as_ref(),
             metadata,
         );
-        return Err(CoreError::AccessDenied(reason));
+        return Err(CoreError::access_denied(reason));
     }
     Ok(())
 }
@@ -1101,7 +1101,7 @@ pub async fn authorize_unheld_read_coded(
         evaluate_chain(hot, running, package_id, &ctx).await
     {
         *code = crate::services::pullability::reason_code_for(&rule, None, &metadata);
-        return Err(CoreError::AccessDenied(reason));
+        return Err(CoreError::access_denied(reason));
     }
     Ok(())
 }
@@ -1135,7 +1135,7 @@ pub async fn authorize_unpinned(
     };
     for rule in policy.rules.iter().filter(|r| r.name() == "deny_latest") {
         if let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await {
-            return Err(CoreError::AccessDenied(reason));
+            return Err(CoreError::access_denied(reason));
         }
     }
     Ok(())

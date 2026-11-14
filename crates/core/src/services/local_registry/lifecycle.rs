@@ -668,7 +668,7 @@ impl LocalRegistryService {
                 .iter()
                 .any(|g| g.replace(' ', "") == norm_id);
             if !ok {
-                return Err(CoreError::AccessDenied(format!(
+                return Err(CoreError::access_denied(format!(
                     "namespace '{}' in registry '{}' is owned by group '{}'; \
                      you are not a member",
                     ns.prefix, registry, ns.group_id

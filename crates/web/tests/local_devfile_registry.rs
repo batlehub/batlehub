@@ -375,7 +375,7 @@ async fn a_republish_is_409_and_the_same_bytes_give_the_same_digest() {
 async fn an_anonymous_publish_is_refused_and_a_proxy_registry_has_no_publish_route() {
     let app = app(RegistryMode::Local, None).await;
     let (status, _) = status_of(&app, publish(stack("acme-go", "1.0.0"), None)).await;
-    assert_eq!(status, 403);
+    assert_eq!(status, 401);
     let proxy = app_proxy().await;
     let (status, _) = status_of(
         &proxy,

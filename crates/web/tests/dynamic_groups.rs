@@ -407,7 +407,7 @@ async fn anonymous_denied_group_registry_proxy() {
         .uri("/proxy/github2/rust-lang/rust/releases")
         .to_request();
     let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.status(), 401);
 }
 
 // ── /api/v1/me with groups ────────────────────────────────────────────────────

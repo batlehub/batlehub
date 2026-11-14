@@ -38,7 +38,7 @@ async fn peek_for_script(
     match first {
         Some(Ok(chunk)) => {
             if crate::entities::RawPolicy::starts_like_script(&chunk) {
-                return Err(CoreError::AccessDenied(format!(
+                return Err(CoreError::access_denied(format!(
                     "RAW_SCRIPT: '{coordinate}' begins with a script preamble; this registry's \
                      raw.scripts is \"deny\""
                 )));
