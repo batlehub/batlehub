@@ -1,0 +1,3583 @@
+{
+  "$defs": {
+    "ActionsGroupRule": {
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "type": "array"
+        },
+        "group": {
+          "type": "string"
+        },
+        "group_template": {
+          "description": "Template rendered from JWT claims, e.g. `\"{name}/{repository}/{ref_name}\"`.\n`{name}` = provider name; `{ref_name}` = branch/tag stripped of `refs/heads/`/`refs/tags/`;\nany other `{key}` maps to that JWT claim value. All substituted values have `/` → `-`.",
+          "type": "string"
+        },
+        "match": {
+          "$ref": "#/$defs/RuleMatch"
+        },
+        "role": {
+          "description": "Role granted when this rule matches. When absent the rule contributes groups\nwithout affecting role elevation — useful for pure group-assignment rules.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ActionsOidcAuthConfig": {
+      "properties": {
+        "audience": {
+          "description": "Value the token's `aud` claim must equal. **Required.**\n\nNot optional the way `OidcAuthConfig::audiences` is, because the issuer\nhere is shared: `https://token.actions.githubusercontent.com` signs\ntokens for every repository on GitHub, and `aud` is the one claim the\ncalling workflow chooses. Without checking it, `iss` proves only that the\ncaller is *a* GitHub Actions job, and the whole barrier is whatever\n`rules` happen to say.\n\nSet it to something specific to this deployment — its URL is the usual\nchoice — and have workflows request it:\n`core.getIDToken('https://batlehub.example.com')`.",
+          "type": "string"
+        },
+        "issuer_url": {
+          "type": "string"
+        },
+        "name": {
+          "default": "actions-oidc",
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/ActionsGroupRule"
+          },
+          "type": "array"
+        },
+        "user_id_claim": {
+          "default": "sub",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AirGapConfig": {
+      "properties": {
+        "bundle_trusted_keys": {
+          "default": [],
+          "description": "Hex-encoded 32-byte ed25519 public keys whose signature an imported\nbundle must carry. Required when `enabled`: an air-gapped instance\nwhose only content path is unauthenticated is worse than one with no\ncontent path.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "description": "The whole switch. `false` — the default, and the value in every\nexisting config — leaves every code path as it is today.",
+          "type": "boolean"
+        },
+        "miss_retention_days": {
+          "default": 90,
+          "description": "How long a recorded miss is kept. `0` keeps it until purged by hand.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "record_misses": {
+          "default": true,
+          "description": "Record what was asked for and not held. On by default with the mode:\nthe record is the input to the next bundle.",
+          "type": "boolean"
+        },
+        "synthesise_listings": {
+          "description": "Answer a listing from what this instance holds when it holds no\ndocument for it (RFC 0008-bis §4.1). Absent means `true` under\n`enabled = true`: an instance that has just imported a bundle should\nanswer `npm install` without a second setting. `false` is RFC 0008's\nbehaviour — every listing it does not hold is a `503` and a recorded\nmiss. Read only under `enabled = true`; `true` elsewhere is refused at\nload, because it would read as if the instance answered offline.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ApiDocsConfig": {
+      "additionalProperties": false,
+      "description": "`[server.api_docs]` — what the `/scalar` API reference may do.\n\n```toml\n[server.api_docs]\nai_agent     = true\nai_agent_key = \"${SCALAR_AGENT_KEY}\"   # required off `localhost`\n```\n\nOff by default. \"Ask AI\" is Scalar's hosted agent: turning it on sends the\nwhole OpenAPI document, and every question typed into it, to\n`api.scalar.com`, and opens `connect-src` on `/scalar` to that origin —\nwhich also lets the bundle's registry lookups through, announcing the page\nto Scalar on every load. A private registry should leave it off.\n\n`connect-src` is opened only where the agent can actually appear: with a\nkey, or keyless on a host the bundle calls local (`localhost`, `127.0.0.1`,\n`[::1]`, …). A keyless agent anywhere else stays hidden, so that page keeps\nthe strict policy rather than paying the price for nothing.",
+      "properties": {
+        "ai_agent": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ai_agent_key": {
+          "description": "Scalar agent key. The bundle enables the agent without one only when the\npage is served from `localhost`; anywhere else it stays hidden. It is\nwritten into the page, so it is not a secret from whoever can open it.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ApiReadsConfig": {
+      "description": "`[registries.api_reads]` — the typed read-only JSON routes to add beside\nthe release listing (RFC 0019 §4.1).",
+      "properties": {
+        "families": {
+          "default": [],
+          "description": "`tags`, `commits`, `branches`. Nothing else is accepted: `contents`\nand `git/blobs` are raw by another door, and an unknown family would\nproxy writes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ApkSigningConfig": {
+      "description": "RSA signing key for a locally hosted `apk` repository's index\n(RFC 0026 §4.1).\n\n```toml\n[registries.apk_signing]\nkey_name        = \"internal-apk@example.com-5f3a1c2e.rsa.pub\"\nprivate_key_pem = \"${APK_SIGNING_KEY_PEM}\"\n```\n\n`key_name` is the exact file name the client will hold under\n`/etc/apk/keys/`, because apk opens the key *by the name the signature entry\ncarries* (`package.c:589`). A mismatch is not an error the client reports as\none — it is an untrusted index — so the name is validated here and served\nback verbatim on the key route.\n\nRSA rather than Ed25519 because no shipping apk accepts Ed25519 for a v2\nindex, and without the banned `rsa` crate: the signing goes through\n`aws-lc-rs`, already this tree's TLS provider (RFC 0026 §2.4, decision 2).",
+      "properties": {
+        "key_name": {
+          "description": "The `.rsa.pub` file name the public half lands under in\n`/etc/apk/keys/`. Alpine's own convention is `<email>-<8 hex>.rsa.pub`.",
+          "type": "string"
+        },
+        "previous_keys": {
+          "description": "Keys this one replaced, newest first — the rotation window.\n\nThe index is signed with `key_name` **and then** with each of these, in\norder, in one signature member. apk installs from the first `.SIGN.*`\nentry whose key file it holds, so a fleet where some machines have the\nnew key and some do not keeps installing from both. Drop an entry once\nevery client has the new file; an empty list is a completed rotation\n(RFC 0026 §11 decision 9).",
+          "items": {
+            "$ref": "#/$defs/ApkSigningConfig"
+          },
+          "type": "array"
+        },
+        "private_key_pem": {
+          "description": "RSA private key, PEM (PKCS#8 or PKCS#1), 2048 bits or more. A secret of\nthe same class as `repo_signing.seed_hex`: keep it out of the file with\n`${VAR}`. Never written back by the config editor.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppConfig": {
+      "properties": {
+        "air_gap": {
+          "$ref": "#/$defs/AirGapConfig",
+          "description": "A server that will not dial out (RFC 0008 §4.1). Absent means today's\nbehaviour."
+        },
+        "audit": {
+          "$ref": "#/$defs/AuditConfig",
+          "description": "`[audit]`: retention, pseudonymisation, sealing and erasure of the\naudit trail (RFC 0036 §4.1). Absent changes nothing."
+        },
+        "auth": {
+          "items": {
+            "$ref": "#/$defs/AuthConfig"
+          },
+          "type": "array"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheConfig"
+        },
+        "cache_coherence": {
+          "$ref": "#/$defs/CacheCoherenceConfig",
+          "description": "Optional periodic sweep for storage blobs no artifact-meta row points at.\nWhen absent or `enabled = false`, orphans are only collected when an\noperator asks for it."
+        },
+        "config_version": {
+          "description": "Config schema version. Optional; absent is treated as\n[`CURRENT_CONFIG_VERSION`] so every existing config file keeps working\nunchanged. An explicit value newer than this binary supports is\nrejected at startup rather than silently misbehaving.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseConfig"
+        },
+        "flag_sources": {
+          "description": "Third parties that may push vulnerability flags (RFC 0002 §4.3).",
+          "items": {
+            "$ref": "#/$defs/FlagSourceConfig"
+          },
+          "type": "array"
+        },
+        "grants": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "RFC 0015 §4.1's instance tier — grants that apply above every registry.\n\nWhere the control-surface verbs are delegated: `config:read`,\n`system:read`, `blocks:write` and the rest guard endpoints that name no\nregistry, so a registry-tier block cannot express them. §10 rule 5 already\ngrants all of them to `role:admin`, so this block is only ever needed to\ngive one of them to somebody *else*.\n\nUnioned on top of that translation, never replacing it — a grant only ever\nadds (§4.3).",
+          "type": "object"
+        },
+        "ip_blocking": {
+          "$ref": "#/$defs/IpBlockingConfig",
+          "description": "Optional global IP-based blocking (fail2ban) configuration."
+        },
+        "limits": {
+          "$ref": "#/$defs/LimitsConfig"
+        },
+        "logging": {
+          "$ref": "#/$defs/LoggingConfig",
+          "description": "`[logging]`: the log line format, and with `json` the audit stream\n(RFC 0036 §4.1). Absent means `text`, byte-identical to before."
+        },
+        "notifications": {
+          "$ref": "#/$defs/NotificationsConfig",
+          "description": "Optional webhook and notification configuration."
+        },
+        "otel": {
+          "$ref": "#/$defs/OtelConfig"
+        },
+        "proxy": {
+          "$ref": "#/$defs/UpstreamProxyConfig",
+          "description": "Global HTTP/SOCKS proxy applied to all registry upstreams that do not\ndefine their own `[registries.proxy]` section.\n\nCan be overridden at runtime via `PROXY_CACHE__PROXY__URL` (and related\nvariables) without changing the config file."
+        },
+        "registries": {
+          "items": {
+            "$ref": "#/$defs/RegistryConfig"
+          },
+          "type": "array"
+        },
+        "release_imports": {
+          "description": "Forge releases imported into the registries that serve them\n(RFC 0021 §4.1). Empty means no import runs and nothing changes.",
+          "items": {
+            "$ref": "#/$defs/ReleaseImportConfig"
+          },
+          "type": "array"
+        },
+        "scanners": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScannerConfig"
+          },
+          "default": {},
+          "description": "`[scanners.<name>]` — the scanners registries opt into by name\n(RFC 0018 §4.1). Absent means only the implicit `osv`.",
+          "type": "object"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchConfig",
+          "description": "What the catalogue's search box can see. Absent means names only, which\nis what it has always matched."
+        },
+        "server": {
+          "$ref": "#/$defs/ServerConfig"
+        },
+        "stats": {
+          "$ref": "#/$defs/StatsConfig",
+          "description": "What numbers this instance keeps and publishes. Absent means today's\nbehaviour: `/metrics` served, history recorded, 30 days retained."
+        },
+        "storage": {
+          "$ref": "#/$defs/StoragesConfig"
+        },
+        "subdomain_routing": {
+          "$ref": "#/$defs/SubdomainRoutingConfig",
+          "description": "Optional wildcard host derivation for host-based registry routing.\nAbsent or `enabled = false` derives no wildcard hosts; a registry can\nstill declare explicit `hosts`."
+        },
+        "upstream_audit": {
+          "$ref": "#/$defs/UpstreamAuditConfig",
+          "description": "The upstream-disappearance audit (RFC 0014). Absent means off."
+        },
+        "vulnerability_scan": {
+          "$ref": "#/$defs/VulnerabilityScanConfig",
+          "description": "Optional periodic re-check of cached SBOMs against the OSV vulnerability\ndatabase. When absent or `enabled = false`, no background scan runs."
+        },
+        "worker": {
+          "$ref": "#/$defs/WorkerConfig",
+          "default": {
+            "job_timeout_secs": 600,
+            "max_attempts": 3,
+            "max_concurrent": 4,
+            "registries": [],
+            "sandbox": {
+              "cpu_seconds": 300,
+              "max_entries": 50000,
+              "max_extracted_mb": 512,
+              "memory_limit_mb": 2048,
+              "runtime": "bwrap"
+            }
+          },
+          "description": "`[worker]` — how the scan worker role is tuned (RFC 0018 §4.1)."
+        }
+      },
+      "type": "object"
+    },
+    "AuditConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "access_retention_days": {
+          "default": 0,
+          "description": "Days a `download` / `view_metadata` row is kept. `0` never expires.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "erasure_key": {
+          "description": "The secret erasure keys its HMAC with, so an erased subject's rows stay\nlinkable to each other and to nobody. Keep it outside the database.",
+          "type": "string"
+        },
+        "pseudonymise_after_days": {
+          "default": 0,
+          "description": "Days after which an access row's IP is truncated (to /24 or /48) and its\nuser agent dropped. `0` disables.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seal_interval_secs": {
+          "default": 0,
+          "description": "How often a sealing window closes. `0` disables sealing.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seal_signing_key": {
+          "description": "The Ed25519 key that signs the seal chain: a 32-byte seed, hex — the\nform every other signing key in this configuration takes.",
+          "type": "string"
+        },
+        "security_retention_days": {
+          "default": 0,
+          "description": "Days every other row — admin actions, sign-ins, purges — is kept. `0`\nnever expires.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AuthConfig": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TokenAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/OidcAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "oidc",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/KubernetesAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "kubernetes",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ActionsOidcAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "actions-oidc",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "AutoWireConfig": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "The wire: rewrite `…/_wire/{host}/{rest}`. Default off.",
+          "type": "boolean"
+        },
+        "overlay": {
+          "default": false,
+          "description": "Serve a merged registry archive with `tools`. Default off.",
+          "type": "boolean"
+        },
+        "registry_upstream": {
+          "description": "Where the server fetches `registry/latest.tar.zst`.",
+          "type": "string"
+        },
+        "retired": {
+          "default": [],
+          "description": "Overlay names no longer served, still answered locally (§4.2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/MiseToolConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "BasicAuthConfig": {
+      "properties": {
+        "password": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BearerAuthConfig": {
+      "properties": {
+        "token": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BetaChannelConfig": {
+      "description": "Per-registry beta-channel configuration (local/hybrid mode only).\n\nWhen `enabled` is `true`, pre-release versions (semver versions with a\nnon-empty pre-release component, e.g. `1.0.0-beta.1`) are hidden from users\nwho are not registered as beta-channel members. Non-members receive 404 on\nboth index listings and artifact downloads for pre-release versions.\n\n```toml\n[registries.beta_channel]\nenabled = true\n```",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable pre-release gating for this registry.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CacheCoherenceConfig": {
+      "description": "Periodic collection of storage blobs nothing references.\n\nAn artifact is cached in two steps — the bytes, then the row that points at\nthem. A process killed between the two leaves a blob no request can reach and\n**no eviction strategy will ever consider**, because every strategy reads the\ntable the row is missing from. This is the sweep that collects those.\n\n```toml\n[cache_coherence]\nenabled       = true\ninterval_secs = 86400          # daily\n```\n\n# Off by default\n\nIt deletes data on a timer with nobody watching, so it is opt-in — the rule\nevery other destructive policy in this file follows. A deployment that never\nenables it can still sweep on demand through\n`POST /api/v1/admin/registries/{registry}/coherence`.\n\n# Why the interval is not short\n\nTwo costs and one safety property push the same way. Each run lists **every\ncached object** of every registry (a paginated `ListObjectsV2`, or a full\ndirectory walk) — that is not a query to run every minute. And a blob is only\ndeleted if the *previous* run saw it orphaned too, so the interval is also\nthe grace window a cache write in flight gets: shortening it buys faster\ncollection of bytes nobody can reach, at the cost of narrowing the margin on\nthe one thing this must never delete.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the periodic background sweep.",
+          "type": "boolean"
+        },
+        "interval_secs": {
+          "default": 86400,
+          "description": "Seconds between sweeps. Defaults to one day.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CacheConfig": {
+      "description": "Selects the metadata cache backend.\n\nIn TOML:\n```toml\n[cache]\ntype = \"postgres\"   # \"memory\" (default) | \"postgres\" | \"redis\"\n\n# Required when type = \"redis\":\nurl = \"redis://localhost:6379\"\n```",
+      "properties": {
+        "type": {
+          "default": "memory",
+          "description": "`\"memory\"` (default) uses an in-process HashMap; no persistence between restarts.\n`\"postgres\"` stores entries in the `metadata_cache` table; survives restarts and\nis shared across multiple server instances.\n`\"redis\"` stores entries in Redis; survives restarts and is shared across instances.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Connection URL for the Redis cache backend (required when `type = \"redis\"`).\nFormat: `redis://[:<password>@]<host>[:<port>][/<db>]`\nor `rediss://...` for TLS.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CachePolicy": {
+      "properties": {
+        "artifact_ttl_secs": {
+          "description": "Evict artifacts older than this many seconds. `null` means never expire by age.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idle_days": {
+          "description": "Evict artifacts not accessed for this many days. `null` means never expire by idle time.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keep_latest_n": {
+          "description": "Keep only the N most-recently-cached versions per (registry, package). Older versions\nare evicted when a new one is stored. `null` means keep all versions.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_size_bytes": {
+          "description": "Storage size cap in bytes. When exceeded, the least-recently-used artifacts are evicted\nuntil usage falls below this threshold. `null` means no size cap.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metadata_ttl_secs": {
+          "default": 300,
+          "description": "TTL for metadata (version lists, release info) in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "serve_stale": {
+          "default": true,
+          "description": "When true (the default), serve stale metadata when upstream returns a transient\nerror instead of propagating a 502. Allows cached artifacts to keep being served\nduring upstream outages.",
+          "type": "boolean"
+        },
+        "warm_concurrency": {
+          "default": 2,
+          "description": "Maximum number of concurrent artifact downloads during a warming run (default: 2).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warm_latest_n": {
+          "default": 1,
+          "description": "Number of most-recent versions to pre-warm per package (default: 1 = latest only).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warm_packages": {
+          "default": [],
+          "description": "Packages to pre-fetch on startup and via the `/warm` admin endpoint.\nEach entry is either a bare package name (`\"lodash\"`) or a pinned version\n(`\"lodash@4.17.21\"`). Bare names warm the latest `warm_latest_n` versions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warm_paths": {
+          "default": [],
+          "description": "Upstream artifact paths to pre-fetch, for path-addressed registries\n(`deb`/`rpm`/`jetbrains`) that have no per-package version model. Each entry\nis the upstream-relative path, e.g. `\"idea/idea-2026.1.3.tar.gz\"` for a\nJetBrains registry or `\"dists/stable/Release\"` for a Deb registry. Warmed on\nstartup and via the `/warm` admin endpoint (`paths`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warm_platforms": {
+          "default": [],
+          "description": "The platforms `warm_packages` warms, for the two kinds whose artifact\nis one file per platform: `sdkman` (`linuxx64`, `darwinarm64`, …) and\n`nodedist` (`linux-x64`, `darwin-arm64`, …). Empty — the default —\nmeans the platform this server runs on; guessing every platform would\nfetch 1.6 GB of JDK to satisfy a one-line `.sdkmanrc` (RFC 0010 §6.9).\nRejected on any other kind.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Condition": {
+      "properties": {
+        "claim": {
+          "type": "string"
+        },
+        "match_type": {
+          "$ref": "#/$defs/ConditionMatchType"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ConditionMatchType": {
+      "enum": [
+        "auto",
+        "glob",
+        "regex"
+      ],
+      "type": "string"
+    },
+    "CveGateConfig": {
+      "description": "Gate downloads of package versions with known vulnerabilities, as discovered\nby the periodic SBOM re-scan (`[vulnerability_scan]`).\n\n```toml\n[[registries.rules]]\nkind = \"cve_gate\"\nmin_severity = \"high\"        # unknown | low | medium | high | critical\nblock = true                 # false (default) = warn-only, surfaced in UI but never blocked\nbypass_roles = [\"admin\"]\n```",
+      "properties": {
+        "block": {
+          "default": false,
+          "description": "When `true`, deny downloads of affected versions; when `false` (the\ndefault) the finding is only surfaced in the UI and never blocks.",
+          "type": "boolean"
+        },
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the gate even when `block` is `true` (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "min_severity": {
+          "default": "high",
+          "description": "Lowest severity that triggers the gate. One of\n`unknown | low | medium | high | critical`. Defaults to `high`.",
+          "type": "string"
+        },
+        "unknown_severity": {
+          "description": "What an unrated advisory is judged at against `min_severity` (RFC 0041\ndecision 16). Absent means `high`; `unknown` restores \"an unrated\nadvisory never blocks\". Not read on a `[registries.security]`\nregistry, where the profile's own `unknown_severity` decides.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DatabaseConfig": {
+      "properties": {
+        "acquire_timeout_secs": {
+          "default": 30,
+          "description": "How long to wait for a connection to become available before erroring out.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "listen_url": {
+          "description": "A direct (session) connection for the read cache's `LISTEN`, when\n`url` goes through a transaction-mode pooler such as PgBouncer, which\ndoes not deliver notifications. Absent, the listener holds one\nconnection of the pool, and the cache stays off behind such a pooler.",
+          "type": "string"
+        },
+        "max_connections": {
+          "default": 20,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_connections": {
+          "default": 1,
+          "description": "Minimum number of idle connections the pool keeps warm.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_cache": {
+          "default": true,
+          "description": "The in-process read cache of blocks, flags, visibility, tokens, user\nblocks and dedup mappings. `false` reads every one from the database\non every request, and no listener is started.",
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DenyLatestConfig": {
+      "properties": {
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the restriction (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EmailChannelConfig": {
+      "description": "SMTP email channel.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "smtp_host": {
+          "type": "string"
+        },
+        "smtp_password": {
+          "type": "string"
+        },
+        "smtp_port": {
+          "default": 587,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "smtp_user": {
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 10,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tls": {
+          "default": true,
+          "type": "boolean"
+        },
+        "to": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EscalationConfig": {
+      "description": "`[scanners.<name>.escalation]` (RFC 0018 §4.2).",
+      "properties": {
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "from": {
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/FindingKind"
+          },
+          "type": "array"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ExploreRbacConfig": {
+      "description": "Per-registry explore/search permissions.\n\nExample TOML:\n```toml\n[registries.rbac.explore]\nanonymous = false   # anonymous users cannot search\nuser = false        # regular users cannot search (proxy-only)\nadmin = true        # admins can browse\n```",
+      "properties": {
+        "admin": {
+          "default": true,
+          "type": "boolean"
+        },
+        "anonymous": {
+          "default": true,
+          "type": "boolean"
+        },
+        "user": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "FeatureFlagsConfig": {
+      "description": "Per-registry \"feature flag\" category: a set of named boolean toggles for\noptional, cross-cutting features that can be turned on or off for a whole\nregistry. New opt-in features add a new field here.\n\n```toml\n[registries.feature_flags]\nsocket_badge = false   # hide the socket.dev badge for this registry\n```",
+      "properties": {
+        "socket_badge": {
+          "default": true,
+          "description": "Show a [socket.dev](https://socket.dev) supply-chain badge/link for each\npackage version in the UI (for registry types socket.dev supports, e.g.\n`cargo`, `npm`, `pypi`). Enabled by default; set to `false` to disable\nthe badge for the whole registry.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "FilesystemStorageConfig": {
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FindingKind": {
+      "description": "What kind of thing a finding is — the axis escalation and the console\ngroup on.",
+      "oneOf": [
+        {
+          "enum": [
+            "vulnerability",
+            "malware_signal",
+            "install_hook",
+            "provenance",
+            "signature",
+            "license",
+            "publisher",
+            "typosquat",
+            "transition",
+            "age",
+            "soc_verdict",
+            "scanner_error",
+            "block_list",
+            "ref"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "A required scanner has not answered yet. Not in the RFC's list, which\nfolded it into `ScannerError`; separate because \"nobody looked yet\"\nand \"somebody looked and crashed\" are different holds with different\nmetrics.",
+          "type": "string"
+        },
+        {
+          "const": "advisory_db_error",
+          "description": "A `ScannerError` from a scanner that is an advisory database (RFC 0041\ndecision 44): the maturity bypass does not lift it on a version the\ndatabase never answered for.",
+          "type": "string"
+        }
+      ]
+    },
+    "FlagSourceConfig": {
+      "properties": {
+        "max_effect": {
+          "default": "gate",
+          "description": "The strongest effect this source may set. Default `gate`.",
+          "type": "string"
+        },
+        "max_flags_per_minute": {
+          "default": 600,
+          "description": "Items per minute across pushes; over it the push is `429`. Default\n600; `0` disables the limit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The path segment of the push endpoint: `[a-z0-9][a-z0-9_-]*`.",
+          "type": "string"
+        },
+        "registries": {
+          "default": [],
+          "description": "Registries this source may flag. Empty means every registry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "secret": {
+          "description": "HMAC-SHA256 key. Required and non-empty: the signature is the only\ncredential the endpoint has.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GalaxyRoleMode": {
+      "description": "How much of Ansible Galaxy's v1 role surface a `galaxy` registry serves\n(RFC 0031 §4.4).\n\nAn enum rather than a string, so a misspelling is a config error at load\nrather than a silent fall back to a default the operator did not choose.\n\nIt lives in `core` rather than in `config` because it is read on **every**\nrole request off `HotConfig`, the way `deny_components` is: baked into the\nregistry client instead, a reload would not take effect until the cached\nupstream document expired.",
+      "oneOf": [
+        {
+          "const": "proxy",
+          "description": "Serve the v1 reads and route role bytes through this instance.",
+          "type": "string"
+        },
+        {
+          "const": "index",
+          "description": "Serve the v1 reads and relay `download_url` as upstream gave it.",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Serve no v1 surface, and say so in the discovery document.",
+          "type": "string"
+        }
+      ]
+    },
+    "GrantsShadowConfig": {
+      "additionalProperties": false,
+      "description": "RFC 0015 §4.7 — this node's grants are in **shadow**: they resolve, the\nwould-have-been is recorded, and nothing is refused because of them.\n\n# Why a block rather than `grants.dry_run`\n\n§4.9 spells the flag `grants.dry_run`, which puts it inside `[…grants]`. That\nblock is a `subject → [verb]` **map**, so it can hold neither a boolean nor a\ndate — the reserved-key reading is unambiguous (no subject can be spelled\n`dry_run`) and still does not typecheck.\n\nA sibling block is better than the workarounds, and not only because it\ncompiles: **`until` is a required field**, so a shadow with no expiry cannot\nbe written at all. §4.7 asks config load to reject the flag without a\ncompanion date, and *\"a shadow mode that cannot be forgotten is the entire\npoint\"* — a rejection the type performs is stronger than one a validator\nremembers to.\n\n```toml\n[registries.namespaces.grants_shadow]\nuntil = \"2026-12-01\"\n```\n\nPresence is the flag. There is deliberately no `enabled = false` spelling: a\nblock that says it does nothing is one more thing to misread on the page\nlisting everything currently failing open.",
+      "properties": {
+        "until": {
+          "description": "The date the shadow stops applying. **Required**, and config load refuses\na date already past.",
+          "format": "date",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GroupRateLimitConfig": {
+      "description": "A shared request pool for all members of a named group.\n\nThe `name` is matched against the namespaced group strings in `Identity.groups`\n(e.g. `\"oidc:ci-bots\"` or `\"*:ci-bots\"` for a wildcard provider prefix).\n\nExample TOML:\n```toml\n[[registries.rate_limit.groups]]\nname                = \"oidc:ci-bots\"\nrequests_per_window = 5000\nwindow_secs         = 60\nenforcement         = \"block\"   # optional; inherits parent enforcement when omitted\n```",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/$defs/RateLimitEnforcement",
+          "description": "Override enforcement for this group. Inherits the parent `enforcement` when absent."
+        },
+        "name": {
+          "description": "Group name to match against `Identity.groups` (exact string match).",
+          "type": "string"
+        },
+        "requests_per_window": {
+          "description": "Maximum requests the entire group may collectively make within the window.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_secs": {
+          "description": "Length of the sliding window in seconds.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "HeaderAuthConfig": {
+      "description": "Sends a single custom HTTP header on every upstream request.\nUseful for registries that use `X-API-Key` or similar schemes.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HybridMerge": {
+      "description": "How a `hybrid` helm registry composes a chart it hosts with the upstream\nchart of the same name. Read off `HotConfig` for `OciEntries`' reason.",
+      "oneOf": [
+        {
+          "const": "chart",
+          "description": "A chart name published here takes the whole name: the upstream chart's\nentries are dropped and its archives are never fetched. The rule every\nother hybrid kind applies, and the one that keeps a public `acme-auth\n9.9.9` from outranking the internal `acme-auth 1.0.0`.",
+          "type": "string"
+        },
+        {
+          "const": "version",
+          "description": "Upstream versions are listed under the local ones, local winning per\nversion (RFC 0029 §4.4) — what a mirror extended with a few patched\nreleases wants, and a dependency-confusion vector for anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "Immutable": {
+      "description": "Whether published bytes may be replaced — RFC 0015 §4.5.\n\n# Why this is not a verb\n\n**Immutability is a property of the resource, the verb is a property of the\nsubject, and a replace needs both.** That split is what lets a namespace be\nappend-only for *everyone, including admins*, which no role-based model can\nsay. Adding a `releases:overwrite`-style exception here would make it a rule\nan admin can step over, and a rule an admin can step over is not an\ninvariant.",
+      "oneOf": [
+        {
+          "const": "never",
+          "description": "Any version may be replaced by a caller holding `releases:overwrite`.\n\nThe default, and **not** because it is the best policy — §4.5 says\n`released` is what most estates want. It is the default because nothing\nenforces immutability today, so any other value would change the meaning\nof an existing config, which §10 rule 8 forbids.",
+          "type": "string"
+        },
+        {
+          "const": "released",
+          "description": "A release is immutable; a pre-release may be replaced.\n\nThe Maven shape — SNAPSHOT churns, releases do not. \"Pre-release\" here is\n[`version_order::is_prerelease`](crate::services::version_order::is_prerelease),\nthe one definition; before phase 4 converged it, the rule in use called\n`1.0-SNAPSHOT` a release and would have frozen exactly the versions this\nvalue exists to let churn.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "No version may ever be replaced; `releases:overwrite` grants nothing here.",
+          "type": "string"
+        }
+      ]
+    },
+    "ImportPrincipalConfig": {
+      "description": "The identity an import publishes under (RFC 0021 §4.3).\n\nDeliberately smaller than `Identity`: there is no `role`, because the answer\nis always `user` and an admin would skip the namespace check outright; and\nno provider, because nothing authenticated this principal — the server\nconstructs it for its own action.",
+      "properties": {
+        "groups": {
+          "default": [],
+          "description": "Groups, each written `config:<name>`. The prefix is reserved so a config\nfile cannot mint a group string an identity provider owns.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "user_id": {
+          "description": "What grants name: `user:<user_id>`. Also what quota is charged to and\nwhat the audit row records.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "InboundWebhookConfig": {
+      "description": "Configuration for a single inbound webhook endpoint.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "description": "Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header.\nWhen absent, any payload is accepted (suitable only for internal networks).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "InstallHookMode": {
+      "description": "`deny_install_hooks` — what an install hook finding does.",
+      "enum": [
+        "deny",
+        "warn",
+        "ignore"
+      ],
+      "type": "string"
+    },
+    "IntegrityConfig": {
+      "description": "Per-registry artifact integrity verification, applied on the proxy\nfetch-and-cache path. Once upstream bytes are buffered they are hashed and\ncompared against the checksum advertised in the registry metadata\n(Cargo SHA-256, npm SRI/`shasum`, PyPI SHA-256). Registries that advertise no\nchecksum (NuGet, Maven, GitHub, Go, …) fall through to the \"missing\" path.\n\nDoes **not** apply to `firewall_only` registries, which stream straight\nthrough without buffering.\n\n```toml\n[registries.integrity]\nenabled = true            # verify when a checksum is advertised\nblock_on_mismatch = true  # fail the download on a hash mismatch (never bypassable)\nrequire_metadata = false  # block downloads with no advertised checksum\nbypass_roles = [\"admin\"]  # roles exempt from the require_metadata gate\n```",
+      "properties": {
+        "block_on_mismatch": {
+          "default": true,
+          "description": "Fail the download (and skip caching) when the computed digest does not\nmatch the advertised one. A mismatch is never bypassable.",
+          "type": "boolean"
+        },
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles allowed to bypass the `require_metadata` gate.\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Master switch. When `false`, no verification is performed.",
+          "type": "boolean"
+        },
+        "require_metadata": {
+          "default": false,
+          "description": "Block downloads for which the upstream advertises no usable checksum,\nunless the caller clears `bypass_roles` (the least-privileged listed\nrole is the floor). Defaults to `false`\n(missing checksums are only warned about).",
+          "type": "boolean"
+        },
+        "verify_on_serve": {
+          "default": false,
+          "description": "Re-verify cached/stored bytes against a self-computed SHA-256 on **every**\nserve (cache hit on the proxy path, and local-registry reads), not just on\nthe first fetch. Catches storage corruption or tampering of already-cached\nartifacts. Off by default: it reads and hashes the bytes on each serve (the\nproxy path streams them through the hash, so memory stays bounded, then\nre-opens the entry to serve it). A mismatch fails the download (`502`) and\nevicts the bad entry.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "IpBlockingConfig": {
+      "properties": {
+        "ban_duration_secs": {
+          "default": 3600,
+          "description": "How long to keep a blocked IP banned, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable IP-based blocking.",
+          "type": "boolean"
+        },
+        "trigger_on_status": {
+          "default": [
+            429,
+            401
+          ],
+          "description": "HTTP status codes that increment the violation counter for the source IP.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "trusted_proxies": {
+          "default": [],
+          "description": "**Deprecated** — use [`ServerConfig::trusted_proxies`] instead.\n\nIPs (or, since proxy trust became server-level, CIDR ranges) of trusted\nreverse proxies. When the TCP peer address falls inside one of these, the\nfirst entry of `X-Forwarded-For` is used as the client IP. When empty\n(the default), the TCP peer address is always used and `X-Forwarded-For`\nis ignored — preventing spoofed-header bypass.\n\nStill honoured as a fallback: when `[server].trusted_proxies` is absent\nthis list governs the forwarded host and scheme as well as the client IP,\nand it satisfies the trust-policy requirement that host-based routing\nimposes. When both keys are set, `[server]` wins and a config warning\nnames this one.\n\n[`ServerConfig::trusted_proxies`]: super::server::ServerConfig::trusted_proxies",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "violation_threshold": {
+          "default": 10,
+          "description": "Number of violations in the window before auto-blocking the IP.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "violation_window_secs": {
+          "default": 300,
+          "description": "Length of the violation counting window in seconds, at most\n[`MAX_VIOLATION_WINDOW_SECS`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "KubernetesAuthConfig": {
+      "properties": {
+        "api_server": {
+          "description": "Kubernetes API server URL.\nDefaults to `https://<KUBERNETES_SERVICE_HOST>:<KUBERNETES_SERVICE_PORT>`\n(the env vars injected by Kubernetes for in-cluster use).",
+          "type": "string"
+        },
+        "audiences": {
+          "default": [],
+          "description": "Audiences passed to the TokenReview API for bound-token validation.\nDefaults to `[\"batlehub\"]` when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ca_cert_path": {
+          "description": "Path to the CA certificate PEM file for the Kubernetes API server.\nDefaults to `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`.",
+          "type": "string"
+        },
+        "issuers": {
+          "default": [],
+          "description": "Token issuers (`iss`) this provider will spend a TokenReview on.\n\nEmpty (the default) means \"any issuer\": the provider then narrows on the\naudience alone, which is enough to keep a browser's OIDC ID token out of\na TokenReview body but still lets any *other* cluster's bound token be\nforwarded. Set it to the cluster's issuer —\n`kubectl get --raw /.well-known/openid-configuration | jq -r .issuer`,\ntypically `https://kubernetes.default.svc.cluster.local` — when this\nserver sees tokens from more than one issuer.\n\nRead from the token without verifying its signature, and used only to\ndecide whether to *ask* the API server. Nothing is granted on it: the\nTokenReview verdict is still what authenticates.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "default": "kubernetes",
+          "description": "Unique name for this provider instance.\nUsed as the prefix for unmapped groups: e.g. `name = \"k8s-prod\"` → group `\"k8s-prod:team-a\"`.\nDefaults to `\"kubernetes\"`.",
+          "type": "string"
+        },
+        "role_mappings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Maps Kubernetes usernames or group names to proxy roles.\n\nKubernetes populates:\n- username: `\"system:serviceaccount:<namespace>:<name>\"`\n- groups:   `[\"system:serviceaccounts\", \"system:serviceaccounts:<namespace>\", ...]`\n\nValues not listed here default to the `anonymous` role.\nWhen a token matches multiple keys, the highest role wins.",
+          "type": "object"
+        },
+        "token_path": {
+          "description": "Path to the batlehub's own service account token used to authenticate\nTokenReview API calls.\nDefaults to `/var/run/secrets/kubernetes.io/serviceaccount/token`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LicenseGateConfig": {
+      "description": "Gate downloads by the licence the package's own manifest declares, as read\nby the SBOM extractor at cache/publish time (RFC 0004-bis §13.1).\n\n```toml\n[[registries.rules]]\nkind = \"license_gate\"\nallow = [\"MIT\", \"Apache-2.0\", \"BSD-3-Clause\"]  # optional allowlist\ndeny  = [\"AGPL-3.0\", \"SSPL-1.0\"]               # always refused\nallow_unknown = true                           # default\nblock = false                                  # default = warn-only\nbypass_roles = [\"admin\"]\n```\n\n**The licence is read from the archive, so it is not known until the\nartifact has been fetched once.** The first request for an uncached package\nis therefore governed by `allow_unknown`, not by `allow`/`deny`. This is the\nsame trade `integrity.require_metadata` makes for checksums; see §13.1 for\nwhy it cannot be designed away.\n\nComparison is case-insensitive and ignores surrounding whitespace, because\nmanifests are written by hand. It is otherwise literal: `allow = [\"MIT\"]`\ndoes not match `MIT OR Apache-2.0`, since a compound expression is a\ndifferent declaration and silently accepting it would let a package opt out\nof the gate by adding an alternative.",
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Approved licences. When non-empty, a declared licence matching none of\nthese is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_unknown": {
+          "default": true,
+          "description": "How to treat a package whose licence is unknown — no manifest parser for\nthe registry type, nothing declared, or not fetched yet. `true` (the\ndefault) lets it through; `false` refuses it.",
+          "type": "boolean"
+        },
+        "block": {
+          "default": false,
+          "description": "When `true`, deny; when `false` (the default) the rule never blocks and\nthe licence is only surfaced in the UI.",
+          "type": "boolean"
+        },
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the gate even when `block` is `true`.\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "default": [],
+          "description": "Refused licences, checked before `allow` so a deny entry always wins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "LimitsConfig": {
+      "description": "Upload size limits.\n\n```toml\n[limits]\nmax_artifact_size_bytes = 524288000  # 500 MiB\nversions_per_page       = 100        # rows in one package-detail answer\npackages_per_page       = 20         # rows in one catalog answer\n```",
+      "properties": {
+        "max_artifact_size_bytes": {
+          "description": "Maximum artifact size for proxy downloads and local publishes.\nDefaults to 500 MiB when absent.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "packages_per_page": {
+          "default": 20,
+          "description": "How many packages `GET /api/v1/explore/packages` returns in one answer.\n\nThe same two readings as `versions_per_page` — the unasked-for default\nand the ceiling — for the other list, and a separate key because the two\nare not the same question. A catalog row is a name and a few counts; 20\nof them is a screenful, which is why that is the default and has always\nbeen what the console drew. A version row costs a vulnerability read and\na licence read. An operator sizing a screen should not be sizing a query\nat the same time.\n\nThe console does **not** ask for a number here, unlike the version table:\nthe catalog *is* the list, so the operator's number is the right one, and\nthe console reads it back out of the answer to size its pager.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "versions_per_page": {
+          "default": 100,
+          "description": "How many versions `GET /api/v1/explore/packages/{registry}/{name}`\nreturns in one answer.\n\nTwo things at once, deliberately: the number a caller that asks for no\n`per_page` gets, **and** the most any caller may ask for. A ceiling and a\ndefault expressed as two keys would let them contradict each other, and\nthe question an operator actually has is one question — how much of a\nversion list this server is willing to build, hold in memory and\nserialise for one request. `@babel/plugin-transform-runtime` has 169\nversions and the enrichment behind each row is a database read.\n\nThe console asks for the number of rows it draws, which is its own\nbusiness and smaller than this; it reads back the `per_page` the server\nactually applied rather than assuming it got what it asked for.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LogFormat": {
+      "description": "How the process writes its log lines on stdout.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "Human-readable lines — the default, unchanged from before `[logging]`\nexisted.",
+          "type": "string"
+        },
+        {
+          "const": "json",
+          "description": "One JSON object per line, and the audit stream on: every audit row is\nalso a line with `event.dataset = \"batlehub.audit\"` (RFC 0036 §6.2).",
+          "type": "string"
+        }
+      ]
+    },
+    "LoggingConfig": {
+      "additionalProperties": false,
+      "description": "`[logging]` (RFC 0036 §4.1).",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/LogFormat"
+        }
+      },
+      "type": "object"
+    },
+    "MiseBackendConfig": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "properties": {
+            "full": {
+              "type": "string"
+            },
+            "options": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "A backend as mise's registry files write it: a string, or a table with\n`full` and backend options."
+    },
+    "MiseToolConfig": {
+      "properties": {
+        "aliases": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "backends": {
+          "items": {
+            "$ref": "#/$defs/MiseBackendConfig"
+          },
+          "type": "array"
+        },
+        "bins": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "on_collision": {
+          "$ref": "#/$defs/OnCollision"
+        },
+        "source": {
+          "$ref": "#/$defs/MiseToolSource"
+        },
+        "version_order": {
+          "default": "semver",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MiseToolSource": {
+      "properties": {
+        "registry": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MultiStorageConfig": {
+      "properties": {
+        "backends": {
+          "items": {
+            "$ref": "#/$defs/NamedStorageConfig"
+          },
+          "type": "array"
+        },
+        "default": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NamedStorageConfig": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/FilesystemStorageConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "filesystem",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/S3StorageConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "s3",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NamespaceConfig": {
+      "additionalProperties": false,
+      "description": "One `[[registries.namespaces]]` block.\n\nA namespace is **matched, not enumerated**: `match = \"@acme/billing\"` covers\n`@acme/billing/cards` and `@acme/billing/ledger`. Matching is on segment\nboundaries using the ecosystem's own separator, so `@acme/billing` never\nmatches `@acme/billing-internal` — the bug RFC 0011-bis §4.2 records for\n`digital` versus `digital.pipeline-tools`.\n\nRFC 0015 §4.1 gives the namespace tier `visibility`, `versioning`, `quota`\nand `rules` beside its `grants`, and phase 4 adds them here. `retention` is\n[RFC 0016](/rfc/0016-retention-and-the-permanence-of-a-published-name)'s\nblock and is not declared on this struct.\n\n`deny_unknown_fields` stays, and is now what stops a `retention` block from\nbeing silently ignored — an operator who writes a policy and gets no error\nconcludes it is in force.",
+      "properties": {
+        "grants": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "See [`RegistryConfig::grants`] — absent inherits, empty seals.",
+          "type": "object"
+        },
+        "grants_shadow": {
+          "$ref": "#/$defs/GrantsShadowConfig",
+          "description": "RFC 0015 §4.7 — put this namespace's grants in shadow."
+        },
+        "match": {
+          "description": "The namespace prefix, in the ecosystem's own spelling.",
+          "type": "string"
+        },
+        "prerelease_visibility": {
+          "$ref": "#/$defs/Visibility",
+          "description": "A different default visibility for **pre-releases** published here\n(RFC 0015 §4.5), replacing `[registries.beta_channel]`.\n\n`beta_channel` existed because \"pre-releases are for members only\" could\nnot be said any other way. As a conditional visibility default it is one\nline at the tier that owns the packages, it composes with everything else\nby §4.1's rules, and a version-tier `visibility` overrides it for the one\nbuild you want to show someone."
+        },
+        "quota": {
+          "$ref": "#/$defs/QuotaConfig",
+          "description": "How much may be published here. Composes wholesale, like `versioning`."
+        },
+        "rules": {
+          "description": "Gate overrides for this namespace only.\n\nComposes **deepest wins, per rule** — each gate is independently\nconfigured, and a wholesale override would force redeclaring `cve_gate`\nand `license_gate` to change `release_age`. A forgotten one would then be\na gate silently switched off, which is the fail-open direction.\n\nThis is the piece that answers the standing `release_age` finding:\n`min_age_secs = 0` on the namespace your CI publishes to states the\nintent directly, instead of choosing between quarantining your own builds\nand turning the gate off everywhere.",
+          "items": {
+            "$ref": "#/$defs/RuleConfig"
+          },
+          "type": "array"
+        },
+        "versioning": {
+          "$ref": "#/$defs/VersioningPolicy",
+          "description": "What a version may be called here, and whether it may change.\n\nComposes **wholesale**, not per field: the motivating case is a narrower\npolicy on a deeper tier, and a per-field merge cannot express dropping an\ninherited constraint. Wholesale is also greppable — what is on the node\nis what runs."
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "description": "Default visibility for a version published into this namespace\n(RFC 0015 §4.5), replacing \"public unless someone sets it\".\n\nComposes **deepest wins** — it is a single value, so there is nothing to\nmerge — and a per-package override remains (RFC 0011-bis §4.3)."
+        }
+      },
+      "type": "object"
+    },
+    "NixSigningConfig": {
+      "description": "Ed25519 narinfo signing key for a `nix` registry (RFC 0028 §4.1).\n\n```toml\n[registries.nix_signing]\nseed_hex = \"${NIX_SIGNING_SEED}\"   # 32-byte Ed25519 seed, hex-encoded\nkey_name = \"batlehub-nix-1\"        # optional; default: batlehub-{registry}-1\n```\n\n`key_name` is the half of a `trusted-public-keys` entry before the colon,\nand it is how Nix picks which key verifies a `Sig:`. It has to be stable\nacross restarts and unique among the caches a client trusts — hence a\ndefault carrying the registry name, and a `-1` suffix an operator bumps on\nrotation exactly as `cache.nixos.org-1` does.",
+      "properties": {
+        "key_name": {
+          "description": "The name before the colon in `Sig:` and in `trusted-public-keys`.",
+          "type": "string"
+        },
+        "seed_hex": {
+          "description": "Hex-encoded 32-byte Ed25519 seed. A secret of the same class as\n`vsx_signing.seed_hex`: keep it out of the file with `${VAR}`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NotificationChannelConfig": {
+      "description": "A single outbound notification channel.",
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/WebhookChannelConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "webhook",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/SlackChannelConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "slack",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TeamsChannelConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "teams",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/EmailChannelConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "email",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "NotificationsConfig": {
+      "description": "Top-level notification configuration block.\n\n```toml\n[notifications]\nenabled = true\n\n[[notifications.channels]]\nname = \"my-slack\"\ntype = \"slack\"\nurl = \"https://hooks.slack.com/services/...\"\n\n[[notifications.channels]]\nname = \"ci-webhook\"\ntype = \"webhook\"\nurl = \"https://example.com/hook\"\nsecret = \"hmac-secret\"\n\n[[notifications.inbound]]\nname = \"ci-scanner\"\nsecret = \"verify-me\"\n```",
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/NotificationChannelConfig"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "inbound": {
+          "items": {
+            "$ref": "#/$defs/InboundWebhookConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "OciEntries": {
+      "description": "What an index entry whose `urls[0]` is `oci://` becomes in the served index\n(RFC 0029 §4.4, decision 2).\n\nIn `core` rather than `config` because the handler reads it off `HotConfig`\non every index request, the way `GalaxyRoleMode` is read.",
+      "oneOf": [
+        {
+          "const": "drop",
+          "description": "Omitted: an entry this instance cannot serve is one its policy cannot\nreach, so it is not advertised.",
+          "type": "string"
+        },
+        {
+          "const": "relay",
+          "description": "Served as upstream wrote it — `helm` pulls it from the OCI registry,\npast this instance.",
+          "type": "string"
+        }
+      ]
+    },
+    "OidcAuthConfig": {
+      "properties": {
+        "audiences": {
+          "default": [],
+          "description": "Values the token's `aud` claim is accepted for. Defaults to\n`[client_id]`, which is the audience of an ID token issued to this\nclient.\n\nSet it explicitly when the identity provider mints access tokens for a\nseparate API audience (Auth0's `audience` parameter, Okta's authorization\nserver `aud`) and that is what reaches this server.\n\nLeaving audience unchecked means any token the issuer signed for *any*\nof its clients authenticates here, so there is no way to switch this off.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "client_secret": {
+          "type": "string"
+        },
+        "frontend_url": {
+          "default": "",
+          "description": "Base URL of the SPA frontend.  After a successful OIDC callback the\nbrowser is redirected to `{frontend_url}/?oidc_access_token=...`.\nDefaults to `\"\"` (same origin as the backend — correct for production).\nIn development set this to `\"http://localhost:5173\"`.",
+          "type": "string"
+        },
+        "issuer_url": {
+          "type": "string"
+        },
+        "name": {
+          "default": "oidc",
+          "description": "Unique name for this provider instance.\nUsed as the prefix for unmapped groups: e.g. `name = \"oidc1\"` → group `\"oidc1:team-a\"`.\nAlso used as `\"*:team-a\"` wildcard target in `[registries.rbac.groups]`.\nDefaults to `\"oidc\"`.",
+          "type": "string"
+        },
+        "redirect_uri": {
+          "description": "Redirect URI registered with the OIDC provider.\nRequired for the browser-based SSO login flow.\nExample: `\"https://batlehub.example.com/api/v1/auth/oidc/callback\"`.",
+          "type": "string"
+        },
+        "role_claim": {
+          "default": "role",
+          "description": "JWT claim to inspect for role mapping (default: `\"role\"`).\nThe claim value may be a string or an array of strings; the highest\nmatching role in `role_mappings` wins.",
+          "type": "string"
+        },
+        "role_mappings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Maps JWT claim values → proxy role names (`\"admin\"`, `\"user\"`).\nClaim values not present here default to the `anonymous` role.",
+          "type": "object"
+        },
+        "scopes": {
+          "default": [
+            "openid",
+            "profile",
+            "email"
+          ],
+          "description": "OAuth2 scopes to request.  Defaults to `[\"openid\", \"profile\", \"email\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "user_id_claim": {
+          "default": "sub",
+          "description": "JWT claim used as `user_id` (default: `\"sub\"`).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "OnCollision": {
+      "description": "What the overlay does when a name is in the upstream archive too (§4.2).",
+      "oneOf": [
+        {
+          "const": "drop",
+          "description": "Both entries removed: the name installs nowhere until an operator acts.",
+          "type": "string"
+        },
+        {
+          "const": "overlay",
+          "description": "The overlay entry replaces the upstream one.",
+          "type": "string"
+        },
+        {
+          "const": "upstream",
+          "description": "The overlay entry is removed.",
+          "type": "string"
+        }
+      ]
+    },
+    "OtelConfig": {
+      "properties": {
+        "endpoint": {
+          "description": "OTLP endpoint, e.g. `http://localhost:4317`.",
+          "type": "string"
+        },
+        "service_name": {
+          "default": "batlehub",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ProcessRole": {
+      "description": "What a process does (`[server].roles`, RFC 0018 §4.1).",
+      "enum": [
+        "proxy",
+        "worker"
+      ],
+      "type": "string"
+    },
+    "QuotaConfig": {
+      "description": "Per-registry publish quotas for local/hybrid mode.\n\nExample TOML:\n```toml\n[registries.quota]\nmax_storage_bytes_per_user = 1_073_741_824   # 1 GiB\nmax_packages_per_user      = 100\nwarn_threshold_pct         = 80\nenforcement                = \"block\"\n```",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/$defs/QuotaEnforcement",
+          "description": "Whether to hard-block or just warn on quota overrun."
+        },
+        "max_packages_per_user": {
+          "description": "Maximum number of distinct package versions a single user may publish.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_storage_bytes_per_user": {
+          "description": "Maximum cumulative bytes a single user may publish to this registry.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warn_threshold_pct": {
+          "default": 80,
+          "description": "Emit a quota-warning response header when usage exceeds this percentage\nof the limit. Defaults to 80.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "QuotaEnforcement": {
+      "description": "How to enforce quota violations.",
+      "oneOf": [
+        {
+          "const": "block",
+          "description": "Reject the publish request with HTTP 429 when the quota is exceeded.",
+          "type": "string"
+        },
+        {
+          "const": "warn",
+          "description": "Allow the publish but include a warning header in the response.",
+          "type": "string"
+        }
+      ]
+    },
+    "RateLimitConfig": {
+      "description": "Per-registry request rate limiting.\n\nExample TOML:\n```toml\n[registries.rate_limit]\nrequests_per_window = 100\nwindow_secs         = 60\nenforcement         = \"block\"\n\n[[registries.rate_limit.groups]]\nname                = \"ci-bots\"\nrequests_per_window = 5000   # shared pool for all ci-bots members combined\nwindow_secs         = 60\n```",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/$defs/RateLimitEnforcement",
+          "description": "Whether to hard-block (429) or just warn on rate-limit overrun."
+        },
+        "groups": {
+          "description": "Optional per-group rate limits. Each entry defines a shared request pool for all\nmembers of the named group. A user's request is checked against both their personal\nbucket and every group bucket they belong to; all must have tokens available.",
+          "items": {
+            "$ref": "#/$defs/GroupRateLimitConfig"
+          },
+          "type": "array"
+        },
+        "requests_per_window": {
+          "description": "Maximum number of requests a single user (or IP for anonymous) may make within the window.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_secs": {
+          "description": "Length of the sliding window in seconds.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RateLimitEnforcement": {
+      "description": "How to enforce rate-limit violations.",
+      "oneOf": [
+        {
+          "const": "block",
+          "description": "Reject requests that exceed the rate limit with HTTP 429.",
+          "type": "string"
+        },
+        {
+          "const": "warn",
+          "description": "Allow the request but include a warning header in the response.",
+          "type": "string"
+        }
+      ]
+    },
+    "RawConfig": {
+      "description": "Raw file serving, **off unless written**.\n\nRaw was implicitly on for all three forges before this section existed:\n`raw.githubusercontent.com`, Forgejo's `raw/`, GitLab's `/-/raw/`. Turning\nit off by default is the behaviour change RFC 0019 §9 states, and the\nfirst refused request answers with a body that says exactly this.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_size_bytes": {
+          "default": 10485760,
+          "description": "Ceiling on one raw file. Must be set when `enabled`, and must not\nexceed `[limits].max_artifact_size_bytes` — a number the global limit\nwould silently win over is a lie.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repos": {
+          "default": [],
+          "description": "`owner/repo` globs (`cli/*`). Empty allows any repository.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_pinned": {
+          "default": false,
+          "description": "Refuse a branch ref for raw content.",
+          "type": "boolean"
+        },
+        "scripts": {
+          "description": "`\"warn\"` | `\"deny\"` | `\"ignore\"` for shell, PowerShell, Python and\nbatch payloads. **Absent means `deny` on a registry with\n`[registries.security]`** and `warn` on any other (RFC 0019 §11 q2,\ndecided 2026-09-04): opting into a quarantine is opting into \"nothing\nunscanned is served\", and a script passed through is the one artifact\nno scanner here reads.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RbacConfig": {
+      "properties": {
+        "admin": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "anonymous": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "explore": {
+          "$ref": "#/$defs/ExploreRbacConfig",
+          "default": {
+            "admin": true,
+            "anonymous": true,
+            "user": true
+          },
+          "description": "Controls which roles can search/browse this registry in the package explorer.\nWhen absent, defaults to allowing explore for any role that has proxy access."
+        },
+        "groups": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "Dynamic groups from external identity providers (e.g. Authentik).\nMaps group name → list of permitted resource types for this registry.",
+          "type": "object"
+        },
+        "user": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ReadmeConfig": {
+      "description": "Per-registry README capture configuration.\n\n```toml\n[registries.readme]\nenabled       = true      # store and serve READMEs for this registry\nfrom_archive  = true      # extract from the cached artifact when the metadata carries none\nmax_bytes       = 262144    # cap on stored source (256 KiB); larger is truncated and flagged\nremote_images   = \"strip\"   # \"strip\" | \"proxy\"\nimage_max_bytes = 2097152   # cap on one proxied image (2 MiB); larger is not served\n```\n\nThe whole block is optional and its absence means **on**, which is why every\nfield defaults to the enabled shape rather than to `false`/zero. `from_archive`\nis the one part of that default that is not free: it rides the artifact read\nSBOM already performs when SBOM is on, and adds one storage read per\nnewly-cached version when it is not.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Store and serve READMEs for this registry.",
+          "type": "boolean"
+        },
+        "from_archive": {
+          "default": true,
+          "description": "Read the README out of the artifact when the metadata carries none. Inert\non kinds whose README is metadata-borne only, and on `firewall_only`\nregistries, which never cache an artifact to extract from — both warned\nabout rather than rejected.",
+          "type": "boolean"
+        },
+        "image_max_bytes": {
+          "default": 2097152,
+          "description": "Cap on **one proxied image**, in bytes. Separate from `max_bytes`, which\ncaps the stored *text*: a 256 KiB text cap and a 2 MiB image cap are not\nthe same number for the same reason, and sharing one would make raising\neither a decision about the other (RFC 0007-bis §4.1).\n\nInert under `remote_images = \"strip\"`, where nothing is fetched.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "default": 262144,
+          "description": "Cap on the stored source, in bytes, applied after decompression.\nTruncation is recorded and surfaced, never silent.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "remote_image_hosts": {
+          "default": [],
+          "description": "Which hosts an image may be proxied *from*, when `remote_images =\n\"proxy\"`.\n\n```toml\n[registries.readme]\nremote_images = \"proxy\"\nremote_image_hosts = [\"img.shields.io\", \"badgen.net\", \"codecov.io\"]\n```\n\nAn entry matches the host exactly or any subdomain of it, so\n`\"shields.io\"` covers `img.shields.io`. An image from anywhere else is\nchipped exactly as `strip` chips it — the reader still sees that an image\nwas there and where it pointed.\n\n**Absent means every host**, which is what `proxy` did before this\nexisted: adding a key must not silently change what a running instance\nserves. An operator who wants the narrow behaviour asks for it, and the\nasking is one line.\n\nInert under `strip`, where nothing is fetched at all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remote_images": {
+          "default": "strip",
+          "description": "`\"strip\"` (default) or `\"proxy\"`. There is no `\"allow\"`: the SPA's CSP is\nbaked into the document at build time, so it would silently do nothing.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RefsConfig": {
+      "description": "`[registries.refs]` — how long a ref → commit resolution is trusted.\n\nResolution itself always runs; it is what builds the cache key. These two\nnumbers decide how often the forge is asked again, and so how quickly a\nmoved tag or an advanced branch is noticed — and how many API calls a\nbusy registry spends noticing.",
+      "properties": {
+        "branch_ttl_secs": {
+          "default": 60,
+          "description": "How long a branch → commit resolution is trusted. Default 60 s.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mutable_refs": {
+          "default": "warn",
+          "description": "What following a branch does: `\"warn\"` (default) or `\"deny\"`. A\nregistry that must be reproducible sets `deny` and every mutable\ncoordinate is refused.",
+          "type": "string"
+        },
+        "tag_moved": {
+          "default": "deny",
+          "description": "What a tag that has moved — and a release asset whose digest changed —\ndoes: `\"deny\"` (default) or `\"warn\"`.",
+          "type": "string"
+        },
+        "tag_ttl_secs": {
+          "default": 3600,
+          "description": "How long a tag → commit resolution is trusted. Tags can move; default\none hour, which is also the detection latency of a moved tag.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RegistryConfig": {
+      "properties": {
+        "api_reads": {
+          "$ref": "#/$defs/ApiReadsConfig",
+          "description": "`[registries.api_reads]` — the typed read-only JSON routes to add\nbeside the release listing."
+        },
+        "apk_signing": {
+          "$ref": "#/$defs/ApkSigningConfig",
+          "description": "Optional RSA key an `apk` registry signs its generated `APKINDEX.tar.gz`\nwith (RFC 0026 §4.1). `local`/`hybrid` only: in proxy mode the upstream\nindex is relayed byte-exact and there is nothing to sign."
+        },
+        "apk_unsigned": {
+          "default": false,
+          "description": "Explicitly ship an `apk` repository whose index is unsigned.\n\nAn unsigned index is uninstallable by every apk that ships unless the\nclient passes `--allow-untrusted`, which also switches off the package\nidentity check — so this is a choice put on the record rather than a\ndefault anything inherits. Kind-prefixed like the signing fields beside\nit: a bare `unsigned` on a struct shared by every registry type would\nread as a promise the other kinds do not keep.",
+          "type": "boolean"
+        },
+        "auto_wire": {
+          "$ref": "#/$defs/AutoWireConfig",
+          "description": "RFC 0045 — the mise wire and overlay, on a `mise-versions` registry\nonly. Absent is off."
+        },
+        "beta_channel": {
+          "$ref": "#/$defs/BetaChannelConfig",
+          "description": "Optional beta-channel configuration (local/hybrid mode only).\nWhen enabled, pre-release versions are only visible to registered beta-channel members."
+        },
+        "broker_url": {
+          "description": "SDKMAN only: URL of the download broker, the second host of the one\nprotocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the\ncandidates API (`https://api.sdkman.io/2`). Rejected on any other type,\nfor the same reason `index_url` would be on a non-cargo registry: a\nsilently ignored option is a misconfiguration that looks like a proxy\nbug (RFC 0010 §4.1, §4.5).",
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CachePolicy"
+        },
+        "cargo_auth_required": {
+          "description": "`cargo` only: force `\"auth-required\"` in the sparse index's\n`config.json` on or off, instead of deriving it.\n\nThe field tells cargo that \"this is a private registry that requires all\noperations to be authenticated including API requests, crate downloads\nand sparse index updates\" — and without it cargo sends **no credential\nat all** on a read, so a registry that refuses anonymous callers is\nsimply unusable rather than authenticated.\n\nLeft unset it is derived: `true` when an anonymous caller cannot read\nthis registry. The derivation reads the *registry* tier, so it is wrong\nin one direction — a registry that closes the tier and then re-opens one\npackage to `*` through a grant would be advertised as fully closed, and\ncargo would demand a token for the open package too. That is the case\nthis knob exists for.",
+          "type": "boolean"
+        },
+        "console_fetch": {
+          "default": true,
+          "description": "Whether the console may ask this instance to fetch a version from\nupstream — the **Fetch this version** button (RFC 0007-bis §4.1, §4.4).\n\n**On by default**, and it admits nothing: the fetch runs the same\ndownload the caller could already run with `curl`, through every gate\nthat download would pass, attributed to them in the audit log. The switch\nexists for the operator who wants the console strictly read-only, which\nis a legitimate posture and not one the software should have to guess at.\n\nInert on a `local`-mode registry: there is no upstream to fetch from, and\nevery version the page lists is already held.",
+          "type": "boolean"
+        },
+        "deny_components": {
+          "default": [],
+          "description": "rustup only: components this registry never serves, whatever the\nchannel manifest says.\n\nNames are manifest package names (`rust-docs`, `clippy-preview`),\nbefore `[renames]` are applied, because that is the table the filter\nedits; `[A-Za-z0-9_-]+`, which is every component the tree publishes.\nA profile install proceeds without them, and an explicit `rustup\ncomponent add` stops before any request on rustup's own \"toolchain '…'\ndoes not contain component '…' for target '…'\".\nEmpty — the default — denies nothing. Rejected on any other type, for\nthe reason `broker_url` is (RFC 0024 §4.1, §4.5).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "feature_flags": {
+          "$ref": "#/$defs/FeatureFlagsConfig",
+          "description": "Optional per-registry feature flags (opt-in/out toggles for cross-cutting\nUI/integration features). When absent, every flag takes its default."
+        },
+        "firewall_only": {
+          "default": false,
+          "description": "When `true` the registry acts as a pure firewall: rules are evaluated but\nartifacts are never cached. Requests that pass rules are streamed directly\nfrom upstream with nothing written to storage.",
+          "type": "boolean"
+        },
+        "grants": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "RFC 0015 §4.3 — grants written on this registry.\n\n`subject → [verb]`, unioned with whatever `[registries.rbac]` translates\nto (§10: the old block \"remains accepted indefinitely and is documented\nas the shorthand it becomes. There is no flag day.\").\n\n**`Option` is load-bearing.** An absent block inherits — which at\nregistry tier means \"only the rbac translation applies\" — and a block\nwritten as `grants = {}` is a *seal*: it grants nothing and stops\ninheritance. Those are different states, and collapsing them is the\nmodelling rule survey finding 2 broke, where an empty accessible-registry\nlist read as *every* registry.\n\n```toml\n[registries.grants]\n\"*\"                = [\"releases:read\"]\n\"group:*:engineer\" = [\"releases:read\", \"source:read\"]\n```",
+          "type": "object"
+        },
+        "grants_shadow": {
+          "$ref": "#/$defs/GrantsShadowConfig",
+          "description": "RFC 0015 §4.7 — put this **registry's** grants in shadow, which covers\nevery namespace and package beneath it.\n\nThe shape §10's migration needs: enable the new model in shadow, watch a\nweek of real traffic, then enforce."
+        },
+        "hosts": {
+          "default": [],
+          "description": "Extra hostnames whose **root** serves this registry, in addition to\n`/proxy/{name}/…`. Everything reachable under the subpath is reachable\nidentically at the root of each of these hosts.\n\n```toml\nhosts = [\"npm.acme.io\"]\n```\n\nIndependent of `[subdomain_routing]`: a registry can have vanity hosts\nwith no wildcard configured at all, and an explicit entry wins over this\nregistry's own wildcard host. A host claimed by two registries is a config\nerror. DNS and TLS for these names are the operator's job.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hybrid_merge": {
+          "$ref": "#/$defs/HybridMerge",
+          "description": "helm only, `hybrid` only: how a chart published here composes with the\nupstream chart of the same name.\n\n- `chart` (the behaviour when absent) — the local chart takes the whole\n  name; upstream's entries for it are dropped and its archives never\n  fetched, so a public chart cannot outrank an internal one.\n- `version` — upstream's versions are listed under the local ones, local\n  winning per version: a mirror extended with a few patched releases.\n\nLeaving it unset on a hybrid helm registry is warned at every reload,\nbecause the two answers suit different estates and the admin is the one\nwho knows which this is. Rejected on any other type or mode."
+        },
+        "index_url": {
+          "description": "Cargo only: URL of the sparse crate index.\nDefaults to `https://index.crates.io` when the upstream is crates.io.\nSet this for self-hosted registries (e.g. Gitea/Forgejo package feeds).",
+          "type": "string"
+        },
+        "integrity": {
+          "$ref": "#/$defs/IntegrityConfig",
+          "description": "Optional artifact integrity (checksum) verification on proxied downloads.\nWhen absent, the defaults apply: verify against any advertised checksum\nand block on a mismatch; warn (do not block) when none is advertised."
+        },
+        "max_pending_nars": {
+          "description": "How many unclaimed `nix` NAR uploads one publisher may hold at once\n(RFC 0028 §4.4). Default 64; the next one answers `429`.\n\nThe floor that matters is the client's own concurrency: `nix copy`\nparallelises over `http-connections` (default **25**), and each\nin-flight path holds at most one unclaimed NAR, so a value below that\nwill refuse legitimate copies.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metadata_url": {
+          "description": "godist only: Go's release document, read for which releases and files\nexist and their `sha256`. Defaults to\n`https://go.dev/dl/?mode=json&include=all`; `upstreams` is the archive\ntree (`https://dl.google.com/go`). Rejected on any other type, for the\nreason `broker_url` is (RFC 0048 §4.1).",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/RegistryMode",
+          "description": "Controls proxy vs. local vs. hybrid behaviour for this registry."
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespaces": {
+          "description": "RFC 0015 §4.1 — namespace nodes beneath this registry.",
+          "items": {
+            "$ref": "#/$defs/NamespaceConfig"
+          },
+          "type": "array"
+        },
+        "nix_signing": {
+          "$ref": "#/$defs/NixSigningConfig",
+          "description": "Optional Ed25519 key a `nix` registry signs the narinfos it hosts with\n(RFC 0028 §4.1). `local`/`hybrid` only: a proxied narinfo keeps the\nupstream's `Sig:` lines byte-exact and is never re-signed.\n\nAbsent in `local`/`hybrid` mode is allowed and warned about — every\nstock client runs with `require-sigs = true` and refuses an unsigned\npath, but a fleet that has turned it off is a legitimate lab."
+        },
+        "oci_entries": {
+          "$ref": "#/$defs/OciEntries",
+          "description": "helm only: what an `index.yaml` entry whose `urls[0]` is `oci://`\nbecomes in the served index (RFC 0029 §4.4).\n\n- `drop` (the default when absent) — the entry is omitted, so the chart\n  version is not installable through this registry: an entry the proxy\n  cannot serve is one its policy cannot reach.\n- `relay` — the entry is served as upstream wrote it, and `helm` pulls it\n  from the OCI registry directly, **past this instance** — uncached and\n  ungated. Warned at every reload.\n\nRejected on any other type, for the reason `roles` is."
+        },
+        "on_confirmed": {
+          "description": "RFC 0014 §13 O6 — the registry-tier `on_confirmed`: what the upstream\naudit does with a disappearance confirmed on *this* registry,\n`\"audit\"` or `\"block\"`. Deepest wins: set, it overrides\n`[upstream_audit] on_confirmed` for this registry alone; absent, the\nestate's key applies. `\"block\"` needs the audit enabled and this\nregistry audited, which §4.9-style validation checks.",
+          "type": "string"
+        },
+        "path_allow": {
+          "default": [],
+          "description": "Glob allowlist of upstream paths this registry may serve. Only meaningful\nfor path-addressed registry types (`deb`/`rpm`/`pacman`/`jetbrains`/`generic`),\nwhere the request path is passed straight through to the upstream — without\nit, a registry pointed at a shared host (`storage.googleapis.com`, a CDN\nserving many vendors) would relay *every* path on that host.\n\nPatterns are matched against the upstream-relative path with\n[`glob::Pattern`] semantics, where `*` also crosses `/`. Required for\n`generic`; `[\"**\"]` is the explicit opt-out that allows everything.\n\n```toml\npath_allow = [\"v*/node-v*-linux-x64.tar.*\", \"v*/SHASUMS256.txt*\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_routing": {
+          "default": true,
+          "description": "Whether `/proxy/{name}/…` serves this registry. Defaults to `true`.\n\n`false` makes the registry reachable **only** through its `hosts` (or its\nwildcard host), so content handed to a team under `npm.acme.io` does not\nalso answer on the shared main host, where it would inherit that host's\nCORS policy, WAF rules and cache keys. The subpath then returns `404`, not\n`403` — a disabled ingress should look absent, not forbidden.\n\n`path_routing = false` on a registry with no reachable host is a config\nerror: nothing could talk to it.",
+          "type": "boolean"
+        },
+        "pending_nar_ttl_secs": {
+          "description": "How long an unclaimed `nix` NAR upload is kept, in seconds\n(RFC 0028 §4.4). Default 3600.\n\n`nix copy --to` sends a NAR before the narinfo that names it, so the\nbytes wait in a staging area with no coordinate of their own. This is\nhow long they wait before a later upload sweeps them.\n\n**Raise it for a link where the two requests are far apart**, not for a\nlarge closure: `nix copy` walks path by path, so the gap is one NAR's\nupload and one narinfo's round trip, whatever the closure's size.\nLowering it is a tighter leash on abandoned uploads.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prerelease_visibility": {
+          "$ref": "#/$defs/Visibility",
+          "description": "RFC 0015 §4.5 — the registry-tier default visibility for pre-releases.\n\nThis is what `[registries.beta_channel]` translates to (§10 rule 6), and\nit is accepted on proxy-mode registries — where it is inert — because\n`beta_channel` carries no mode restriction today and refusing it would\nstop such an instance booting on upgrade. §4.9 warns instead."
+        },
+        "proxy": {
+          "$ref": "#/$defs/UpstreamProxyConfig",
+          "description": "Optional HTTP/SOCKS proxy for upstream connections."
+        },
+        "quota": {
+          "$ref": "#/$defs/QuotaConfig",
+          "description": "Optional publish quota enforced on local/hybrid registries."
+        },
+        "rate_limit": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "Optional per-user request rate limit for this registry."
+        },
+        "raw": {
+          "$ref": "#/$defs/RawConfig",
+          "description": "`[registries.raw]` — raw file serving, off unless written (RFC 0019\n§4.1, phase 3)."
+        },
+        "rbac": {
+          "$ref": "#/$defs/RbacConfig",
+          "default": {
+            "admin": [],
+            "anonymous": [],
+            "explore": {
+              "admin": true,
+              "anonymous": true,
+              "user": true
+            },
+            "groups": {},
+            "user": []
+          }
+        },
+        "readme": {
+          "$ref": "#/$defs/ReadmeConfig",
+          "description": "Optional README capture configuration.\n\nUnlike [`Self::sbom`], **absent means enabled**: for the metadata-borne\nregistry kinds the text is a field of a document the proxy already\nfetches and parses, so the default costs one deserialised field\n(RFC 0007 §4.1)."
+        },
+        "refs": {
+          "$ref": "#/$defs/RefsConfig",
+          "description": "`[registries.refs]` — how long a forge ref → commit resolution is\ntrusted (RFC 0019 §4.1). Forge kinds only; validation refuses it\nelsewhere. Absent means the defaults: branches every minute, tags every\nhour."
+        },
+        "repo_signing": {
+          "$ref": "#/$defs/RepoSigningConfig",
+          "description": "Optional Ed25519 OpenPGP key for signing generated Deb/RPM repository\nmetadata (`Release`/`InRelease`/`Release.gpg`, `repomd.xml.asc`). When\nabsent, the hosted repository is unsigned."
+        },
+        "require_upstream_sigs": {
+          "default": false,
+          "description": "Refuse to relay a `nix` narinfo that carries no `Sig:` line at all.\n\nOff by default for two reasons: a content-addressed path (`CA:`)\nlegitimately has none — Nix's own `isContentAddressed` short-circuits\n`checkSignatures` — and the client's `require-sigs` is the check that\nactually protects the store. On, it closes the one case the client\ncannot see: an upstream mirror that silently dropped signatures\n(RFC 0028 §4.1).",
+          "type": "boolean"
+        },
+        "retention": {
+          "$ref": "#/$defs/RetentionConfig",
+          "description": "Optional retention policy for what this registry holds *locally*\n(RFC 0016). Absent means keep everything, forever, which is what every\ninstance does today.\n\nNot to be confused with [`CachePolicy`]'s `idle_days`/`keep_latest_n`,\nwhich govern the **proxy cache** and are a different problem: an evicted\ncache entry is re-fetchable from upstream, a reclaimed local version is\nfrequently the only copy in existence (RFC 0016 §5.1). The two are\ndeliberately separate blocks with opposite defaults, and this one must not\nbe implemented by widening that one."
+        },
+        "roles": {
+          "$ref": "#/$defs/GalaxyRoleMode",
+          "description": "galaxy only: how much of Ansible Galaxy's **v1 role** surface this\nregistry serves (RFC 0031 §4.4).\n\n- `proxy` (the default when absent) — the v1 read endpoints are served,\n  each role version's `download_url` is rewritten to this instance, and\n  the archive is fetched server-side from the host it names, through the\n  SSRF guard and only from the fixed role-download allowlist.\n- `index` — the same endpoints with `download_url` relayed. Role\n  metadata is proxied; role bytes are not, so the server makes no egress\n  to `github.com`.\n- `off` — the v1 endpoints answer `404` **and** `v1` is absent from the\n  discovery document, so `ansible-galaxy role install` fails on the\n  client's own *\"requires API versions 'v1'\"* rather than on a `404` an\n  operator reads as a proxy fault.\n\nRejected on any other type, for the reason `broker_url` and\n`deny_components` are: a silently ignored option is a misconfiguration\nnobody sees."
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuleConfig"
+          },
+          "type": "array"
+        },
+        "sbom": {
+          "$ref": "#/$defs/SbomConfig",
+          "description": "Optional SBOM generation configuration. When absent, SBOM is disabled."
+        },
+        "search_url": {
+          "description": "Base URL of the upstream search API used by the Package Explorer.\n\nWhen absent, each registry type falls back to its built-in default:\n- `maven`    → `https://search.maven.org`\n- `composer` → `https://packagist.org` (for packagist.org-based repos)\n\nSet to `\"\"` (empty string) to disable upstream search for this registry.\nHas no effect on registry types that do not support upstream search.",
+          "type": "string"
+        },
+        "security": {
+          "$ref": "#/$defs/SecurityConfig",
+          "description": "`[registries.security]` — the quarantine profile (RFC 0018 §4.1).\nAbsent means no quarantine: the gates run as rules, exactly as before."
+        },
+        "signed_downloads": {
+          "default": false,
+          "description": "Mint signed, expiring, single-coordinate download URLs in the protocol\ndocuments of this registry, and accept them on the artifact routes that\nthe client fetches without an `Authorization` header (RFC 0012).\n\nTerraform is the case this exists for: it authenticates the two JSON\ndocuments of a provider install and then fetches the archive, its\n`SHA256SUMS` and the `.sig` with no credential — measured, not read\n(RFC 0012 §11). Without this, such a registry needs\n`anonymous = [\"releases:read\", \"source:read\"]`, which opens *every* read\non it rather than the one step that needs opening.\n\nRequires `[server.signed_urls].secret`; setting it without one is a\nstartup error, because a registry that believes it is closed and is not\nis the failure this feature exists to prevent.",
+          "type": "boolean"
+        },
+        "signing": {
+          "$ref": "#/$defs/SigningConfig",
+          "description": "Optional artifact signing configuration (local/hybrid mode only)."
+        },
+        "storage": {
+          "description": "Name of the storage backend to use for this registry's artifacts.\nMust match one of the backend names in `[[storage.backends]]`.\nWhen absent, the default backend is used.",
+          "type": "string"
+        },
+        "sumdb_url": {
+          "description": "Base URL for the Go checksum database (`GOSUMDB`) proxy endpoint.\nOnly applies to `goproxy` registries.\nAbsent → default to `https://sum.golang.org`.\nSet to `\"\"` to disable `/sumdb/{path}` for this registry.\n\nProxying the checksum database is the other half of `GOPROXY`\n(RFC 0009 §7.4). Without it `go mod download` still opens a direct\nconnection to `sum.golang.org` for every module it has not seen, which\nfails closed in an air-gapped estate — so the proxy has moved the egress\nrather than removed it. A registry serving only private modules has no\nsumdb and should set `\"\"`, because a lookup there would leak private\nmodule paths upstream.",
+          "type": "string"
+        },
+        "tls": {
+          "$ref": "#/$defs/UpstreamTlsConfig",
+          "description": "TLS settings for upstream connections (e.g. custom CA certificate)."
+        },
+        "type": {
+          "type": "string"
+        },
+        "upstream_auth": {
+          "$ref": "#/$defs/UpstreamAuthConfig",
+          "description": "Credentials to send on every upstream request for this registry."
+        },
+        "upstream_detail": {
+          "$ref": "#/$defs/UpstreamDetailConfig",
+          "description": "Optional configuration for the console's discovery read — whether this\ninstance may ask upstream about a package it holds nothing of.\n\nA separate block from [`Self::readme`] because it is not a README\nsetting: it governs the version list too, and an operator may want one\nwithout the other. **Absent means enabled** (RFC 0007 §4.1)."
+        },
+        "upstreams": {
+          "default": [],
+          "description": "Upstream URLs tried in order; if a registry returns 404 the next one is tried.\nWhen empty the adapter's built-in default (e.g. registry.npmjs.org) is used.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "versioning": {
+          "$ref": "#/$defs/VersioningPolicy",
+          "description": "Optional versioning policy enforced at publish time (local/hybrid mode only)."
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "description": "RFC 0015 §4.1 — the registry-tier default visibility, inherited by every\nnamespace and package beneath it that does not set its own.\n\nVisibility is one of the policies §4.1 notes has \"no registry-level\nexpression at all\" today; the tier system regularises what is there\nrather than inventing it. Absent means `public`, which is the behaviour\non every existing instance."
+        },
+        "vsx_signing": {
+          "$ref": "#/$defs/VsxSigningConfig",
+          "description": "Optional Ed25519 key a `vscode-marketplace`/`openvsx` registry signs\nevery VSIX it publishes with (RFC 0020). The signature is served as the\ngallery's `VsixSignature` asset, which is what a current editor's\nExtensions view requires before it enables Install."
+        },
+        "vuln_db_url": {
+          "description": "Base URL for the Go Vulnerability Database (`govulndb`) proxy endpoints.\nOnly applies to `goproxy` registries.\nAbsent → default to `https://vuln.go.dev`.\nSet to `\"\"` to disable the `/v1/index.json`, `/v1/ID/{id}.json`, and\n`/v1/query` passthrough endpoints for this registry.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RegistryMode": {
+      "description": "Controls whether a registry acts as a caching proxy, a private authoritative\nregistry, or both.",
+      "oneOf": [
+        {
+          "const": "proxy",
+          "description": "Forward all requests to upstream registries and cache responses.",
+          "type": "string"
+        },
+        {
+          "const": "local",
+          "description": "BatleHub is the authoritative source; no upstream is consulted.",
+          "type": "string"
+        },
+        {
+          "const": "hybrid",
+          "description": "Check local publications first; fall back to upstream if not found.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReleaseAgeGateConfig": {
+      "properties": {
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the age gate (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny_missing_timestamp": {
+          "description": "When `true`, deny requests for packages whose upstream does not provide\na publish timestamp (instead of the default behaviour of skipping the\ncheck and allowing the download).\n\nUseful for registries — such as conda — where the timestamp field is\noptional: setting this to `true` forces every package to carry a\nverifiable age before it can be downloaded.\n\nAn `Option` so that *absence* is observable: on the toolchain kinds\n(`nodedist`; `sdkman` when it lands) this one field is most of the rule,\nand config validation refuses to let it default there (RFC 0010 §4.5,\n§6.7). Everywhere else an unset field means `false`, exactly as before —\nread it through [`Self::deny_missing_timestamp`].",
+          "type": "boolean"
+        },
+        "min_age_secs": {
+          "default": 3600,
+          "description": "Minimum age in seconds before a release is downloadable.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ReleaseImportConfig": {
+      "properties": {
+        "as": {
+          "$ref": "#/$defs/ImportPrincipalConfig",
+          "description": "Who the publish is, and answers as."
+        },
+        "assets": {
+          "description": "Asset name globs. Never empty: a release routinely carries checksums,\nsignatures and source tarballs beside the artifact, and \"everything\" is\nnever what an operator means.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "from": {
+          "description": "The registry fetched from — `github`, `gitlab` or `forgejo`. A\nconfigured registry and never a URL, so the fetch inherits its\ncredential, its allowlist and its SSRF guard (RFC 0021 §7).",
+          "type": "string"
+        },
+        "interval_secs": {
+          "description": "How often this import runs on its own. Absent means it runs only when\nan operator asks.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "into": {
+          "description": "The registry published into. Local or hybrid mode: a publish into a\nproxy-mode registry is a `404` at request time, and failing at load is\nthe same answer a day earlier.",
+          "type": "string"
+        },
+        "releases": {
+          "default": "latest",
+          "description": "`\"latest\"` (the newest release that is neither a draft nor a\npre-release), `\"all\"`, or one tag.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/repo` on the source forge.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RepoSigningConfig": {
+      "description": "Ed25519 repository-metadata signing key for `deb`/`rpm` registries.\n\n```toml\n[registries.repo_signing]\nseed_hex = \"9d61b19d...\"   # 32-byte Ed25519 seed, hex-encoded\nuser_id  = \"BatleHub Repo <repo@example.com>\"\ncreated  = 1700000000      # key creation unix time (stable across restarts)\n```",
+      "properties": {
+        "created": {
+          "description": "Key creation time (unix seconds). Part of the fingerprint, so it must stay\nstable. Defaults to 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seed_hex": {
+          "description": "Hex-encoded 32-byte Ed25519 seed.",
+          "type": "string"
+        },
+        "user_id": {
+          "description": "OpenPGP User ID string. Defaults to `\"BatleHub\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RequireSignedReleaseConfig": {
+      "description": "Gate downloads on the upstream's best-effort signature signal\n(`PackageMetadata::is_signed`) — e.g. a `.asc`/`.sig` release asset on\nGitHub/Forgejo, or a signature blob in an OpenVSX/VS Code extension.\nThis is *not* cryptographic verification: registries with no such signal\nfor their ecosystem (npm, PyPI, crates.io, Maven, …) report `is_signed =\nNone`, which this rule allows through by default (see\n`deny_missing_signature`).",
+      "properties": {
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the signature requirement (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny_missing_signature": {
+          "default": false,
+          "description": "When `true`, deny releases from registries that report no signature\nsignal at all (`is_signed == None`), instead of skipping the check.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RetentionConfig": {
+      "additionalProperties": false,
+      "description": "Retention policy for locally published versions and for the tombstones they\nleave behind (RFC 0016).\n\nValid at **registry tier**. The namespace and package tiers RFC 0016 §4.1\ndescribes need RFC 0015's namespace config blocks and its `policy` table,\nneither of which exists; the version-tier `keep` pin does *not* need them and\nis a column on the version row, set through the admin API beside\n`yanked`/`unlisted`.\n\n# Keep conditions are a union of vetoes\n\n**A version survives if *any* configured condition matches.** There is no\nexpression to write and no ordering to get wrong: the only way to reclaim a\nversion is for every configured condition to decline to keep it. Wrong\nconfiguration therefore fails toward keeping, which is the direction that is\nrecoverable (RFC 0016 §4.2).",
+      "properties": {
+        "download_signal_floor_days": {
+          "description": "The date before which \"no recorded download\" proves nothing (RFC 0016 §4.3).\n\nExpressed as days before now. The Maven and NuGet local artifact paths\nrecorded no download event at all until the 2026-08-26 survey\nremediation, so for those ecosystems the audit trail is silent for that\nperiod, and a retention run that read the silence as disuse would reclaim\nversions the estate was using every day.\n\nA version whose only evidence is older than the floor is **kept**. Unset\nuses the built-in floor, which is the remediation date itself; set it\nexplicitly if this instance's audit history begins later — after a\nrestore from backup, say, or an `audit_purge`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Report what a run would reclaim or strip, and change nothing. **On by\ndefault**, so a configured policy does nothing until the operator has\nread a report and turned it off.\n\nRetention is the one policy whose dry-run direction is unambiguously safe\n— the system does less — which is why it is the only one that defaults to\non (RFC 0016 §4.2).",
+          "type": "boolean"
+        },
+        "keep_for_days": {
+          "description": "Keep anything **published** within this many days.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keep_if_pulled_days": {
+          "description": "Keep anything **downloaded** within this many days.\n\nThe rule that makes retention safe to switch on: whatever anyone is\nactually using stays, regardless of age or count (RFC 0016 §4.3).\n\nReads the download signal, so it also reads\n[`Self::download_signal_floor_days`] — absence of a pull record from\nbefore the floor is not evidence of disuse.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keep_versions": {
+          "description": "Keep the newest N versions of every package, by publish date.\n\nAlone, this throws away the version half the estate is pinned to because\nit happens to be N+1th by date. Pair it with `keep_if_pulled_days`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keep_yanked": {
+          "default": true,
+          "description": "Keep yanked versions. **On by default**: a yank says \"do not install\nthis\", which is a reason to stop resolving it and not a reason to destroy\nthe only copy — a yanked version is frequently the one an incident is\nstill being investigated against.",
+          "type": "boolean"
+        },
+        "reclaim_delay_ms": {
+          "default": 0,
+          "description": "Milliseconds to wait between reclamations in one run.\n\nA first live run on an estate that has never reclaimed anything may drop\na large fraction of its storage in one pass. A rate limit rather than a\nper-run cap, per RFC 0016 §11: a cap leaves the estate mid-reclamation in\na state nothing else models, where every intermediate state of a paced\nrun is a valid one.\n\n`0` — the default — paces nothing.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tombstone_detail_for_days": {
+          "description": "Days after deletion at which a tombstone's *detail* — index metadata,\nchecksum, publisher, signature — is stripped, keeping the coordinate\nclaim forever (RFC 0016 §4.5).\n\n**Unset by default.** Disk is recoverable; a question an auditor can no\nlonger answer is not. Nothing is stripped until an operator asks for it.\n\nThere is deliberately no setting that *removes* a tombstone. Not \"off by\ndefault\" — absent from the schema, so it cannot be reached by an operator\nin a hurry, because collecting a tombstone reopens the hole tombstones\nexist to close.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RuleConfig": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ReleaseAgeGateConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "release_age_gate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/RequireSignedReleaseConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "require_signed_release",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DenyLatestConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "deny_latest",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CveGateConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "cve_gate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/LicenseGateConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "license_gate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/VersionGateConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "version_gate",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TrustedPublisherConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "trusted_publisher",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "RuleMatch": {
+      "enum": [
+        "all",
+        "any"
+      ],
+      "type": "string"
+    },
+    "S3StorageConfig": {
+      "description": "Config for the S3-compatible storage backend adapter. Lives in `core`\n(rather than `crates/config`, which re-exports it) so `adapters` doesn't\nneed a dependency on the `config` crate.",
+      "properties": {
+        "bucket": {
+          "type": "string"
+        },
+        "endpoint_url": {
+          "type": "string"
+        },
+        "force_path_style": {
+          "description": "Use path-style URLs (required for RustFS and other S3-compatible stores).",
+          "type": "boolean"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SandboxConfig": {
+      "description": "`[worker.sandbox]` — parsed now, enforced by phase 3's subprocess runner.",
+      "properties": {
+        "cpu_seconds": {
+          "default": 300,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_entries": {
+          "default": 50000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_extracted_mb": {
+          "default": 512,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_limit_mb": {
+          "default": 2048,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runtime": {
+          "default": "bwrap",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SbomConfig": {
+      "description": "Per-registry SBOM generation configuration.\n\n```toml\n[registries.sbom]\nenabled        = true\nformats        = [\"spdx\", \"cyclonedx\"]\nrequired       = false   # deny publish when no manifest found\nfetch_upstream = true    # try GitHub/npm upstream SBOM APIs first\n```",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable SBOM generation for this registry.",
+          "type": "boolean"
+        },
+        "fetch_upstream": {
+          "default": true,
+          "description": "When `true`, attempt to fetch a pre-built SBOM from the upstream before\nfalling back to extraction / minimal generation.",
+          "type": "boolean"
+        },
+        "formats": {
+          "default": [
+            "spdx",
+            "cyclonedx"
+          ],
+          "description": "Formats to generate. Defaults to both when enabled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ScannerConfig": {
+      "description": "`[scanners.<name>]`, tagged by `type`.\n\nEvery scanner the RFC names parses, so a config written for the full set\nround-trips; which ones a build can *run* is [`ScannerConfig::available`].\nPhase 1 ships `osv`; the archive and external scanners arrive with phases\n3 and 5, and a registry that lists one before then is refused at startup\nrather than silently scanned with nothing.",
+      "oneOf": [
+        {
+          "properties": {
+            "api_url": {
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "type": {
+              "const": "osv",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "timeout_secs": {
+              "default": 60,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "trivy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "online": {
+              "default": false,
+              "type": "boolean"
+            },
+            "timeline": {
+              "default": true,
+              "type": "boolean"
+            },
+            "type": {
+              "const": "postmortem",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "ecosystems": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "type": {
+              "const": "guarddog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "api_key": {
+              "type": "string"
+            },
+            "api_url": {
+              "description": "The CVE API base; `https://vuln.mlab.sh` when absent.",
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "type": {
+              "const": "mlab",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "rekor_url": {
+              "type": "string"
+            },
+            "require_for": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "sigstore",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "api_key": {
+              "type": "string"
+            },
+            "api_url": {
+              "description": "The REST base; `https://api.socket.dev` when absent.",
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "type": {
+              "const": "socket",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Operator-supplied YARA rules, run by yara-x's `yr` in the sandbox\n(RFC 0036 §6.6). The worker refuses to start without the binary or\nwithout a rule file under `rules_dir`.",
+          "properties": {
+            "command": {
+              "default": "/usr/local/bin/yr",
+              "type": "string"
+            },
+            "escalation": {
+              "$ref": "#/$defs/EscalationConfig"
+            },
+            "rules_dir": {
+              "type": "string"
+            },
+            "type": {
+              "const": "yara",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScannerErrorMode": {
+      "description": "`scanner_error` — what a scanner that crashed or timed out does.",
+      "enum": [
+        "quarantine",
+        "warn",
+        "ignore"
+      ],
+      "type": "string"
+    },
+    "SearchConfig": {
+      "additionalProperties": false,
+      "description": "What the catalogue's search matches (RFC 0007-bis §4.1).\n\n```toml\n[search]\nreadmes     = true        # match README prose as well as package names\ntext_config = \"english\"   # the Postgres text search configuration\n```\n\n**Off by default**, unlike README *capture*, which RFC 0007 defaulted on\nbecause it costs one already-parsed field. This builds an index over prose,\nand the cost is storage plus write amplification on every capture. An\noperator should choose it.",
+      "properties": {
+        "readmes": {
+          "default": false,
+          "description": "Match README prose as well as package names.\n\nWith this off, `?in=readme` and `?in=both` are accepted and answer\nexactly as `?in=name` does, plus a response field saying so. A parameter\nthat silently means something else is the failure this whole RFC family\nkeeps finding; one that says *\"prose search is not enabled on this\ninstance\"* is one an operator can act on.",
+          "type": "boolean"
+        },
+        "text_config": {
+          "default": "english",
+          "description": "The Postgres text search configuration the index is built with.\n\nSettable because an estate whose internal packages are documented in\nanother language is precisely the kind of deployment that self-hosts.\nChanging it **rebuilds the generated column** — `to_tsvector` in one must\nbe IMMUTABLE, so the configuration has to be a literal — which makes this\na decision to take at install rather than to tune later. The server does\nthe rebuild on startup and says so in the log rather than leaving an\noperator to find out during a migration.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SecurityConfig": {
+      "description": "`[registries.security]`.",
+      "properties": {
+        "deny_install_hooks": {
+          "$ref": "#/$defs/InstallHookMode",
+          "default": "warn"
+        },
+        "hold_missing_timestamp": {
+          "default": true,
+          "description": "Hold a version the upstream did not date. Default true: the gate's\n`deny_missing_timestamp` under the verdict's name, defaulted the\nother way.",
+          "type": "boolean"
+        },
+        "mature_age_secs": {
+          "default": 86400,
+          "description": "Served `warned` while a scan is still pending above this age. Default\none day, which with the default `min_age_secs` leaves the scan-hold\nwindow empty (§4.1 says so). `0` never serves unscanned.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_severity": {
+          "default": "high",
+          "description": "Findings at or above this severity deny (`block`) or warn.",
+          "type": "string"
+        },
+        "min_age_secs": {
+          "default": 86400,
+          "description": "Never served below this age. Default one day; floor one hour.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/SecurityMode",
+          "default": "block",
+          "description": "`\"block\"` (default) or `\"warn\"`."
+        },
+        "pullers_window_days": {
+          "default": 30,
+          "description": "How far back the flip alert names who pulled a version, and the\ndefault window of the `pullers` report (RFC 0018 decision 23).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_provenance": {
+          "default": false,
+          "type": "boolean"
+        },
+        "required_scanners": {
+          "default": [
+            "osv"
+          ],
+          "description": "Must all answer before serving. Default `[\"osv\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rescan": {
+          "$ref": "#/$defs/SecurityRescanConfig"
+        },
+        "scanner_error": {
+          "$ref": "#/$defs/ScannerErrorMode",
+          "default": "quarantine"
+        },
+        "scanners": {
+          "default": [
+            "osv"
+          ],
+          "description": "Names from `[scanners]`. Default `[\"osv\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unknown_severity": {
+          "description": "What an unrated (`unknown`) finding is judged at against\n`max_severity` (RFC 0041 §4.5). Absent means `high`; `unknown`\nrestores \"an unrated finding never acts\". An `Option` so a warning can\ntell a chosen value from the default.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SecurityMode": {
+      "description": "`mode` — what findings at or above the threshold do.",
+      "enum": [
+        "block",
+        "warn"
+      ],
+      "type": "string"
+    },
+    "SecurityRescanConfig": {
+      "description": "`[registries.security.rescan]` (RFC 0018 phase 4): `interval_secs > 0`\nhas the rescan scheduler queue a `Rescan` for every verdict of the\nregistry whose last scan is older than that; `on_webhook` is whether an\ninbound `security.rescan` is honoured regardless of the interval.",
+      "properties": {
+        "interval_secs": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "on_webhook": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ServerConfig": {
+      "properties": {
+        "api_docs": {
+          "$ref": "#/$defs/ApiDocsConfig",
+          "description": "The `/scalar` API reference. See [`ApiDocsConfig`]."
+        },
+        "cli_binary_path": {
+          "description": "Path to the `batlehub-cli` binary to serve via `GET /api/v1/cli/download`.\nWhen absent the endpoint returns 404.\n\n```toml\n[server]\ncli_binary_path = \"/usr/local/bin/batlehub-cli\"\n```",
+          "type": "string"
+        },
+        "cors_allowed_origins": {
+          "description": "Allowed CORS origins. When set, only the listed origins receive\nAccess-Control-Allow-Origin headers. When absent, all origins are\nallowed (suitable for development; restrict in production).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host": {
+          "default": "0.0.0.0",
+          "type": "string"
+        },
+        "port": {
+          "default": 8080,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roles": {
+          "default": [
+            "proxy",
+            "worker"
+          ],
+          "description": "What this process does (RFC 0018 §4.1): `proxy` serves requests and\nenqueues scan jobs, `worker` dequeues and scans. Default both — the\nembedded worker — so every existing deployment keeps working.",
+          "items": {
+            "$ref": "#/$defs/ProcessRole"
+          },
+          "type": "array"
+        },
+        "signed_urls": {
+          "$ref": "#/$defs/SignedUrlsConfig",
+          "description": "Signing material for RFC 0012 download URLs. Absent means the feature is\nunavailable, and any registry with `signed_downloads = true` is a\nstartup error rather than a registry that quietly serves nothing."
+        },
+        "static_dir": {
+          "description": "Directory from which to serve the built SPA (optional).",
+          "type": "string"
+        },
+        "trusted_proxies": {
+          "description": "CIDR ranges (or bare IPs) of the reverse proxies in front of BatleHub.\n`Forwarded` / `X-Forwarded-Host` / `X-Forwarded-Proto` / `X-Forwarded-For`\nare honoured only when the TCP peer falls inside one of these.\n\n```toml\n[server]\ntrusted_proxies = [\"10.42.0.0/16\", \"192.168.1.10\"]\n```\n\nThree distinguishable states, which is why this is an `Option`:\n\n| Value    | Behaviour                                                        |\n|----------|------------------------------------------------------------------|\n| absent   | legacy permissive — forwarded host/scheme believed unconditionally, `X-Forwarded-For` ignored. A hard error once host-based routing is configured. |\n| `[]`     | forwarded headers ignored entirely; the `Host` header and the connection decide. |\n| `[nets]` | forwarded headers honoured only from peers inside those prefixes. |\n\nA bare address is accepted and treated as a `/32` (`/128` for IPv6), so\nevery value that was valid for the deprecated\n`[ip_blocking].trusted_proxies` stays valid here.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SignedUrlsConfig": {
+      "additionalProperties": false,
+      "description": "`[server.signed_urls]` — the instance secret that signs download URLs.\n\nGlobal rather than per-registry because the key is a property of the\ninstance, not of a registry; the per-registry switch is\n`[[registries]].signed_downloads`.\n\n```toml\n[server.signed_urls]\n# The loader interpolates ${VAR}; a signing key does not belong in a file\n# that gets committed. See docs/guide/configuration.md, \"Sensitive values\".\nsecret           = \"${BATLEHUB_URL_SIGNING_SECRET}\"\nttl_seconds      = 300   # default; hard-capped at 3600\n# Only while rotating. `${VAR}` interpolation *fails the whole config load*\n# when the variable is unset (`expand_braced_var`), so once the old secret is\n# retired either remove this line or export the variable as an empty string —\n# an entry that interpolates to empty is dropped.\nprevious_secrets = [\"${BATLEHUB_URL_SIGNING_SECRET_OLD}\"]\n```",
+      "properties": {
+        "previous_secrets": {
+          "default": [],
+          "description": "Verified against but never minted with, so a secret can be rotated\nwithout a flag day. An entry that interpolates to empty is dropped, so\n`BATLEHUB_URL_SIGNING_SECRET_OLD=\"\"` is a valid steady state — but the\nvariable must still *exist*: `${VAR}` expansion happens before parsing\nand `expand_braced_var` refuses an unset variable, so leaving the line in\nplace with the variable unset fails the config load outright rather than\nbeing ignored. Remove the line or export it empty once rotation is done.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "secret": {
+          "description": "HMAC signing secret, 32 bytes minimum.",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "default": 300,
+          "description": "Lifetime of a minted URL. Terraform follows one within milliseconds, so\nthe margin is for a slow runner rather than for a human.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SigningConfig": {
+      "description": "Per-registry artifact signing configuration.",
+      "properties": {
+        "allowed_types": {
+          "default": [],
+          "description": "Accepted signature types (e.g. `[\"pgp\", \"ed25519\"]`).\nWhen empty, any type (or no type) is accepted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "trusted_keys": {
+          "default": [],
+          "description": "Hex-encoded 32-byte Ed25519 public keys trusted to sign artifacts in this\nregistry. A download verifies against each in turn; any match passes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "verify_on_download": {
+          "default": false,
+          "description": "When `true`, verify a stored `ed25519` detached signature against\n`trusted_keys` on every download. A stored signature that fails to verify\n(or was signed by an untrusted key) fails the download with `502`.\nA stored signature of an *unsupported* type (anything other than\n`ed25519`, which cannot be verified here) is likewise **rejected** with\n`502` — the download fails closed rather than serving unverified bytes.\nOnly artifacts with *no* stored signature are exempt (their presence is\ngoverned by `required` at publish time).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SlackChannelConfig": {
+      "description": "Slack Incoming Webhook channel.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 10,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StatsConfig": {
+      "additionalProperties": false,
+      "description": "Both of the instance's statistical outputs, in one block.\n\nThey live together because an operator deciding \"do I want this instance\nkeeping numbers\" is asking one question, not two (RFC 0004 R9) — even though\nthe two flags answer different halves of it: `metrics_enabled` is about\n*exposure*, `history_enabled` is about *storage*.\n\n```toml\n[stats]\n# The rollup behind the dashboard's trend.\nhistory_enabled        = true   # default\nhistory_retention_days = 30     # 0 disables retention pruning\n\n# The Prometheus recorder and the /metrics endpoint.\nmetrics_enabled        = true   # default: today's behaviour\n```",
+      "properties": {
+        "dashboard_url": {
+          "description": "The global monitoring link, shown on Admin → Dashboard (RFC 0044\n§4.1). No placeholder. Absent: no button.",
+          "type": "string"
+        },
+        "history_enabled": {
+          "default": true,
+          "description": "Record the hourly cache-statistics rollup that backs the admin\ndashboard's trend. `false` restores the pre-RFC-0004 dashboard, which\nshows only counters since the current process started.",
+          "type": "boolean"
+        },
+        "history_retention_days": {
+          "default": 30,
+          "description": "How many days of rollup rows to keep. `0` disables pruning rather than\ndisabling history — that is what `history_enabled = false` is for.\n\nOne row per registry per hour is under 9 000 rows a year per registry,\nso this is a tidiness setting, not a storage argument (RFC 0004 R9).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metrics_enabled": {
+          "default": true,
+          "description": "Install the Prometheus recorder and serve `/metrics`.\n\n**This is a security control, not a preference** (RFC 0004 §7).\n`/metrics` is unauthenticated and, before RFC 0004, unconditional: it\npublishes cache hit rates, per-registry pull volumes and upstream\nlatencies to anyone who can reach the port. That is defensible behind an\ningress that does not route it, and indefensible for a self-hoster who\nhad no way to turn it off. Defaults to `true` so no existing scrape\nbreaks on upgrade.",
+          "type": "boolean"
+        },
+        "registry_dashboard_url": {
+          "description": "The per-registry monitoring link, shown on each registry page.\n`{registry}` is its only placeholder, replaced percent-encoded by\n[`monitoring_url_for`].",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StorageBackendConfig": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/FilesystemStorageConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "filesystem",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/S3StorageConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "s3",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "StoragesConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StorageBackendConfig",
+          "description": "Legacy single backend (no `default` or `backends` keys)."
+        },
+        {
+          "$ref": "#/$defs/MultiStorageConfig",
+          "description": "New multi-backend with explicit default selection."
+        }
+      ],
+      "description": "Accepts both the legacy single-backend form and the new multi-backend form.\n\nLegacy (single backend, backwards-compatible):\n```toml\n[storage]\ntype = \"filesystem\"\npath = \"./tmp/cache\"\n```\n\nMulti-backend:\n```toml\n[storage]\ndefault = \"primary\"\n\n[[storage.backends]]\nname = \"primary\"\ntype = \"filesystem\"\npath = \"./tmp/cache\"\n\n[[storage.backends]]\nname = \"rustfs\"\ntype = \"s3\"\nbucket = \"artifacts\"\nregion = \"us-east-1\"\nendpoint_url = \"http://localhost:9900\"\nforce_path_style = true\n```"
+    },
+    "SubdomainRoutingConfig": {
+      "description": "Global wildcard host derivation.\n\n```toml\n[subdomain_routing]\nenabled     = true\nbase_domain = \"hub.example.com\"   # npm1.hub.example.com -> registry \"npm1\"\nscheme      = \"https\"             # only used to render public URLs\n```",
+      "properties": {
+        "base_domain": {
+          "description": "The domain wildcard hosts hang off. Required when `enabled = true`.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Derive a host for every registry from its name. When `false` (or the\nwhole section is absent) only explicit `hosts` entries route.",
+          "type": "boolean"
+        },
+        "scheme": {
+          "default": "https",
+          "description": "Scheme used when *advertising* a registry's public URL in the API and UI.\nNever affects routing — a request's own scheme decides that.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TeamsChannelConfig": {
+      "description": "Microsoft Teams Incoming Webhook channel.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 10,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TokenAuthConfig": {
+      "properties": {
+        "tokens": {
+          "items": {
+            "$ref": "#/$defs/TokenEntry"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "TokenEntry": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TrustedPublisherConfig": {
+      "description": "Restrict downloads to packages published by an allowed org/user/scope.\n\nThe publisher is derived from already-resolved metadata, with no extra\nupstream calls — supported for `github`/`gitlab`/`forgejo` (top-level\nowner/group), `npm` (scope, or the publishing user when unscoped), and\n`openvsx`/`vscode-marketplace` (the extension's publisher segment).\n**Not yet supported for `cargo`** (crates.io ownership isn't in the sparse\nindex and would need a separate API call) — configuring this rule on an\nunsupported registry denies every request. Matching is case-insensitive.\n\n```toml\n[[registries.rules]]\nkind = \"trusted_publisher\"\nallow = [\"my-org\", \"trusted-user\"]\nbypass_roles = [\"admin\"]\n```",
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Allowed publisher identifiers (org/user/scope). When non-empty, a\npackage whose derived publisher matches none of these is rejected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the gate (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "UpstreamAuditConfig": {
+      "additionalProperties": false,
+      "description": "`[upstream_audit]` (RFC 0014 §4.1): the periodic sweep that asks each\nproxy/hybrid upstream whether the artifacts cached from it still exist,\nconfirms a disappearance across sweeps, and holds a confirmed artifact\nback from eviction.\n\n`deny_unknown_fields`: a typo in `confirm_after` must fail the load, not\nsilently take the default. Concurrency is `[worker].max_concurrent` —\nthe sweep runs on the worker role (0014 §13).\n\n```toml\n[upstream_audit]\nenabled              = true\ninterval_secs        = 21600\nconfirm_after        = 3\nconfirm_min_age_secs = 86400\noutage_ratio         = 0.25\non_confirmed         = \"audit\"\nretain_disappeared   = true\nskip_recently_seen   = true\nregistries           = []\n```",
+      "properties": {
+        "confirm_after": {
+          "default": 3,
+          "description": "Consecutive valid-sweep misses a disappearance must survive.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "confirm_min_age_secs": {
+          "default": 86400,
+          "description": "…and at least this long since the first miss. Both floors must clear.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Nothing sweeps unless asked: scheduled outbound traffic to third\nparties is opt-in, like `[vulnerability_scan]`.",
+          "type": "boolean"
+        },
+        "interval_secs": {
+          "default": 21600,
+          "description": "Seconds between sweeps. Default six hours; floor five minutes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "on_confirmed": {
+          "default": "audit",
+          "description": "`\"audit\"` (report and hold) or `\"block\"` (also refuse on the wire —\nRFC 0014 phase 6, refused until it lands).",
+          "type": "string"
+        },
+        "outage_ratio": {
+          "default": 0.25,
+          "description": "Above this fraction of a registry's probed packages missing, the\nsweep is void for that registry: an outage, not an unpublish.",
+          "format": "double",
+          "type": "number"
+        },
+        "registries": {
+          "default": [],
+          "description": "Empty = every `proxy`/`hybrid` registry; else only these names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "retain_disappeared": {
+          "default": true,
+          "description": "Hold confirmed artifacts back from TTL, idle and keep-latest-N\neviction (not from the LRU size cap), and pin their metadata.",
+          "type": "boolean"
+        },
+        "skip_recently_seen": {
+          "default": true,
+          "description": "A package re-cached from upstream since the last sweep started was\npresent then; skip its probe.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "UpstreamAuthConfig": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BearerAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "bearer",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "basic",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HeaderAuthConfig"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "header",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "UpstreamDetailConfig": {
+      "description": "Whether the console may ask upstream about a package this instance holds\nnothing of, and how much of the answer it may show.\n\n```toml\n[registries.upstream_detail]\nenabled           = true    # the console may ask upstream about a package we hold nothing of\nmax_versions      = 300     # cap on upstream-only versions returned for one package\nnegative_ttl_secs = 300     # how long an upstream \"no such package\" is remembered\n```\n\n**There is no TTL of its own.** The document lands in the existing metadata\ncache, so it obeys the registry's `metadata_ttl_secs` and its `serve_stale`.\nA second, independently clocked expiry for the same bytes is how two caches\ncome to disagree about one document.\n\nInert on a `local`-mode registry — there is no upstream to ask — and on the\npath-addressed kinds, which have no package identity to ask about. Both are\nwarned about rather than rejected.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_versions": {
+          "default": 300,
+          "description": "Cap on the upstream-only versions one package's page is handed. Applied\nnewest-first, and the response says it was applied: a silently shortened\nlist is a lie about the registry.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "negative_ttl_secs": {
+          "default": 300,
+          "description": "How long an upstream `404` is remembered, so a bad URL, a typo or a\ncrawler cannot turn every reload into an upstream request. A connection\nfailure is not a fact about the package and is never remembered.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "UpstreamProxyConfig": {
+      "description": "HTTP/SOCKS proxy to use when connecting to upstream registries.\n\n```toml\n[registries.proxy]\nurl = \"http://proxy.corp.example.com:3128\"\n# username = \"proxyuser\"   # optional; alternative to embedding in the URL\n# password = \"proxypass\"   # optional\n# no_proxy = \"localhost,internal.example.com\"\n```",
+      "properties": {
+        "no_proxy": {
+          "description": "Comma-separated list of hosts or domains to bypass the proxy for\n(e.g. `\"localhost,10.0.0.0/8,internal.example.com\"`).\nEquivalent to the `NO_PROXY` environment variable.",
+          "type": "string"
+        },
+        "password": {
+          "description": "Optional proxy password (sets Basic auth; overrides any credentials in `url`).",
+          "type": "string"
+        },
+        "url": {
+          "description": "Proxy URL. Supports `http://`, `https://`, and `socks5://` schemes.\nCredentials can be embedded: `http://user:pass@proxy:3128`.",
+          "type": "string"
+        },
+        "username": {
+          "description": "Optional proxy username (sets Basic auth; overrides any credentials in `url`).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UpstreamTlsConfig": {
+      "properties": {
+        "ca_cert_path": {
+          "description": "Path to a PEM-encoded CA certificate to trust for this registry's upstream.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "VersionGateConfig": {
+      "description": "Gate downloads by version: an optional approved-version allowlist plus a\nblocklist of specific versions with known issues. Each entry is an exact\nversion string or a semver range (e.g. `\">=1.2.0, <2.0.0\"`).\n\n```toml\n[[registries.rules]]\nkind = \"version_gate\"\nallow = [\">=1.2.0, <2.0.0\"]   # optional: when set, only matching versions are served\nblock = [\"1.4.7\", \"1.5.0\"]    # specific versions with known issues\nbypass_roles = [\"admin\"]\n```",
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Approved-version allowlist. When non-empty, a version that matches none of\nthese entries is rejected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "block": {
+          "default": [],
+          "description": "Blocklist of specific versions (or ranges) with known issues.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the gate (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "VersioningPolicy": {
+      "description": "Versioning policy: what a version may be called, and whether it may change.\n\nRegistry-level today and namespace-level as of RFC 0015 phase 4 — which is\nmost of the value on its own, since a policy that is right for\n`com.acme.internal` is rarely right for the vendored third-party namespace\nbeside it, and one setting per registry forces the looser of the two.",
+      "properties": {
+        "allow_prerelease": {
+          "default": true,
+          "description": "Reject publish if the semver pre-release component is non-empty (e.g. `-alpha`, `-beta.1`).\nOnly effective when `enforce_semver` is also `true`.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Evaluate fully, record what would have been refused, refuse nothing\n(RFC 0015 §4.7).\n\n**Direction: mixed.** A badly-named or duplicate version is accepted, so\nbad data lands — but nothing leaks. That is why this one has no expiry\nrequirement while `grants.dry_run` does: forgetting it costs a messy\nregistry, where forgetting the other one is an authorization bypass.\n\nDefaults to `false`, as §4.7 requires. Only `retention.dry_run` defaults\nto `true`, and RFC 0016 argues that from the fact that it is the only one\nof the three whose dry-run direction is unambiguously safe.",
+          "type": "boolean"
+        },
+        "enforce_semver": {
+          "default": false,
+          "description": "Reject publish if the version string is not a valid semver (e.g. `1.2.3`, `1.0.0-beta.1`).",
+          "type": "boolean"
+        },
+        "immutable": {
+          "$ref": "#/$defs/Immutable",
+          "default": "never",
+          "description": "Whether these bytes may be replaced (RFC 0015 §4.5).\n\nThe one field of this block honoured at **version** tier, where freezing\na single golden build inside a namespace that otherwise permits\nreplacement is the motivating case (§4.1)."
+        },
+        "monotonic": {
+          "default": false,
+          "description": "Refuse a publish whose version does not sort strictly above the newest\nexisting one for that package (RFC 0015 §4.5).\n\nCatches what `immutable` cannot: republishing an *older* number after a\nbad release, which leaves a resolver picking a version that was never\nmeant to come back. Ordered by\n[`version_order::newest_first`](batlehub_core::services::version_order::newest_first),\nalready the single ordering function in the tree.\n\nThree consequences, each stated in §4.5 rather than left to be\ndiscovered:\n\n- **A yanked or deleted version still counts** as the newest, which RFC\n  0016's soft delete is what makes possible. Otherwise deleting `2.0.0`\n  would let `1.9.9` be re-taken.\n- **Pre-releases fall out correctly** with no special case: `1.3.0-rc1`\n  sorts above `1.2.0` and is accepted, while `1.2.0-rc1` after `1.2.0`\n  sorts below and is refused.\n- **Bulk import is incompatible with it** by construction, since a\n  package's history publishes oldest-first. Import with `monotonic =\n  false` and turn it on afterwards; there is deliberately no bypass verb.",
+          "type": "boolean"
+        },
+        "version_pattern": {
+          "description": "Reject publish if the version string does not match this regex.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Visibility": {
+      "description": "How wide the audience for a resource is — RFC 0015 §4.5's one *narrowing*\ndimension.\n\nGrants and visibility answer the same question from opposite directions, and\nthe model ships both deliberately: a grant says *this subject may* and\ncomposes by union, so it can only ever widen; visibility says *the audience\nis this wide*, is a single scalar, and composes deepest-wins, so it can only\never narrow. **A caller needs both** — a grant for the verb and membership of\nthe audience — which is an AND, not a fallback. A `releases:read` grant does\nnot make a `team` package public, and a `public` namespace does not serve a\ncaller no grant matches.\n\nThe variants are declared widest to narrowest. Nothing in production compares\ntwo of them today — visibility composes deepest-wins, which picks a value\nrather than ordering two — but the derived `Ord` is part of the type's public\nshape, and an enum whose order reads as arbitrary is one somebody reorders for\nreadability. `visibility_is_ordered_widest_to_narrowest` pins it.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Anyone, including anonymous users, may download.",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "Any authenticated user may download.",
+          "type": "string"
+        },
+        {
+          "const": "team",
+          "description": "Only members of the owning team group may download.",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "description": "Inherited read grants do not apply — only grants written on this node or\nbelow (RFC 0015 §4.5).\n\nThis is the case the other three cannot express: narrowing to *fewer\nsubjects than the parent named*, which is RFC 0011-bis §4.3's empty\nreader set — the shape it uses to keep one package private inside a\nshared namespace. It is a scalar rather than a second subject list, so it\nenumerates nobody and adds no second place to look.\n\n**Package and version tier only.** §4.9 rejects it at registry or\nnamespace tier, where \"only grants written at this node or below\" either\nsays nothing or says what `grants = {}` already says properly — accepting\nit higher up would give sealing a second, weaker spelling.\n\n§4.3's administrative floor applies to it exactly as it does to a seal,\nso it cannot lock an operator out of their own registry.",
+          "type": "string"
+        }
+      ]
+    },
+    "VsxSigningConfig": {
+      "description": "Ed25519 VSIX signing key for `vscode-marketplace`/`openvsx` registries\n(RFC 0020 §4.1).\n\n```toml\n[registries.vsx_signing]\nseed_hex = \"${VSX_SIGNING_SEED}\"   # 32-byte Ed25519 seed, hex-encoded\nkey_id   = \"2026-09\"               # optional; default: 16 hex chars of SHA-256(public key)\n```",
+      "properties": {
+        "key_id": {
+          "description": "The id the public key is served under\n(`/proxy/{registry}/api/-/public-key/{key_id}`). Must change when the\nkey does; the default derives it from the key, so it does.",
+          "type": "string"
+        },
+        "seed_hex": {
+          "description": "Hex-encoded 32-byte Ed25519 seed. A secret of the same class as\n`repo_signing.seed_hex`: keep it out of the file with `${VAR}`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "VulnerabilityScanConfig": {
+      "description": "Periodic SBOM-vs-CVE re-check configuration.\n\n```toml\n[vulnerability_scan]\nenabled       = true\ninterval_secs = 86400          # daily\nosv_api_url   = \"https://api.osv.dev\"\nbatch_size    = 100\n```",
+      "properties": {
+        "batch_size": {
+          "default": 100,
+          "description": "Number of SBOMs processed per page. Defaults to 100.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the periodic background scan.",
+          "type": "boolean"
+        },
+        "interval_secs": {
+          "default": 86400,
+          "description": "Seconds between scan runs. Defaults to one day.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "osv_api_url": {
+          "description": "Base URL of the OSV API. Defaults to `https://api.osv.dev` when absent.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "WebhookChannelConfig": {
+      "description": "Generic outbound HTTP webhook channel.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "description": "Optional HMAC-SHA256 signing secret. When set, a\n`X-BatleHub-Signature-256: sha256=<hex>` header is added to each POST.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 10,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "WorkerConfig": {
+      "description": "`[worker]`.",
+      "properties": {
+        "job_timeout_secs": {
+          "default": 600,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 3,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_concurrent": {
+          "default": 4,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "registries": {
+          "default": [],
+          "description": "Empty means every registry; else only these names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxConfig",
+          "default": {
+            "cpu_seconds": 300,
+            "max_entries": 50000,
+            "max_extracted_mb": 512,
+            "memory_limit_mb": 2048,
+            "runtime": "bwrap"
+          }
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generated by `task docs:config-schema` from the server's config structs (RFC 0049). Only `config` and `credentials.config` are constrained.",
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/AppConfig"
+    },
+    "credentials": {
+      "properties": {
+        "config": {
+          "$ref": "#/$defs/AppConfig"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "batlehub chart values",
+  "type": "object"
+}

@@ -1,4 +1,5 @@
-//! The committed config JSON Schema files match the structs (RFC 0049 §6.3).
+//! The committed config JSON Schema files, and the chart's
+//! `values.schema.json` built from them, match the structs (RFC 0049 §6.3).
 //!
 //! `BLESS=1 cargo test -p batlehub-config --test config_schema` rewrites them
 //! (`task docs:config-schema`). Only the value `1` blesses: a stray `BLESS`
@@ -13,13 +14,23 @@ fn repo() -> PathBuf {
 #[test]
 fn schema_is_current() {
     let bless = std::env::var("BLESS").as_deref() == Ok("1");
+    let files = [
+        (
+            "docs/public/schema/config.schema.json",
+            batlehub_config::json_schema_text(false),
+        ),
+        (
+            "docs/public/schema/config-layer.schema.json",
+            batlehub_config::json_schema_text(true),
+        ),
+        (
+            "helm/batlehub/values.schema.json",
+            batlehub_config::schema_text(&batlehub_config::values_schema()),
+        ),
+    ];
     let mut stale = Vec::new();
-    for (file, layer) in [
-        ("config.schema.json", false),
-        ("config-layer.schema.json", true),
-    ] {
-        let path = repo().join("docs/public/schema").join(file);
-        let want = batlehub_config::json_schema_text(layer);
+    for (file, want) in files {
+        let path = repo().join(file);
         if bless {
             std::fs::write(&path, &want).expect("writing the schema file");
             continue;
@@ -28,7 +39,7 @@ fn schema_is_current() {
         // Compared as values: key order is not the gate's business.
         let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).ok();
         if parse(&have).is_none() || parse(&have) != parse(&want) {
-            stale.push(format!("docs/public/schema/{file}"));
+            stale.push(file);
         }
     }
     assert!(

@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **In review** — every question resolved; phases 0 to 2 built together in #359 |
 | Short       | Config JSON Schema                                            |
 | Settles     | How the config schema is published for editors and for Helm, and why the chart needs no list of integer fields |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-11-14                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/config` (derive, `json_schema()`, a schema test), `crates/core` (derive on the 17 config types it owns), `server` (`dump-config-schema`), `helm/batlehub` (phase 0 `_helpers.tpl`, `ci/values-integers.yaml`; phase 2 `values.schema.json`), `.tasks/docs.yaml`, `.tasks/helm.yaml`, `.github/workflows` (`test.yaml` path filter, `helm-lint.yaml`, the release workflow's assets), docs (`docs/public/schema/`, `docs/guide/configuration.md` and its `docs/fr/` twin, `docs/guide/install/helm.md`, `docs/contributing/testing.md`), `CLAUDE.md`, `CHANGELOG.md` |
+| Touches     | `crates/config` (derive, `json_schema()`, a schema test), `crates/core` (derive on the 18 config types it owns, `schema` feature), `server` (`dump-config-schema`), `helm/batlehub` (`_helpers.tpl`, `values.yaml`, `values.schema.json`, `ci/values-integers.yaml`, `.helmignore`), `.tasks/docs.yaml`, `.tasks/scripts/config_schema_check.sh`, `mise.toml`/`mise.lock` (taplo), `config.example*.toml`, `.github/workflows` (`test.yaml` path filter, `helm-lint.yaml`, `build.yaml`'s release assets), docs (`docs/public/schema/`, `docs/guide/configuration.md` and `docs/guide/install/helm.md` with their `docs/fr/` twins, `docs/contributing/testing.md`), `CLAUDE.md`, `CHANGELOG.md` |
 | Risk        | Low                                                           |
 
 ---
@@ -62,7 +62,7 @@ acess_retention_days = 30    # flagged before the server ever reads the file
    a `--set` workaround in Argo CD for `audit.*`. *Settled by phase 0 without
    the schema* (§15 question 1).
 2. **An operator edits `config.toml` blind.** 77 structs and 14 enums in
-   `crates/config/src/schema`, plus 17 types from `crates/core`; tagged enums
+   `crates/config/src/schema`, plus 18 types from `crates/core`; tagged enums
    (`type = "…"` on auth, scanners, rules, notification channels);
    `deny_unknown_fields` on 10 structs. A typo is found at load, by a server
    that refuses to start or a reload that is refused. No editor can check the
@@ -176,7 +176,7 @@ yaml-language-server users completion under `config:` through
 | --- | --- | --- |
 | `docs/public/schema/*.json` differs from `json_schema()` | `schema_is_current` (`cargo test`) | the two file names and `task docs:config-schema` |
 | a `config.example*.toml` fails `config.schema.json` | `task docs:config-schema:check` (taplo) | taplo's diagnostic, file and line |
-| a `deploy/helm` render fails `config-layer.schema.json` | `task helm:examples` (taplo) | the values file, then taplo's diagnostic |
+| a `deploy/helm` render fails `config-layer.schema.json` | `task docs:config-schema:check` (taplo) | the values file, then taplo's diagnostic |
 | phase 2: `values.schema.json` differs from the generated one | `schema_is_current` | the file and the task |
 
 There are no warnings. Only the drift rows are fixed by regenerating; an
@@ -237,10 +237,20 @@ error: Additional properties are not allowed ('acess_retention_days' was unexpec
 valid under any of the schemas listed in the 'anyOf' keyword`. It is what
 §4.2's rule removes.
 
-**M6 — phase 2, `helm install`** with the typo under `config.audit`: Helm's
-schema error naming `/config/audit` and the unexpected key, exit non-zero,
-nothing rendered. To be quoted from Helm v4.3.1 and the oldest Helm in §15
-question 5 before *In review*.
+**M6 — phase 2, `helm install`** with the typo under `config.audit`
+(observation 11, Helm's own text; exit 1, nothing rendered):
+
+```text
+# Helm 3.19 and later (santhosh-tekuri/jsonschema)
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+batlehub:
+- at '/config/audit': additional properties 'acess_retention_days' not allowed
+
+# Helm 3.15 to 3.18 (gojsonschema)
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+batlehub:
+- config.audit: Additional property acess_retention_days is not allowed
+```
 
 ---
 
@@ -305,7 +315,7 @@ main; `helm-lint.yaml`'s *Integer fields render as integers* step renders
   (`src/schema/mise_auto_wire.rs:84`) takes
   `#[schemars(with = "serde_json::Map<String, serde_json::Value>")]`:
   `toml::Table` has no `JsonSchema`.
-- `crates/core` owns 17 embedded types: the auth ports (`OidcAuthConfig`,
+- `crates/core` owns 18 embedded types: the auth ports (`OidcAuthConfig`,
   `KubernetesAuthConfig`, `ActionsOidcAuthConfig`, `ActionsGroupRule`,
   `Condition`, `ConditionMatchType`, `RuleMatch`), `S3StorageConfig`,
   `Severity`, `FindingKind`, `InstallHookMode`, `ScannerErrorMode`,
@@ -341,7 +351,8 @@ brings. `BLESS=1` (the value `1`, not any value, unlike
 - `docs:config-schema` runs the `BLESS=1` test; `docs:config-schema:check`
   runs `taplo check --schema` on every `config.example*.toml` against
   `config.schema.json` (M3). taplo is pinned in `mise.toml`.
-- `helm:examples` adds a taplo check of each rendered `config.toml` against
+- The same check renders each `deploy/helm` file and `ci/values-integers.yaml`
+  and validates every rendered `.toml` against
   `config-layer.schema.json`: a first layer may leave `database.url` to the
   credentials Secret (`deploy/helm/values-external-secrets.yaml`), so only
   types and unknown keys are checked there.
@@ -360,15 +371,18 @@ brings. `BLESS=1` (the value `1`, not any value, unlike
 
 ### 6.5 Phase 2, `helm/batlehub/values.schema.json`
 
-Generated by the same test from `json_schema(true)`: its `$defs` move to the
-root of `values.schema.json`, `$schema` is stripped from the embedded copy,
-and `properties.config` and `properties.credentials.properties.config` both
-`$ref` the one embedded root. Both use the **layer** variant: `required` is a
-property of the merged config, and either half may hold any part of it.
-Every other value stays unconstrained. Gates before it lands: the default
-values, the seven `deploy/helm` files and the documented credentials example
-(`values.yaml:337-347`) pass on Helm v4.3.1 and on the oldest Helm the docs
-support (§15 question 5).
+`values_schema()` in `crates/config/src/json_schema.rs`, committed by the
+same test: the layer schema moves under `$defs/AppConfig` beside its own
+definitions (so every `#/$defs/…` reference still resolves from the chart
+document's root, checked by `values_schema_refs_all_resolve_from_its_root`),
+its `$schema` moves to the top, and `properties.config` and
+`properties.credentials.properties.config` both `$ref` it. Both use the
+**layer** variant: `required` is a property of the merged config, and either
+half may hold any part of it. Every other value stays unconstrained. Draft
+2020-12 is kept as-is: a draft-07 rewrite (`definitions`) was probed beside it
+and behaved identically on every Helm version (observation 11), so it buys
+nothing. `helm-lint.yaml` gains two steps: the typo of M6 must fail the
+render, the documented credentials layer (`values.yaml:337-347`) must not.
 
 ### 6.6 Docs
 
@@ -430,11 +444,25 @@ Phase 1, run 2026-11-14 on this branch:
 10. `batlehub dump-config-schema` and `--layer` are byte-identical to the
     committed files; `| head -3` exits 0 with no panic.
 
-To produce before phase 2 moves past *Draft*:
+Phase 2, run 2026-11-14 on the Helm each Argo CD minor bundles
+(`hack/tool-versions.sh` at v2.12.0 to v3.6.1): 3.15.2, 3.16.3, 3.17.1,
+3.18.4, 3.19.4, 4.2.1, 4.3.1:
 
-11. **Refusal, phase 2 (M6):** the typo under `config.audit` fails
-    `helm template` on Helm v4.3.1 and the oldest supported Helm, and the
-    default values and the documented credentials layer do **not** fail.
+11. On all seven, with the 2020-12 document and with a draft-07 rewrite: the
+    default values, the seven `deploy/helm` files, `ci/values-integers.yaml`
+    and the documented credentials layer all render (10 of 10); the typo of
+    M6 is refused with the text quoted there.
+12. **Refusals reach through `$ref`, `oneOf` and `allOf`**, on 3.15.2 and
+    4.3.1: `auth[0].type: tokn` (*'oneOf' failed, none matched … value must
+    be 'token'*), `server.port: "abc"` (*got string, want integer*), and
+    `cache.metadata_ttl_secs: 30.5` (*got number, want integer*; 3.15.2:
+    *Invalid type. Expected: integer, given: number*). The last is a value
+    phase 0 leaves for the server to refuse; with phase 2 Helm refuses it
+    first.
+13. `--skip-schema-validation` exists from Helm 3.16.3 (`helm template
+    --help`) and not in 3.15.2; Argo CD's `ApplicationSourceHelm` has
+    `SkipSchemaValidation` (`skipSchemaValidation`) from v2.14.0, which
+    bundles Helm 3.16.3, and not in v2.12.0 or v2.13.0.
 
 `ci/values-integers.yaml` is not loaded by `explain-config`: its one registry
 carries fields of several kinds (`refs` of a forge, `pending_nar_ttl_secs` of
@@ -550,7 +578,7 @@ the subcommand, which exits.
 | Editor on the *latest* URL, binary older | nothing | a key that binary ignores validates green: **fails open** | the release URL, which the docs give by default |
 | Docs site or GitHub down | editor | no validation; the server is unaffected | `dump-config-schema` to a local path |
 | Editor cached an older schema | editor | stale diagnostics until the cache expires | *Editor support* says how to refresh |
-| Phase 2 refuses existing values | `helm install`, Argo CD | install refused; in Argo a ComparisonError, auto-sync stops, running pods unaffected | the skip option (§15 question 5) or the previous chart |
+| Phase 2 refuses existing values | `helm install`, Argo CD | install refused; in Argo a ComparisonError, auto-sync stops, running pods unaffected | `--skip-schema-validation` (Helm 3.16+), `skipSchemaValidation` (Argo CD 2.14+), or the previous chart |
 | Phase 0 regresses | `helm-lint.yaml` step | the server refuses `N.0`: fails closed | — |
 
 ### 10.3 Performance and capacity
@@ -598,8 +626,8 @@ render time.
   value it did not already break; phases 1 and 2 are opt-in or validation
   only.
 - **Config migration**: none; `CURRENT_CONFIG_VERSION` does not move.
-- **Operator prerequisites**: an editor with taplo support; for phase 2, the
-  minimum Helm version of §15 question 5.
+- **Operator prerequisites**: an editor with taplo support; Helm 3.15 or
+  later (§15 question 5).
 - **Rollback**: revert; nothing is persisted. Phase 2 reverts alone, and a
   consumer can skip schema validation per install.
 
@@ -610,7 +638,7 @@ render time.
 - **Unit**: `json_schema` post-pass (no `null` arm left; `layer` has no
   `required` at any depth; no `$id`).
 - **Integration**: `schema_is_current` (§6.3).
-- **Real client**: `docs:config-schema:check` and `helm:examples` (taplo),
+- **Real client**: `docs:config-schema:check` (taplo),
   `helm-lint.yaml` (phase 0, and in phase 2 the documented credentials layer
   and default values must render).
 - **Negative, per §7.1 row**: a hand-edited generated file is red (row 1);
@@ -634,17 +662,12 @@ render time.
 | 6 | Validate examples with the `jsonschema` crate or taplo? | **taplo.** The real client; the crate would pull a second `reqwest` past `multiple-versions = "deny"`. |
 | 7 | Which schema does Helm validate `config` and `credentials.config` against? | **The layer variant, for both.** `required` holds only after the merge; the full schema refused the chart's default `credentials.config: {}`. |
 | 8 | Should `version:set` regenerate? | **No.** The PR gate keeps the files current; a release cut should not rewrite them. |
+| 5 | Minimum Helm version, and how a consumer turns the schema off? | **Helm 3.15; `--skip-schema-validation` (Helm 3.16+) or `spec.source.helm.skipSchemaValidation` (Argo CD 2.14+); on Helm 3.15 / Argo CD 2.12–2.13, pin the previous chart.** Probed on the Helm each Argo CD minor from 2.12 bundles (observations 11–13): all validate the document identically. 3.15 is the oldest probed, not a known break below it; `Chart.yaml` has no field for a Helm floor, so the floor is stated in `docs/guide/install/helm.md` and the CHANGELOG. |
 | 4 | `schemars` or `utoipa`? | **schemars.** Spiked on the config's own shapes (2026-11-14): utoipa 6 writes an `untagged` enum as `oneOf` (wrong when two variants accept one value), a `u16` as `int32` with no maximum, and references into `#/components/schemas` to be reassembled by hand; schemars writes `anyOf`, `uint16` with `maximum`, and a self-contained `$defs` document. |
 
 ### Still open
 
-5. **Minimum Helm version and the Argo CD escape for phase 2.** Helm v4.3.1
-   is the only version probed; the docs say "Helm 3+", the validator
-   changed across Helm 3 minors, and `--skip-schema-validation` is a CLI
-   flag. Recommendation: probe the oldest Helm 3 still supported and the Helm
-   bundled by weebo-si's Argo CD, state the minimum in `Chart.yaml`, and name
-   the Application field that skips validation, or say none exists, before
-   phase 2 moves past *Draft*.
+None.
 
 ---
 
@@ -654,4 +677,4 @@ render time.
 | --- | --- |
 | 0 | phase 0: `batlehub.wholeFloatsToInts`, the `helm-lint.yaml` step, the `audit` block in `values.yaml`. Ships alone. |
 | 1 | The derive, `json_schema(layer)`, `dump-config-schema`, the two committed files, `schema_is_current`, the taplo tasks, the path filter, the release assets, *Editor support*. Useful alone. |
-| 2 | `values.schema.json` with the layer variant, after question 5. |
+| 2 | `values.schema.json` with the layer variant, its two `helm-lint.yaml` steps, the Helm floor and skip options in the install guide. |

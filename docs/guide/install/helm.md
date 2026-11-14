@@ -10,7 +10,7 @@ a fragment, and each one a file in the repository under `deploy/helm/`.
 external secrets, every registry kind, and a permissive and a restrictive
 configuration.
 
-**Prerequisites:** Helm 3+, a running Kubernetes cluster, PostgreSQL accessible from the cluster.
+**Prerequisites:** Helm 3.15 or later (the oldest the chart's [values schema](#helm-values-schema) is tested on), a running Kubernetes cluster, PostgreSQL accessible from the cluster.
 
 ## Quick install
 
@@ -396,6 +396,33 @@ helm upgrade batlehub ./helm/batlehub \
 ```
 
 Any change to the values that affects the rendered `config.toml` triggers a Pod rollout, via the `checksum/config` annotation on both Deployments. The `credentials` layer is deliberately outside that: it has no checksum annotation, so rotating it reloads in place instead. See [A separate config file for the credentials](#helm-credentials).
+
+### The values schema {#helm-values-schema}
+
+The chart ships a `values.schema.json` generated from the server's config
+structs, so `helm install`, `helm upgrade` and `helm template` refuse a
+`config:` or `credentials.config:` that the server would refuse or silently
+ignore, before anything is deployed:
+
+```text
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+batlehub:
+- at '/config/audit': additional properties 'acess_retention_days' not allowed
+```
+
+- **What it checks.** Key names (where the server refuses unknown keys),
+  types, enum values and tags, and integers: `30.5` for a field of whole
+  seconds fails here rather than at the server's start. Nothing is
+  *required*: either config file may leave any part to the other, and only
+  the merged config can be complete, which the server checks.
+- **What it leaves alone.** Every value outside `config` and
+  `credentials.config`.
+- **Turning it off**, for a values file the schema wrongly refuses (report
+  it): `--skip-schema-validation` on Helm 3.16 and later, or in an Argo CD
+  Application (Argo CD 2.14 and later)
+  `spec.source.helm.skipSchemaValidation: true`. Helm 3.15, and the Argo CD
+  2.12 and 2.13 that bundle it, have no switch: pin the previous chart
+  version.
 
 ## Scan worker (RFC 0018) {#helm-worker}
 

@@ -78,6 +78,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   either key**: remove them before rolling back. The shipped Grafana dashboard
   gains a `registry` variable; re-importing it overwrites local edits.
 
+### Changed
+
+- **The Helm chart validates `config` and `credentials.config` against the
+  server's config schema** (RFC 0049). A values file with a misspelt key
+  where the server refuses unknown keys, a wrong type, an unknown enum tag or
+  a fraction on an integer field now fails `helm install` / `helm upgrade` /
+  `helm template` instead of a pod that does not start; nothing is required,
+  since either file may hold any part of the config. **An upgrade can now
+  refuse a values file that installed before.** Helm 3.15 or later is
+  required (tested from 3.15.2 to 4.3.1). To turn the check off:
+  `--skip-schema-validation` (Helm 3.16+), or
+  `spec.source.helm.skipSchemaValidation: true` in an Argo CD Application
+  (2.14+).
+
 ### Fixed
 
 - **Helm chart: an integer set from a values file rendered as a float, and the

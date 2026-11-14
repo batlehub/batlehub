@@ -3,7 +3,7 @@ pub mod reload_keys;
 mod render;
 pub mod schema;
 
-pub use json_schema::{json_schema, json_schema_text};
+pub use json_schema::{json_schema, json_schema_text, schema_text, values_schema};
 pub use schema::AppConfig;
 
 use anyhow::{bail, Context, Result};

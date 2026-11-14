@@ -214,6 +214,35 @@ jobs:
           print("every integer field renders as an integer")
           PY
 
+      # RFC 0049 phase 2: values.schema.json validates `config` and
+      # `credentials.config` against the config's layer schema. A misspelt key
+      # must fail the render, and the documented credentials layer (partial
+      # by design: no server, no storage) must not.
+      - name: A mistyped config key fails the render
+        run: |
+          printf 'config:\n  audit:\n    acess_retention_days: 3\n' > /tmp/typo.yaml
+          if helm template batlehub helm/batlehub -f /tmp/typo.yaml > /dev/null 2> /tmp/typo.err; then
+            echo "::error::values.schema.json accepted config.audit.acess_retention_days"
+            exit 1
+          fi
+          grep -q acess_retention_days /tmp/typo.err
+      - name: The documented credentials layer passes the schema
+        run: |
+          cat > /tmp/cred.yaml <<'YAML'
+          credentials:
+            enabled: true
+            config:
+              database:
+                url: "postgresql://batlehub:${DB_PASSWORD}@postgres:5432/batlehub"
+              auth:
+                - type: "token"
+                  tokens:
+                    - value: "a-real-admin-token"
+                      role: "admin"
+                      user_id: "admin"
+          YAML
+          helm template batlehub helm/batlehub -f /tmp/cred.yaml > /dev/null
+
       # RFC 0049: the example configs and every deploy/helm render validate
       # against the committed config JSON Schema, checked by taplo — the
       # engine the editors run. The schema itself is held current by
