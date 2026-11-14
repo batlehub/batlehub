@@ -48,9 +48,7 @@ function cancel() {
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <template #title
-      ><slot name="title">{{ title }}</slot></template
-    >
+    <template #title><slot name="title">{{ title }}</slot></template>
     <template v-if="description || $slots.description" #description>
       <slot name="description">{{ description }}</slot>
     </template>

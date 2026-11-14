@@ -508,9 +508,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
   >
     <template #title>
       <i18n-t keypath="adminHealth.refreshExploreFor" tag="span">
-        <template #registry
-          ><span class="font-mono">{{ explorePending }}</span></template
-        >
+        <template #registry><span class="font-mono">{{ explorePending }}</span></template>
       </i18n-t>
     </template>
     <template #description>{{ t("adminHealth.exploreRepopulates") }}</template>

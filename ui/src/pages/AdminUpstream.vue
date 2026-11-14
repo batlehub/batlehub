@@ -297,9 +297,7 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
                   <TableHead>{{ t("adminUpstream.col.firstMissed") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.lastChecked") }}</TableHead>
                   <TableHead>{{ t("adminUpstream.col.confirmed") }}</TableHead>
-                  <TableHead
-                    ><span class="sr-only">{{ t("common.actions") }}</span></TableHead
-                  >
+                  <TableHead><span class="sr-only">{{ t("common.actions") }}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
