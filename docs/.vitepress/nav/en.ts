@@ -324,6 +324,10 @@ export const sidebar = {
           text: "TD-0005 — Upstream URL segment encoding",
           link: "/techdebt/0005-upstream-url-segment-encoding",
         },
+        {
+          text: "TD-0006 — mise .NET install feed",
+          link: "/techdebt/0006-mise-dotnet-install-feed",
+        },
       ],
     },
   ],
