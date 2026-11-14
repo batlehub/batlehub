@@ -117,7 +117,9 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("files.pythonhosted.org", "pypi", "pypi"),
     ("proxy.golang.org", "goproxy", "go"),
     // The Go *toolchain* (RFC 0048 phase 5); Go *modules* are `goproxy` above.
-    ("dl.google.com", "godist", "godist"),
+    // Keyed by path too: the rest of the host is Android's, which `godist`
+    // cannot serve (RFC 0047 §6.1).
+    ("dl.google.com/go/", "godist", "godist"),
     ("rubygems.org", "rubygems", "rubygems"),
     ("repo1.maven.org", "maven", "maven"),
     ("registry.terraform.io", "terraform", "terraform"),
@@ -134,6 +136,20 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("download.jetbrains.com", "jetbrains", "jetbrains"),
     ("plugins.jetbrains.com", "jetbrains-marketplace", "jbm"),
 ];
+
+/// The [`TYPED_HOSTS`] row for a URL's host and path. A key with a `/` is a
+/// host plus a path prefix, and matches only under that prefix.
+fn typed_host(
+    host: &str,
+    path: &str,
+) -> Option<&'static (&'static str, &'static str, &'static str)> {
+    TYPED_HOSTS
+        .iter()
+        .find(|(key, _, _)| match key.split_once('/') {
+            Some((h, prefix)) => h == host && path.starts_with(prefix),
+            None => *key == host,
+        })
+}
 
 /// Hosts with no package protocol at all, for which we know a sensible upstream
 /// root, allowlist and client mirror variable.
@@ -245,8 +261,8 @@ pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> Strin
 /// Same table the suggester reads, asked a narrower question: planning needs
 /// to know whether *some* configured registry of that kind mirrors the host,
 /// not what a new registry should be called.
-pub(crate) fn registry_kind_for_host(host: &str) -> Option<&'static str> {
-    if let Some((_, kind, _)) = TYPED_HOSTS.iter().find(|(h, _, _)| *h == host) {
+pub(crate) fn registry_kind_for_host(host: &str, path: &str) -> Option<&'static str> {
+    if let Some((_, kind, _)) = typed_host(host, path) {
         return Some(kind);
     }
     // A generic mirror can front any host, so a host with a preset is
@@ -942,7 +958,7 @@ fn collect_from_mise_lock_entry(
 fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
     let (host, path) = split_url(url)?;
 
-    if let Some((_, registry_type, name)) = TYPED_HOSTS.iter().find(|(h, _, _)| *h == host) {
+    if let Some((_, registry_type, name)) = typed_host(host, path) {
         return Some(SuggestedRegistry {
             name: (*name).to_owned(),
             registry_type: (*registry_type).to_owned(),
@@ -1728,6 +1744,17 @@ mod tests {
         let reg =
             registry_for_url("https://dl.google.com/go/go1.25.4.linux-amd64.tar.gz", "s").unwrap();
         assert_eq!(reg.registry_type, "godist");
+        // The rest of the host is Android's: the narrow generic every unknown
+        // host gets, and no kind for the plan, until a preset names it.
+        let android = "https://dl.google.com/android/repository/platform-tools-latest-linux.zip";
+        let reg = registry_for_url(android, "s").unwrap();
+        assert_eq!(reg.registry_type, "generic");
+        assert_eq!(
+            reg.path_allow,
+            ["android/repository/platform-tools-latest-linux.zip"]
+        );
+        let (host, path) = split_url(android).unwrap();
+        assert_eq!(registry_kind_for_host(host, path), None);
         assert!(registry_for_backend("core:unknown-thing", "x").is_none());
     }
 
