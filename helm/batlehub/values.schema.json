@@ -2011,7 +2011,7 @@
         },
         "path_allow": {
           "default": [],
-          "description": "Glob allowlist of upstream paths this registry may serve. Only meaningful\nfor path-addressed registry types (`deb`/`rpm`/`pacman`/`jetbrains`/`generic`),\nwhere the request path is passed straight through to the upstream — without\nit, a registry pointed at a shared host (`storage.googleapis.com`, a CDN\nserving many vendors) would relay *every* path on that host.\n\nPatterns are matched against the upstream-relative path with\n[`glob::Pattern`] semantics, where `*` also crosses `/`. Required for\n`generic`; `[\"**\"]` is the explicit opt-out that allows everything.\n\n```toml\npath_allow = [\"v*/node-v*-linux-x64.tar.*\", \"v*/SHASUMS256.txt*\"]\n```",
+          "description": "Glob allowlist of upstream paths this registry may serve. Only meaningful\nfor path-addressed registry types (`deb`/`rpm`/`pacman`/`jetbrains`/`generic`),\nwhere the request path is passed straight through to the upstream — without\nit, a registry pointed at a shared host (`storage.googleapis.com`, a CDN\nserving many vendors) would relay *every* path on that host.\n\nPatterns are matched against the upstream-relative path with\n[`glob::Pattern`] semantics. On `generic`, `*` stays inside one path\nsegment and only `**` crosses `/` (RFC 0047 §15 Q7); on the other kinds\n`*` also crosses `/`. Required for `generic`; `[\"**\"]` is the explicit\nopt-out that allows everything.\n\n```toml\npath_allow = [\"v*/node-v*-linux-x64.tar.*\", \"v*/SHASUMS256.txt*\"]\n```",
           "items": {
             "type": "string"
           },
@@ -2085,7 +2085,7 @@
         },
         "revalidate": {
           "default": [],
-          "description": "RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every\nread instead of cached forever, for a mutable document under an\notherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs\nmatched like `path_allow` but with `*` kept inside one segment; each\nmust also be admitted by `path_allow`. On an upstream error the cached\ncopy is served stale. Absent: nothing is revalidated.\n\n```toml\nrevalidate = [\"elixir/builds.txt\", \"otp/*/*/builds.txt\"]\n```",
+          "description": "RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every\nread instead of cached forever, for a mutable document under an\notherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs\nmatched like `path_allow`, with `*` kept inside one segment; each\nmust also be admitted by `path_allow`. On an upstream error the cached\ncopy is served stale. Absent: nothing is revalidated.\n\n```toml\nrevalidate = [\"elixir/builds.txt\", \"otp/*/*/builds.txt\"]\n```",
           "items": {
             "type": "string"
           },

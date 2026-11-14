@@ -1110,6 +1110,7 @@ dependencies = [
  "flate2",
  "futures",
  "getrandom 0.4.3",
+ "glob",
  "hex",
  "hmac",
  "md-5",

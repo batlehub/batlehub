@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use comfy_table::Table;
 
-use crate::api::suggest::{render_client_env, render_toml, suggest_registries, SuggestedRegistry};
+use crate::api::suggest::{render_client_env, render_toml, suggest, SuggestedRegistry};
 use crate::api::BatleHubClient;
 
 #[derive(Subcommand)]
@@ -334,7 +334,7 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
         Some(d) => d,
         None => std::env::current_dir()?,
     };
-    let suggestions = suggest_registries(&dir, opts.depth);
+    let (suggestions, unroutable) = suggest(&dir, opts.depth);
 
     // Scanning is purely local, so an unreachable server must not fail
     // the command — it only costs the "already configured" annotation.
@@ -356,6 +356,7 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
         print_json(
             &wanted,
             &already,
+            &unroutable,
             &client.base_url,
             opts.mise_commented,
             opts.mise_catch_all,
@@ -364,11 +365,12 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
         print_human(
             &wanted,
             &already,
+            &unroutable,
             &dir,
             &client.base_url,
             opts.client_env,
-            opts.mise.then_some(opts.mise_commented),
-            opts.mise_catch_all,
+            opts.mise
+                .then_some((opts.mise_commented, opts.mise_catch_all)),
         );
     }
     Ok(())
@@ -377,6 +379,7 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
 fn print_json(
     wanted: &[SuggestedRegistry],
     already: &[SuggestedRegistry],
+    unroutable: &[String],
     server_url: &str,
     mise_commented: bool,
     mise_catch_all: bool,
@@ -387,6 +390,8 @@ fn print_json(
             "type": s.registry_type,
             "upstreams": s.upstreams,
             "path_allow": s.path_allow,
+            "revalidate": s.revalidate,
+            "max_artifact_size_bytes": s.max_artifact_size_bytes,
             "sources": s.sources,
             "note": s.note,
             "proxy_url": s.proxy_url(server_url),
@@ -401,7 +406,8 @@ fn print_json(
     let out = serde_json::json!({
         "suggested": wanted.iter().map(to_json).collect::<Vec<_>>(),
         "already_configured": already.iter().map(to_json).collect::<Vec<_>>(),
-        "toml": render_toml(wanted),
+        "unroutable": unroutable,
+        "toml": render_toml(wanted, unroutable),
         "mise_toml": crate::api::suggest::render_mise_toml(
             wanted,
             server_url,
@@ -416,15 +422,15 @@ fn print_json(
 fn print_human(
     wanted: &[SuggestedRegistry],
     already: &[SuggestedRegistry],
+    unroutable: &[String],
     dir: &std::path::Path,
     server_url: &str,
     client_env: bool,
-    // `Some(commented)` when `--mise` was passed.
-    mise: Option<bool>,
-    // RFC 0008 §4.4's catch-all, appended last.
-    mise_catch_all: bool,
+    // `Some((commented, catch_all))` when `--mise` was passed; the catch-all
+    // is RFC 0008 §4.4's, appended last.
+    mise: Option<(bool, bool)>,
 ) {
-    if wanted.is_empty() && already.is_empty() {
+    if wanted.is_empty() && already.is_empty() && unroutable.is_empty() {
         println!("No package sources found in: {}", dir.display());
         println!(
             "Looked at: mise.lock, mise.toml, .nvmrc, .sdkmanrc, Cargo.toml, go.mod, \
@@ -449,6 +455,9 @@ fn print_human(
 
     if wanted.is_empty() {
         println!("Every detected source is already covered by a configured registry.");
+        for line in unroutable {
+            println!("Not routable through BatleHub: {line}");
+        }
         return;
     }
 
@@ -456,9 +465,9 @@ fn print_human(
     println!();
     println!("Add to config.toml:");
     println!();
-    println!("{}", render_toml(wanted));
+    println!("{}", render_toml(wanted, unroutable));
 
-    if let Some(commented) = mise {
+    if let Some((commented, mise_catch_all)) = mise {
         println!();
         println!("Route mise through the proxy:");
         println!();
@@ -475,7 +484,7 @@ fn print_human(
         println!("{}", render_client_env(wanted, server_url));
     }
 
-    print_flag_hints(client_env, mise);
+    print_flag_hints(client_env, mise.map(|(commented, _)| commented));
 }
 
 fn print_suggestion_table(wanted: &[SuggestedRegistry]) {

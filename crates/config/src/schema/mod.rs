@@ -3435,12 +3435,17 @@ impl AppConfig {
                 )
             })?;
             // The entry read as a literal path: `**` in path_allow admits the
-            // `*` of a revalidate glob as it admits any other character.
+            // `*` of a revalidate glob as it admits any other character. Matched
+            // as the generic client matches (`path_proxy.rs`): `*` stops at `/`.
+            let opts = glob::MatchOptions {
+                require_literal_separator: true,
+                ..glob::MatchOptions::new()
+            };
             let admitted = registry
                 .path_allow
                 .iter()
                 .filter_map(|p| glob::Pattern::new(p).ok())
-                .any(|p| p.matches(entry));
+                .any(|p| p.matches_with(entry, opts));
             if !admitted {
                 bail!(
                     "registry '{}': revalidate entry \"{entry}\" is outside path_allow; \

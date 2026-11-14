@@ -238,6 +238,14 @@ fn every_live_claim_names_a_phase_that_exists() {
         }
     }
 
+    // Phases that prove a client's routes across kinds rather than one kind:
+    // `mise-core` drives mise's core toolchains through nodedist, rustup and
+    // the generic presets at once (RFC 0048 §6.P), each already claimed above.
+    claimed.insert("mise-core".to_owned());
+    // `mise-http` drives RFC 0047's `generic` presets with mise; `generic` is
+    // claimed above.
+    claimed.insert("mise-http".to_owned());
+
     // And the other direction: a phase nobody claims is a phase whose kind was
     // removed, or a row that was never written.
     let orphans: Vec<&String> = phases.difference(&claimed).collect();

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: f1c957c08200d1e3
+sourceHash: fe649cef9d1f85ef
 ---
 
 # Miroir générique
@@ -23,7 +23,7 @@ premier défaut. Il n'y a ni publication, ni index, ni modèle de signature.
 | **Publication privée** | proxy seul |
 | **Coupure réseau** | aucun index à composer ; un fichier détenu est servi par chemin |
 
-## Mise en place du proxy
+## Mise en place du proxy {#proxy-setup}
 
 `upstreams` **et** une liste d'autorisation `path_allow` sont obligatoires — sans
 elle, un miroir d'un hôte partagé relaierait tous les chemins sans rapport qui
@@ -38,6 +38,26 @@ mode       = "proxy"
 upstreams  = ["https://nodejs.org/dist"]   # obligatoire — il n'existe pas de défaut
 path_allow = ["v*/**"]                      # obligatoire — ["**"] autorise tout
 ```
+
+Les motifs de `path_allow` sont des globs où `*` reste dans un seul segment de
+chemin et où seul `**` traverse les `/` : `v*/**` admet
+`v24.18.0/node-v24.18.0-linux-x64.tar.gz`, et `go*` admet
+`go1.25.4.linux-amd64.tar.gz` mais pas `go1.25/sub/file`.
+
+::: warning Changé par la phase 2 de la RFC 0047
+Avant elle, `*` traversait aussi les `/`, si bien que `go*` admettait tout chemin
+commençant par `go`. Un `path_allow` qui s'appuyait là-dessus refuse désormais
+ces chemins par un `403` ; écrivez `**` là où un séparateur doit être franchi :
+
+```toml
+path_allow = ["go*"]     # avant : admettait aussi go1.25/sub/file
+path_allow = ["go*/**"]  # après : les mêmes chemins, dits explicitement
+```
+
+Le changement échoue fermé : rien n'est admis qui était refusé auparavant. Il
+ne touche que `generic` ; `deb`, `rpm`, `pacman` et `jetbrains` gardent un `*`
+qui traverse les `/`.
+:::
 
 Le chemin qui suit `/generic/` correspond un pour un à l'amont configuré.
 Remplacez `<registry>` par le nom de registre que vous avez configuré :
@@ -64,6 +84,34 @@ téléchargements directs par un bloc `[settings.url_replacements]`.
 `batlehub-cli registry suggest` analyse un projet (`mise.toml` et `mise.lock`
 compris) et imprime à la fois les blocs de configuration de registre et les
 variables d'environnement client correspondantes.
+
+## Préréglages
+
+`batlehub-cli registry suggest --mise` écrit ces registres quand `mise.lock`
+enregistre une URL sur leur hôte. Chaque `path_allow` commence par un segment de
+produit littéral, si bien qu'un préréglage ne relaie jamais l'hôte entier ;
+`revalidate` énumère les documents que mise relit pour y chercher du nouveau
+([RFC 0047](/rfc/0047-mise-backends-coverage) §6.1).
+
+| Nom | Amont | Sert |
+| --- | --- | --- |
+| `hashicorp-releases` | `https://releases.hashicorp.com` | boundary, consul, nomad, nomad-pack, packer, sentinel, terraform, terraform-ls, tfc-agent, vault, waypoint |
+| `hashicorp-api` | `https://api.releases.hashicorp.com/v1/releases` | les dates de publication de nomad-pack, sentinel et tfc-agent — la première page de dix seulement, puisque la chaîne de requête n'est pas transmise à l'amont |
+| `k8s-dl` | `https://dl.k8s.io` | kubectl, kubectl-convert, `release/stable.txt` |
+| `apache-archive` | `https://archive.apache.org/dist` | ant, groovy, maven, spark, tomcat |
+| `openshift-mirror` | `https://mirror.openshift.com/pub/openshift-v4/clients` | oc, openshift-install |
+| `julia-dist` | `https://julialang-s3.julialang.org/bin` | julia et son `versions.json` |
+| `docker-dl` | `https://download.docker.com` | le client docker statique pour Linux, macOS et Windows |
+| `android-dl` | `https://dl.google.com/android` | les outils en ligne de commande d'android-sdk, aapt2, android-cli ; `dl.google.com/go/` relève du type [`godist`](/fr/registries/godist) |
+| `deno-dl`, `zig-dl`, `hex-builds`, `swift-dl`, `swift-api`, `pypy-dl` | — | les chaînes d'outils `core:` de [mise](/fr/use/mise#core-toolchains) |
+| `helm-bin`, `sonar-binaries` | `https://get.helm.sh`, `https://binaries.sonarsource.com` | helm ; sonar-scanner-cli et sonarqube-cli |
+
+Un listage de répertoire — une URL terminée par `/`, comme l'index `ocp/` où oc
+liste ses versions, ou `ant/binaries/` — est refusé par un `400` sur tout
+registre `generic` : une installation qui doit d'abord lister les versions a
+besoin de `mise.lock`. Sur un hôte de buckets (`storage.googleapis.com`,
+`s3.amazonaws.com`) sans préréglage, le miroir suggéré admet le répertoire du
+fichier verrouillé et la liste de versions que mise lit dans le même bucket.
 
 ## Authentification
 

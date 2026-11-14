@@ -191,8 +191,10 @@ pub struct RegistryConfig {
     /// serving many vendors) would relay *every* path on that host.
     ///
     /// Patterns are matched against the upstream-relative path with
-    /// [`glob::Pattern`] semantics, where `*` also crosses `/`. Required for
-    /// `generic`; `["**"]` is the explicit opt-out that allows everything.
+    /// [`glob::Pattern`] semantics. On `generic`, `*` stays inside one path
+    /// segment and only `**` crosses `/` (RFC 0047 §15 Q7); on the other kinds
+    /// `*` also crosses `/`. Required for `generic`; `["**"]` is the explicit
+    /// opt-out that allows everything.
     ///
     /// ```toml
     /// path_allow = ["v*/node-v*-linux-x64.tar.*", "v*/SHASUMS256.txt*"]
@@ -559,7 +561,7 @@ pub struct RegistryConfig {
     /// RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every
     /// read instead of cached forever, for a mutable document under an
     /// otherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs
-    /// matched like `path_allow` but with `*` kept inside one segment; each
+    /// matched like `path_allow`, with `*` kept inside one segment; each
     /// must also be admitted by `path_allow`. On an upstream error the cached
     /// copy is served stale. Absent: nothing is revalidated.
     ///

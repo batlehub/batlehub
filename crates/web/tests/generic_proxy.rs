@@ -148,6 +148,37 @@ async fn generic_get_outside_path_allow_returns_403() {
     assert_eq!(resp.status(), 403);
 }
 
+/// RFC 0047 §15 Q7: through the whole stack, `*` stops at `/` on `generic`.
+#[actix_web::test]
+async fn generic_star_stops_at_a_separator_end_to_end() {
+    let server = mockito::Server::new_async().await;
+    let app = make_generic_app(&server.url(), &["go*"]).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/proxy/files/generic/go1.25/sub/file")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// A directory listing (`ocp/`, `ant/binaries/`) is not a file the kind can
+/// cache: refused at the edge, whatever the allowlist (RFC 0047 §16 row 2).
+#[actix_web::test]
+async fn generic_directory_listing_returns_400() {
+    let server = mockito::Server::new_async().await;
+    let app = make_generic_app(&server.url(), &["**"]).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/proxy/files/generic/ocp/")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+}
+
 #[actix_web::test]
 async fn generic_traversal_path_returns_400() {
     let server = mockito::Server::new_async().await;

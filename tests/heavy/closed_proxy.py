@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The closed world, as a proxy a client cannot opt out of.
 
-    closed_proxy.py <listen-port>
+    closed_proxy.py <listen-port> [refusal-log]
 
 Every heavy suite closes the world the same way: `HTTP(S)_PROXY` at a port
 nothing listens on, `NO_PROXY` exempting the loopback so the tap stays
@@ -37,6 +37,9 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LISTEN_PORT = int(sys.argv[1])
+# One refused host per line, for a phase that asserts what a client *tried* to
+# reach — a request this proxy refused never reaches the tap's transcript.
+REFUSAL_LOG = sys.argv[2] if len(sys.argv) > 2 else None
 
 # Names that are the loopback without being an address. Everything else has to
 # *be* a loopback address to be relayed — no DNS, so a name cannot resolve its
@@ -65,6 +68,9 @@ class ClosedProxy(BaseHTTPRequestHandler):
         """Silence BaseHTTPRequestHandler's own stderr logging."""
 
     def _refuse(self, host):
+        if REFUSAL_LOG:
+            with open(REFUSAL_LOG, "a", encoding="utf-8") as log:
+                log.write(f"{host}\n")
         body = f"closed world: {host} is not reachable from here\n".encode()
         self.send_response(403)
         self.send_header("Content-Type", "text/plain")

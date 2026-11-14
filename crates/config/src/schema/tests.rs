@@ -5376,6 +5376,20 @@ fn per_registry_limit_and_revalidate_are_validated() {
         "a revalidate entry outside path_allow must not load",
     );
     assert!(outside.contains("outside path_allow"), "{outside}");
+    // RFC 0047 §15 Q7: `*` in path_allow no longer crosses `/`, here as on
+    // the wire, so it no longer admits a revalidate entry one segment down.
+    let star = validation_error(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download*"]
+        revalidate = ["download/index.json"]
+        "#,
+        "a `*` must not admit a path across `/`",
+    );
+    assert!(star.contains("outside path_allow"), "{star}");
     let typed = validation_error(
         r#"
         [[registries]]

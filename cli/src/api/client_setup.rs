@@ -26,7 +26,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 use crate::api::registry::RegistryInfo;
-use crate::api::suggest::push_replacement;
+use crate::api::suggest::{mise_settings_for, push_replacement};
 use batlehub_core::services::mise_wire::{
     self, is_plain_http_url, select, url_host, Mode, WireRegistry,
 };
@@ -2045,6 +2045,16 @@ impl<'a> PlanCtx<'a> {
                         body.push('\n');
                     }
                     body.push_str(&format!("[settings.go]\nrepo = \"{url}\"\n"));
+                }
+                let generic = chosen
+                    .iter()
+                    .filter(|(ty, _)| *ty == "generic")
+                    .flat_map(|(_, r)| r.upstreams.iter().map(String::as_str));
+                for (table, key, value, _) in mise_settings_for(generic) {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    body.push_str(&format!("[settings.{table}]\n{key} = {value}\n"));
                 }
                 if !skipped.is_empty() {
                     let note = format!("no mise rules for {}", skipped.join("; "));
@@ -4689,6 +4699,30 @@ mod tests {
             find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).state,
             State::Conflict
         );
+    }
+
+    /// RFC 0048 §6.2: a zig mirror brings the setting that keeps mise off
+    /// the community mirrors, and only a zig mirror does.
+    #[test]
+    fn mise_zig_mirror_turns_the_community_mirrors_off() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let mut zig = reg("zig-dl", "generic", "proxy");
+        zig.upstreams = vec!["https://ziglang.org".to_owned()];
+        let next = |regs: &[RegistryInfo]| {
+            find(&plan(regs, &opts(), &env).unwrap(), TargetId::Mise)
+                .next
+                .clone()
+                .unwrap()
+        };
+        let with = next(&[zig]);
+        assert!(
+            with.contains("[settings.zig]\nuse_community_mirrors = false"),
+            "{with}"
+        );
+        assert!(with.contains("proxy/zig-dl/generic/$1"), "{with}");
+        toml::from_str::<toml::Table>(&with).unwrap();
+        assert!(!next(&[reg("gh", "github", "proxy")]).contains("zig"));
     }
 
     /// n° 12: mise gets its node mirror, and a global setting that would

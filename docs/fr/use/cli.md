@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: db75573b9739dcd6
+sourceHash: 3032e86468e54c4d
 ---
 
 # batlehub-cli
@@ -310,8 +310,8 @@ $ batlehub-cli registry suggest --client-env
 +------------------+---------+--------------------------------------+----------------------------+
 | cargo            | cargo   | (adapter default)                    | manifest, mise.lock: …     |
 | github           | github  | (adapter default)                    | mise.lock: gitleaks, …     |
-| node-dist        | generic | https://nodejs.org/dist              | mise.lock: node            |
-| rust-dist        | generic | https://static.rust-lang.org         | mise.lock: rust            |
+| node             | nodedist| (adapter default)                    | mise.lock: node            |
+| rust             | rustup  | (adapter default)                    | mise.lock: rust            |
 | helm-bin         | generic | https://get.helm.sh                  | mise.lock: helm            |
 +------------------+---------+--------------------------------------+----------------------------+
 
@@ -319,8 +319,9 @@ Add to config.toml:
 …
 Point clients at the proxy:
 
-# node-dist (generic)
-export NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node-dist/generic"
+# node (nodedist)
+export NVM_NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node/nodedist"
+…
 ```
 
 | Option | Description |
@@ -342,9 +343,12 @@ tous les miroirs `generic`. Vérifié contre `mise install` :
   `api.github.com/repos/…/releases/assets/{id}` : c'est donc la règle sur
   `api.github.com` qui porte tout — pas celle sur
   `github.com/…/releases/download/…`.
-- `core:node` récupère **à la fois** l'archive de la plateforme et l'archive des
-  sources `node-v<ver>.tar.gz`, ce pourquoi le `path_allow` suggéré est `v*/**`
-  plutôt qu'un motif limité à une plateforme.
+- `core:node` et `core:rust` passent par leurs types dédiés, `nodedist` et
+  `rustup` ; le bloc ajoute `node.mirror_url` et, pour rustup — un
+  sous-processus qui ne lit aucune règle —, `RUSTUP_DIST_SERVER` sous `[env]`.
+  La règle de Zig vient avec `zig.use_community_mirrors = false`. La route de
+  chaque chaîne d'outils du cœur est dans
+  [mise § 5.1](/fr/use/mise#core-toolchains).
 
 Les backends qui délèguent à un autre outil (`cargo:`, `pipx:`, `npm:`, `go:`) ne
 sont **pas** couverts — ces processus lisent leur propre configuration, pas celle

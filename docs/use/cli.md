@@ -296,8 +296,8 @@ $ batlehub-cli registry suggest --client-env
 +------------------+---------+--------------------------------------+----------------------------+
 | cargo            | cargo   | (adapter default)                    | manifest, mise.lock: …     |
 | github           | github  | (adapter default)                    | mise.lock: gitleaks, …     |
-| node-dist        | generic | https://nodejs.org/dist              | mise.lock: node            |
-| rust-dist        | generic | https://static.rust-lang.org         | mise.lock: rust            |
+| node             | nodedist| (adapter default)                    | mise.lock: node            |
+| rust             | rustup  | (adapter default)                    | mise.lock: rust            |
 | helm-bin         | generic | https://get.helm.sh                  | mise.lock: helm            |
 +------------------+---------+--------------------------------------+----------------------------+
 
@@ -305,8 +305,9 @@ Add to config.toml:
 …
 Point clients at the proxy:
 
-# node-dist (generic)
-export NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node-dist/generic"
+# node (nodedist)
+export NVM_NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node/nodedist"
+…
 ```
 
 | Flag | Description |
@@ -327,9 +328,11 @@ mirror. Verified against `mise install`:
 - aqua resolves *and downloads* assets through `api.github.com/repos/…/releases/assets/{id}`,
   so the `api.github.com` rule is the load-bearing one — not the
   `github.com/…/releases/download/…` rule.
-- `core:node` fetches **both** the platform tarball and the `node-v<ver>.tar.gz`
-  source tarball, which is why the suggested `path_allow` is `v*/**` rather than
-  a platform-only glob.
+- `core:node` and `core:rust` go through their typed kinds, `nodedist` and
+  `rustup`; the block adds `node.mirror_url` and, for rustup — a subprocess
+  that reads no rule — `RUSTUP_DIST_SERVER` under `[env]`. Zig's rule comes
+  with `zig.use_community_mirrors = false`. Every core toolchain's route is in
+  [mise § 5.1](/use/mise#core-toolchains).
 
 Backends that shell out to another tool (`cargo:`, `pipx:`, `npm:`, `go:`) are
 **not** covered — those processes read their own config, not mise's. The

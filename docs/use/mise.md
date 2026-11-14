@@ -321,6 +321,16 @@ would be undoing the block by accident.
   `dotnet.registry_url` ([RFC 0047](/rfc/0047-mise-backends-coverage)
   phase 3), and the install is a `dotnet tool install` that reads
   NuGet.config, not mise: run `batlehub-cli setup apply --only nuget` as well.
+- **`core:dotnet`.** mise runs Microsoft's `dotnet-install.sh`, whose
+  download feed is hard-coded and set only by `--azure-feed`, which mise
+  does not pass. No rewrite rule reaches it: `registry suggest` lists it
+  under *Not routable through BatleHub* and `mise plan` under `unsupported`.
+- **Compiled `core:` installs.** `python.compile`, `ruby.compile`,
+  `node.compile` and kerl-built Erlang clone their build tools over git and
+  run them as subprocesses. A lock entry for `core:node`, `core:python`,
+  `core:ruby` or `core:erlang` that records no URL is read as one, and
+  `mise plan` lists it as `unsupported`; run `mise lock` if the install is
+  in fact precompiled.
 - **An older mise.** The rules on this page are verified against mise
   2026.11.3, the release the heavy suites pin. Earlier releases are not
   measured, and one that does not know a setting only warns and lets the
@@ -348,6 +358,37 @@ would be undoing the block by accident.
   asset the lock names, and `mise plan` reads the lock rather than the
   config because that is the list the bundle must carry. Keep
   `lockfile = true` and commit the lock.
+
+### 5.1 The core toolchains {#core-toolchains}
+
+Each of mise's thirteen `core:` toolchains has one route, and
+`registry suggest --mise`, `mise plan` and `setup` agree on it
+([RFC 0048](/rfc/0048-mise-core-toolchains)):
+
+| Tool | Route |
+| --- | --- |
+| node | the [`nodedist`](/registries/nodedist) kind; the block also sets `node.mirror_url` |
+| rust | the [`rustup`](/registries/rustup) kind, through `RUSTUP_DIST_SERVER` and `RUSTUP_UPDATE_ROOT` under `[env]`: rustup is a subprocess and reads no rewrite rule |
+| go | the [`godist`](/registries/godist) kind |
+| python, bun, ruby | the `github` kind, from the URLs the lock records |
+| deno | `generic` preset `deno-dl` (`dl.deno.land`) |
+| zig | `generic` preset `zig-dl` (`ziglang.org`), with `zig.use_community_mirrors = false` |
+| elixir, erlang | `generic` preset `hex-builds` (`builds.hex.pm`); erlang on macOS comes from `erlef/otp_builds` on GitHub |
+| swift | `generic` presets `swift-dl` (`download.swift.org`, its own `max_artifact_size_bytes`) and `swift-api` (the release index) |
+| PyPy | `generic` preset `pypy-dl` (`downloads.python.org/pypy`) |
+| java | none yet: the `mise-java` kind is RFC 0048 phase 2 |
+| dotnet | not routable, see above |
+
+Node and Rust used to get `generic` presets (`node-dist`, `rust-dist`); a
+mirror an estate already declared that way keeps working, and `mise plan`
+still plans through it, but a block on a Node release or a Rust toolchain
+only holds through the typed kind.
+
+Zig needs its setting: mise tries seventeen community mirrors before
+`ziglang.org`, so a rule on `ziglang.org` is reached only after every one of
+them has failed. The generated block always carries
+`zig.use_community_mirrors = false`; a hand-written one is checked by
+nothing, so `mise plan` prints a `note:` for every locked zig.
 
 ## See also
 

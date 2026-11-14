@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::suggest::{
-    lockless_backend_note, proxy_path_for, registry_kind_for_host, split_url,
+    lockless_backend_note, proxy_path_for, registry_kinds_for_host, split_url,
     unsupported_backend_reason, vfox_subprocess_note,
 };
 
@@ -187,37 +187,32 @@ pub fn plan_from_lock(
         }
     }
 
-    // A host is mirrored when some configured registry has the kind that
-    // host maps to. Kind rather than name, because the plan is written
-    // before anyone chooses names and two registries of the same kind serve
-    // the same hosts.
-    let configured: BTreeSet<&str> = known.iter().map(|r| r.registry_type.as_str()).collect();
+    // A host is mirrored when some configured registry has a kind that
+    // host maps to, the preferred kind first. Kind rather than name, because
+    // the plan is written before anyone chooses names and two registries of
+    // the same kind serve the same hosts.
     for entry in &mut entries {
         let Some((host, path)) = split_url(&entry.url) else {
             continue;
         };
-        match registry_kind_for_host(host, path) {
-            Some(kind) if configured.contains(kind) => {
-                let registry =
-                    known
-                        .iter()
-                        .find(|r| r.registry_type == kind)
-                        .map(|r| PlanRegistry {
-                            name: r.name.clone(),
-                            registry_type: r.registry_type.clone(),
-                        });
-                entry.key = registry
-                    .as_ref()
-                    .map(|r| storage_key(&r.name, &entry.tool, &entry.version, &entry.url));
-                entry.proxy_path = registry
-                    .as_ref()
-                    .and_then(|r| proxy_path_for(&entry.url, &r.name, &r.registry_type));
-                entry.registry = registry;
-            }
-            _ => {
-                hosts.insert(host.to_owned());
-            }
-        }
+        let found = registry_kinds_for_host(host, path)
+            .into_iter()
+            .find_map(|kind| known.iter().find(|r| r.registry_type == kind));
+        let Some(r) = found else {
+            hosts.insert(host.to_owned());
+            continue;
+        };
+        entry.key = Some(storage_key(
+            &r.name,
+            &entry.tool,
+            &entry.version,
+            &entry.url,
+        ));
+        entry.proxy_path = proxy_path_for(&entry.url, &r.name, &r.registry_type);
+        entry.registry = Some(PlanRegistry {
+            name: r.name.clone(),
+            registry_type: r.registry_type.clone(),
+        });
     }
 
     let mut platforms_out: Vec<String> = if platforms.is_empty() {
@@ -342,6 +337,14 @@ fn plan_one_tool(
         }
     }
     notes.extend(vfox_subprocess_note(backend));
+    // A hand-written block is checked by nothing else (RFC 0048 §4.3).
+    if backend == "core:zig" {
+        notes.push(
+            "zig: community mirrors are tried before ziglang.org; keep \
+             zig.use_community_mirrors = false"
+                .to_owned(),
+        );
+    }
     notes.dedup();
 }
 
@@ -616,6 +619,62 @@ backend = "vfox:mise-plugins/vfox-php"
         v1.as_object_mut().unwrap().remove("notes");
         let read: MisePlan = serde_json::from_value(v1).unwrap();
         assert!(read.notes.is_empty());
+    }
+
+    /// RFC 0048 §6.2, §13: a `node-dist` generic mirror an estate declared
+    /// before the typed suggestion still plans Node; `nodedist` wins when
+    /// both exist. `core:dotnet` is refused with its reason, and zig carries
+    /// its mirrors note.
+    #[test]
+    fn core_toolchains_plan_through_either_kind_and_dotnet_is_refused() {
+        let lock = r#"
+[[tools.node]]
+version = "24.11.0"
+backend = "core:node"
+[tools.node."platforms.linux-x64"]
+url = "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.gz"
+
+[[tools.dotnet]]
+version = "9.0.100"
+backend = "core:dotnet"
+
+[[tools.zig]]
+version = "0.15.2"
+backend = "core:zig"
+[tools.zig."platforms.linux-x64"]
+url = "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+"#;
+        let generic = KnownRegistry {
+            name: "node-dist".into(),
+            registry_type: "generic".into(),
+        };
+        let plan = plan_from_lock("mise.lock", lock, &[], std::slice::from_ref(&generic)).unwrap();
+        let node = plan.entries.iter().find(|e| e.tool == "node").unwrap();
+        assert_eq!(
+            node.proxy_path.as_deref(),
+            Some("/proxy/node-dist/generic/v24.11.0/node-v24.11.0-linux-x64.tar.gz")
+        );
+        let typed = KnownRegistry {
+            name: "node".into(),
+            registry_type: "nodedist".into(),
+        };
+        let plan = plan_from_lock("mise.lock", lock, &[], &[generic, typed]).unwrap();
+        let node = plan.entries.iter().find(|e| e.tool == "node").unwrap();
+        assert_eq!(
+            node.proxy_path.as_deref(),
+            Some("/proxy/node/nodedist/v24.11.0/node-v24.11.0-linux-x64.tar.gz")
+        );
+        assert_eq!(plan.unsupported.len(), 1, "{:?}", plan.unsupported);
+        assert!(plan.unsupported[0]
+            .reason
+            .starts_with("core:dotnet: mise runs dotnet-install.sh"));
+        assert!(
+            plan.notes
+                .iter()
+                .any(|n| n.contains("zig.use_community_mirrors = false")),
+            "{:?}",
+            plan.notes
+        );
     }
 
     #[test]

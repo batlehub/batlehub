@@ -964,6 +964,40 @@ grep -q 'unmirrored.example.com' "$HEAVY_WORK/aw-missing.json" \
   || { cat "$HEAVY_WORK/aw-missing.json" >&2; heavy_fail "the wired sink did not record unmirrored.example.com"; }
 heavy_log "MISE-AUTO-WIRE-AIRGAP-OK (one rule; an unmirrored host recorded under its name)"
 
+# RFC 0047 §6.P case 7: a vendor host no registry on this side mirrors.
+# `sentinel` downloads from releases.hashicorp.com, which the bundle does not
+# hold, so the catch-all `registry suggest --mise-catch-all` appends (the same
+# pattern, `MISE_CATCH_ALL_PATTERN`) sinks every request for it: a `501` that
+# names the host, recorded under `unmirrored_host`, and nothing leaves.
+heavy_mark "mise-http-sink"
+SINKTOOL="$HEAVY_WORK/mise-http-sink"
+mkdir -p "$SINKTOOL"
+cat > "$SINKTOOL/mise.toml" <<EOF
+[settings]
+github_attestations = false
+
+[settings.url_replacements]
+"regex:^https://([^/]+)/(.*)" = "$HEAVY_TAP_BASE/_air-gap/unmirrored/\$1/\$2"
+
+[tools]
+sentinel = "0.30.0"
+EOF
+heavy_log "mise install sentinel@0.30.0 through the catch-all, its host unmirrored"
+run_client "mise install (unmirrored vendor host)" "$HEAVY_WORK/mise-http-sink.txt" \
+  bash -c "cd '$SINKTOOL' && MISE_TRUSTED_CONFIG_PATHS='$SINKTOOL' MISE_DATA_DIR='$SINKTOOL/data' \
+    MISE_CACHE_DIR='$SINKTOOL/cache' MISE_STATE_DIR='$SINKTOOL/state' ${MISE[*]} install"
+[[ $CLIENT_RC -ne 0 ]] || { cat "$HEAVY_WORK/mise-http-sink.txt" >&2; heavy_fail "sentinel installed with its host unmirrored on the disconnected side"; }
+heavy_wire_re_after "mise-http-sink" "GET /_air-gap/unmirrored/releases[.]hashicorp[.]com/sentinel/[^ ]* -> 501" \
+  "mise's sentinel request did not reach the catch-all sink as a 501"
+[[ "$(heavy_wire_count_after "mise-http-sink" "/_air-gap/unmirrored/releases[.]hashicorp[.]com/[^ ]* -> 200")" == 0 ]] \
+  || heavy_fail "the sink served a releases.hashicorp.com path"
+curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/api/v1/admin/air-gap/missing?kind=unmirrored_host&per_page=100" >"$HEAVY_WORK/sink-missing.json"
+grep -q 'releases.hashicorp.com' "$HEAVY_WORK/sink-missing.json" \
+  || { cat "$HEAVY_WORK/sink-missing.json" >&2; heavy_fail "the sink did not record releases.hashicorp.com under unmirrored_host"; }
+measure "mise | install sentinel@0.30.0, host unmirrored, catch-all | $(heavy_wire_count_after "mise-http-sink" '/_air-gap/unmirrored/releases[.]hashicorp[.]com/') request(s) -> 501, recorded | exit $CLIENT_RC after ${CLIENT_SECS}s"
+heavy_log "MISE-HTTP-SINK-OK (releases.hashicorp.com sunk and recorded; the client egress stayed denied)"
+
 # RFC 0045 §15 Q3: an *overlay* name, with egress denied. The bundle carried
 # the raw registry archive (`mise export --include-mise-registry`), and this
 # instance serves it merged with its own overlay, so `acme-gh` — a name only

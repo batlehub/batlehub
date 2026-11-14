@@ -655,9 +655,10 @@ fn registry_list_json() {
     assert_eq!(arr[0]["mode"], "local");
 }
 
-/// A `mise.lock` covering the three shapes `registry suggest` must handle: a
-/// GitHub release asset (typed registry), a preset toolchain host (curated
-/// generic mirror), and a URL-less backend (mapped by backend prefix).
+/// A `mise.lock` covering the shapes `registry suggest` must handle: a
+/// GitHub release asset and a Node release (typed registries), a preset
+/// toolchain host (curated generic mirror), and a URL-less backend (mapped by
+/// backend prefix).
 const SAMPLE_MISE_LOCK: &str = r#"
 [[tools."aqua:EmbarkStudios/cargo-deny"]]
 version = "0.20.2"
@@ -672,6 +673,13 @@ backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
 url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz"
+
+[[tools.zig]]
+version = "0.15.2"
+backend = "core:zig"
+
+[tools.zig."platforms.linux-x64"]
+url = "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
 
 [[tools.semgrep]]
 version = "1.170.0"
@@ -713,16 +721,21 @@ fn registry_suggest_maps_mise_lock_sources_to_registries() {
         .unwrap()
         .is_empty());
 
-    // A preset host → generic mirror with an explicit upstream + allowlist,
-    // both of which the server requires for `type = "generic"`.
-    let node = by_name("node-dist");
-    assert_eq!(node["type"], "generic");
-    assert_eq!(node["upstreams"][0], "https://nodejs.org/dist");
-    assert!(!node["path_allow"].as_array().unwrap().is_empty());
+    // Node has a typed kind, so no generic mirror (RFC 0048 §6.2).
+    let node = by_name("node");
+    assert_eq!(node["type"], "nodedist");
     assert_eq!(
         node["client_env"]["NODEJS_ORG_MIRROR"],
-        serde_json::json!(format!("{}/proxy/node-dist/generic", srv.base_url()))
+        serde_json::json!(format!("{}/proxy/node/nodedist", srv.base_url()))
     );
+
+    // A preset host → generic mirror with an explicit upstream + allowlist,
+    // both of which the server requires for `type = "generic"`.
+    let zig = by_name("zig-dl");
+    assert_eq!(zig["type"], "generic");
+    assert_eq!(zig["upstreams"][0], "https://ziglang.org");
+    assert!(!zig["path_allow"].as_array().unwrap().is_empty());
+    assert_eq!(zig["revalidate"][1], "download/index.json");
 
     // A URL-less backend maps by prefix (`pipx:` → PyPI).
     assert_eq!(by_name("pypi")["type"], "pypi");
@@ -829,8 +842,16 @@ fn registry_suggest_mise_block_is_valid_toml_with_doubled_escapes() {
 
     // Generic mirror: rule derived from the upstream, proxied under /generic/.
     assert_eq!(
+        repl[r"regex:^https://ziglang\.org/(.+)"].as_str(),
+        Some("https://hub.example.com/proxy/zig-dl/generic/$1")
+    );
+    assert_eq!(
         repl[r"regex:^https://nodejs\.org/dist/(.+)"].as_str(),
-        Some("https://hub.example.com/proxy/node-dist/generic/$1")
+        Some("https://hub.example.com/proxy/node/nodedist/$1")
+    );
+    assert_eq!(
+        parsed["settings"]["zig"]["use_community_mirrors"].as_bool(),
+        Some(false)
     );
     // GitHub: no `/github/` type segment — that route is /proxy/{name}/{owner}/…
     assert_eq!(

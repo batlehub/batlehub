@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 9ede8a9f2787d6f2
+sourceHash: 47ff00db95f8767c
 ---
 
 # Faire pointer mise vers BatleHub
@@ -348,6 +348,17 @@ reviendrait à défaire le blocage par accident.
   ([RFC 0047](/rfc/0047-mise-backends-coverage), phase 3), et l'installation
   est un `dotnet tool install` qui lit NuGet.config, pas mise : lancez aussi
   `batlehub-cli setup apply --only nuget`.
+- **`core:dotnet`.** mise lance le `dotnet-install.sh` de Microsoft, dont le
+  flux de téléchargement est codé en dur et ne se règle que par
+  `--azure-feed`, que mise ne passe pas. Aucune règle de réécriture ne
+  l'atteint : `registry suggest` le liste sous *Not routable through
+  BatleHub* et `mise plan` sous `unsupported`.
+- **Les installations `core:` compilées.** `python.compile`, `ruby.compile`,
+  `node.compile` et l'Erlang construit par kerl clonent leurs outils de
+  construction par git et les lancent en sous-processus. Une entrée de
+  verrou `core:node`, `core:python`, `core:ruby` ou `core:erlang` sans URL
+  est lue comme telle, et `mise plan` la liste sous `unsupported` ; lancez
+  `mise lock` si l'installation est en réalité précompilée.
 - **Un mise plus ancien.** Les règles de cette page sont vérifiées avec mise
   2026.11.3, la version qu'épinglent les suites heavy. Les versions
   antérieures ne sont pas mesurées, et une version qui ne connaît pas un
@@ -376,6 +387,38 @@ reviendrait à défaire le blocage par accident.
   le verrou nomme, et `mise plan` lit le verrou plutôt que la configuration
   parce que c'est cette liste-là que le lot doit porter. Gardez
   `lockfile = true` et versionnez le verrou.
+
+### 5.1 Les chaînes d'outils du cœur {#core-toolchains}
+
+Chacune des treize chaînes d'outils `core:` de mise a une seule route, et
+`registry suggest --mise`, `mise plan` et `setup` s'accordent sur elle
+([RFC 0048](/rfc/0048-mise-core-toolchains)) :
+
+| Outil | Route |
+| --- | --- |
+| node | le type [`nodedist`](/fr/registries/nodedist) ; le bloc règle aussi `node.mirror_url` |
+| rust | le type [`rustup`](/fr/registries/rustup), par `RUSTUP_DIST_SERVER` et `RUSTUP_UPDATE_ROOT` sous `[env]` : rustup est un sous-processus et ne lit aucune règle de réécriture |
+| go | le type [`godist`](/fr/registries/godist) |
+| python, bun, ruby | le type `github`, d'après les URL que le verrou enregistre |
+| deno | le préréglage `generic` `deno-dl` (`dl.deno.land`) |
+| zig | le préréglage `generic` `zig-dl` (`ziglang.org`), avec `zig.use_community_mirrors = false` |
+| elixir, erlang | le préréglage `generic` `hex-builds` (`builds.hex.pm`) ; erlang sous macOS vient de `erlef/otp_builds` sur GitHub |
+| swift | les préréglages `generic` `swift-dl` (`download.swift.org`, avec son propre `max_artifact_size_bytes`) et `swift-api` (l'index des versions) |
+| PyPy | le préréglage `generic` `pypy-dl` (`downloads.python.org/pypy`) |
+| java | aucune pour l'instant : le type `mise-java` est la phase 2 de la RFC 0048 |
+| dotnet | non routable, voir plus haut |
+
+Node et Rust recevaient auparavant des préréglages `generic` (`node-dist`,
+`rust-dist`) ; un miroir qu'un parc a déjà déclaré ainsi continue de
+fonctionner, et `mise plan` planifie toujours à travers lui, mais un blocage
+sur une version de Node ou une chaîne d'outils Rust ne tient que par le type
+dédié.
+
+Zig a besoin de son réglage : mise essaie dix-sept miroirs communautaires
+avant `ziglang.org`, si bien qu'une règle sur `ziglang.org` n'est atteinte
+qu'après l'échec de chacun d'eux. Le bloc généré porte toujours
+`zig.use_community_mirrors = false` ; un bloc écrit à la main n'est vérifié
+par rien, aussi `mise plan` affiche une `note:` pour chaque zig verrouillé.
 
 ## Voir aussi
 

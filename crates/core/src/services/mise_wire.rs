@@ -92,6 +92,9 @@ pub fn typed_rules(kind: RegistryKind) -> &'static [Rule] {
         // and its `.sha256` (`go.rs:126-128`, `:384-387`); the default mirror is
         // `https://dl.google.com/go`. Its listing is the versions host, or git.
         RegistryKind::Godist => &[(r"^https://dl\.google\.com/go/(.+)", "{proxy}/$1")],
+        // mise's `core:node`: `nodejs.org/dist/v{v}/…`, `SHASUMS256.txt` and its
+        // `.sig` (`node.rs:397-439`), the same tree the kind serves.
+        RegistryKind::Nodedist => &[(r"^https://nodejs\.org/dist/(.+)", "{proxy}/$1")],
         RegistryKind::Cargo => &[(
             r"^https://static\.crates\.io/crates/([^/]+)/([^/]+)/.+\.crate",
             "{proxy}/$1/$2/download",
