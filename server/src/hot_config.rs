@@ -64,6 +64,24 @@ fn build_versioning_map(registries: &[RegistryConfig]) -> HashMap<String, Versio
     )
 }
 
+/// RFC 0048 §15 Q12 — each registry's `revalidate` globs, compiled once.
+/// Validation already refused an invalid one, so a pattern that fails here is
+/// skipped rather than taking the reload down.
+fn build_revalidate_map(registries: &[RegistryConfig]) -> HashMap<String, Arc<Vec<glob::Pattern>>> {
+    registries
+        .iter()
+        .filter(|r| !r.revalidate.is_empty())
+        .map(|r| {
+            let globs = r
+                .revalidate
+                .iter()
+                .filter_map(|g| glob::Pattern::new(g).ok())
+                .collect();
+            (r.name.clone(), Arc::new(globs))
+        })
+        .collect()
+}
+
 /// Build the per-registry integrity policy map. Only registries with an explicit
 /// `[registries.integrity]` block get an entry; the proxy applies
 /// [`IntegrityPolicy::default`] (verify + block-on-mismatch) to the rest.
@@ -781,6 +799,12 @@ pub(super) fn build_hot_bundle(
             .collect(),
         feature_flags: build_feature_flags_map(&cfg.registries),
         integrity: build_integrity_map(&cfg.registries),
+        registry_artifact_limits: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.max_artifact_size_bytes.map(|l| (r.name.clone(), l)))
+            .collect(),
+        generic_revalidate: build_revalidate_map(&cfg.registries),
         beta_channel: build_beta_channel_map(Arc::clone(beta_channel_store), &cfg.registries),
         retention: build_retention_map(&cfg.registries),
         resolution: reg_resolution,

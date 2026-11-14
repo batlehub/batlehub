@@ -39,6 +39,8 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
 profiling = ["dep:pprof"]
 
 [dependencies]
+# RFC 0048 §15 Q12: compiles each registry's `revalidate` globs.
+glob.workspace = true
 # `background_threads`, and it is the difference between "jemalloc can return
 # dirty pages to the OS" and "jemalloc does".
 #

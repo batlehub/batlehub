@@ -547,6 +547,27 @@ pub struct RegistryConfig {
     /// and block on a mismatch; warn (do not block) when none is advertised.
     #[serde(default)]
     pub integrity: Option<IntegrityConfig>,
+    /// RFC 0048 §15 Q11 — this registry's artifact size limit, in bytes,
+    /// overriding `[limits] max_artifact_size_bytes` for this registry alone,
+    /// above or below it. Absent: the instance limit (500 MiB by default).
+    ///
+    /// ```toml
+    /// max_artifact_size_bytes = 1_200_000_000   # Swift tarballs reach 1 007 MB
+    /// ```
+    #[serde(default)]
+    pub max_artifact_size_bytes: Option<u64>,
+    /// RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every
+    /// read instead of cached forever, for a mutable document under an
+    /// otherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs
+    /// matched like `path_allow` but with `*` kept inside one segment; each
+    /// must also be admitted by `path_allow`. On an upstream error the cached
+    /// copy is served stale. Absent: nothing is revalidated.
+    ///
+    /// ```toml
+    /// revalidate = ["elixir/builds.txt", "otp/*/*/builds.txt"]
+    /// ```
+    #[serde(default)]
+    pub revalidate: Vec<String>,
     /// Base URL for the Go Vulnerability Database (`govulndb`) proxy endpoints.
     /// Only applies to `goproxy` registries.
     /// Absent → default to `https://vuln.go.dev`.

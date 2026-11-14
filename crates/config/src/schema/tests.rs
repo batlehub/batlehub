@@ -5337,3 +5337,72 @@ fn godist_loads_bare_and_metadata_url_is_its_own() {
         "godist has no publish protocol",
     );
 }
+
+/// RFC 0048 §4.3: the per-registry size limit and `revalidate`.
+#[test]
+fn per_registry_limit_and_revalidate_are_validated() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download/**"]
+        revalidate = ["download/index.json"]
+        max_artifact_size_bytes = 1_200_000_000
+        "#,
+    )
+    .validate()
+    .expect("a limit and a revalidate entry inside path_allow load");
+    let zero = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        max_artifact_size_bytes = 0
+        "#,
+        "a zero limit must not load",
+    );
+    assert!(zero.contains("at least 1"), "{zero}");
+    let outside = validation_error(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download/**"]
+        revalidate = ["builds/index.json"]
+        "#,
+        "a revalidate entry outside path_allow must not load",
+    );
+    assert!(outside.contains("outside path_allow"), "{outside}");
+    let typed = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        revalidate = ["x"]
+        "#,
+        "revalidate on a typed kind must not load",
+    );
+    assert!(typed.contains("only supported on generic"), "{typed}");
+}
+
+/// RFC 0048 §6.6: a raw ceiling is compared with the registry's own limit
+/// when it sets one, not only with the instance's.
+#[test]
+fn a_raw_ceiling_is_checked_against_the_registry_limit() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+        max_artifact_size_bytes = 1000
+        [registries.raw]
+        enabled = true
+        max_size_bytes = 2000
+        "#,
+        "a raw ceiling above the registry limit must not load",
+    );
+    assert!(err.contains("raw.max_size_bytes"), "{err}");
+}

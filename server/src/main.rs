@@ -894,6 +894,7 @@ async fn main() -> Result<()> {
         metrics: Arc::clone(&proxy_metrics),
         sbom: Some(Arc::clone(&sbom_svc)),
         readme: Some(Arc::clone(&readme_svc)),
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: Some(Arc::clone(&admin_svc.explore_cache)),
     });

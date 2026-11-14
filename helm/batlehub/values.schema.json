@@ -1967,6 +1967,12 @@
           "$ref": "#/$defs/IntegrityConfig",
           "description": "Optional artifact integrity (checksum) verification on proxied downloads.\nWhen absent, the defaults apply: verify against any advertised checksum\nand block on a mismatch; warn (do not block) when none is advertised."
         },
+        "max_artifact_size_bytes": {
+          "description": "RFC 0048 §15 Q11 — this registry's artifact size limit, in bytes,\noverriding `[limits] max_artifact_size_bytes` for this registry alone,\nabove or below it. Absent: the instance limit (500 MiB by default).\n\n```toml\nmax_artifact_size_bytes = 1_200_000_000   # Swift tarballs reach 1 007 MB\n```",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_pending_nars": {
           "description": "How many unclaimed `nix` NAR uploads one publisher may hold at once\n(RFC 0028 §4.4). Default 64; the next one answers `429`.\n\nThe floor that matters is the client's own concurrency: `nix copy`\nparallelises over `http-connections` (default **25**), and each\nin-flight path holds at most one unclaimed NAR, so a value below that\nwill refuse legitimate copies.",
           "format": "uint32",
@@ -2076,6 +2082,14 @@
         "retention": {
           "$ref": "#/$defs/RetentionConfig",
           "description": "Optional retention policy for what this registry holds *locally*\n(RFC 0016). Absent means keep everything, forever, which is what every\ninstance does today.\n\nNot to be confused with [`CachePolicy`]'s `idle_days`/`keep_latest_n`,\nwhich govern the **proxy cache** and are a different problem: an evicted\ncache entry is re-fetchable from upstream, a reclaimed local version is\nfrequently the only copy in existence (RFC 0016 §5.1). The two are\ndeliberately separate blocks with opposite defaults, and this one must not\nbe implemented by widening that one."
+        },
+        "revalidate": {
+          "default": [],
+          "description": "RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every\nread instead of cached forever, for a mutable document under an\notherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs\nmatched like `path_allow` but with `*` kept inside one segment; each\nmust also be admitted by `path_allow`. On an upstream error the cached\ncopy is served stale. Absent: nothing is revalidated.\n\n```toml\nrevalidate = [\"elixir/builds.txt\", \"otp/*/*/builds.txt\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "roles": {
           "$ref": "#/$defs/GalaxyRoleMode",

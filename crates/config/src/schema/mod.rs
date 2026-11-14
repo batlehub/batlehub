@@ -2643,6 +2643,7 @@ impl AppConfig {
             self.validate_retention(registry)?;
             Self::validate_registry_upstreams(registry, kind)?;
             Self::validate_registry_path_allow(registry, kind)?;
+            Self::validate_registry_fill_options(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
             Self::validate_registry_metadata_url(registry, kind)?;
@@ -3380,21 +3381,71 @@ impl AppConfig {
         Ok(())
     }
 
-    /// RFC 0019 §4.3 — a raw ceiling above the global artifact limit is a
-    /// number the global one would silently win over.
+    /// RFC 0019 §4.3 — a raw ceiling above the artifact limit is a number
+    /// the artifact limit would silently win over. That limit is the
+    /// registry's own when it sets one (RFC 0048 §15 Q11), else the instance's.
     fn validate_raw_ceilings(&self) -> Result<()> {
-        let Some(global) = self.limits.max_artifact_size_bytes else {
-            return Ok(());
-        };
         for reg in &self.registries {
             let Some(raw) = &reg.raw else { continue };
-            if raw.enabled && raw.max_size_bytes > global {
+            let Some(limit) = reg
+                .max_artifact_size_bytes
+                .or(self.limits.max_artifact_size_bytes)
+            else {
+                continue;
+            };
+            if raw.enabled && raw.max_size_bytes > limit {
                 bail!(
-                    "registry '{}': raw.max_size_bytes = {} exceeds \
-                     [limits].max_artifact_size_bytes = {global}; the global ceiling \
-                     would win and the registry's number would be a lie",
+                    "registry '{}': raw.max_size_bytes = {} exceeds the artifact limit \
+                     max_artifact_size_bytes = {limit}; the artifact limit would win and \
+                     the registry's number would be a lie",
                     reg.name,
                     raw.max_size_bytes
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0048 §4.3 — the per-registry size limit and `revalidate`.
+    fn validate_registry_fill_options(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        if registry.max_artifact_size_bytes == Some(0) {
+            bail!(
+                "registry '{}': max_artifact_size_bytes must be at least 1; 0 would refuse \
+                 every artifact while looking like \"no limit\"",
+                registry.name
+            );
+        }
+        if registry.revalidate.is_empty() {
+            return Ok(());
+        }
+        if kind != batlehub_core::entities::RegistryKind::Generic {
+            bail!(
+                "registry '{}': 'revalidate' is only supported on generic registries",
+                registry.name
+            );
+        }
+        for entry in &registry.revalidate {
+            glob::Pattern::new(entry).map_err(|e| {
+                anyhow::anyhow!(
+                    "registry '{}': invalid revalidate glob '{entry}': {e}",
+                    registry.name
+                )
+            })?;
+            // The entry read as a literal path: `**` in path_allow admits the
+            // `*` of a revalidate glob as it admits any other character.
+            let admitted = registry
+                .path_allow
+                .iter()
+                .filter_map(|p| glob::Pattern::new(p).ok())
+                .any(|p| p.matches(entry));
+            if !admitted {
+                bail!(
+                    "registry '{}': revalidate entry \"{entry}\" is outside path_allow; \
+                     a revalidated path that can never be served is a typo",
+                    registry.name
                 );
             }
         }
