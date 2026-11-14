@@ -252,6 +252,22 @@ fn oci_error(status: actix_web::http::StatusCode, code: &str, message: &str) -> 
         .json(serde_json::json!({ "errors": [{ "code": code, "message": message }] }))
 }
 
+/// The OCI `DENIED` answer. A refusal a credential could lift also carries
+/// the typed [`AppError`], which is what the auth middleware reads to turn an
+/// anonymous caller's `403` into `401` + `WWW-Authenticate` (RFC 0015 §13.19).
+fn oci_denied(message: &str, credential: bool) -> HttpResponse {
+    let oci = oci_error(actix_web::http::StatusCode::FORBIDDEN, "DENIED", message);
+    if !credential {
+        return oci;
+    }
+    let mut res = HttpResponse::from_error(AppError {
+        credential,
+        ..AppError::forbidden(message)
+    });
+    *res.headers_mut() = oci.headers().clone();
+    res.set_body(oci.into_body())
+}
+
 fn oci_not_found(code: &str, message: impl AsRef<str>) -> HttpResponse {
     oci_error(
         actix_web::http::StatusCode::NOT_FOUND,
@@ -823,13 +839,7 @@ async fn serve_oci(
             Err(CoreError::NotFound(m) | CoreError::NotFoundWithheld(m)) => {
                 return Ok(oci_not_found(unknown_code, m))
             }
-            Err(CoreError::AccessDenied(m)) => {
-                return Ok(oci_error(
-                    actix_web::http::StatusCode::FORBIDDEN,
-                    "DENIED",
-                    &m,
-                ))
-            }
+            Err(CoreError::AccessDenied(d)) => return Ok(oci_denied(&d.message, d.credential)),
             Err(e) => return Err(AppError::from(e)),
         };
         // No identity headers: they name a proxy cache key, which is what a
@@ -864,13 +874,9 @@ async fn serve_oci(
             )
             .await)
         }
-        ProxyResponse::Denied { reason, .. } => {
-            return Ok(oci_error(
-                actix_web::http::StatusCode::FORBIDDEN,
-                "DENIED",
-                &reason,
-            ))
-        }
+        ProxyResponse::Denied {
+            reason, credential, ..
+        } => return Ok(oci_denied(&reason, credential)),
         _ => return Err(AppError::internal("unexpected response for an OCI object")),
     };
     let body = collect_storage_stream(stream).await?;
@@ -1229,4 +1235,30 @@ pub async fn devfile_delete(
         )));
     }
     Ok(HttpResponse::Ok().json(DevfileDeleted { deleted: true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The auth middleware challenges an anonymous refusal by reading the
+    /// typed error off the response; an OCI `DENIED` built as a plain body
+    /// carried none, so a credential refusal there stayed a bare `403`.
+    #[actix_web::test]
+    async fn a_credential_denial_carries_the_typed_error_and_keeps_the_oci_body() {
+        let res = oci_denied("no grant", true);
+        assert_eq!(res.status(), actix_web::http::StatusCode::FORBIDDEN);
+        assert!(res
+            .error()
+            .and_then(|e| e.as_error::<AppError>())
+            .is_some_and(AppError::wants_credential));
+        assert!(res.headers().contains_key(API_VERSION.0));
+        let body = actix_web::body::to_bytes(res.into_body()).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["errors"][0]["code"], "DENIED");
+
+        let rule = oci_denied("blocked", false);
+        assert_eq!(rule.status(), actix_web::http::StatusCode::FORBIDDEN);
+        assert!(rule.error().is_none(), "a rule's refusal is not challenged");
+    }
 }
