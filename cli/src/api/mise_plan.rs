@@ -185,10 +185,10 @@ pub fn plan_from_lock(
     // the same hosts.
     let configured: BTreeSet<&str> = known.iter().map(|r| r.registry_type.as_str()).collect();
     for entry in &mut entries {
-        let Some((host, _)) = split_url(&entry.url) else {
+        let Some((host, path)) = split_url(&entry.url) else {
             continue;
         };
-        match registry_kind_for_host(host) {
+        match registry_kind_for_host(host, path) {
             Some(kind) if configured.contains(kind) => {
                 let registry =
                     known
