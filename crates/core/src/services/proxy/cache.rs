@@ -17,7 +17,7 @@ use crate::services::hot_config::IntegrityPolicy;
 use crate::services::integrity::{IntegrityOutcome, StreamingVerifier};
 
 use super::handle::REVERIFY_BUFFER_LIMIT;
-use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming};
+use super::{fill, ProxyRequest, ProxyResponse, ProxyService, RequestTiming};
 
 /// The artifact-cache storage key for `req`. A pure function of the package
 /// coordinate, so functions below recompute it instead of taking it as a
@@ -289,11 +289,121 @@ impl ProxyService {
         limit: u64,
         timing: &RequestTiming,
     ) -> Result<ProxyResponse, CoreError> {
-        let registry_name = req.package_id.registry.as_str();
-        // Pure function of `req`, cheap to recompute — the caller already holds its
-        // own copy (needed for the `fresh_cached_artifact` check before choosing this
-        // path), so this isn't threaded through as a ninth parameter.
+        let registry = req.package_id.registry.clone();
+        let registry_name = registry.as_str();
         let artifact_key = artifact_key_for(&req);
+
+        // ── Missing-checksum gate (no artifact bytes needed) ───────────────────
+        // Per request, because it reads the caller's role: a joiner is judged
+        // on its own identity, not on the one that started the fill.
+        self.gate_missing_checksum(&req, &metadata, integrity, &artifact_key, timing)
+            .await?;
+
+        // A registry that holds artifacts before serving them (RFC 0018) keeps
+        // store-then-serve: streaming never hands out bytes it would hold.
+        let hold = self.hot.read().await.security.contains_key(registry_name);
+
+        // ── Join the running fill, or start it detached (RFC 0048 §15 Q9) ─────
+        let (fill, started) = match self.fills.join_or_start(&artifact_key) {
+            fill::Joined::Joined(fill) => {
+                tracing::debug!(key = %artifact_key, "joining the running cold fill");
+                metrics::counter!("batlehub_proxy_fill_joined_total", "registry" => timing.registry_label.clone()).increment(1);
+                (fill, false)
+            }
+            fill::Joined::Started(writer) => {
+                let fill = writer.fill();
+                let this = self.clone();
+                let client = Arc::clone(&client);
+                let metadata = metadata.clone();
+                let (req, integrity, timing) = (req.clone(), integrity.clone(), timing.clone());
+                tokio::spawn(async move {
+                    let end = match this
+                        .fill_artifact(&writer, &req, client, metadata, &integrity, limit, &timing)
+                        .await
+                    {
+                        Ok(true) => fill::FillEnd::Done,
+                        Ok(false) => fill::FillEnd::NoStore,
+                        Err(e) => fill::FillEnd::Failed((&e).into()),
+                    };
+                    writer.finish(end);
+                });
+                (fill, true)
+            }
+        };
+
+        let stream = match fill.serve(hold).await? {
+            fill::Served::Stream(stream) => stream,
+            fill::Served::FromStorage => {
+                self.storage
+                    .retrieve(&artifact_key)
+                    .await?
+                    .ok_or_else(|| {
+                        CoreError::Registry(format!(
+                            "artifact '{artifact_key}' vanished immediately after caching"
+                        ))
+                    })?
+                    .stream
+            }
+            fill::Served::NoStore => {
+                // Upstream forbade caching, so there was nothing to share:
+                // this request fetches for itself.
+                let upstream = self
+                    .fetch_artifact_or_record_error(
+                        &client,
+                        &req,
+                        &metadata,
+                        &timing.registry_label,
+                        Instant::now(),
+                    )
+                    .await?;
+                return self
+                    .serve_no_store(req, upstream.stream, &metadata, integrity, limit, timing)
+                    .await;
+            }
+        };
+
+        super::warn_if_audit_failed(
+            self.repo
+                .record_access(
+                    AccessEvent::allowed_download(
+                        req.package_id,
+                        req.identity.user_id,
+                        req.identity.role,
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                )
+                .await,
+            "allowed download",
+        );
+        // The console's Fetch reads the status row this event writes right
+        // after the answer (TD-0004 §2), so the request that cached the
+        // artifact waits for it; the fill does the same for the artifact row.
+        if started {
+            self.repo.flush_access_events().await;
+            if let Some(cache) = &self.explore_cache {
+                cache.invalidate(Some(registry_name)).await;
+            }
+        }
+        super::finish_request(&timing.registry_label, "allowed", timing.start);
+        Ok(ProxyResponse::Stream(stream))
+    }
+
+    /// The detached half of a cold miss: upstream → storage, spooled for the
+    /// fill's subscribers, verified, promoted and recorded. `Ok(false)` when
+    /// upstream said `no-store` and nothing was cached.
+    #[allow(clippy::too_many_arguments)]
+    async fn fill_artifact(
+        &self,
+        writer: &fill::FillWriter,
+        req: &ProxyRequest,
+        client: Arc<dyn RegistryClient>,
+        metadata: PackageMetadata,
+        integrity: &IntegrityPolicy,
+        limit: u64,
+        timing: &RequestTiming,
+    ) -> Result<bool, CoreError> {
+        let registry_name = req.package_id.registry.as_str();
+        let artifact_key = artifact_key_for(req);
         tracing::debug!(key = %artifact_key, "artifact not cached, fetching from upstream");
         metrics::counter!("batlehub_artifact_cache_misses_total", "registry" => timing.registry_label.clone()).increment(1);
         self.metrics.record_artifact_miss(registry_name);
@@ -301,7 +411,7 @@ impl ProxyService {
         let mut upstream = self
             .fetch_artifact_or_record_error(
                 &client,
-                &req,
+                req,
                 &metadata,
                 &timing.registry_label,
                 upstream_start,
@@ -323,7 +433,7 @@ impl ProxyService {
         // else, while a `warn` that had to read bytes would mean buffering
         // every raw file to say something the response already says by name.
         upstream.stream = self
-            .refuse_raw_script(&req, upstream.stream)
+            .refuse_raw_script(req, upstream.stream)
             .await
             .inspect_err(|_| {
                 tracing::info!(package = %req.package_id, "raw: refused by scripts = deny");
@@ -334,23 +444,15 @@ impl ProxyService {
             .as_deref()
             .map(|h| parse_cache_control(h).no_store)
             .unwrap_or(false);
-
-        // ── Missing-checksum gate (no artifact bytes needed) ───────────────────
-        // Decided up front so it applies equally to the streaming and no-store
-        // paths, and so we never start a transfer that policy will reject.
-        self.gate_missing_checksum(&req, &metadata, integrity, &artifact_key, timing)
-            .await?;
-
         if skip_artifact_cache {
             tracing::debug!(key = %artifact_key, "upstream Cache-Control: no-store; skipping artifact cache");
-            return self
-                .serve_no_store(req, upstream.stream, &metadata, integrity, limit, timing)
-                .await;
+            return Ok(false);
         }
 
         // ── Build the advertised-checksum verifier (None ⇒ no verification) ────
-        // `None` covers: integrity disabled, no advertised checksum (gated above),
-        // or an unparseable checksum (treated like missing, with a metric).
+        // `None` covers: integrity disabled, no advertised checksum (gated
+        // before the fill), or an unparseable checksum (treated like missing,
+        // with a metric).
         let verifier = build_artifact_verifier(
             integrity,
             &metadata,
@@ -373,13 +475,15 @@ impl ProxyService {
             artifact_key.clone()
         };
 
-        // ── Stream upstream → storage, hashing + size-limiting in flight ───────
+        // ── Stream upstream → storage, hashing + size-limiting in flight, and
+        // spooled for the fill's subscribers ───────────────────────────────────
         let outcome_slot: Arc<Mutex<Option<IntegrityOutcome>>> = Arc::new(Mutex::new(None));
         let instrumented =
             instrument_upstream(upstream.stream, limit, verifier, Arc::clone(&outcome_slot));
+        let spooled = writer.spool(instrumented);
         let store_outcome = match self
             .storage
-            .store_streaming(&store_key, instrumented, StorageMeta::default())
+            .store_streaming(&store_key, spooled, StorageMeta::default())
             .await
         {
             Ok(o) => o,
@@ -399,7 +503,7 @@ impl ProxyService {
         // ── Inspect the advertised-checksum verdict (post-stream) ──────────────
         let verify_outcome = outcome_slot.lock().expect("verifier mutex").take();
         self.enforce_verify_outcome(
-            &req,
+            req,
             &store_key,
             had_verifier,
             verify_outcome,
@@ -451,32 +555,11 @@ impl ProxyService {
         )
         .await;
 
-        // ── Serve the client from the freshly cached bytes (streamed) ──────────
-        let stored = self.storage.retrieve(&artifact_key).await?.ok_or_else(|| {
-            CoreError::Registry(format!(
-                "artifact '{artifact_key}' vanished immediately after caching"
-            ))
-        })?;
-
-        let registry = req.package_id.registry.clone();
-        super::warn_if_audit_failed(
-            self.repo
-                .record_access(
-                    AccessEvent::allowed_download(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                    )
-                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
-                )
-                .await,
-            "allowed download",
-        );
-        // The catalogue lists this package from the status row `record_access`
-        // writes and the artifact row above; until now its cached listing held
-        // neither, for up to `ExploreCache`'s TTL. Once per cached artifact,
-        // never on a hit — after both writes, so a listing read in between
-        // cannot put the old answer back.
+        // The catalogue lists this package from the status row the request's
+        // `record_access` writes and the artifact row above; until now its
+        // cached listing held neither, for up to `ExploreCache`'s TTL. Once
+        // per cached artifact, never on a hit — after both writes, so a
+        // listing read in between cannot put the old answer back.
         //
         // `record_access` only *queues* the event since access events are
         // batched (TD-0004 §2), so the status row is waited for here: without
@@ -485,10 +568,9 @@ impl ProxyService {
         // answer for the whole TTL.
         self.repo.flush_access_events().await;
         if let Some(cache) = &self.explore_cache {
-            cache.invalidate(Some(&registry)).await;
+            cache.invalidate(Some(registry_name)).await;
         }
-        super::finish_request(&timing.registry_label, "allowed", timing.start);
-        Ok(ProxyResponse::Stream(stored.stream))
+        Ok(true)
     }
 
     /// Enforce the integrity policy when upstream advertises no checksum. No-op

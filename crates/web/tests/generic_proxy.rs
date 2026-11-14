@@ -85,6 +85,7 @@ async fn make_generic_app(
         metrics: proxy_metrics.clone(),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

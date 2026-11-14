@@ -164,6 +164,7 @@ async fn audit_quick_forwards_to_upstream_and_returns_response() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

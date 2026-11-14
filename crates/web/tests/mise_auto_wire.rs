@@ -184,6 +184,7 @@ fn proxy_for(lab: &Lab, storage: Arc<dyn StorageBackend>) -> LabProxy {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

@@ -118,6 +118,9 @@ spec:
             sizeLimit: {{ .Values.persistence.ephemeralSizeLimit | default "1Gi" }}
           {{- end }}
         {{- end }}
+        - name: fill-scratch
+          emptyDir:
+            sizeLimit: {{ .Values.fillScratch.sizeLimit }}
         {{- range .Values.externalManifest }}
         {{- if and (eq (include "batlehub.manifestEnabled" .) "true") .mount (not .mount.asConfig) }}
         - name: extra-{{ .name }}
@@ -244,6 +247,10 @@ spec:
             - name: cache
               mountPath: {{ .Values.config.storage.path }}
             {{- end }}
+            # RFC 0048 §15 Q9: a cold fill spools the bytes it streams to its
+            # clients here, so the root filesystem can stay read-only.
+            - name: fill-scratch
+              mountPath: /tmp
             {{- range .Values.externalManifest }}
             {{- if and (eq (include "batlehub.manifestEnabled" .) "true") .mount (not .mount.asConfig) }}
             - name: extra-{{ .name }}

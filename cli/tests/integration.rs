@@ -254,6 +254,7 @@ impl TestServer {
             metrics: Arc::new(ProxyMetrics::new(&[])),
             sbom: None,
             readme: Some(Arc::clone(&readme_svc)),
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
         });

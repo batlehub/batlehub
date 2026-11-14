@@ -309,6 +309,7 @@ async fn composer_security_advisories_forwards_to_upstream_and_returns_response(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

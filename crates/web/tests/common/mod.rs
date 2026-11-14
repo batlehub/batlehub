@@ -950,6 +950,7 @@ pub fn one_registry_proxy(
         metrics: Arc::new(ProxyMetrics::new(&[name.to_owned()])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -2043,6 +2044,7 @@ pub async fn make_app_with_defaults_and_access(
         metrics: proxy_metrics.clone(),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -2211,6 +2213,7 @@ pub fn local_registry_app_parts_with_artifact_meta(
         metrics: Arc::new(ProxyMetrics::new(&[name.to_owned()])),
         sbom: sbom_svc,
         readme: readme_svc,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: Some(Arc::clone(&admin_svc.explore_cache)),
     });
@@ -2285,6 +2288,7 @@ pub fn local_only_app_parts(
         metrics: Arc::new(ProxyMetrics::new(&[name.to_owned()])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -2521,6 +2525,7 @@ pub fn empty_app_parts() -> EmptyAppParts {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -2681,6 +2686,7 @@ pub async fn make_app_with_eviction_and_repo(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -2743,6 +2749,7 @@ pub async fn make_app_with_warming(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -3062,6 +3069,7 @@ pub async fn make_local_nuget_app(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
