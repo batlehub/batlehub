@@ -470,7 +470,7 @@ export const defaultUpstream: Record<RegistryType, string> = {
   rubygems: "https://rubygems.org",
   composer: "https://repo.packagist.org",
   pypi: "https://pypi.org",
-  conda: "https://conda.anaconda.org",
+  conda: "https://conda.anaconda.org/conda-forge",
   nuget: "https://api.nuget.org",
   // Deb has a canonical Debian mirror; RPM and generic have no universal default
   // upstream, so they are left blank for the user to fill in (e.g. a

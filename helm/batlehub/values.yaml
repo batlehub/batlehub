@@ -603,8 +603,11 @@ fillScratch:
   # it streams to clients while it stores them (RFC 0048 §15 Q9). It holds the
   # artifacts being filled at once, each up to its registry's
   # `max_artifact_size_bytes`. When the scratch file cannot be written the fill
-  # still runs, and is served once it has ended — store-then-serve.
-  sizeLimit: 2Gi
+  # still runs, and is served once it has ended — store-then-serve. The
+  # kubelet evicts the pod when this is exceeded, so it covers several large
+  # fills at once (a Swift tarball is 1.6 GB); a cross-replica fill that needs
+  # no scratch is the follow-up RFC.
+  sizeLimit: 8Gi
 
 # ── Extra / external manifests ────────────────────────────────────────────────
 # 0..N additional Kubernetes manifests rendered by this chart. Each entry:

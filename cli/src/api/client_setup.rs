@@ -3571,8 +3571,8 @@ mod tests {
                 "npm" => Some("https://registry.npmjs.org".to_owned()),
                 "cargo" => Some("https://crates.io".to_owned()),
                 "openvsx" => Some("https://open-vsx.org".to_owned()),
-                // The bare host (`server/src/builders.rs`): no channel named.
-                "conda" => Some("https://conda.anaconda.org".to_owned()),
+                // The server's default channel (`server/src/builders.rs`).
+                "conda" => Some("https://conda.anaconda.org/conda-forge".to_owned()),
                 _ => None,
             },
             installable: None,
@@ -3627,7 +3627,11 @@ mod tests {
         cf.upstream = Some("https://conda.anaconda.org/conda-forge/".to_owned());
         let mut bio = reg("bio", "conda", "proxy");
         bio.upstream = Some("https://conda.anaconda.org/bioconda".to_owned());
-        let regs = [cf, bio, reg("dflt", "conda", "proxy")];
+        // A registry written on the bare host: no channel, so no rule. One
+        // with no `upstreams` at all defaults to conda-forge on the server.
+        let mut dflt = reg("dflt", "conda", "proxy");
+        dflt.upstream = Some("https://conda.anaconda.org".to_owned());
+        let regs = [cf, bio, dflt];
         let p = find(&plan(&regs, &opts(), &env).unwrap(), TargetId::Mise).clone();
         assert!(p.writes(), "{:?} {:?}", p.state, p.detail);
         let next = p.next.clone().unwrap();
