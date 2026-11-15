@@ -584,3 +584,248 @@ async fn stat_by_prefix_counts_and_sums_the_recorded_sizes() {
         (2, expected)
     );
 }
+
+// ── Fill segments (RFC 0048-bis) ──────────────────────────────────────────────
+
+/// A leaf that counts `assemble_segments` calls and otherwise is `inner`.
+struct CountingLeaf {
+    inner: Arc<FilesystemStorageBackend>,
+    assembled: AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl StorageBackend for CountingLeaf {
+    async fn store(
+        &self,
+        key: &str,
+        data: Bytes,
+        meta: StorageMeta,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.inner.store(key, data, meta).await
+    }
+    async fn move_key(&self, from: &str, to: &str) -> Result<(), batlehub_core::error::CoreError> {
+        self.inner.move_key(from, to).await
+    }
+    async fn put_segment(
+        &self,
+        staged: &str,
+        n: u32,
+        data: Bytes,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.inner.put_segment(staged, n, data).await
+    }
+    async fn get_segment(
+        &self,
+        staged: &str,
+        n: u32,
+    ) -> Result<Option<batlehub_core::ports::ByteStream>, batlehub_core::error::CoreError> {
+        self.inner.get_segment(staged, n).await
+    }
+    async fn assemble_segments(
+        &self,
+        staged: &str,
+        count: u32,
+        dest: &str,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.assembled.fetch_add(1, Ordering::Relaxed);
+        self.inner.assemble_segments(staged, count, dest).await
+    }
+    async fn delete_segments(
+        &self,
+        staged: &str,
+        upto: u32,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.inner.delete_segments(staged, upto).await
+    }
+    async fn retrieve_from(
+        &self,
+        key: &str,
+        offset: u64,
+    ) -> Result<Option<StoredArtifact>, batlehub_core::error::CoreError> {
+        self.inner.retrieve_from(key, offset).await
+    }
+    async fn delete_stale_staging(
+        &self,
+        older_than: std::time::Duration,
+    ) -> Result<usize, batlehub_core::error::CoreError> {
+        self.inner.delete_stale_staging(older_than).await
+    }
+    async fn retrieve(
+        &self,
+        key: &str,
+    ) -> Result<Option<StoredArtifact>, batlehub_core::error::CoreError> {
+        self.inner.retrieve(key).await
+    }
+    async fn exists(&self, key: &str) -> Result<bool, batlehub_core::error::CoreError> {
+        self.inner.exists(key).await
+    }
+    async fn delete(&self, key: &str) -> Result<bool, batlehub_core::error::CoreError> {
+        self.inner.delete(key).await
+    }
+    async fn delete_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<usize, batlehub_core::error::CoreError> {
+        self.inner.delete_by_prefix(prefix).await
+    }
+    async fn stat_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<(u64, u64), batlehub_core::error::CoreError> {
+        self.inner.stat_by_prefix(prefix).await
+    }
+    async fn list_keys(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<String>, batlehub_core::error::CoreError> {
+        self.inner.list_keys(prefix).await
+    }
+}
+
+/// Two segments — a full one and a tail unique to this run — and their
+/// `StoreOutcome`, as the fill will compute it.
+fn fill_payload(label: &str) -> (Vec<Bytes>, batlehub_core::ports::StoreOutcome) {
+    let full = Bytes::from(vec![7u8; batlehub_core::ports::FILL_SEGMENT_BYTES]);
+    let tail = upayload(label);
+    let whole = [full.as_ref(), tail.as_ref()].concat();
+    let outcome = batlehub_core::ports::StoreOutcome {
+        content_hash: hex::encode(Sha256::digest(&whole)),
+        size: whole.len() as u64,
+    };
+    (vec![full, tail], outcome)
+}
+
+async fn put_all(router: &StorageRouter, staged: &str, segments: &[Bytes]) {
+    for (n, seg) in segments.iter().enumerate() {
+        router
+            .put_segment(staged, n as u32, seg.clone())
+            .await
+            .unwrap();
+    }
+}
+
+/// Segments are staging: they reach the leaf untracked, `promote_segments`
+/// assembles them straight into `blob/<hash>` on a first reference, and a
+/// dedup hit assembles nothing and deletes them.
+#[tokio::test]
+async fn segments_promote_into_the_blob_and_a_dedup_hit_assembles_nothing() {
+    let Some(url) = db_url() else { return };
+    let fs = make_fs("segments").await;
+    let leaf = Arc::new(CountingLeaf {
+        inner: fs.clone(),
+        assembled: AtomicU64::new(0),
+    });
+    let pool = pool(&url).await;
+    let mut backends: HashMap<String, Arc<dyn StorageBackend>> = HashMap::new();
+    backends.insert("default".to_owned(), leaf.clone());
+    let router = StorageRouter::new(backends, "default".to_owned(), HashMap::new(), pool.clone());
+
+    let (segments, outcome) = fill_payload("segments-promote");
+    let whole: Vec<u8> = segments.concat();
+    let key = ukey("npm", "segmented");
+    let staged = batlehub_core::ports::staging_key_for(&key);
+    put_all(&router, &staged, &segments).await;
+    let seg0 = batlehub_core::ports::segment_key(&staged, 0).unwrap();
+    assert_eq!(
+        tracked_rows(&pool, &staged).await + tracked_rows(&pool, &seg0).await,
+        0
+    );
+    let read = router
+        .get_segment(&staged, 1)
+        .await
+        .unwrap()
+        .expect("committed segment");
+    assert_eq!(
+        batlehub_core::ports::collect_byte_stream(read)
+            .await
+            .unwrap(),
+        segments[1]
+    );
+    assert!(
+        !router.exists(&key).await.unwrap(),
+        "not servable before promotion"
+    );
+
+    router
+        .promote_segments(&staged, 2, &key, &outcome)
+        .await
+        .unwrap();
+    assert_eq!(leaf.assembled.load(Ordering::Relaxed), 1);
+    assert!(fs
+        .exists(&format!("blob/{}", outcome.content_hash))
+        .await
+        .unwrap());
+    assert!(
+        router.get_segment(&staged, 0).await.unwrap().is_none(),
+        "segments consumed"
+    );
+    assert_eq!(
+        tracked_rows(&pool, &key).await,
+        2,
+        "one ref, one storage row"
+    );
+    assert_eq!(
+        collect(router.retrieve(&key).await.unwrap().unwrap()).await,
+        whole
+    );
+    let from = router.retrieve_from(&key, 5).await.unwrap().unwrap();
+    assert_eq!(collect(from).await, whole[5..]);
+
+    // The same bytes filled for a second key: one more ref, no assembly.
+    let second = ukey("npm", "segmented-again");
+    let staged = batlehub_core::ports::staging_key_for(&second);
+    put_all(&router, &staged, &segments).await;
+    router
+        .promote_segments(&staged, 2, &second, &outcome)
+        .await
+        .unwrap();
+    assert_eq!(
+        leaf.assembled.load(Ordering::Relaxed),
+        1,
+        "a dedup hit assembles nothing"
+    );
+    assert!(
+        router.get_segment(&staged, 1).await.unwrap().is_none(),
+        "segments deleted"
+    );
+    assert_eq!(
+        collect(router.retrieve(&second).await.unwrap().unwrap()).await,
+        whole
+    );
+}
+
+/// The trait-default assembly through the router lands as a tracked, dedup'd
+/// artifact; the segment methods refuse a logical key outright.
+#[tokio::test]
+async fn segments_on_the_router_route_to_the_leaf_and_refuse_logical_keys() {
+    let Some(url) = db_url() else { return };
+    let fs = make_fs("segment-routes").await;
+    let pool = pool(&url).await;
+    let router = single_backend_router(fs.clone(), pool.clone());
+
+    let key = ukey("npm", "assembled");
+    let data = upayload("segment-default-assembly");
+    assert!(router.put_segment(&key, 0, data.clone()).await.is_err());
+    assert!(router.get_segment(&key, 0).await.is_err());
+    assert!(router.delete_segments(&key, 1).await.is_err());
+
+    let staged = batlehub_core::ports::staging_key_for(&key);
+    router.put_segment(&staged, 0, data.clone()).await.unwrap();
+    router.assemble_segments(&staged, 1, &key).await.unwrap();
+    assert_eq!(tracked_rows(&pool, &key).await, 2);
+    assert!(fs.exists(&content_key(&data)).await.unwrap());
+    assert_eq!(
+        collect(router.retrieve(&key).await.unwrap().unwrap()).await,
+        data.as_ref()
+    );
+    router.delete_segments(&staged, 1).await.unwrap();
+    assert!(router.get_segment(&staged, 0).await.unwrap().is_none());
+    // Nothing stale on a fresh leaf; the sweep reaches it through the router.
+    assert_eq!(
+        router
+            .delete_stale_staging(std::time::Duration::from_secs(3600))
+            .await
+            .unwrap(),
+        0
+    );
+}

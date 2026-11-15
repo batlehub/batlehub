@@ -176,14 +176,21 @@ heavy_start_second_server() {
   local config="$1" port="$2" storage="${3:-$HEAVY_WORK/storage2}"
   mkdir -p "$storage"
   HEAVY_BASE2="http://127.0.0.1:$port"
+  # A server already answering here is not the one about to start.
+  ! curl -s -o /dev/null "$HEAVY_BASE2/healthz" \
+    || heavy_fail "port $port already answers: a server from an earlier run is still up"
   heavy_log "Starting the second BatleHub (config=$config, port=$port)"
   # Its own port and path, through the loader's env-override path so the
   # config file stays valid TOML. Exported for this launch only: the parent
   # shell keeps the first instance's values.
+  # The first server's features too: a build without them would replace its
+  # binary with one that cannot read the shared config (backends.sh's S3).
+  local -a features=()
+  [[ -n "${HEAVY_SERVER_FEATURES:-}" ]] && features=(--features "$HEAVY_SERVER_FEATURES")
   (
     export PROXY_CACHE__SERVER__PORT="$port"
     export PROXY_CACHE__STORAGE__PATH="$storage"
-    setsid cargo run -p batlehub-server -- \
+    setsid cargo run -p batlehub-server "${features[@]}" -- \
       --config "$config" >"$HEAVY_WORK/server2.log" 2>&1 &
     echo $! > "$HEAVY_WORK/server2.pid"
   )
@@ -208,17 +215,27 @@ heavy_stop_second_server() {
     kill -TERM -- "-$HEAVY_SERVER2_PID" 2>/dev/null \
       || kill -TERM "$HEAVY_SERVER2_PID" 2>/dev/null || true
     wait "$HEAVY_SERVER2_PID" 2>/dev/null || true
+    # Not our child (a subshell started it), so `wait` returns at once: wait
+    # for the group to go, or a server left behind answers the next run's
+    # health check on this port with the previous run's registries.
+    for _ in $(seq 1 30); do
+      pgrep -g "$HEAVY_SERVER2_PID" >/dev/null 2>&1 || break
+      sleep 1
+    done
+    pkill -KILL -g "$HEAVY_SERVER2_PID" 2>/dev/null || true
   fi
   HEAVY_SERVER2_PID=""
 }
 
 heavy_cleanup() {
-  [[ -n "$HEAVY_TAP_PID" ]] && kill "$HEAVY_TAP_PID" 2>/dev/null
+  # `|| true`: under `set -e` a failed `kill` ending an `&&` list ends the
+  # trap here, and every server after it is left running.
+  [[ -n "$HEAVY_TAP_PID" ]] && { kill "$HEAVY_TAP_PID" 2>/dev/null || true; }
   # A suite that starts a second tap (or anything else) registers its pid
   # here, so a failure mid-way leaves no listener behind on the port the
   # next run needs.
   for pid in "${HEAVY_EXTRA_PIDS[@]:-}"; do
-    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+    [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; }
   done
   heavy_stop_second_server
   heavy_stop_server

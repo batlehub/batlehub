@@ -282,6 +282,7 @@ pub fn embedded_migrator() -> Migrator {
             "rfc 0044 scan status indexes",
             "../migrations/068_rfc0044_scan_status_indexes.sql"
         ),
+        mig!(69, "fill leases", "../migrations/069_fill_leases.sql"),
     ])
 }
 

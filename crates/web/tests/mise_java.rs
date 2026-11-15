@@ -262,6 +262,33 @@ async fn an_archive_that_does_not_match_its_row_is_refused() {
     }
 }
 
+/// RFC 0048 T10 at the HTTP layer: a mismatch found after the body began to
+/// stream aborts the response. The client sees a cut transfer, never a short
+/// `200` that ends cleanly and reads as a complete archive.
+#[actix_web::test]
+async fn a_mismatch_found_mid_stream_aborts_the_response() {
+    let big = vec![b'j'; 9 * 1024 * 1024];
+    let mut server = upstream(rows(&format!("sha256:{}", "0".repeat(64)))).await;
+    server
+        .mock("GET", vendor_path(ADOPTIUM).as_str())
+        .with_body(&big)
+        .create_async()
+        .await;
+    let app = app_against(&server).await;
+    let resp = call_service(&app, admin_get(&dl(ADOPTIUM))).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the first segment streams before the end"
+    );
+    let body = actix_web::body::to_bytes(resp.into_body()).await;
+    assert!(
+        body.is_err(),
+        "a reset body must be an error, not {} clean bytes",
+        body.map(|b| b.len()).unwrap_or(0)
+    );
+}
+
 /// T5, accepted residual (§15 Q10): an `md5:` row stays in the document and
 /// its archive is cached unverified — served, and served again from cache.
 #[actix_web::test]

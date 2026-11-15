@@ -68,6 +68,60 @@ pub fn staged_destination(key: &str) -> Option<&str> {
         .map(|(_, dest)| dest)
 }
 
+/// RFC 0048-bis §15 Q1: the size of every segment of a cold fill but its last.
+/// 8 MiB is the multipart `PART_SIZE` and clears S3's 5 MiB floor for any part
+/// but the last, so segments can be assembled with `UploadPartCopy`.
+pub const FILL_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
+
+/// RFC 0048-bis: segment `n` of the fill staged at `staged`.
+/// `staging:<fill>/<dest>` → `staging:<fill>.<n>/<dest>`; still a staging
+/// key, so `staged_destination` and the router route it unchanged. `None`
+/// when `staged` is not a staging key, or is already a segment key (its fill
+/// part carries a `.`), so a segment never names another fill's segment.
+pub fn segment_key(staged: &str, n: u32) -> Option<String> {
+    let (fill, dest) = staged.strip_prefix(STAGING_PREFIX)?.split_once('/')?;
+    if fill.is_empty() || fill.contains('.') || dest.is_empty() {
+        return None;
+    }
+    Some(format!("{STAGING_PREFIX}{fill}.{n}/{dest}"))
+}
+
+/// The segment key for `staged`, or the `InvalidInput` a backend answers for
+/// a key that is not a fill's staging key.
+pub fn require_segment_key(staged: &str, n: u32) -> Result<String, CoreError> {
+    segment_key(staged, n)
+        .ok_or_else(|| CoreError::InvalidInput(format!("{staged:?} is not a fill's staging key")))
+}
+
+/// A fill has at least one segment — an empty artifact is one empty segment —
+/// so assembling none is a caller's mistake every backend refuses alike.
+pub fn require_segments(staged: &str, count: u32) -> Result<(), CoreError> {
+    if count == 0 {
+        return Err(CoreError::InvalidInput(format!(
+            "assemble {staged}: a fill has at least one segment"
+        )));
+    }
+    Ok(())
+}
+
+/// Drop the first `offset` bytes of `stream`.
+pub(crate) fn skip_bytes(stream: ByteStream, offset: u64) -> ByteStream {
+    let mut remaining = offset;
+    Box::pin(stream.filter_map(move |chunk| {
+        let out = match chunk {
+            Ok(b) if remaining > 0 => {
+                // `n` is at most `b.len()`, so the cast cannot truncate.
+                let n = remaining.min(b.len() as u64);
+                remaining -= n;
+                let rest = b.slice(n as usize..);
+                (!rest.is_empty()).then_some(Ok(rest))
+            }
+            other => Some(other),
+        };
+        futures::future::ready(out)
+    }))
+}
+
 /// What a streaming store wrote: the bare SHA-256 hex of the persisted bytes and
 /// their total length. The digest is the same value [`crate::services::integrity::sha256_hex`]
 /// would compute over the full artifact, so it doubles as both the dedup content
@@ -172,6 +226,142 @@ pub trait StorageBackend: Send + Sync {
         Ok(())
     }
 
+    // ── Fill segments (RFC 0048-bis §6.1) ─────────────────────────────────────
+    //
+    // A cold fill writes its bytes as `FILL_SEGMENT_BYTES` segments under its
+    // staging key `staged` (`staging:<fill>/<artifact key>`), so any replica
+    // can read the ones already committed, and assembles them into the
+    // artifact once the digest is verified. Every segment but the last is
+    // exactly `FILL_SEGMENT_BYTES` long, and segments are put in order.
+
+    /// Write segment `n` of the fill staged at `staged`. The default stores it
+    /// as its own object at [`segment_key`].
+    async fn put_segment(&self, staged: &str, n: u32, data: Bytes) -> Result<(), CoreError> {
+        let key = require_segment_key(staged, n)?;
+        let meta = StorageMeta {
+            size: Some(data.len() as u64),
+            ..Default::default()
+        };
+        self.store(&key, data, meta).await
+    }
+
+    /// [`put_segment`](Self::put_segment) from the chunks a fill received, in
+    /// order. A backend that can write them one after the other overrides it,
+    /// so the segment is never joined into a second buffer beside the chunks
+    /// its readers still hold. The default joins them.
+    async fn put_segment_parts(
+        &self,
+        staged: &str,
+        n: u32,
+        parts: Vec<Bytes>,
+    ) -> Result<(), CoreError> {
+        let data = match parts.as_slice() {
+            [one] => one.clone(),
+            parts => {
+                let mut buf = bytes::BytesMut::with_capacity(parts.iter().map(Bytes::len).sum());
+                parts.iter().for_each(|b| buf.extend_from_slice(b));
+                buf.freeze()
+            }
+        };
+        self.put_segment(staged, n, data).await
+    }
+
+    /// Read segment `n` of the fill staged at `staged`; `None` if it is not
+    /// there (never written, or already deleted).
+    async fn get_segment(&self, staged: &str, n: u32) -> Result<Option<ByteStream>, CoreError> {
+        let key = require_segment_key(staged, n)?;
+        Ok(self.retrieve(&key).await?.map(|a| a.stream))
+    }
+
+    /// Write segments `0..count` of `staged`, concatenated, as the object at
+    /// `dest`; `count` is at least 1. Whether the segments stay is the
+    /// backend's: the filesystem renames its one file onto `dest`. The default re-streams them through
+    /// [`store_streaming`](Self::store_streaming).
+    async fn assemble_segments(
+        &self,
+        staged: &str,
+        count: u32,
+        dest: &str,
+    ) -> Result<(), CoreError> {
+        require_segments(staged, count)?;
+        let mut segments = Vec::with_capacity(count as usize);
+        for n in 0..count {
+            let segment = self.get_segment(staged, n).await?.ok_or_else(|| {
+                CoreError::Storage(format!("segment {n} of {staged} vanished before assembly"))
+            })?;
+            segments.push(segment);
+        }
+        let chained: ByteStream = Box::pin(futures::stream::iter(segments).flatten());
+        self.store_streaming(dest, chained, StorageMeta::default())
+            .await
+            .map(|_| ())
+    }
+
+    /// Delete segments `0..upto` of `staged`, the ones that may exist. A
+    /// segment already gone is not an error.
+    async fn delete_segments(&self, staged: &str, upto: u32) -> Result<(), CoreError> {
+        let mut first_err = None;
+        for n in 0..upto {
+            let key = require_segment_key(staged, n)?;
+            if let Err(e) = self.delete(&key).await {
+                tracing::warn!(key = %key, error = %e, "failed to delete fill segment");
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// The segment counterpart of [`promote`](Self::promote): make segments
+    /// `0..count` of `staged` — whose concatenation hashed to `outcome` — the
+    /// content of `key`, then delete them. On failure nothing is promoted and
+    /// the segments are deleted too. The deduplicating router overrides it so
+    /// a dedup hit assembles nothing.
+    async fn promote_segments(
+        &self,
+        staged: &str,
+        count: u32,
+        key: &str,
+        outcome: &StoreOutcome,
+    ) -> Result<(), CoreError> {
+        let _ = outcome;
+        let assembled = self.assemble_segments(staged, count, key).await;
+        if let Err(e) = self.delete_segments(staged, count).await {
+            tracing::warn!(key = %staged, error = %e, "failed to delete fill segments after promotion");
+        }
+        assembled
+    }
+
+    /// [`retrieve`](Self::retrieve) from byte `offset` on: the stream starts
+    /// there and `meta.size`, when known, is the length still to come. An
+    /// offset at or past the end yields an empty stream. The default reads
+    /// and discards the first `offset` bytes.
+    async fn retrieve_from(
+        &self,
+        key: &str,
+        offset: u64,
+    ) -> Result<Option<StoredArtifact>, CoreError> {
+        let Some(mut artifact) = self.retrieve(key).await? else {
+            return Ok(None);
+        };
+        if offset > 0 {
+            artifact.meta.size = artifact.meta.size.map(|s| s.saturating_sub(offset));
+            artifact.stream = skip_bytes(artifact.stream, offset);
+        }
+        Ok(Some(artifact))
+    }
+
+    /// Delete staged bytes (`staging:` keys, the router's `blob/staging/`)
+    /// last written more than `older_than` ago — what a crashed fill or upload
+    /// left behind — and return how many objects went (a filesystem staging
+    /// tree counts as one). The default deletes nothing.
+    async fn delete_stale_staging(
+        &self,
+        older_than: std::time::Duration,
+    ) -> Result<usize, CoreError> {
+        let _ = older_than;
+        Ok(0)
+    }
+
     /// Retrieve an artifact as a streaming response. Returns `None` if not cached.
     async fn retrieve(&self, key: &str) -> Result<Option<StoredArtifact>, CoreError>;
 
@@ -216,4 +406,58 @@ pub trait StorageBackend: Send + Sync {
     /// backend-internal paths). Used by eviction, coherence, and deduplication.
     /// Shadowed by the router, as above.
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, CoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_segment_key_routes_as_its_fills_destination() {
+        let staged = staging_key_for("artifact:npm/@scope/pkg/1.0.0");
+        let seg = segment_key(&staged, 7).unwrap();
+        assert!(seg.starts_with(STAGING_PREFIX));
+        assert!(seg.contains(".7/"));
+        assert_eq!(staged_destination(&seg), staged_destination(&staged));
+        assert_ne!(segment_key(&staged, 0), segment_key(&staged, 1));
+    }
+
+    #[test]
+    fn only_a_fills_staging_key_has_segments() {
+        assert_eq!(segment_key("artifact:npm/pkg/1.0", 0), None);
+        assert_eq!(segment_key("staging:/artifact:npm/pkg/1.0", 0), None);
+        assert_eq!(segment_key("staging:abc", 0), None);
+        let seg = segment_key("staging:abc/artifact:npm/pkg/1.0", 3).unwrap();
+        assert_eq!(seg, "staging:abc.3/artifact:npm/pkg/1.0");
+        // A segment key is not a fill's staging key: no segment of a segment.
+        assert_eq!(segment_key(&seg, 0), None);
+        assert!(require_segment_key("blob/abc", 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn skip_bytes_drops_exactly_the_offset_across_chunks() {
+        let chunks: Vec<Result<Bytes, CoreError>> = ["abc", "de", "fghij"]
+            .iter()
+            .map(|c| Ok(Bytes::from_static(c.as_bytes())))
+            .collect();
+        for (offset, want) in [
+            (0, "abcdefghij"),
+            (2, "cdefghij"),
+            (5, "fghij"),
+            (6, "ghij"),
+            (10, ""),
+            (99, ""),
+        ] {
+            let stream: ByteStream = Box::pin(futures::stream::iter(
+                chunks
+                    .iter()
+                    .map(|c| Ok(c.as_ref().unwrap().clone()))
+                    .collect::<Vec<_>>(),
+            ));
+            let got = collect_byte_stream(skip_bytes(stream, offset))
+                .await
+                .unwrap();
+            assert_eq!(got, want.as_bytes(), "offset {offset}");
+        }
+    }
 }

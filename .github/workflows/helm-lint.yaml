@@ -267,6 +267,7 @@ jobs:
             --set 'ingress.extraHosts[0]=*.batlehub.example.com' \
             --set persistence.enabled=false \
             --set config.storage.type=s3 \
+            --set config.cache.type=postgres \
             > /dev/null
 
   docs:

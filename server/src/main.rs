@@ -884,6 +884,8 @@ async fn main() -> Result<()> {
         readme_svc = readme_svc.with_image_fetcher(fetcher);
     }
     let readme_svc = Arc::new(readme_svc);
+    let fill_leases = stores::create_fill_leases(&config, repo.pool());
+    stores::spawn_fill_sweep(Arc::clone(&fill_leases), storage.clone(), repo.pool());
     let proxy_svc = Arc::new(ProxyService {
         hot: Arc::clone(&hot),
         storage: storage.clone(),
@@ -894,7 +896,8 @@ async fn main() -> Result<()> {
         metrics: Arc::clone(&proxy_metrics),
         sbom: Some(Arc::clone(&sbom_svc)),
         readme: Some(Arc::clone(&readme_svc)),
-        fills: Default::default(),
+        // Outside the actix factory: one coordinator per process, not per worker.
+        fills: Arc::new(batlehub_core::services::proxy::FillCoordinator::with_leases(fill_leases)),
         discovery: Default::default(),
         explore_cache: Some(Arc::clone(&admin_svc.explore_cache)),
     });

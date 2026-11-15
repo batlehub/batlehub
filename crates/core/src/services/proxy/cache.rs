@@ -11,7 +11,7 @@ use futures::{stream, StreamExt};
 
 use crate::entities::{AccessEvent, PackageMetadata};
 use crate::error::CoreError;
-use crate::ports::{ArtifactMetaRecord, ByteStream, RegistryClient, StorageMeta};
+use crate::ports::{ArtifactMetaRecord, ByteStream, Phase, RegistryClient};
 use crate::services::cache_control::parse_cache_control;
 use crate::services::hot_config::IntegrityPolicy;
 use crate::services::integrity::{IntegrityOutcome, StreamingVerifier};
@@ -279,7 +279,9 @@ impl ProxyService {
     /// then served from the freshly cached entry (also streamed). When the
     /// upstream says `no-store`, falls back to a buffered serve-from-memory path
     /// (see [`Self::serve_no_store`]) since verify-before-serve has nothing to
-    /// stream from.
+    /// stream from. `refresh`: the caller found the artifact in storage and
+    /// wants it fetched again (see [`fill::FillWriter::start`]).
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fetch_and_cache(
         &self,
         req: ProxyRequest,
@@ -288,6 +290,7 @@ impl ProxyService {
         integrity: &IntegrityPolicy,
         limit: u64,
         timing: &RequestTiming,
+        refresh: bool,
     ) -> Result<ProxyResponse, CoreError> {
         let registry = req.package_id.registry.clone();
         let registry_name = registry.as_str();
@@ -304,35 +307,51 @@ impl ProxyService {
         let hold = self.hot.read().await.security.contains_key(registry_name);
 
         // ── Join the running fill, or start it detached (RFC 0048 §15 Q9) ─────
-        let (fill, started) = match self.fills.join_or_start(&artifact_key) {
+        let (fill, started) = match self.fills.join_or_start(&artifact_key, &self.storage) {
             fill::Joined::Joined(fill) => {
                 tracing::debug!(key = %artifact_key, "joining the running cold fill");
-                metrics::counter!("batlehub_proxy_fill_joined_total", "registry" => timing.registry_label.clone()).increment(1);
+                metrics::counter!("batlehub_proxy_fill_joined_total", "registry" => timing.registry_label.clone(), "scope" => "local").increment(1);
                 (fill, false)
             }
-            fill::Joined::Started(writer) => {
+            fill::Joined::Started(mut writer) => {
                 let fill = writer.fill();
                 let this = self.clone();
                 let client = Arc::clone(&client);
                 let metadata = metadata.clone();
                 let (req, integrity, timing) = (req.clone(), integrity.clone(), timing.clone());
                 tokio::spawn(async move {
-                    let end = match this
-                        .fill_artifact(&writer, &req, client, metadata, &integrity, limit, &timing)
+                    match writer
+                        .start(Arc::clone(&timing.registry_label), refresh)
                         .await
                     {
-                        Ok(true) => fill::FillEnd::Done,
-                        Ok(false) => fill::FillEnd::NoStore,
-                        Err(e) => fill::FillEnd::Failed((&e).into()),
+                        fill::Start::Fill => {}
+                        fill::Start::Follow(state) => return writer.follow(state).await,
+                        fill::Start::Cached => return writer.finish(Phase::Done).await,
+                    }
+                    let end = match this
+                        .fill_artifact(
+                            &mut writer,
+                            &req,
+                            client,
+                            metadata,
+                            &integrity,
+                            limit,
+                            &timing,
+                        )
+                        .await
+                    {
+                        Ok(true) => Phase::Done,
+                        Ok(false) => Phase::NoStore,
+                        Err(e) => Phase::Failed((&e).into()),
                     };
-                    writer.finish(end);
+                    writer.finish(end).await;
                 });
                 (fill, true)
             }
         };
 
-        let stream = match fill.serve(hold).await? {
-            fill::Served::Stream(stream) => stream,
+        let stream = match Arc::clone(&fill).serve(hold).await? {
+            fill::Served::Stream(stream) => first_byte_timed(stream, &fill, timing.start),
             fill::Served::FromStorage => {
                 self.storage
                     .retrieve(&artifact_key)
@@ -388,13 +407,13 @@ impl ProxyService {
         Ok(ProxyResponse::Stream(stream))
     }
 
-    /// The detached half of a cold miss: upstream → storage, spooled for the
-    /// fill's subscribers, verified, promoted and recorded. `Ok(false)` when
+    /// The detached half of a cold miss: upstream → segments in storage, read
+    /// by the fill's subscribers, verified, promoted and recorded. `Ok(false)` when
     /// upstream said `no-store` and nothing was cached.
     #[allow(clippy::too_many_arguments)]
     async fn fill_artifact(
         &self,
-        writer: &fill::FillWriter,
+        writer: &mut fill::FillWriter,
         req: &ProxyRequest,
         client: Arc<dyn RegistryClient>,
         metadata: PackageMetadata,
@@ -461,73 +480,37 @@ impl ProxyService {
             &artifact_key,
         );
 
-        // Only artifacts that can actually be *blocked* need to be hidden from
-        // concurrent readers until verified. Stream those to a private staging
-        // key and promote to `artifact_key` only after the digest verifies, so a
-        // concurrent cache lookup never observes unverified bytes through the real
-        // key. When nothing can block (no verifier, or warn-only), stream straight
-        // to the real key — there is nothing to retract.
+        // ── Upstream → segments of the fill's staging key, hashing and
+        // size-limiting in flight; readers follow the committed segments.
+        // Always staged, verified or not: the artifact key appears only through
+        // the promotion below (RFC 0048-bis §6.4).
         let had_verifier = verifier.is_some();
-        let must_stage = had_verifier && integrity.block_on_mismatch;
-        let store_key = if must_stage {
-            crate::ports::staging_key_for(&artifact_key)
-        } else {
-            artifact_key.clone()
-        };
-
-        // ── Stream upstream → storage, hashing + size-limiting in flight, and
-        // spooled for the fill's subscribers ───────────────────────────────────
         let outcome_slot: Arc<Mutex<Option<IntegrityOutcome>>> = Arc::new(Mutex::new(None));
-        let instrumented =
+        let mut instrumented =
             instrument_upstream(upstream.stream, limit, verifier, Arc::clone(&outcome_slot));
-        let spooled = writer.spool(instrumented);
-        let store_outcome = match self
-            .storage
-            .store_streaming(&store_key, spooled, StorageMeta::default())
-            .await
-        {
-            Ok(o) => o,
-            Err(e) => {
-                // Mid-stream failure (size-limit abort or upstream/backend error).
-                // Backends clean up their own partial writes; drop the staging key
-                // too in case the backend committed a partial entry under it.
-                if must_stage {
-                    if let Err(cleanup_err) = self.storage.delete(&store_key).await {
-                        tracing::warn!(key = %store_key, error = %cleanup_err, "failed to delete staging artifact after mid-stream failure");
-                    }
-                }
-                return Err(e);
-            }
-        };
+        while let Some(chunk) = instrumented.next().await {
+            writer.push(chunk?).await?;
+        }
+        drop(instrumented);
 
         // ── Inspect the advertised-checksum verdict (post-stream) ──────────────
+        // On a refusal the fill ends failed and its segments are deleted.
         let verify_outcome = outcome_slot.lock().expect("verifier mutex").take();
-        self.enforce_verify_outcome(
-            req,
-            &store_key,
-            had_verifier,
-            verify_outcome,
-            integrity,
-            timing,
-        )
-        .await?;
+        self.enforce_verify_outcome(req, had_verifier, verify_outcome, integrity, timing)
+            .await?;
 
-        // Only now — verified (or warn-only), never evicted — do the bytes count
-        // as actually cached. Counting earlier (right after `store_streaming`)
-        // would overstate the metric on a blocked checksum mismatch, since
-        // `enforce_verify_outcome` above can still evict everything just written.
+        // Verified (or warn-only): the last segment is written and every
+        // segment becomes readable, then promoted onto the artifact key — on
+        // the router, assembled straight into `blob/<sha256>`.
+        let (count, store_outcome) = writer.seal().await?;
         metrics::counter!("batlehub_cached_bytes_total", "registry" => timing.registry_label.clone())
             .increment(store_outcome.size);
-
-        // Verified (or warn-only): promote a staged blob to the real key now —
-        // after verification — so the artifact only becomes visible to concurrent
-        // readers as already-verified bytes. See `StorageBackend::promote`: on
-        // the router it is a rename of the blob already written, not a copy.
-        if must_stage {
-            self.storage
-                .promote(&store_key, &artifact_key, &store_outcome)
-                .await?;
-        }
+        let assembly = Instant::now();
+        self.storage
+            .promote_segments(writer.staged(), count, &artifact_key, &store_outcome)
+            .await?;
+        metrics::histogram!("batlehub_proxy_fill_assembly_seconds")
+            .record(assembly.elapsed().as_secs_f64());
 
         // The digest computed by the streaming store is the same bare SHA-256 the
         // re-serve path expects, so persist it as the stored checksum directly —
@@ -605,12 +588,11 @@ impl ProxyService {
 
     /// Inspect the post-stream advertised-checksum verdict and fail closed when
     /// required: a verifier that published no verdict (stream not consumed) or a
-    /// blocking mismatch. In both cases the just-stored (staging) bytes are
-    /// evicted so they are never promoted or served. `Ok(())` means proceed.
+    /// blocking mismatch. In both cases the fill fails, so its segments are
+    /// deleted and never promoted or served. `Ok(())` means proceed.
     async fn enforce_verify_outcome(
         &self,
         req: &ProxyRequest,
-        store_key: &str,
         had_verifier: bool,
         verify_outcome: Option<IntegrityOutcome>,
         integrity: &IntegrityPolicy,
@@ -624,8 +606,6 @@ impl ProxyService {
         // means the stream was not consumed to completion. We cannot claim the
         // bytes were verified, so evict and reject rather than serve them.
         if had_verifier && verify_outcome.is_none() {
-            self.evict_staged(store_key, "failed to evict unverified artifact")
-                .await;
             let reason = format!(
                 "integrity verification did not complete for {}",
                 req.package_id,
@@ -644,21 +624,12 @@ impl ProxyService {
                 &artifact_key,
                 &req.package_id,
             ) {
-                self.evict_staged(store_key, "failed to evict mismatched artifact")
-                    .await;
                 self.audit_integrity_failure(req, &reason, "integrity mismatch", timing)
                     .await;
                 return Err(CoreError::IntegrityFailure(reason));
             }
         }
         Ok(())
-    }
-
-    /// Best-effort eviction of a stored (staging) key, logging on failure.
-    async fn evict_staged(&self, store_key: &str, warn_msg: &str) {
-        if let Err(e) = self.storage.delete(store_key).await {
-            tracing::warn!(key = %store_key, error = %e, "{warn_msg}");
-        }
     }
 
     /// Record a proxy-error audit event and finish the request as integrity-failed.
@@ -919,6 +890,25 @@ fn instrument_upstream(
                 }
                 None
             }
+        }
+    }))
+}
+
+/// Record `batlehub_proxy_fill_first_byte_seconds{scope}` — from the request
+/// to its first byte of a fill, the number RFC 0048-bis §15 Q1 sizes segments
+/// on — when `stream` yields it.
+fn first_byte_timed(
+    stream: crate::ports::ByteStream,
+    fill: &fill::Fill,
+    start: Instant,
+) -> crate::ports::ByteStream {
+    let scope = if fill.is_remote() { "remote" } else { "local" };
+    let mut timed = false;
+    Box::pin(stream.inspect(move |chunk| {
+        if !timed && chunk.is_ok() {
+            timed = true;
+            metrics::histogram!("batlehub_proxy_fill_first_byte_seconds", "scope" => scope)
+                .record(start.elapsed().as_secs_f64());
         }
     }))
 }

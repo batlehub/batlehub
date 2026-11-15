@@ -1088,7 +1088,12 @@ async fn artifact_ttl_expired_refetches_from_upstream() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
-        fills: Default::default(),
+        // Shared, as a Postgres lease is: its "already in storage?" check
+        // must not answer an expired copy with itself (review of PR 363).
+        fills: Arc::new(fill::FillCoordinator::new(
+            Arc::new(crate::ports::InMemoryFillLeases::default().as_shared()),
+            "a".into(),
+        )),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -3691,6 +3696,26 @@ async fn a_revalidated_path_is_served_stale_on_upstream_error() {
     assert_eq!(client.fetches(), 3);
 }
 
+/// Under a shared lease the fill checks storage before fetching (R5); a
+/// revalidating request found the copy there on purpose and still fetches.
+#[tokio::test]
+async fn a_revalidated_path_refetches_under_a_shared_lease() {
+    let client = ScriptedRegistry::new("v1");
+    let mut svc = revalidating(client.clone()).await;
+    svc.fills = Arc::new(fill::FillCoordinator::new(
+        Arc::new(crate::ports::InMemoryFillLeases::default().as_shared()),
+        "a".into(),
+    ));
+    let path = "release/stable.txt";
+    body_of(svc.handle(generic_req(path)).await.unwrap()).await;
+    client.set(Ok("v2"));
+    assert_eq!(
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+        "v2"
+    );
+    assert_eq!(client.fetches(), 2);
+}
+
 #[tokio::test]
 async fn an_unlisted_path_is_not_revalidated() {
     let client = ScriptedRegistry::new("v1");
@@ -3875,4 +3900,271 @@ async fn a_streamed_mismatch_resets_and_caches_nothing() {
     assert!(matches!(err, CoreError::IntegrityFailure(_)), "{err:?}");
     let key = proxy_artifact_key(&req("npm").package_id);
     assert!(!svc.storage.exists(&key).await.unwrap(), "nothing promoted");
+}
+
+// ── RFC 0048-bis phase 2: the fill's bytes as segments in storage ─────────
+
+fn staging_keys(svc: &ProxyService) -> Vec<String> {
+    futures::executor::block_on(svc.storage.list_keys(crate::ports::STAGING_PREFIX)).unwrap()
+}
+
+/// A body of two segments and a bit: streamed whole to the client, promoted
+/// onto the artifact key, and no segment left behind.
+#[tokio::test]
+async fn a_multi_segment_fill_is_served_whole_and_promoted() {
+    let (client, tx) = GatedRegistry::new(None);
+    let svc = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    let seg = crate::ports::FILL_SEGMENT_BYTES;
+    let mut body = vec![b'a'; seg];
+    body.extend(vec![b'b'; seg]);
+    body.extend_from_slice(b"tail");
+    // Uneven chunks, so segment boundaries fall inside them.
+    for part in body.chunks(3 * 1024 * 1024 + 7) {
+        tx.send(Ok(Bytes::copy_from_slice(part))).unwrap();
+    }
+    drop(tx);
+    let got = read_all(stream_of(svc.handle(req("npm")).await.unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(got.len(), body.len());
+    assert!(got == body);
+    let key = proxy_artifact_key(&req("npm").package_id);
+    for _ in 0..100 {
+        if svc.fills.is_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(svc.storage.exists(&key).await.unwrap(), "promoted");
+    assert!(
+        staging_keys(&svc).is_empty(),
+        "segments deleted after promotion"
+    );
+    assert_eq!(client.fetches(), 1);
+}
+
+/// T3: what another replica reads — the lease's committed count and the
+/// segments in storage — never reaches the end of a body whose digest
+/// failed; the fill ends `Failed` and its segments are deleted.
+#[tokio::test]
+async fn a_remote_reader_never_completes_an_unverified_body() {
+    use crate::ports::{FillLeases, InMemoryFillLeases, Phase, Taken};
+    use futures::StreamExt;
+
+    let wrong = crate::services::integrity::sha256_hex(b"not these bytes");
+    let (client, tx) = GatedRegistry::new(Some(wrong));
+    let leases = Arc::new(InMemoryFillLeases::default());
+    let mut svc = proxy("npm", client, SpyRepo::new(), vec![]);
+    svc.fills = Arc::new(fill::FillCoordinator::new(leases.clone(), "a".into()));
+    let key = proxy_artifact_key(&req("npm").package_id);
+    let seg = crate::ports::FILL_SEGMENT_BYTES;
+
+    let local = {
+        let svc = svc.clone();
+        tokio::spawn(async move { read_all(stream_of(svc.handle(req("npm")).await?)).await })
+    };
+    tx.send(Ok(Bytes::from(vec![b'a'; seg]))).unwrap();
+    tx.send(Ok(Bytes::from_static(b"b"))).unwrap();
+    // `expired(0)` lists every lease without taking one: wait for the fill's.
+    while leases.expired(Duration::ZERO).await.unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // Segment 0 is committed once segment 1 has a byte.
+    let state = loop {
+        match leases.take(&key, "b").await.unwrap() {
+            Taken::Running(s) if s.committed == 1 => break s,
+            Taken::Running(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            Taken::Started { .. } => panic!("the fill holds the lease"),
+        }
+    };
+    let mut follow = leases.follow(&key, state.fill);
+    let staged = format!("{}{}/{key}", crate::ports::STAGING_PREFIX, state.fill);
+    let segment0 = svc.storage.get_segment(&staged, 0).await.unwrap().unwrap();
+    assert_eq!(read_all(segment0).await.unwrap().len(), seg);
+    assert!(
+        svc.storage.get_segment(&staged, 1).await.unwrap().is_none(),
+        "the open segment is not in storage"
+    );
+
+    tx.send(Ok(Bytes::from_static(b"c"))).unwrap();
+    drop(tx);
+    let mut last = None;
+    while let Some(s) = follow.next().await {
+        let s = s.unwrap();
+        assert!(
+            !matches!(s.phase, Phase::Verified { .. } | Phase::Done),
+            "an unverified body is never released: {s:?}"
+        );
+        assert!(s.committed <= 1, "the last segment is never committed");
+        last = Some(s.phase);
+    }
+    assert!(matches!(last, Some(Phase::Failed(_))), "{last:?}");
+    let err = local
+        .await
+        .unwrap()
+        .expect_err("the local reader is reset too");
+    assert!(matches!(err, CoreError::IntegrityFailure(_)), "{err:?}");
+    for _ in 0..100 {
+        if staging_keys(&svc).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        staging_keys(&svc).is_empty(),
+        "the failed fill's segments are deleted"
+    );
+    assert!(!svc.storage.exists(&key).await.unwrap(), "nothing promoted");
+}
+
+// ── RFC 0048-bis phase 3: two replicas on one lease and one storage ───────
+
+/// Replica B of `a`: its own coordinator (its own per-process map), the same
+/// storage and the same lease, as two servers on one database and bucket.
+fn second_replica(a: &ProxyService, leases: Arc<dyn crate::ports::FillLeases>) -> ProxyService {
+    let mut b = a.clone();
+    b.fills = Arc::new(fill::FillCoordinator::new(leases, "b".into()));
+    b
+}
+
+/// §6.P obs. 1 and 2, in process: B follows A's fill instead of fetching,
+/// is served the committed segment while A is still filling, and both get
+/// the whole body from one upstream fetch.
+#[tokio::test]
+async fn two_replicas_fetch_a_cold_artifact_once() {
+    use crate::ports::FillLeases;
+    let (client, tx) = GatedRegistry::new(None);
+    let leases = Arc::new(crate::ports::InMemoryFillLeases::default());
+    let mut a = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    a.fills = Arc::new(fill::FillCoordinator::new(leases.clone(), "a".into()));
+    let b = second_replica(&a, leases.clone());
+    let seg = crate::ports::FILL_SEGMENT_BYTES;
+
+    let on_a = {
+        let a = a.clone();
+        tokio::spawn(async move { read_all(stream_of(a.handle(req("npm")).await?)).await })
+    };
+    tx.send(Ok(Bytes::from(vec![b'a'; seg]))).unwrap();
+    tx.send(Ok(Bytes::from_static(b"b"))).unwrap();
+    while leases.expired(Duration::ZERO).await.unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let Some(mut on_b) = (async {
+        for _ in 0..200 {
+            if let Ok(ProxyResponse::Stream(s)) = b.handle(req("npm")).await {
+                return Some(s);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        None
+    })
+    .await
+    else {
+        panic!("B joins A's fill")
+    };
+    let mut got = Vec::new();
+    while got.len() < seg {
+        use futures::StreamExt;
+        got.extend_from_slice(&on_b.next().await.unwrap().unwrap());
+    }
+    assert_eq!(
+        got.len(),
+        seg,
+        "B read the committed segment before the end"
+    );
+    assert_eq!(client.fetches(), 1, "B made no upstream request");
+    tx.send(Ok(Bytes::from_static(b"cd"))).unwrap();
+    drop(tx);
+    got.extend(read_all(on_b).await.unwrap());
+    let mut want = vec![b'a'; seg];
+    want.extend_from_slice(b"bcd");
+    assert!(got == want, "B's body is whole");
+    assert!(on_a.await.unwrap().unwrap() == want);
+    assert_eq!(client.fetches(), 1);
+    for _ in 0..200 {
+        if a.fills.is_idle() && b.fills.is_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(b.fills.is_idle(), "the follower ended with the fill");
+}
+
+/// R4 and R7: a holder that stops without a word is followed until its lease
+/// expires, the follower's client is reset, and its retry takes the lease
+/// over, deletes the dead fill's segments and fills from zero.
+#[tokio::test]
+async fn a_takeover_after_expiry_refetches_and_deletes_the_old_segments() {
+    use crate::ports::{FillLeases, Taken};
+    let (client, tx) = GatedRegistry::new(None);
+    let ttl = Duration::from_millis(150);
+    let leases = Arc::new(crate::ports::InMemoryFillLeases::with_ttl(ttl));
+    let a = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    let b = second_replica(&a, leases.clone());
+    let key = proxy_artifact_key(&req("npm").package_id);
+    let seg = crate::ports::FILL_SEGMENT_BYTES;
+
+    // A dead holder: it took the lease, committed one segment and was killed.
+    let Taken::Started { fill: dead, .. } = leases.take(&key, "a").await.unwrap() else {
+        panic!("the first take starts")
+    };
+    let dead_staged = format!("{}{dead}/{key}", crate::ports::STAGING_PREFIX);
+    b.storage
+        .put_segment(&dead_staged, 0, Bytes::from(vec![b'x'; seg]))
+        .await
+        .unwrap();
+    assert!(leases.commit(&key, dead, 1).await.unwrap());
+
+    let err = read_all(stream_of(b.handle(req("npm")).await.unwrap()))
+        .await
+        .expect_err("a follower of a dead fill is reset");
+    assert!(err.to_string().contains("stopped"), "{err}");
+    assert_eq!(client.fetches(), 0, "following fetches nothing");
+
+    tx.send(Ok(Bytes::from_static(b"fresh"))).unwrap();
+    drop(tx);
+    let got = read_all(stream_of(b.handle(req("npm")).await.unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        got, b"fresh",
+        "restart, not resume: no byte of the dead fill"
+    );
+    assert_eq!(client.fetches(), 1);
+    assert!(
+        b.storage
+            .get_segment(&dead_staged, 0)
+            .await
+            .unwrap()
+            .is_none(),
+        "the takeover deleted the dead fill's segments"
+    );
+}
+
+/// R5: a shared lease taken after another replica's fill ended serves the
+/// artifact from storage instead of fetching it again.
+#[tokio::test]
+async fn a_lease_taken_after_the_fill_ended_elsewhere_serves_from_storage() {
+    let (client, _tx) = GatedRegistry::new(None);
+    let leases = Arc::new(crate::ports::InMemoryFillLeases::default().as_shared());
+    let mut svc = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    svc.fills = Arc::new(fill::FillCoordinator::new(leases, "a".into()));
+    let key = proxy_artifact_key(&req("npm").package_id);
+    let (fill::Joined::Started(mut writer), storage) = (
+        svc.fills.join_or_start(&key, &svc.storage),
+        svc.storage.clone(),
+    ) else {
+        panic!("the first request starts")
+    };
+    // The other replica promoted while this request was between its miss and
+    // its lease.
+    storage
+        .store(&key, Bytes::from_static(b"cached"), Default::default())
+        .await
+        .unwrap();
+    assert!(matches!(
+        writer.start(Arc::from("npm"), false).await,
+        fill::Start::Cached
+    ));
+    assert_eq!(client.fetches(), 0);
 }

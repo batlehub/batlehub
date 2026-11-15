@@ -1,12 +1,16 @@
 use async_trait::async_trait;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
 use bytes::{Bytes, BytesMut};
-use futures::{stream, StreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use sha2::{Digest, Sha256};
 
 use batlehub_core::{
     error::CoreError,
-    ports::{ByteStream, StorageBackend, StorageMeta, StoreOutcome, StoredArtifact},
+    ports::{
+        require_segment_key, require_segments, ByteStream, StorageBackend, StorageMeta,
+        StoreOutcome, StoredArtifact,
+    },
 };
 
 use super::{super::read_chunked, S3StorageBackend};
@@ -14,6 +18,10 @@ use super::{super::read_chunked, S3StorageBackend};
 /// Multipart part size. Parts (except the last) must be ≥ 5 MiB per the S3 API;
 /// 8 MiB keeps a comfortable margin while bounding peak memory to one part.
 const PART_SIZE: usize = 8 * 1024 * 1024;
+
+/// `UploadPartCopy` requests in flight while assembling a fill (RFC 0048-bis
+/// §15 Q4): assembly is a data copy on RustFS, not a metadata operation.
+const ASSEMBLY_PARALLELISM: usize = 4;
 
 #[async_trait]
 impl StorageBackend for S3StorageBackend {
@@ -106,14 +114,7 @@ impl StorageBackend for S3StorageBackend {
         if let Err(e) = result {
             // Abort the multipart upload so we don't leak storage-billed parts.
             if let Some(id) = upload_id {
-                let _ = self
-                    .client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(&obj_key)
-                    .upload_id(id)
-                    .send()
-                    .await;
+                self.abort_multipart(&obj_key, &id).await;
             }
             return Err(e);
         }
@@ -133,7 +134,7 @@ impl StorageBackend for S3StorageBackend {
             .copy_object()
             .bucket(&self.bucket)
             .key(&to_key)
-            .copy_source(format!("{}/{}", self.bucket, from_key))
+            .copy_source(copy_source(&self.bucket, &from_key))
             .send()
             .await
             .map_err(|e| {
@@ -318,9 +319,212 @@ impl StorageBackend for S3StorageBackend {
         Ok(keys)
     }
 
-    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, CoreError> {
-        use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+    /// One `PutObject` whose body is the fill's chunks in order, so the
+    /// segment is never joined into a second buffer beside the chunks its
+    /// readers hold: a fill costs one segment of RAM, not two.
+    async fn put_segment_parts(
+        &self,
+        staged: &str,
+        n: u32,
+        parts: Vec<Bytes>,
+    ) -> Result<(), CoreError> {
+        use aws_sdk_s3::primitives::{ByteStream as S3Body, SdkBody};
+        let obj_key = self.object_key(&require_segment_key(staged, n)?)?;
+        let len: usize = parts.iter().map(Bytes::len).sum();
+        let parts: std::sync::Arc<[Bytes]> = parts.into();
+        // Retryable: a retry replays the same reference-counted chunks.
+        let body = SdkBody::retryable(move || {
+            SdkBody::from_body_1_x(Parts {
+                parts: std::sync::Arc::clone(&parts),
+                next: 0,
+            })
+        });
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&obj_key)
+            .body(S3Body::new(body))
+            .content_length(len as i64)
+            .send()
+            .await
+            .map_err(|e| CoreError::Storage(format!("S3 put_object {obj_key}: {e}")))?;
+        Ok(())
+    }
 
+    /// Segments are objects of their own: one `DeleteObjects` per 1 000 of
+    /// them, not a request each.
+    async fn delete_segments(&self, staged: &str, upto: u32) -> Result<(), CoreError> {
+        let mut objects = Vec::with_capacity(upto as usize);
+        for n in 0..upto {
+            let key = self.object_key(&require_segment_key(staged, n)?)?;
+            objects.push(
+                ObjectIdentifier::builder()
+                    .key(key)
+                    .build()
+                    .map_err(|e| CoreError::Storage(format!("S3 delete build: {e}")))?,
+            );
+        }
+        while !objects.is_empty() {
+            let rest = objects.split_off(objects.len().min(1000));
+            self.delete_objects(std::mem::replace(&mut objects, rest))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// One object per segment (the default `put_segment`), assembled
+    /// server-side: `UploadPartCopy` of each segment as a part of `dest`, so
+    /// no byte passes through this process; a single segment is a `CopyObject`.
+    async fn assemble_segments(
+        &self,
+        staged: &str,
+        count: u32,
+        dest: &str,
+    ) -> Result<(), CoreError> {
+        require_segments(staged, count)?;
+        let dest_key = self.object_key(dest)?;
+        let mut sources = Vec::with_capacity(count as usize);
+        for n in 0..count {
+            sources.push(copy_source(
+                &self.bucket,
+                &self.object_key(&require_segment_key(staged, n)?)?,
+            ));
+        }
+        if let [only] = sources.as_slice() {
+            self.client
+                .copy_object()
+                .bucket(&self.bucket)
+                .key(&dest_key)
+                .copy_source(only)
+                .send()
+                .await
+                .map_err(|e| {
+                    CoreError::Storage(format!("S3 copy_object {only} -> {dest_key}: {e}"))
+                })?;
+            return Ok(());
+        }
+        let upload_id = self
+            .create_multipart(&dest_key, &StorageMeta::default())
+            .await?;
+        // Futures are lazy, so building them all up front still keeps only
+        // `ASSEMBLY_PARALLELISM` requests in flight. (Mapping inside the stream
+        // trips a higher-ranked lifetime error under `async_trait`'s `Send`.)
+        let copies: Vec<_> = sources
+            .iter()
+            .zip(1..)
+            .map(|(source, part_number)| {
+                self.copy_one_part(&dest_key, &upload_id, part_number, source)
+            })
+            .collect();
+        let parts: Result<Vec<CompletedPart>, CoreError> = stream::iter(copies)
+            .buffered(ASSEMBLY_PARALLELISM)
+            .try_collect()
+            .await;
+        let result = match parts {
+            Ok(parts) => self.complete_multipart(&dest_key, &upload_id, parts).await,
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            self.abort_multipart(&dest_key, &upload_id).await;
+        }
+        result
+    }
+
+    /// `GetObject` with `Range: bytes=<offset>-`.
+    async fn retrieve_from(
+        &self,
+        key: &str,
+        offset: u64,
+    ) -> Result<Option<StoredArtifact>, CoreError> {
+        if offset == 0 {
+            return self.retrieve(key).await;
+        }
+        let obj_key = self.object_key(key)?;
+        let resp = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&obj_key)
+            .range(format!("bytes={offset}-"))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let sdk_err = e.into_service_error();
+                // 416: the object exists and ends at or before `offset`.
+                if sdk_err.code() == Some("InvalidRange") {
+                    return Ok(Some(StoredArtifact {
+                        stream: Box::pin(stream::once(async { Ok(Bytes::new()) })),
+                        meta: StorageMeta {
+                            size: Some(0),
+                            ..Default::default()
+                        },
+                    }));
+                }
+                let err_str = sdk_err.to_string();
+                if Self::is_not_found(&sdk_err.into()) {
+                    return Ok(None);
+                }
+                return Err(CoreError::Storage(format!(
+                    "S3 get_object {obj_key} from {offset}: {err_str}"
+                )));
+            }
+        };
+        let size = resp.content_length().map(|n| n as u64);
+        let content_type = resp.content_type().map(str::to_owned);
+        Ok(Some(StoredArtifact {
+            stream: read_chunked(resp.body.into_async_read(), obj_key),
+            meta: StorageMeta {
+                size,
+                content_type,
+                ..Default::default()
+            },
+        }))
+    }
+
+    /// Objects under `staging:` and `blob/staging/` whose `LastModified` is
+    /// older than `older_than`.
+    async fn delete_stale_staging(
+        &self,
+        older_than: std::time::Duration,
+    ) -> Result<usize, CoreError> {
+        let Some(cutoff) = std::time::SystemTime::now().checked_sub(older_than) else {
+            return Ok(0);
+        };
+        let cutoff = aws_sdk_s3::primitives::DateTime::from(cutoff);
+        let mut total = 0usize;
+        for prefix in [batlehub_core::ports::STAGING_PREFIX, "blob/staging/"] {
+            let s3_prefix = self.object_key(prefix)?;
+            let mut continuation_token: Option<String> = None;
+            loop {
+                let resp = self
+                    .client
+                    .list_objects_v2()
+                    .bucket(&self.bucket)
+                    .prefix(&s3_prefix)
+                    .set_continuation_token(continuation_token.take())
+                    .send()
+                    .await
+                    .map_err(|e| CoreError::Storage(format!("S3 list_objects {s3_prefix}: {e}")))?;
+                let stale: Vec<ObjectIdentifier> = resp
+                    .contents()
+                    .iter()
+                    .filter(|o| o.last_modified().is_some_and(|t| t.secs() < cutoff.secs()))
+                    .filter_map(|o| o.key())
+                    .filter_map(|k| ObjectIdentifier::builder().key(k.to_owned()).build().ok())
+                    .collect();
+                total += self.delete_objects(stale).await?;
+                if !resp.is_truncated().unwrap_or(false) {
+                    break;
+                }
+                continuation_token = resp.next_continuation_token().map(str::to_owned);
+            }
+        }
+        Ok(total)
+    }
+
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, CoreError> {
         let s3_prefix = self.object_key(prefix)?;
         let mut total = 0usize;
         let mut continuation_token: Option<String> = None;
@@ -353,33 +557,7 @@ impl StorageBackend for S3StorageBackend {
                 .filter_map(|k| ObjectIdentifier::builder().key(k.to_owned()).build().ok())
                 .collect();
 
-            let batch_len = object_keys.len();
-            if batch_len > 0 {
-                let delete = Delete::builder()
-                    .set_objects(Some(object_keys))
-                    .build()
-                    .map_err(|e| CoreError::Storage(format!("S3 delete build: {e}")))?;
-                let resp = self
-                    .client
-                    .delete_objects()
-                    .bucket(&self.bucket)
-                    .delete(delete)
-                    .send()
-                    .await
-                    .map_err(|e| CoreError::Storage(format!("S3 delete_objects: {e}")))?;
-
-                // Per-object failures come back in the body of a `200`, not as a
-                // request error, so a batch can partially fail silently. Count
-                // only what S3 confirmed and surface the rest.
-                for err in resp.errors() {
-                    tracing::warn!(
-                        key = err.key().unwrap_or("<unknown>"),
-                        code = err.code().unwrap_or("<none>"),
-                        "S3 delete_objects: object not deleted"
-                    );
-                }
-                total += batch_len.saturating_sub(resp.errors().len());
-            }
+            total += self.delete_objects(object_keys).await?;
 
             let is_truncated = resp.is_truncated().unwrap_or(false);
             continuation_token = resp.next_continuation_token().map(str::to_owned);
@@ -395,6 +573,87 @@ impl StorageBackend for S3StorageBackend {
 /// Single-S3-call helpers for the multipart streaming upload in `store_streaming`.
 /// Each wraps one SDK call and maps its error, keeping the orchestrator readable.
 impl S3StorageBackend {
+    /// One `DeleteObjects` call for `objects` (full object keys, at most the
+    /// 1 000 one listing page returns), returning how many S3 confirmed.
+    async fn delete_objects(&self, objects: Vec<ObjectIdentifier>) -> Result<usize, CoreError> {
+        let batch_len = objects.len();
+        if batch_len == 0 {
+            return Ok(0);
+        }
+        let delete = Delete::builder()
+            .set_objects(Some(objects))
+            .build()
+            .map_err(|e| CoreError::Storage(format!("S3 delete build: {e}")))?;
+        let resp = self
+            .client
+            .delete_objects()
+            .bucket(&self.bucket)
+            .delete(delete)
+            .send()
+            .await
+            .map_err(|e| CoreError::Storage(format!("S3 delete_objects: {e}")))?;
+
+        // Per-object failures come back in the body of a `200`, not as a
+        // request error, so a batch can partially fail silently. Count
+        // only what S3 confirmed and surface the rest.
+        for err in resp.errors() {
+            tracing::warn!(
+                key = err.key().unwrap_or("<unknown>"),
+                code = err.code().unwrap_or("<none>"),
+                "S3 delete_objects: object not deleted"
+            );
+        }
+        Ok(batch_len.saturating_sub(resp.errors().len()))
+    }
+
+    /// Best-effort abort, so a failed upload leaves no storage-billed parts.
+    async fn abort_multipart(&self, obj_key: &str, upload_id: &str) {
+        if let Err(e) = self
+            .client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(obj_key)
+            .upload_id(upload_id)
+            .send()
+            .await
+        {
+            tracing::warn!(key = %obj_key, error = %e, "S3 abort_multipart_upload failed");
+        }
+    }
+
+    /// Copy the object `source` (`<bucket>/<key>`) as part `part_number`.
+    async fn copy_one_part(
+        &self,
+        obj_key: &str,
+        upload_id: &str,
+        part_number: i32,
+        source: &str,
+    ) -> Result<CompletedPart, CoreError> {
+        let resp = self
+            .client
+            .upload_part_copy()
+            .bucket(&self.bucket)
+            .key(obj_key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .copy_source(source)
+            .send()
+            .await
+            .map_err(|e| {
+                CoreError::Storage(format!(
+                    "S3 upload_part_copy {source} -> {obj_key} #{part_number}: {e}"
+                ))
+            })?;
+        Ok(CompletedPart::builder()
+            .set_e_tag(
+                resp.copy_part_result()
+                    .and_then(|r| r.e_tag())
+                    .map(str::to_owned),
+            )
+            .part_number(part_number)
+            .build())
+    }
+
     /// Begin a multipart upload, returning its upload id.
     async fn create_multipart(
         &self,
@@ -489,5 +748,62 @@ impl S3StorageBackend {
             .await
             .map_err(|e| CoreError::Storage(format!("S3 complete_multipart {obj_key}: {e}")))?;
         Ok(())
+    }
+}
+
+/// An HTTP body over a fill's chunks, yielded in order without copying them.
+struct Parts {
+    parts: std::sync::Arc<[Bytes]>,
+    next: usize,
+}
+
+impl http_body::Body for Parts {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        let next = self.parts.get(self.next).cloned();
+        self.next += 1;
+        std::task::Poll::Ready(next.map(|b| Ok(http_body::Frame::data(b))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.next >= self.parts.len()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        let rest = self.parts.get(self.next..).unwrap_or_default();
+        http_body::SizeHint::with_exact(rest.iter().map(|b| b.len() as u64).sum())
+    }
+}
+
+/// The `x-amz-copy-source` of `key` in `bucket`. S3 URL-decodes that header,
+/// so a key carrying `+` (a cargo `+build` version, a Go `+incompatible`) or
+/// `%` must be percent-encoded, or the copy names an object that does not
+/// exist. `/` stays: it separates the bucket from the key and the key's parts.
+fn copy_source(bucket: &str, key: &str) -> String {
+    let mut out = String::with_capacity(bucket.len() + key.len() + 1);
+    for b in format!("{bucket}/{key}").bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod copy_source_tests {
+    #[test]
+    fn a_copy_source_is_percent_encoded_but_keeps_its_slashes() {
+        assert_eq!(
+            super::copy_source("b", "staging:f.0/cargo/wasi/0.11.0+wasi 100%"),
+            "b/staging%3Af.0/cargo/wasi/0.11.0%2Bwasi%20100%25"
+        );
     }
 }

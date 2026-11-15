@@ -44,8 +44,10 @@ pub use governance::{
 };
 pub use notification::{NotificationPort, NotificationSink};
 pub use ops::{
-    BlockedIpInfo, IpBlockStore, NoopWarmCoordinator, QuotaOutcome, QuotaRepository, QuotaUsage,
-    RateLimitStore, UpstreamStatusPort, WarmCoordinator,
+    heartbeat_every, segments_for, BlockedIpInfo, FillError, FillId, FillLeases,
+    InMemoryFillLeases, IpBlockStore, LeaseState, NoopWarmCoordinator, Phase, QuotaOutcome,
+    QuotaRepository, QuotaUsage, RateLimitStore, Taken, UpstreamStatusPort, WarmCoordinator,
+    HEARTBEAT_AFTER, LEASE_TTL,
 };
 pub use readme::{ReadmeImageFetcher, ReadmeRepository, ReadmeSearchHit};
 pub use registry::{
@@ -64,9 +66,10 @@ pub use scanner::{ArtifactScanner, FindingEnricher, ScanInput, ScannerError};
 pub use security::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 pub use stats_history::{StatsHistoryRepository, StatsRollupRow};
 pub use storage::{
-    collect_byte_stream, staged_destination, staging_key_for, ArtifactStorageRecord, ByteStream,
-    CacheEntry, CacheStore, S3StorageConfig, StorageAdminRepository, StorageBackend, StorageMeta,
-    StoreOutcome, StoredArtifact, STAGING_PREFIX,
+    collect_byte_stream, require_segment_key, require_segments, segment_key, staged_destination,
+    staging_key_for, ArtifactStorageRecord, ByteStream, CacheEntry, CacheStore, S3StorageConfig,
+    StorageAdminRepository, StorageBackend, StorageMeta, StoreOutcome, StoredArtifact,
+    FILL_SEGMENT_BYTES, STAGING_PREFIX,
 };
 pub use vulnerability::{
     BatchAnswer, LookupFailure, OsvMatch, VulnerabilityRepository, VulnerabilityScanner,

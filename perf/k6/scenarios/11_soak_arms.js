@@ -17,7 +17,7 @@
  *   BATLEHUB_URL=http://127.0.0.1:8180 k6 run perf/k6/scenarios/11_soak_arms.js
  */
 import http from "k6/http";
-import { check, fail } from "k6";
+import { check, fail, sleep } from "k6";
 import { ADMIN_TOKEN } from "../config.js";
 import { ARMS, SOAKED_KINDS } from "../soak_arms.js";
 
@@ -43,7 +43,13 @@ export function everyArm() {
     const req = arm.request(0);
     const method = req.method || "GET";
     const headers = { ...AUTH, ...req.headers };
-    const res = http.request(method, req.url, req.body || null, { headers });
+    let res = http.request(method, req.url, req.body || null, { headers });
+    // An arm derived asynchronously from an earlier one (the SBOM of the seed)
+    // gets up to 15 s to appear.
+    for (let i = 0; arm.settles && !arm.expect.includes(res.status) && i < 30; i++) {
+      sleep(0.5);
+      res = http.request(method, req.url, req.body || null, { headers });
+    }
 
     const ok = arm.expect.includes(res.status);
     check(res, { [`${arm.op} → ${arm.expect.join("|")}`]: () => ok });
