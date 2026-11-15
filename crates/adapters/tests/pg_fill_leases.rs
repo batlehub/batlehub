@@ -18,8 +18,8 @@ use batlehub_adapters::db::read_cache::{self, CACHES};
 use batlehub_adapters::db::{PgAdvisoryLeader, PgFillLeases};
 use batlehub_adapters::in_memory::InMemoryStorageBackend;
 use batlehub_core::ports::{
-    FillError, FillLeases, LeaderLock, Phase, StorageBackend, Taken, FILL_SEGMENT_BYTES,
-    STAGING_PREFIX,
+    fill_staging_key, FillError, FillLeases, LeaderLock, Phase, StorageBackend, Taken,
+    FILL_SEGMENT_BYTES,
 };
 use batlehub_core::services::proxy::{sweep_fills, FILL_SWEEP_LEADER_KEY};
 
@@ -276,7 +276,7 @@ async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
     let storage = InMemoryStorageBackend::new();
     let (dead_key, live_key) = (key(), key());
     let (dead, _) = started(leases.take(&dead_key, "dead").await.unwrap());
-    let dead_staged = format!("{STAGING_PREFIX}{dead}/{dead_key}");
+    let dead_staged = fill_staging_key(dead, &dead_key);
     storage
         .put_segment(&dead_staged, 0, Bytes::from_static(b"orphan"))
         .await
@@ -284,7 +284,7 @@ async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
     assert!(leases.commit(&dead_key, dead, 1).await.unwrap());
     tokio::time::sleep(ttl * 2).await;
     let (live, _) = started(leases.take(&live_key, "live").await.unwrap());
-    let live_staged = format!("{STAGING_PREFIX}{live}/{live_key}");
+    let live_staged = fill_staging_key(live, &live_key);
     storage
         .put_segment(&live_staged, 0, Bytes::from_static(b"kept"))
         .await
@@ -319,4 +319,33 @@ async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
         vec![live_key],
         "the dead row is gone, the live one kept"
     );
+}
+
+/// A holder that ends while a take sits between its snapshot and its upsert
+/// is not reported as taken over: the snapshot still says `filling`, but the
+/// row was never expired.
+#[tokio::test]
+async fn an_end_racing_a_take_is_not_a_takeover() {
+    let Some(repo) = repo().await else { return };
+    let pool = repo.pool();
+    let leases = PgFillLeases::new(pool.clone());
+    let k = key();
+    let (a, _) = started(leases.take(&k, "a").await.unwrap());
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE fill_leases SET phase = 'done' WHERE storage_key = $1")
+        .bind(&k)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let take = tokio::spawn({
+        let (leases, k) = (PgFillLeases::new(pool.clone()), k.clone());
+        async move { leases.take(&k, "b").await }
+    });
+    // The take's upsert now waits on the row lock with a `filling` snapshot.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    tx.commit().await.unwrap();
+
+    let (_, previous) = started(take.await.unwrap().unwrap());
+    assert_eq!(previous, None, "{a} ended; it was not taken over");
 }

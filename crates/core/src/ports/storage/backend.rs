@@ -50,15 +50,20 @@ pub async fn collect_byte_stream(mut stream: ByteStream) -> Result<Bytes, CoreEr
 }
 
 /// Prefix of a key holding bytes that are not yet verified and must not be
-/// served: the proxy streams an artifact it may still refuse under one, and
-/// [`StorageBackend::promote`]s it to the real key once the digest matches.
+/// served: a cold fill's segments live under one until the digest matches and
+/// [`StorageBackend::promote_segments`] makes them the artifact.
 pub const STAGING_PREFIX: &str = "staging:";
 
 /// A fresh staging key for `artifact_key`. The destination is carried in the
 /// key so a router places the staged bytes on the backend the artifact will
 /// live on, where promoting them is a rename rather than a copy.
 pub fn staging_key_for(artifact_key: &str) -> String {
-    format!("{STAGING_PREFIX}{}/{artifact_key}", uuid::Uuid::new_v4())
+    fill_staging_key(uuid::Uuid::new_v4(), artifact_key)
+}
+
+/// The staging key of fill `fill` for `artifact_key`: `staging:<fill>/<key>`.
+pub fn fill_staging_key(fill: impl std::fmt::Display, artifact_key: &str) -> String {
+    format!("{STAGING_PREFIX}{fill}/{artifact_key}")
 }
 
 /// The artifact key a staging key was made for, or `None` for any other key.
@@ -189,43 +194,6 @@ pub trait StorageBackend: Send + Sync {
         Ok(())
     }
 
-    /// Make the bytes staged at `staged` — written by
-    /// [`store_streaming`](Self::store_streaming), which returned `outcome` —
-    /// the content of `key`, and remove `staged`.
-    ///
-    /// The default re-streams them and deletes the staging key, which is
-    /// correct for any backend. The deduplicating router overrides it: the
-    /// staged bytes are already hashed, so they become `blob/<hash>` with a
-    /// rename on first reference and are dropped on a dedup hit — no second
-    /// write of the artifact, and no dedup rows for a key that lived for
-    /// milliseconds.
-    async fn promote(
-        &self,
-        staged: &str,
-        key: &str,
-        outcome: &StoreOutcome,
-    ) -> Result<(), CoreError> {
-        let _ = outcome;
-        let artifact = self.retrieve(staged).await?.ok_or_else(|| {
-            CoreError::Registry(format!(
-                "staged artifact '{staged}' vanished before promotion"
-            ))
-        })?;
-        if let Err(e) = self
-            .store_streaming(key, artifact.stream, StorageMeta::default())
-            .await
-        {
-            if let Err(cleanup) = self.delete(staged).await {
-                tracing::warn!(key = %staged, error = %cleanup, "failed to delete staging artifact after promotion failure");
-            }
-            return Err(e);
-        }
-        if let Err(e) = self.delete(staged).await {
-            tracing::warn!(key = %staged, error = %e, "failed to delete staging artifact after promotion");
-        }
-        Ok(())
-    }
-
     // ── Fill segments (RFC 0048-bis §6.1) ─────────────────────────────────────
     //
     // A cold fill writes its bytes as `FILL_SEGMENT_BYTES` segments under its
@@ -311,7 +279,7 @@ pub trait StorageBackend: Send + Sync {
         first_err.map_or(Ok(()), Err)
     }
 
-    /// The segment counterpart of [`promote`](Self::promote): make segments
+    /// Make segments
     /// `0..count` of `staged` — whose concatenation hashed to `outcome` — the
     /// content of `key`, then delete them. On failure nothing is promoted and
     /// the segments are deleted too. The deduplicating router overrides it so

@@ -634,8 +634,18 @@ fn finish_stream(
     if let Some(v) = warned {
         crate::handlers::security::verdict_headers(&mut builder, v, now);
     }
-    // An error mid-body aborts the response, so the client sees a cut
-    // transfer and never a short body that ends cleanly (RFC 0048 T10).
+    stream_body(builder, stream)
+}
+
+/// Every streamed body: an error mid-body aborts the response, so the client
+/// sees a cut transfer and never a short body that ends cleanly (RFC 0048 T10).
+pub(crate) fn stream_body<E>(
+    mut builder: actix_web::HttpResponseBuilder,
+    stream: impl futures::Stream<Item = Result<bytes::Bytes, E>> + 'static,
+) -> HttpResponse
+where
+    E: std::fmt::Debug + std::fmt::Display + 'static,
+{
     builder.streaming(stream.map(|chunk| chunk.map_err(actix_web::error::ErrorBadGateway)))
 }
 

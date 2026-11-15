@@ -96,17 +96,12 @@ pub async fn conda_repodata(
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32);
             if let Ok(Some(stored)) = svc.storage.retrieve(storage_key).await {
-                use futures::StreamExt;
                 let mut builder = HttpResponse::Ok();
                 builder.content_type("application/json");
                 builder.insert_header(("X-BatleHub-Cache", "hit"));
                 mark_synthesised(&mut builder, synthesised);
-                // A storage error mid-body aborts the response: a truncated
-                // index that ends cleanly is one conda would try to parse.
-                let body = stored
-                    .stream
-                    .map(|chunk| chunk.map_err(actix_web::error::ErrorInternalServerError));
-                return Ok(builder.streaming(body));
+                // A truncated index that ends cleanly is one conda would parse.
+                return Ok(super::common::stream_body(builder, stored.stream));
             }
         }
     }
@@ -790,13 +785,11 @@ fn stream_to_client(
     content_type: &str,
     stream: batlehub_core::ports::ArtifactStream,
 ) -> HttpResponse {
-    use futures::StreamExt;
-    // An upstream error aborts the response rather than ending it short.
-    let body = stream.map(|chunk| chunk.map_err(actix_web::error::ErrorBadGateway));
-    HttpResponse::Ok()
+    let mut builder = HttpResponse::Ok();
+    builder
         .content_type(content_type)
-        .insert_header(("X-BatleHub-Cache", "stream"))
-        .streaming(body)
+        .insert_header(("X-BatleHub-Cache", "stream"));
+    super::common::stream_body(builder, stream)
 }
 
 /// The bytes of one repodata document, mode-aware and filtered.
@@ -1166,17 +1159,12 @@ async fn serve_compressed_repodata(
             // The entry says the bytes were stored; storage says whether they
             // still are. A key that has been swept is a miss, not an error.
             if let Ok(Some(stored)) = svc.storage.retrieve(&storage_key).await {
-                use futures::StreamExt;
                 let mut builder = HttpResponse::Ok();
                 builder.content_type(encoding.content_type());
                 builder.insert_header(("X-BatleHub-Cache", "hit"));
                 mark_synthesised(&mut builder, synthesised);
-                // A storage error mid-body aborts the response: a truncated
-                // index that ends cleanly is one conda would try to parse.
-                let body = stored
-                    .stream
-                    .map(|chunk| chunk.map_err(actix_web::error::ErrorInternalServerError));
-                return Ok(builder.streaming(body));
+                // A truncated index that ends cleanly is one conda would parse.
+                return Ok(super::common::stream_body(builder, stored.stream));
             }
         }
     }

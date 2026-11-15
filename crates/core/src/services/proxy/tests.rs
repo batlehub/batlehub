@@ -3978,7 +3978,7 @@ async fn a_remote_reader_never_completes_an_unverified_body() {
         }
     };
     let mut follow = leases.follow(&key, state.fill);
-    let staged = format!("{}{}/{key}", crate::ports::STAGING_PREFIX, state.fill);
+    let staged = crate::ports::fill_staging_key(state.fill, &key);
     let segment0 = svc.storage.get_segment(&staged, 0).await.unwrap().unwrap();
     assert_eq!(read_all(segment0).await.unwrap().len(), seg);
     assert!(
@@ -4108,7 +4108,7 @@ async fn a_takeover_after_expiry_refetches_and_deletes_the_old_segments() {
     let Taken::Started { fill: dead, .. } = leases.take(&key, "a").await.unwrap() else {
         panic!("the first take starts")
     };
-    let dead_staged = format!("{}{dead}/{key}", crate::ports::STAGING_PREFIX);
+    let dead_staged = crate::ports::fill_staging_key(dead, &key);
     b.storage
         .put_segment(&dead_staged, 0, Bytes::from(vec![b'x'; seg]))
         .await
@@ -4167,4 +4167,64 @@ async fn a_lease_taken_after_the_fill_ended_elsewhere_serves_from_storage() {
         fill::Start::Cached
     ));
     assert_eq!(client.fetches(), 0);
+}
+
+/// R9: a `no-store` answer is not shared across replicas: each replica
+/// fetches and serves its own copy, and none is stored.
+#[tokio::test]
+async fn no_store_is_never_shared_across_replicas() {
+    let leases = Arc::new(crate::ports::InMemoryFillLeases::default().as_shared());
+    let mut a = proxy(
+        "npm",
+        Arc::new(NoStoreArtifactRegistry),
+        SpyRepo::new(),
+        vec![],
+    );
+    a.fills = Arc::new(fill::FillCoordinator::new(leases.clone(), "a".into()));
+    let b = second_replica(&a, leases);
+    let key = format!("artifact:{}", req("npm").package_id.cache_key());
+    for replica in [&a, &b] {
+        let body = read_all(stream_of(replica.handle(req("npm")).await.unwrap()))
+            .await
+            .unwrap();
+        assert!(!body.is_empty(), "each replica serves its own fetch");
+    }
+    assert!(!a.storage.exists(&key).await.unwrap(), "nothing stored");
+}
+
+/// T7: an upstream that stalls until its read timeout errors the body; the
+/// fill fails, its reader is reset, and the lease is free for a retry.
+#[tokio::test]
+async fn a_stalled_upstream_ends_the_fill_and_its_lease() {
+    use crate::ports::{FillLeases, Taken};
+    let (client, tx) = GatedRegistry::new(None);
+    let leases = Arc::new(crate::ports::InMemoryFillLeases::default());
+    let mut svc = proxy("npm", client, SpyRepo::new(), vec![]);
+    svc.fills = Arc::new(fill::FillCoordinator::new(leases.clone(), "a".into()));
+    // Two chunks: the newest is withheld, so the response starts on the first.
+    tx.send(Ok(Bytes::from_static(b"some-"))).unwrap();
+    tx.send(Ok(Bytes::from_static(b"more-"))).unwrap();
+    let stream = stream_of(svc.handle(req("npm")).await.unwrap());
+    tx.send(Err(CoreError::Registry("upstream read timed out".into())))
+        .unwrap();
+    drop(tx); // the timed-out connection is gone
+    tokio::time::timeout(Duration::from_secs(5), read_all(stream))
+        .await
+        .expect("the reader is not stranded")
+        .expect_err("a stalled body never ends cleanly");
+    let key = proxy_artifact_key(&req("npm").package_id);
+    for _ in 0..100 {
+        if svc.fills.is_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        matches!(
+            leases.take(&key, "b").await.unwrap(),
+            Taken::Started { previous: None, .. }
+        ),
+        "the failed fill released its lease"
+    );
+    assert!(!svc.storage.exists(&key).await.unwrap(), "nothing stored");
 }

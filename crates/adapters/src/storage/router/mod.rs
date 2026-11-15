@@ -100,7 +100,7 @@ impl StorageRouter {
     /// Staged bytes are unverified and live for one request, so they never
     /// enter the dedup tables or `artifact_storage`: every operation on them
     /// goes straight to the backend their destination routes to, and
-    /// [`promote`](StorageBackend::promote) is what gives them a logical key.
+    /// [`promote_segments`](StorageBackend::promote_segments) is what gives them a logical key.
     fn staging_leaf(&self, key: &str) -> Option<&Arc<dyn StorageBackend>> {
         batlehub_core::ports::staged_destination(key)
             .map(|_| self.resolve_backend(self.backend_name_for_key(key)))
@@ -471,45 +471,6 @@ impl StorageBackend for StorageRouter {
         Ok(outcome)
     }
 
-    /// The staged bytes were hashed as they were written and sit on `key`'s
-    /// own backend (a staging key routes as its destination), so this is
-    /// exactly the second half of [`store_streaming`](Self::store_streaming):
-    /// one dedup transaction for `key`, and a rename of the staged blob to
-    /// `blob/<hash>` on first reference or its deletion on a dedup hit.
-    async fn promote(
-        &self,
-        staged: &str,
-        key: &str,
-        outcome: &StoreOutcome,
-    ) -> Result<(), CoreError> {
-        let backend_name = self.backend_name_for_key(key).to_owned();
-        let backend = self.resolve_backend(&backend_name).clone();
-        let content_key = format!("blob/{}", outcome.content_hash);
-        let target = DedupTarget {
-            key,
-            content_hash: &outcome.content_hash,
-            content_key: &content_key,
-            size: Some(outcome.size),
-        };
-        // `finalize_dedup` consumes the staged blob on its happy paths but not
-        // on an early database error; nothing else would ever delete it.
-        if let Err(e) = self
-            .finalize_dedup(
-                &target,
-                &backend_name,
-                &backend,
-                BlobSource::Staged(staged.to_owned()),
-            )
-            .await
-        {
-            if let Err(del) = backend.delete(staged).await {
-                tracing::warn!(key = %staged, error = %del, "failed to delete staged artifact after promotion error");
-            }
-            return Err(e);
-        }
-        Ok(())
-    }
-
     async fn put_segment(&self, staged: &str, n: u32, data: Bytes) -> Result<(), CoreError> {
         self.segment_leaf(staged)?
             .put_segment(staged, n, data)
@@ -541,7 +502,7 @@ impl StorageBackend for StorageRouter {
     // router's `store_streaming`, so a logical `dest` gets its dedup rows.
     // `promote_segments` is the path that assembles nothing on a dedup hit.
 
-    /// The segment counterpart of [`promote`](Self::promote): one dedup
+    /// One dedup
     /// transaction for `key`; on a first reference the leaf assembles the
     /// segments straight into `blob/<hash>`, on a dedup hit they are deleted.
     async fn promote_segments(
@@ -573,7 +534,7 @@ impl StorageBackend for StorageRouter {
             staged: staged.to_owned(),
             count,
         };
-        // As in `promote`: an early database error consumes nothing.
+        // `finalize_dedup` consumes the segments on its happy paths, not on an early database error.
         if let Err(e) = self
             .finalize_dedup(&target, &backend_name, &backend, source)
             .await

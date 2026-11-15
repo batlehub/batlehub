@@ -39,11 +39,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::error::CoreError;
-use crate::ports::segment_key;
 use crate::ports::storage::skip_bytes;
+use crate::ports::{fill_staging_key, segment_key};
 use crate::ports::{
     heartbeat_every, ByteStream, FillError, FillId, FillLeases, InMemoryFillLeases, LeaseState,
-    Phase, StorageBackend, StoreOutcome, Taken, FILL_SEGMENT_BYTES, STAGING_PREFIX,
+    Phase, StorageBackend, StoreOutcome, Taken, FILL_SEGMENT_BYTES,
 };
 
 /// A lease call that takes longer is treated as the lease store being down
@@ -207,7 +207,7 @@ pub async fn sweep_fills(
                         continue;
                     }
                 };
-                let staged = format!("{STAGING_PREFIX}{fill}/{key}");
+                let staged = fill_staging_key(fill, &key);
                 match storage.delete_segments(&staged, written).await {
                     Ok(()) => deleted += written as usize,
                     Err(e) => {
@@ -332,7 +332,7 @@ impl FillWriter {
                 metrics::gauge!("batlehub_proxy_fill_active").increment(1.0);
                 if let Some((old, written)) = previous {
                     // R4: restart from zero; nothing of the dead fill is read again.
-                    let old_staged = format!("{STAGING_PREFIX}{old}/{key}");
+                    let old_staged = fill_staging_key(old, &key);
                     let deleted = self
                         .fill
                         .storage
@@ -361,7 +361,7 @@ impl FillWriter {
                 FillId::new_v4()
             }
         };
-        self.staged = format!("{STAGING_PREFIX}{id}/{key}");
+        self.staged = fill_staging_key(id, &key);
         let _ = self.fill.staged.set(self.staged.clone());
         Start::Fill
     }
@@ -373,7 +373,7 @@ impl FillWriter {
     /// (R4) and fills from zero.
     pub(super) async fn follow(mut self, state: LeaseState) {
         let key = self.fill.key.clone();
-        self.staged = format!("{STAGING_PREFIX}{}/{key}", state.fill);
+        self.staged = fill_staging_key(state.fill, &key);
         let _ = self.fill.staged.set(self.staged.clone());
         self.fill.remote.store(true, Ordering::Relaxed);
         metrics::counter!("batlehub_proxy_fill_joined_total", "registry" => Arc::clone(&self.registry), "scope" => "remote").increment(1);
@@ -1193,7 +1193,7 @@ mod tests {
         let Taken::Started { fill, .. } = leases.take("k", "dead").await.unwrap() else {
             panic!("the first take starts")
         };
-        let staged = format!("{STAGING_PREFIX}{fill}/k");
+        let staged = fill_staging_key(fill, "k");
         storage
             .put_segment(&staged, 0, Bytes::from_static(b"orphan"))
             .await
@@ -1219,6 +1219,103 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "and the row"
+        );
+    }
+
+    /// A lease store that is down for commits only.
+    struct CommitsDown {
+        inner: InMemoryFillLeases,
+        commits: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl FillLeases for CommitsDown {
+        fn shared(&self) -> bool {
+            self.inner.shared()
+        }
+        fn ttl(&self) -> Duration {
+            self.inner.ttl()
+        }
+        async fn take(&self, key: &str, holder: &str) -> Result<Taken, CoreError> {
+            self.inner.take(key, holder).await
+        }
+        async fn commit(&self, _: &str, _: FillId, _: u32) -> Result<bool, CoreError> {
+            self.commits.fetch_add(1, Ordering::SeqCst);
+            Err(CoreError::Registry("database down".into()))
+        }
+        async fn heartbeat(&self, key: &str, fill: FillId) -> Result<bool, CoreError> {
+            self.inner.heartbeat(key, fill).await
+        }
+        async fn finish(&self, key: &str, fill: FillId, phase: Phase) -> Result<bool, CoreError> {
+            self.inner.finish(key, fill, phase).await
+        }
+        async fn release(&self, key: &str, fill: FillId) -> Result<(), CoreError> {
+            self.inner.release(key, fill).await
+        }
+        async fn reap(&self, key: &str, fill: FillId) -> Result<Option<u32>, CoreError> {
+            self.inner.reap(key, fill).await
+        }
+        fn follow(
+            &self,
+            key: &str,
+            fill: FillId,
+        ) -> futures::stream::BoxStream<'static, Result<LeaseState, CoreError>> {
+            self.inner.follow(key, fill)
+        }
+        async fn expired(
+            &self,
+            older_than: Duration,
+        ) -> Result<Vec<(String, FillId, u32)>, CoreError> {
+            self.inner.expired(older_than).await
+        }
+    }
+
+    /// R10: a lease store that fails costs one call per heartbeat period, not
+    /// one per segment, and the fill keeps going.
+    #[tokio::test]
+    async fn a_lease_outage_costs_one_call_per_heartbeat_period() {
+        let leases = Arc::new(CommitsDown {
+            inner: InMemoryFillLeases::default(),
+            commits: Default::default(),
+        });
+        let coordinator = Arc::new(FillCoordinator::new(leases.clone(), "a".into()));
+        let (_, _, storage) = setup();
+        let mut writer = started(&coordinator, &storage).await;
+        for &b in b"abcd" {
+            writer
+                .push(Bytes::from(vec![b; FILL_SEGMENT_BYTES]))
+                .await
+                .expect("the fill keeps going without its lease store");
+        }
+        assert_eq!(writer.fill().progress.borrow().committed, 3);
+        assert_eq!(
+            leases.commits.load(Ordering::SeqCst),
+            1,
+            "three commits, one lease call"
+        );
+        writer.finish(Phase::Done).await;
+    }
+
+    /// T4: a committed count forged past the segments that exist hands out
+    /// no byte of them: the reader is reset with the fill, never served a
+    /// short body that ends cleanly.
+    #[tokio::test]
+    async fn a_forged_committed_count_past_the_segments_resets_the_reader() {
+        let (coordinator, _, storage) = setup();
+        let writer = started(&coordinator, &storage).await;
+        let fill = writer.fill();
+        fill.progress.send_modify(|p| p.committed = 3);
+        let Served::Stream(s) = Arc::clone(&fill).serve(false).await.unwrap() else {
+            panic!("a committed count streams")
+        };
+        let reading = tokio::spawn(read_all(s));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        writer
+            .finish(Phase::Failed(FillError::other("forged")))
+            .await;
+        assert!(
+            reading.await.unwrap().is_err(),
+            "reset, never a short clean body"
         );
     }
 }
