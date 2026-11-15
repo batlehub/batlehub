@@ -209,7 +209,11 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         RegistryKind::Rubygems => resolve_urls(&reg.upstreams, "https://rubygems.org"),
         RegistryKind::Composer => resolve_urls(&reg.upstreams, "https://repo.packagist.org"),
         RegistryKind::Pypi => resolve_urls(&reg.upstreams, "https://pypi.org"),
-        RegistryKind::Conda => resolve_urls(&reg.upstreams, "https://conda.anaconda.org"),
+        // A conda registry serves one channel (`{upstream}/{subdir}/…`); the bare
+        // host is no channel and answers 404 for every subdir.
+        RegistryKind::Conda => {
+            resolve_urls(&reg.upstreams, "https://conda.anaconda.org/conda-forge")
+        }
         // Deb/RPM have no universal default upstream; proxy/hybrid mode requires an
         // explicit `upstreams` entry. The placeholder keeps a client constructible
         // for local-only mode, where the upstream is never contacted.

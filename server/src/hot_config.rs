@@ -415,7 +415,7 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         RegistryKind::Npm => "https://registry.npmjs.org",
         RegistryKind::Terraform => "https://registry.terraform.io",
         RegistryKind::Pypi => "https://pypi.org",
-        RegistryKind::Conda => "https://conda.anaconda.org",
+        RegistryKind::Conda => "https://conda.anaconda.org/conda-forge",
         RegistryKind::Nuget => "https://api.nuget.org",
         RegistryKind::Composer => "https://packagist.org",
         RegistryKind::JetbrainsMarketplace => "https://plugins.jetbrains.com",

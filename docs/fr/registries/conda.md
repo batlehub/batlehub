@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/conda.md
-sourceHash: 90b4936340d4ce88
+sourceHash: 106852507433094d
 ---
 
 # Conda
@@ -15,7 +15,7 @@ paquets publiés localement sont fusionnés dans le `repodata.json` de l'amont.
 | Propriété | Valeur |
 |---|---|
 | **Type de configuration** | `conda` |
-| **Amont par défaut** | `conda.anaconda.org` |
+| **Amont par défaut** | `conda.anaconda.org/conda-forge` — un canal ; l'hôte nu n'en sert aucun |
 | **Modes** | proxy · local · hybrid |
 | **Adressage** | par paquet |
 | **Publication privée** | oui — `curl -X POST …/{platform}/` |
@@ -114,8 +114,9 @@ password <your-token>
   `batlehub-cli setup` écrivent une règle `url_replacements` par registre
   conda, dérivée de son amont ; un outil `channel = "bioconda"` aboutit donc
   au registre dont l'amont est `https://conda.anaconda.org/bioconda`. Un
-  registre sur l'hôte nu `https://conda.anaconda.org` ne nomme aucun canal et
-  ne reçoit aucune règle. Exige mise 2026.9.5 ou plus récent. Voir
+  registre sur l'hôte nu `https://conda.anaconda.org` ne nomme aucun canal,
+  n'en sert aucun (`{hôte}/{subdir}/repodata.json` répond 404) et ne reçoit
+  aucune règle ; un registre sans `upstreams` prend conda-forge par défaut. Exige mise 2026.9.5 ou plus récent. Voir
   [Pointer mise vers BatleHub](/fr/use/mise#conda-and-dotnet).
 
 ## Voir aussi
