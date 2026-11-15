@@ -66,10 +66,10 @@ pub use scanner::{ArtifactScanner, FindingEnricher, ScanInput, ScannerError};
 pub use security::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 pub use stats_history::{StatsHistoryRepository, StatsRollupRow};
 pub use storage::{
-    collect_byte_stream, require_segment_key, require_segments, segment_key, staged_destination,
-    staging_key_for, ArtifactStorageRecord, ByteStream, CacheEntry, CacheStore, S3StorageConfig,
-    StorageAdminRepository, StorageBackend, StorageMeta, StoreOutcome, StoredArtifact,
-    FILL_SEGMENT_BYTES, STAGING_PREFIX,
+    collect_byte_stream, fill_staging_key, require_segment_key, require_segments, segment_key,
+    staged_destination, staging_key_for, ArtifactStorageRecord, ByteStream, CacheEntry, CacheStore,
+    S3StorageConfig, StorageAdminRepository, StorageBackend, StorageMeta, StoreOutcome,
+    StoredArtifact, FILL_SEGMENT_BYTES, STAGING_PREFIX,
 };
 pub use vulnerability::{
     BatchAnswer, LookupFailure, OsvMatch, VulnerabilityRepository, VulnerabilityScanner,

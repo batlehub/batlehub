@@ -248,10 +248,15 @@ impl FillLeases for PgFillLeases {
                 // one between it and the upsert leaves segments the staging
                 // sweep removes a day later. An ended fill cleaned up after
                 // itself, so only a running one that expired is a takeover.
-                let running = match row.try_get::<Option<String>, _>("phase").db_err()? {
-                    Some(phase) => !matches!(phase.as_str(), "done" | "failed" | "no_store"),
-                    None => false,
-                };
+                // Only an expired running row is a takeover: a holder that
+                // ended between the snapshot and the upsert left a live
+                // `filling` snapshot behind, and is not one.
+                let expired = row.try_get::<Option<bool>, _>("expired").db_err()? == Some(true);
+                let running = expired
+                    && match row.try_get::<Option<String>, _>("phase").db_err()? {
+                        Some(phase) => !matches!(phase.as_str(), "done" | "failed" | "no_store"),
+                        None => false,
+                    };
                 let previous = prev
                     .filter(|_| running)
                     .map(|p| (p, count(&row, "written")));
@@ -458,8 +463,10 @@ impl Follower {
                 // The first read is a query: a commit between the caller's
                 // `take` and this registration sent a notice nobody heard.
                 None => self.poll().await,
+                // Waited in `POLL` slices, so a listener that drops mid-wait
+                // falls back to polling within a second instead of a lease.
                 Some(last) if CACHES.live() => {
-                    match tokio::time::timeout(self.ttl, self.followed.rx.changed()).await {
+                    match tokio::time::timeout(POLL, self.followed.rx.changed()).await {
                         Ok(Ok(())) => match self.followed.rx.borrow_and_update().clone() {
                             Some((committed, phase)) => Some(Ok(LeaseState {
                                 committed: committed.max(last.committed),
@@ -468,6 +475,7 @@ impl Follower {
                             })),
                             None => continue,
                         },
+                        Err(_) if self.last_read.elapsed() < self.ttl => continue,
                         // Nothing for a whole lease: is the holder still there?
                         Ok(Err(_)) | Err(_) => self.poll().await,
                     }

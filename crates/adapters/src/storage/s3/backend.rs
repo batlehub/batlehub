@@ -345,6 +345,15 @@ impl StorageBackend for S3StorageBackend {
             .key(&obj_key)
             .body(S3Body::new(body))
             .content_length(len as i64)
+            // A streaming body would otherwise go out `aws-chunked` with a
+            // trailing CRC32, which some S3-compatible stores refuse; the
+            // fill's own SHA-256 is what verifies the bytes.
+            .customize()
+            .config_override(
+                aws_sdk_s3::config::Builder::new().request_checksum_calculation(
+                    aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired,
+                ),
+            )
             .send()
             .await
             .map_err(|e| CoreError::Storage(format!("S3 put_object {obj_key}: {e}")))?;
