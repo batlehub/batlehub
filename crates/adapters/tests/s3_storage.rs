@@ -459,3 +459,228 @@ async fn new_fails_for_unreachable_bucket() {
         "head_bucket check should fail for a missing bucket"
     );
 }
+
+// ── Fill segments (RFC 0048-bis) ──────────────────────────────────────────────
+
+const SEG: usize = batlehub_core::ports::FILL_SEGMENT_BYTES;
+
+fn fill_bytes(len: usize, seed: u8) -> Bytes {
+    Bytes::from((0..len).map(|i| (i % 251) as u8 ^ seed).collect::<Vec<_>>())
+}
+
+/// A fill's staging key whose destination carries the characters a real
+/// artifact key does (`:`, `@`, `/`), which end up in every `CopySource`.
+fn staged_fill(name: &str) -> String {
+    batlehub_core::ports::staging_key_for(&format!(
+        "artifact:npm/@scope/{}/1.0.0",
+        unique_key(name)
+    ))
+}
+
+#[tokio::test]
+async fn segments_assembled_by_upload_part_copy_equal_their_concatenation() {
+    let Some(ep) = s3_endpoint() else { return };
+    let backend = make_backend(&ep).await;
+    let staged = staged_fill("assemble");
+    let segs = [
+        fill_bytes(SEG, 1),
+        fill_bytes(SEG, 2),
+        fill_bytes(3 * 1024 * 1024, 3),
+    ];
+    for (n, seg) in segs.iter().enumerate() {
+        backend
+            .put_segment(&staged, n as u32, seg.clone())
+            .await
+            .unwrap();
+    }
+    // A segment is readable as soon as its put returns.
+    let read = backend
+        .get_segment(&staged, 1)
+        .await
+        .unwrap()
+        .expect("segment 1");
+    assert_eq!(
+        batlehub_core::ports::collect_byte_stream(read)
+            .await
+            .unwrap(),
+        segs[1]
+    );
+    assert!(backend.get_segment(&staged, 3).await.unwrap().is_none());
+
+    let dest = unique_key("blob/assembled");
+    backend.assemble_segments(&staged, 3, &dest).await.unwrap();
+    let got = collect(backend.retrieve(&dest).await.unwrap().unwrap()).await;
+    let want = segs.concat();
+    assert_eq!(got.len(), want.len());
+    assert!(got == want, "assembly must equal the concatenation");
+
+    backend.delete_segments(&staged, 3).await.unwrap();
+    for n in 0..3 {
+        assert!(backend.get_segment(&staged, n).await.unwrap().is_none());
+    }
+    assert!(
+        backend.exists(&dest).await.unwrap(),
+        "the blob outlives its segments"
+    );
+}
+
+/// The memory fix: a segment put from the chunks a fill received — one
+/// streamed `PutObject`, never joined in this process — reads back as their
+/// concatenation and assembles like any other.
+#[tokio::test]
+async fn a_segment_put_from_its_chunks_equals_their_concatenation() {
+    let Some(ep) = s3_endpoint() else { return };
+    let backend = make_backend(&ep).await;
+    let staged = staged_fill("parts");
+    let whole = fill_bytes(SEG, 7);
+    let parts: Vec<Bytes> = whole
+        .chunks(1024 * 1024 + 3)
+        .map(Bytes::copy_from_slice)
+        .collect();
+    assert!(parts.len() > 1);
+    backend.put_segment_parts(&staged, 0, parts).await.unwrap();
+    let tail = fill_bytes(10, 8);
+    backend
+        .put_segment_parts(&staged, 1, vec![tail.slice(..4), tail.slice(4..)])
+        .await
+        .unwrap();
+    let read = backend.get_segment(&staged, 0).await.unwrap().unwrap();
+    assert!(
+        batlehub_core::ports::collect_byte_stream(read)
+            .await
+            .unwrap()
+            == whole
+    );
+    let dest = unique_key("blob/parts");
+    backend.assemble_segments(&staged, 2, &dest).await.unwrap();
+    let got = collect(backend.retrieve(&dest).await.unwrap().unwrap()).await;
+    assert!(got == [whole, tail].concat());
+    backend.delete_segments(&staged, 2).await.unwrap();
+}
+
+#[tokio::test]
+async fn one_segment_is_assembled_by_copy_and_promoted() {
+    let Some(ep) = s3_endpoint() else { return };
+    let backend = make_backend(&ep).await;
+    let staged = staged_fill("one-segment");
+    let data = fill_bytes(1234, 4);
+    backend.put_segment(&staged, 0, data.clone()).await.unwrap();
+    let key = unique_key("artifact:npm/promoted");
+    let outcome = batlehub_core::ports::StoreOutcome {
+        content_hash: String::new(),
+        size: data.len() as u64,
+    };
+    backend
+        .promote_segments(&staged, 1, &key, &outcome)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect(backend.retrieve(&key).await.unwrap().unwrap()).await,
+        data.as_ref()
+    );
+    assert!(
+        backend.get_segment(&staged, 0).await.unwrap().is_none(),
+        "segments deleted"
+    );
+    assert!(backend.assemble_segments(&staged, 0, &key).await.is_err());
+}
+
+/// S3's 5 MiB floor for every part but the last: a short segment that is not
+/// the last is refused, the upload aborted and nothing written at `dest`.
+#[tokio::test]
+async fn a_short_segment_before_the_last_is_refused() {
+    let Some(ep) = s3_endpoint() else { return };
+    let backend = make_backend(&ep).await;
+    let staged = staged_fill("too-small");
+    backend
+        .put_segment(&staged, 0, fill_bytes(1024 * 1024, 1))
+        .await
+        .unwrap();
+    backend
+        .put_segment(&staged, 1, fill_bytes(1024 * 1024, 2))
+        .await
+        .unwrap();
+    let dest = unique_key("blob/too-small");
+    let err = backend
+        .assemble_segments(&staged, 2, &dest)
+        .await
+        .unwrap_err();
+    println!("short-segment refusal: {err}");
+    assert!(!backend.exists(&dest).await.unwrap());
+    backend.delete_segments(&staged, 2).await.unwrap();
+}
+
+#[tokio::test]
+async fn retrieve_from_reads_a_range() {
+    let Some(ep) = s3_endpoint() else { return };
+    let backend = make_backend(&ep).await;
+    let key = unique_key("ranged");
+    let data = fill_bytes(200_000, 9);
+    backend
+        .store(&key, data.clone(), StorageMeta::default())
+        .await
+        .unwrap();
+    for offset in [0u64, 1, 65_536, 199_999, 200_000, 300_000] {
+        let a = backend
+            .retrieve_from(&key, offset)
+            .await
+            .unwrap()
+            .expect("exists");
+        let want = &data[(offset as usize).min(data.len())..];
+        assert_eq!(a.meta.size, Some(want.len() as u64), "offset {offset}");
+        assert_eq!(collect(a).await, want, "offset {offset}");
+    }
+    assert!(backend
+        .retrieve_from(&unique_key("ranged-missing"), 3)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// Under a prefix of its own, so the sweep cannot reach another test's
+/// segments in the shared bucket.
+#[tokio::test]
+async fn the_stale_staging_sweep_deletes_old_staging_and_nothing_else() {
+    let Some(ep) = s3_endpoint() else { return };
+    let prefix = format!("{}/", unique_key("sweep"));
+    let (backend, _client) = make_prefixed_backend(&ep, &prefix).await;
+    let staged = staged_fill("swept");
+    backend
+        .put_segment(&staged, 0, fill_bytes(10, 1))
+        .await
+        .unwrap();
+    backend
+        .put_segment(&staged, 1, fill_bytes(10, 2))
+        .await
+        .unwrap();
+    backend
+        .store(
+            "blob/staging/orphan-upload",
+            fill_bytes(10, 3),
+            StorageMeta::default(),
+        )
+        .await
+        .unwrap();
+    backend
+        .store(
+            "artifact:npm/kept/1.0",
+            fill_bytes(10, 4),
+            StorageMeta::default(),
+        )
+        .await
+        .unwrap();
+    // Nothing is a day old yet.
+    let day = std::time::Duration::from_secs(86_400);
+    assert_eq!(backend.delete_stale_staging(day).await.unwrap(), 0);
+
+    // `LastModified` has a one-second resolution.
+    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+    let swept = backend
+        .delete_stale_staging(std::time::Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(swept, 3);
+    assert!(backend.get_segment(&staged, 0).await.unwrap().is_none());
+    assert!(!backend.exists("blob/staging/orphan-upload").await.unwrap());
+    assert!(backend.exists("artifact:npm/kept/1.0").await.unwrap());
+}

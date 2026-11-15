@@ -1059,6 +1059,7 @@ dependencies = [
  "futures",
  "glob",
  "hex",
+ "http-body",
  "jsonwebtoken",
  "libc",
  "lzma-rs",

@@ -106,6 +106,15 @@ impl StorageRouter {
             .map(|_| self.resolve_backend(self.backend_name_for_key(key)))
     }
 
+    /// [`staging_leaf`](Self::staging_leaf) for the segment methods, which
+    /// have no meaning on a logical key.
+    fn segment_leaf(&self, staged: &str) -> Result<&Arc<dyn StorageBackend>, CoreError> {
+        batlehub_core::ports::require_segment_key(staged, 0)?;
+        self.staging_leaf(staged).ok_or_else(|| {
+            CoreError::InvalidInput(format!("{staged:?} is not a fill's staging key"))
+        })
+    }
+
     pub(super) fn resolve_backend(&self, name: &str) -> &Arc<dyn StorageBackend> {
         self.backends
             .get(name)
@@ -326,6 +335,10 @@ enum BlobSource {
     /// Bytes already streamed to a staging key (the `store_streaming` path),
     /// promoted to the content key with a cheap backend move.
     Staged(String),
+    /// A cold fill's segments (RFC 0048-bis), assembled by the leaf straight
+    /// into the content key — never into a staging object copied a second
+    /// time — and only on a first reference.
+    Segments { staged: String, count: u32 },
 }
 
 impl BlobSource {
@@ -340,14 +353,31 @@ impl BlobSource {
                 backend.store(content_key, data.clone(), meta.clone()).await
             }
             BlobSource::Staged(staging_key) => backend.move_key(staging_key, content_key).await,
+            // Assembly leaves the segments on S3; delete them here so every
+            // path through `finalize_dedup` consumes the source, as a move does.
+            BlobSource::Segments { staged, count } => {
+                backend
+                    .assemble_segments(staged, *count, content_key)
+                    .await?;
+                self.discard_staged(backend).await;
+                Ok(())
+            }
         }
     }
 
     /// Best-effort removal of a staged blob that won't be promoted.
     async fn discard_staged(&self, backend: &Arc<dyn StorageBackend>) {
-        if let BlobSource::Staged(staging_key) = self {
-            if let Err(e) = backend.delete(staging_key).await {
-                tracing::warn!(key = %staging_key, error = %e, "failed to delete staged blob");
+        match self {
+            BlobSource::Inline(..) => {}
+            BlobSource::Staged(staging_key) => {
+                if let Err(e) = backend.delete(staging_key).await {
+                    tracing::warn!(key = %staging_key, error = %e, "failed to delete staged blob");
+                }
+            }
+            BlobSource::Segments { staged, count } => {
+                if let Err(e) = backend.delete_segments(staged, *count).await {
+                    tracing::warn!(key = %staged, error = %e, "failed to delete fill segments");
+                }
             }
         }
     }
@@ -478,6 +508,119 @@ impl StorageBackend for StorageRouter {
             return Err(e);
         }
         Ok(())
+    }
+
+    async fn put_segment(&self, staged: &str, n: u32, data: Bytes) -> Result<(), CoreError> {
+        self.segment_leaf(staged)?
+            .put_segment(staged, n, data)
+            .await
+    }
+
+    async fn put_segment_parts(
+        &self,
+        staged: &str,
+        n: u32,
+        parts: Vec<Bytes>,
+    ) -> Result<(), CoreError> {
+        self.segment_leaf(staged)?
+            .put_segment_parts(staged, n, parts)
+            .await
+    }
+
+    async fn get_segment(&self, staged: &str, n: u32) -> Result<Option<ByteStream>, CoreError> {
+        self.segment_leaf(staged)?.get_segment(staged, n).await
+    }
+
+    async fn delete_segments(&self, staged: &str, upto: u32) -> Result<(), CoreError> {
+        self.segment_leaf(staged)?
+            .delete_segments(staged, upto)
+            .await
+    }
+
+    // `assemble_segments` keeps the trait default: re-streamed through this
+    // router's `store_streaming`, so a logical `dest` gets its dedup rows.
+    // `promote_segments` is the path that assembles nothing on a dedup hit.
+
+    /// The segment counterpart of [`promote`](Self::promote): one dedup
+    /// transaction for `key`; on a first reference the leaf assembles the
+    /// segments straight into `blob/<hash>`, on a dedup hit they are deleted.
+    async fn promote_segments(
+        &self,
+        staged: &str,
+        count: u32,
+        key: &str,
+        outcome: &StoreOutcome,
+    ) -> Result<(), CoreError> {
+        batlehub_core::ports::require_segments(staged, count)?;
+        let leaf = self.segment_leaf(staged)?.clone();
+        let backend_name = self.backend_name_for_key(key).to_owned();
+        let backend = self.resolve_backend(&backend_name).clone();
+        // A staging key routes as its destination, so this holds unless the
+        // caller promotes a fill of one artifact onto another's key.
+        if !Arc::ptr_eq(&leaf, &backend) {
+            return Err(CoreError::InvalidInput(format!(
+                "segments of {staged} live on another backend than {key}"
+            )));
+        }
+        let content_key = format!("blob/{}", outcome.content_hash);
+        let target = DedupTarget {
+            key,
+            content_hash: &outcome.content_hash,
+            content_key: &content_key,
+            size: Some(outcome.size),
+        };
+        let source = BlobSource::Segments {
+            staged: staged.to_owned(),
+            count,
+        };
+        // As in `promote`: an early database error consumes nothing.
+        if let Err(e) = self
+            .finalize_dedup(&target, &backend_name, &backend, source)
+            .await
+        {
+            if let Err(del) = backend.delete_segments(staged, count).await {
+                tracing::warn!(key = %staged, error = %del, "failed to delete fill segments after promotion error");
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    async fn retrieve_from(
+        &self,
+        key: &str,
+        offset: u64,
+    ) -> Result<Option<StoredArtifact>, CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.retrieve_from(key, offset).await;
+        }
+        if let Some((content_key, backend)) = self.dedup_content_key(key).await? {
+            if let Some(artifact) = backend.retrieve_from(&content_key, offset).await? {
+                return Ok(Some(artifact));
+            }
+            crate::db::read_cache::CACHES.dedup.forget(&key.to_owned());
+        }
+        self.legacy_backend_for(key)
+            .await?
+            .retrieve_from(key, offset)
+            .await
+    }
+
+    /// Every leaf's sweep; one leaf failing does not spare the others.
+    async fn delete_stale_staging(
+        &self,
+        older_than: std::time::Duration,
+    ) -> Result<usize, CoreError> {
+        let mut total = 0;
+        for (name, backend) in &self.backends {
+            match backend.delete_stale_staging(older_than).await {
+                Ok(n) => total += n,
+                Err(e) => {
+                    tracing::warn!(backend = %name, error = %e, "stale staging sweep failed")
+                }
+            }
+        }
+        Ok(total)
     }
 
     /// Intentionally unsupported: a logical key here is a row in `artifact_dedup_refs`

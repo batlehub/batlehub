@@ -26,6 +26,9 @@ aws-sdk-s3 = {
   features = ["default-https-client", "http-1x", "rt-tokio"],
   optional = true
 }
+# The body a fill segment is put from, chunk by chunk (RFC 0048-bis): already
+# in the tree through aws-smithy-types, which the SDK takes it from.
+http-body = { version = "1", optional = true }
 base64.workspace = true
 batlehub-core = { path = "../core" }
 bytes.workspace = true
@@ -239,7 +242,7 @@ registry-terraform = []
 # artifact serves every editor a gzip file named `.vsix` (see `gunzip_stream`).
 registry-vscode-marketplace = ["dep:flate2"]
 storage-fs = []
-storage-s3 = ["dep:aws-config", "dep:aws-sdk-s3"]
+storage-s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:http-body"]
 # `bzip2`/`zstd` are for conda's two container formats, which the README
 # extractor reads `info/about.json` out of (RFC 0007 §4.3). Both are already in
 # the default build through `registry-conda`, so this widens no dependency tree.
