@@ -575,6 +575,10 @@ export const sidebar = {
           link: "/rfc/0048-mise-core-toolchains",
         },
         {
+          text: "0048-bis — Cross-replica cold fill",
+          link: "/rfc/0048-bis-cross-replica-cold-fill",
+        },
+        {
           text: "0049 — Config JSON Schema",
           link: "/rfc/0049-config-json-schema",
         },
