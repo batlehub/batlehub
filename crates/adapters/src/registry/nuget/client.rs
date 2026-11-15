@@ -52,7 +52,17 @@ impl NugetRegistryClient {
         let base = base.trim_end_matches('/').to_owned();
 
         let flat_url = format!("{base}/v3-flatcontainer");
-        let reg_url = format!("{base}/v3/registration5");
+        // nuget.org has no `v3/registration5`: its registration hives are
+        // named (`registration5-semver1`, `-gz-semver2`, …), and every proxied
+        // registration read 404'd — `dotnet tool install` reads it first. The
+        // plain-JSON hive: the gz ones are gzip-encoded and this client does
+        // not decode. shortcut: semver1 omits SemVer 2.0.0-only versions; read
+        // the hive from the upstream's own service index if one is needed.
+        let reg_url = if base == "https://api.nuget.org" {
+            format!("{base}/v3/registration5-semver1")
+        } else {
+            format!("{base}/v3/registration5")
+        };
 
         // Search base: explicit config wins; fall back to nuget.org search for nuget.org upstream.
         let search_base = match opts.search_url.as_deref() {
@@ -587,6 +597,18 @@ mod tests {
         let meta = c.resolve_metadata(&pkg).await.unwrap();
         assert_eq!(meta.cache_control.as_deref(), Some("max-age=120"));
         assert!(meta.download_url.is_none());
+    }
+
+    #[test]
+    fn nuget_org_registration_reads_a_hive_it_serves() {
+        assert_eq!(
+            client("https://api.nuget.org/").reg_url,
+            "https://api.nuget.org/v3/registration5-semver1"
+        );
+        assert_eq!(
+            client("https://feed.example").reg_url,
+            "https://feed.example/v3/registration5"
+        );
     }
 
     #[tokio::test]

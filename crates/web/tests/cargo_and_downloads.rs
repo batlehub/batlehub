@@ -74,6 +74,7 @@ async fn make_app_with_cargo_index(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

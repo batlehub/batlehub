@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 
 use super::super::http_client::{cache_control, fetch_json_document, to_registry_error};
-use super::{models, CondaRegistryClient};
+use super::{models, CachedShardIndex, CondaRegistryClient, ShardIndex};
 use batlehub_core::{
     entities::{PackageId, PackageMetadata},
     error::CoreError,
@@ -12,7 +12,11 @@ use batlehub_core::{
         StreamedDocument, VersionDocument,
     },
 };
-use models::{CondaIndexJson, CondaPackageInfo, CondaRepodata};
+use models::{
+    CondaIndexJson, CondaPackageEntry, CondaPackageInfo, CondaRepodata, CondaShardIndexDoc,
+};
+use std::sync::Arc;
+use std::time::Instant;
 
 impl CondaRegistryClient {
     /// Fetch one platform's `repodata.json` and return all versions of `package` found in it.
@@ -45,20 +49,182 @@ impl CondaRegistryClient {
             .collect()
     }
 
-    /// Look up a specific conda file in `{platform}/repodata.json`.
-    pub(super) async fn lookup_file_in_repodata(
+    /// Look up one conda file: in its package's CEP-16 shard when the channel
+    /// publishes shards, otherwise in `{platform}/repodata.json`.
+    ///
+    /// This runs on every proxied package download, and conda clients that
+    /// fetch files directly (mise drives rattler in-process) never warm the
+    /// index for us: reading `conda-forge/linux-64/repodata.json` here cost
+    /// seconds and gigabytes per file and timed mise out. A shard is a few KB.
+    pub(super) async fn lookup_file(
         &self,
         base: &str,
         platform: &str,
         filename: &str,
         pkg: &PackageId,
     ) -> Result<PackageMetadata, CoreError> {
-        let repodata_url = format!("{base}/{}/repodata.json", encode_path(platform));
+        let (entry, cache_control) = match self.shard_index(base, platform).await {
+            Some(index) => (
+                self.lookup_in_shard(&index, filename).await?,
+                index.cache_control.clone(),
+            ),
+            None => self.lookup_in_repodata(base, platform, filename).await?,
+        };
+        let entry = entry.ok_or_else(|| {
+            CoreError::NotFound(format!("conda: '{filename}' not found in {platform}"))
+        })?;
+        let published_at = entry.timestamp.and_then(|ms| {
+            chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
+        });
+        Ok(PackageMetadata {
+            id: pkg.clone(),
+            published_at,
+            download_url: Some(format!(
+                "{base}/{}/{}",
+                encode_path(platform),
+                encode_path(filename)
+            )),
+            checksum: entry.sha256,
+            is_signed: None,
+            extra: serde_json::json!({
+                "name": entry.name,
+                "version": entry.version,
+                "build": entry.build,
+            }),
+            cache_control,
+        })
+    }
+
+    /// The subdir's shard index, from cache while fresh; `None` when the
+    /// channel publishes none (cached) or it could not be read (not cached, so
+    /// a transient failure does not pin the expensive fallback for a TTL).
+    async fn shard_index(&self, base: &str, platform: &str) -> Option<Arc<ShardIndex>> {
+        if let Ok(guard) = self.shard_indexes.lock() {
+            if let Some(hit) = guard.get(platform) {
+                if hit.read_at.elapsed() <= self.shard_index_ttl {
+                    return hit.index.clone();
+                }
+            }
+        }
+        let url = format!(
+            "{base}/{}/repodata_shards.msgpack.zst",
+            encode_path(platform)
+        );
+        let index = match self.fetch_shard_index(&url).await {
+            Ok(index) => index,
+            Err(e) => {
+                tracing::warn!(url = %url, error = %e, "conda: shard index unreadable, falling back to repodata.json");
+                return None;
+            }
+        };
+        if let Ok(mut guard) = self.shard_indexes.lock() {
+            // The subdir comes from the request path; bound what it can grow.
+            if guard.len() >= MAX_CACHED_SHARD_INDEXES && !guard.contains_key(platform) {
+                if let Some(oldest) = guard
+                    .iter()
+                    .min_by_key(|(_, v)| v.read_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    guard.remove(&oldest);
+                }
+            }
+            guard.insert(
+                platform.to_owned(),
+                CachedShardIndex {
+                    read_at: Instant::now(),
+                    index: index.clone(),
+                },
+            );
+        }
+        index
+    }
+
+    async fn fetch_shard_index(&self, url: &str) -> Result<Option<Arc<ShardIndex>>, CoreError> {
+        let resp = self.get(url).send().await.map_err(to_registry_error)?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status().map_err(to_registry_error)?;
+        let cache_control = cache_control(&resp);
+        let body = resp.bytes().await.map_err(to_registry_error)?;
+        let doc: CondaShardIndexDoc = decode_msgpack_zst(body).await?;
+        let bad = |e: <reqwest::Url as std::str::FromStr>::Err| {
+            CoreError::Registry(format!("conda: shard index URL: {e}"))
+        };
+        let index_url = reqwest::Url::parse(url).map_err(bad)?;
+        let shards_base = index_url
+            .join(doc.info.shards_base_url.as_deref().unwrap_or(""))
+            .map_err(bad)?;
+        // An absolute `shards_base_url` elsewhere would get this registry's credential.
+        if shards_base.origin() != index_url.origin() {
+            return Err(CoreError::Registry(format!(
+                "conda: shards_base_url points off the channel: {shards_base}"
+            )));
+        }
+        Ok(Some(Arc::new(ShardIndex {
+            shards: doc.shards.into_iter().map(|(k, v)| (k, v.0)).collect(),
+            shards_base,
+            cache_control,
+        })))
+    }
+
+    async fn lookup_in_shard(
+        &self,
+        index: &ShardIndex,
+        filename: &str,
+    ) -> Result<Option<CondaPackageEntry>, CoreError> {
+        let Some(digest) = package_name_candidates(filename).find_map(|n| index.shards.get(n))
+        else {
+            return Ok(None);
+        };
+        // The digest is joined into a URL; anything but hex could steer it.
+        if digest.is_empty() || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(CoreError::Registry(format!(
+                "conda: shard digest is not hex: {digest}"
+            )));
+        }
+        let url = index
+            .shards_base
+            .join(&format!("{digest}.msgpack.zst"))
+            .map_err(|e| CoreError::Registry(format!("conda: shard URL: {e}")))?;
         let resp = self
-            .get(&repodata_url)
+            .get(url.as_str())
             .send()
             .await
-            .map_err(|e| CoreError::Registry(format!("conda: repodata request failed: {e}")))?;
+            .map_err(to_registry_error)?
+            .error_for_status()
+            .map_err(to_registry_error)?;
+        let body = resp.bytes().await.map_err(to_registry_error)?;
+        let mut shard: CondaRepodata = decode_msgpack_zst(body).await?;
+        Ok(shard
+            .packages
+            .remove(filename)
+            .or_else(|| shard.packages_conda.remove(filename)))
+    }
+
+    /// The fallback for a channel without shards: `repodata.json` (its `.zst`
+    /// when published), with only the wanted entry ever deserialized.
+    async fn lookup_in_repodata(
+        &self,
+        base: &str,
+        platform: &str,
+        filename: &str,
+    ) -> Result<(Option<CondaPackageEntry>, Option<String>), CoreError> {
+        let repodata_url = format!("{base}/{}/repodata.json", encode_path(platform));
+        let zst = self
+            .get(&format!("{repodata_url}.zst"))
+            .send()
+            .await
+            .ok()
+            .filter(|r| r.status().is_success());
+        let compressed = zst.is_some();
+        let resp =
+            match zst {
+                Some(resp) => resp,
+                None => self.get(&repodata_url).send().await.map_err(|e| {
+                    CoreError::Registry(format!("conda: repodata request failed: {e}"))
+                })?,
+            };
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!(
                 "conda repodata not found for platform '{platform}'"
@@ -72,38 +238,116 @@ impl CondaRegistryClient {
         }
         let cache_control = cache_control(&resp);
         let body = resp.bytes().await.map_err(to_registry_error)?;
-        let repodata: CondaRepodata = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Registry(format!("conda: parse repodata: {e}")))?;
-        let entry = repodata
-            .packages
-            .get(filename)
-            .or_else(|| repodata.packages_conda.get(filename));
-        let entry = entry.ok_or_else(|| {
-            CoreError::NotFound(format!(
-                "conda: '{filename}' not found in {platform}/repodata.json"
-            ))
-        })?;
-        let published_at = entry.timestamp.and_then(|ms| {
-            chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
-        });
-        Ok(PackageMetadata {
-            id: pkg.clone(),
-            published_at,
-            download_url: Some(format!(
-                "{base}/{}/{}",
-                encode_path(platform),
-                encode_path(filename)
-            )),
-            checksum: entry.sha256.clone(),
-            is_signed: None,
-            extra: serde_json::json!({
-                "name": entry.name,
-                "version": entry.version,
-                "build": entry.build,
-            }),
-            cache_control,
+        let filename = filename.to_owned();
+        let entry = tokio::task::spawn_blocking(move || {
+            let body = std::io::Cursor::new(body);
+            let reader: Box<dyn std::io::Read> = if compressed {
+                Box::new(zstd::Decoder::new(body).map_err(|e| e.to_string())?)
+            } else {
+                Box::new(body)
+            };
+            find_in_repodata(std::io::BufReader::new(reader), &filename).map_err(|e| e.to_string())
         })
+        .await
+        .map_err(|e| CoreError::Registry(format!("conda: repodata lookup task: {e}")))?
+        .map_err(|e| CoreError::Registry(format!("conda: parse repodata: {e}")))?;
+        Ok((entry, cache_control))
     }
+}
+
+/// How many subdirs' shard indexes are held at once. A channel has about ten.
+const MAX_CACHED_SHARD_INDEXES: usize = 32;
+
+/// Past this a decompressed shard or shard index is not one (conda-forge's
+/// whole `linux-64` index is ~1.5 MB).
+const MAX_DECODED_SHARD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The package names `filename` could belong to, longest first.
+///
+/// Matched against the shard index's keys rather than taken from a split,
+/// because a name may contain `-` (`ruamel-yaml-0.17.21-py311_0.conda`).
+fn package_name_candidates(filename: &str) -> impl Iterator<Item = &str> {
+    filename
+        .rmatch_indices('-')
+        .map(move |(i, _)| &filename[..i])
+}
+
+/// Decompress and decode a msgpack+zstd document off the async workers.
+async fn decode_msgpack_zst<T: serde::de::DeserializeOwned + Send + 'static>(
+    body: bytes::Bytes,
+) -> Result<T, CoreError> {
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let reader = zstd::Decoder::new(std::io::Cursor::new(body))
+            .map_err(|e| e.to_string())?
+            .take(MAX_DECODED_SHARD_BYTES);
+        rmp_serde::from_read(reader).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| CoreError::Registry(format!("conda: shard decode task: {e}")))?
+    .map_err(|e: String| CoreError::Registry(format!("conda: decode shard: {e}")))
+}
+
+/// The entry for `filename` in a `repodata.json`, every other entry skipped
+/// as it streams past, so memory is one entry rather than the document.
+fn find_in_repodata<R: std::io::Read>(
+    reader: R,
+    filename: &str,
+) -> Result<Option<CondaPackageEntry>, serde_json::Error> {
+    use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
+
+    struct Doc<'a>(&'a str);
+    struct Packages<'a>(&'a str);
+
+    impl<'de> DeserializeSeed<'de> for Doc<'_> {
+        type Value = Option<CondaPackageEntry>;
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+            d.deserialize_map(self)
+        }
+    }
+    impl<'de> Visitor<'de> for Doc<'_> {
+        type Value = Option<CondaPackageEntry>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a repodata.json object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut found = None;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "packages" || key == "packages.conda" {
+                    let hit = map.next_value_seed(Packages(self.0))?;
+                    found = found.or(hit);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(found)
+        }
+    }
+    impl<'de> DeserializeSeed<'de> for Packages<'_> {
+        type Value = Option<CondaPackageEntry>;
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+            d.deserialize_map(self)
+        }
+    }
+    impl<'de> Visitor<'de> for Packages<'_> {
+        type Value = Option<CondaPackageEntry>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of filename to package entry")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut found = None;
+            while let Some(key) = map.next_key::<String>()? {
+                if found.is_none() && key == self.0 {
+                    found = Some(map.next_value::<CondaPackageEntry>()?);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(found)
+        }
+    }
+
+    Doc(filename).deserialize(&mut serde_json::Deserializer::from_reader(reader))
 }
 
 // ── RegistryClient impl ───────────────────────────────────────────────────────
@@ -284,12 +528,10 @@ impl RegistryClient for CondaRegistryClient {
             });
         }
 
-        // For specific package files, look them up in repodata.json.
+        // For specific package files, look up their checksum and date.
         if pkg.name != "repodata" {
             if let Some(filename) = filename {
-                return self
-                    .lookup_file_in_repodata(base, platform, filename, pkg)
-                    .await;
+                return self.lookup_file(base, platform, filename, pkg).await;
             }
         }
 

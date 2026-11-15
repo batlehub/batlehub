@@ -92,6 +92,12 @@ pub fn typed_rules(kind: RegistryKind) -> &'static [Rule] {
         // and its `.sha256` (`go.rs:126-128`, `:384-387`); the default mirror is
         // `https://dl.google.com/go`. Its listing is the versions host, or git.
         RegistryKind::Godist => &[(r"^https://dl\.google\.com/go/(.+)", "{proxy}/$1")],
+        // mise's `core:java` metadata (`java.rs:381`); its downloads are one
+        // rule per `vendor_hosts` entry, added by `registry_rules`.
+        RegistryKind::MiseJava => &[(r"^https://mise-java\.jdx\.dev/(.+)", "{proxy}/$1")],
+        // mise's `core:node`: `nodejs.org/dist/v{v}/…`, `SHASUMS256.txt` and its
+        // `.sig` (`node.rs:397-439`), the same tree the kind serves.
+        RegistryKind::Nodedist => &[(r"^https://nodejs\.org/dist/(.+)", "{proxy}/$1")],
         RegistryKind::Cargo => &[(
             r"^https://static\.crates\.io/crates/([^/]+)/([^/]+)/.+\.crate",
             "{proxy}/$1/$2/download",
@@ -102,10 +108,10 @@ pub fn typed_rules(kind: RegistryKind) -> &'static [Rule] {
         )],
         // mise's `conda:` backend: rattler fetches repodata and packages from
         // `conda.channel` (default `conda-forge`) and sends every request
-        // through `url_replacements`. A registry is one channel, so the rule
-        // is anchored on conda-forge's root and the subdir path carries over.
-        // shortcut: only the default channel is routed; a `channel = "bioconda"`
-        // tool goes direct until the rule is derived from the registry's upstream.
+        // through `url_replacements`. A registry's own rule is derived from
+        // its upstream channel (`registry_rules`, RFC 0047 §6.1); this one is
+        // conda-forge's, the fallback a plan seeds conda entries with when it
+        // knows no registry upstream.
         RegistryKind::Conda => &[(
             r"^https://conda\.anaconda\.org/conda-forge/(.+)",
             "{proxy}/$1",
@@ -125,6 +131,7 @@ pub fn proxy_segment(kind: RegistryKind) -> Option<&'static str> {
             kind,
             RegistryKind::Nodedist
                 | RegistryKind::Godist
+                | RegistryKind::MiseJava
                 | RegistryKind::Sdkman
                 | RegistryKind::Galaxy
                 | RegistryKind::Helm
@@ -197,6 +204,9 @@ pub struct WireRegistry<'a> {
     pub upstreams: &'a [String],
     /// `false` for a host-only registry (RFC 0001): it contributes nothing.
     pub path_routing: bool,
+    /// `mise-java` only: its `vendor_hosts`, one download rule each
+    /// (RFC 0048 §4.1). Empty for every other kind.
+    pub vendor_hosts: &'a [String],
 }
 
 /// Who calls the selection: the two differ on one point only.
@@ -228,7 +238,6 @@ pub struct Selection {
     pub skipped: Vec<String>,
 }
 
-const CONDA_FORGE: &str = "https://conda.anaconda.org/conda-forge";
 const CODEBERG: &str = "https://codeberg.org";
 
 /// The upstream of `r` when the server does not name one.
@@ -284,15 +293,13 @@ pub fn url_host(url: &str) -> Option<String> {
 /// right when the registry proxies that host. An unknown upstream (an older
 /// server) is not assumed public.
 pub fn foreign_upstream(kind: RegistryKind, r: &WireRegistry<'_>) -> Option<String> {
-    // A conda registry is one *channel*, and the rule is conda-forge's: the
-    // host alone would let a bioconda mirror take over every conda-forge read.
+    // A conda registry is one *channel*, and its rule is derived from that
+    // channel's whole URL (`conda_rule`), so it can only ever claim the
+    // channel it fronts. What is refused is an upstream that names none.
     if kind == RegistryKind::Conda {
-        return match r.upstream.map(|u| u.trim_end_matches('/')) {
-            Some(CONDA_FORGE) => None,
-            Some(u) => Some(format!(
-                "conda registry {} (it proxies {u}, not {CONDA_FORGE})",
-                r.name
-            )),
+        return match r.upstream.map(conda_channel) {
+            Some(Ok(_)) => None,
+            Some(Err(why)) => Some(format!("conda registry {} ({why})", r.name)),
             None => Some(unnamed(kind, r)),
         };
     }
@@ -312,6 +319,19 @@ pub fn foreign_upstream(kind: RegistryKind, r: &WireRegistry<'_>) -> Option<Stri
             r.name
         )),
         None => Some(unnamed(kind, r)),
+    }
+}
+
+/// A conda upstream as a channel URL, without its final `/`. The host root
+/// (`https://conda.anaconda.org`, the server's default) names no channel: a
+/// rule on it would claim every channel on the host.
+pub fn conda_channel(upstream: &str) -> Result<&str, String> {
+    let u = check_upstream(upstream)?;
+    match url::Url::parse(u) {
+        Ok(p) if p.path().trim_matches('/').is_empty() => Err(format!(
+            "it proxies {u}, which names no channel: a rule on it would take every channel on the host"
+        )),
+        _ => Ok(u),
     }
 }
 
@@ -342,6 +362,50 @@ fn registry_rules(r: &WireRegistry<'_>, mode: Mode) -> Result<Vec<(String, Strin
                 ),
             })
             .collect());
+    }
+    if r.kind == RegistryKind::Conda {
+        // Derived from the channel the registry fronts (RFC 0047 §6.1): two
+        // registries of two channels each get their own rule.
+        return match foreign_upstream(r.kind, r) {
+            None => Ok(r
+                .upstream
+                .and_then(|u| conda_channel(u).ok())
+                .map(|u| {
+                    vec![(
+                        format!("^{}/(.+)", regex_escape(u)),
+                        "{proxy}/$1".to_owned(),
+                    )]
+                })
+                .unwrap_or_default()),
+            Some(why) => Err(vec![why]),
+        };
+    }
+    if r.kind == RegistryKind::MiseJava && r.vendor_hosts.is_empty() {
+        // The document rule alone would list JDKs through the instance and
+        // download them straight from the vendors: skip it, and say why.
+        return Err(vec![format!(
+            "mise-java registry {} (the server does not say which vendor hosts it serves: \
+             that needs `upstreams:read` granted to `*` on it)",
+            r.name
+        )]);
+    }
+    if r.kind == RegistryKind::MiseJava {
+        // The metadata host, then one rule per vendor prefix onto `dl/`: the
+        // row URLs are served unchanged (RFC 0048 §15 R1), so each vendor host
+        // needs its own rule, and the download route only answers a
+        // `(host, path)` the documents named.
+        let mut rules: Vec<(String, String)> = typed_rules(r.kind)
+            .iter()
+            .map(|(p, rep)| ((*p).to_owned(), (*rep).to_owned()))
+            .collect();
+        for entry in r.vendor_hosts {
+            let entry = entry.trim_end_matches('/');
+            rules.push((
+                format!("^https://{}/(.+)", regex_escape(entry)),
+                format!("{{proxy}}/dl/{entry}/$1"),
+            ));
+        }
+        return Ok(rules);
     }
     let typed = typed_rules(r.kind);
     if typed.is_empty() {
@@ -791,6 +855,7 @@ mod tests {
             upstream,
             upstreams: &[],
             path_routing: true,
+            vendor_hosts: &[],
         }
     }
 
@@ -822,6 +887,7 @@ mod tests {
             upstream: Some("http://127.0.0.1:8189/a"),
             upstreams: &up,
             path_routing: true,
+            vendor_hosts: &[],
         }];
         let (t, _) = WireTable::build(&regs, None);
         assert_eq!(
@@ -937,10 +1003,95 @@ mod tests {
             reg("npm", RegistryKind::Npm, None),
         ];
         let s = select(&regs, Mode::Classic);
-        assert!(s.rules.iter().all(|r| r.registry == "gh"), "{s:?}");
-        assert_eq!(s.skipped.len(), 4, "{:?}", s.skipped);
+        assert!(
+            s.rules
+                .iter()
+                .all(|r| r.registry == "gh" || r.registry == "bio"),
+            "{s:?}"
+        );
+        assert_eq!(s.skipped.len(), 3, "{:?}", s.skipped);
         assert!(s.skipped[0].contains("proxies git.corp.example, not codeberg.org"));
-        assert!(s.skipped[3].contains("does not say"));
+        assert!(
+            s.skipped[1]
+                .contains("dflt (it proxies https://conda.anaconda.org, which names no channel"),
+            "{:?}",
+            s.skipped
+        );
+        assert!(s.skipped[2].contains("does not say"));
+    }
+
+    /// RFC 0047 §6.1, T1: each conda registry is wired on the whole URL of
+    /// the channel it fronts, escaped, and two registries of one channel are
+    /// one claim.
+    /// A mise-java registry whose vendor hosts the caller cannot see wires
+    /// nothing rather than a document rule whose downloads go direct.
+    #[test]
+    fn a_mise_java_registry_without_vendor_hosts_is_skipped_with_its_reason() {
+        let sel = select(&[reg("jdk", RegistryKind::MiseJava, None)], Mode::Classic);
+        assert!(sel.rules.is_empty(), "{:?}", sel.rules);
+        assert!(
+            sel.skipped.iter().any(|s| s.contains("vendor hosts")),
+            "{:?}",
+            sel.skipped
+        );
+    }
+
+    #[test]
+    fn a_conda_rule_is_derived_from_the_registry_channel() {
+        let regs = [
+            reg(
+                "cf",
+                RegistryKind::Conda,
+                Some("https://conda.anaconda.org/conda-forge/"),
+            ),
+            reg(
+                "bio",
+                RegistryKind::Conda,
+                Some("https://conda.anaconda.org/bioconda"),
+            ),
+            reg(
+                "own",
+                RegistryKind::Conda,
+                Some("https://conda.corp.example/c++.tools"),
+            ),
+            reg(
+                "cf2",
+                RegistryKind::Conda,
+                Some("https://conda.anaconda.org/conda-forge"),
+            ),
+        ];
+        let s = select(&regs, Mode::Classic);
+        let rules: Vec<_> = s
+            .rules
+            .iter()
+            .map(|r| (r.registry.as_str(), r.pattern.as_str(), r.prefix.as_str()))
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                (
+                    "cf",
+                    r"^https://conda\.anaconda\.org/conda-forge/(.+)",
+                    "conda-forge/"
+                ),
+                (
+                    "bio",
+                    r"^https://conda\.anaconda\.org/bioconda/(.+)",
+                    "bioconda/"
+                ),
+                (
+                    "own",
+                    r"^https://conda\.corp\.example/c\+\+\.tools/(.+)",
+                    "c++.tools/"
+                ),
+            ]
+        );
+        assert_eq!(s.skipped, ["conda registry cf2 (registry cf has it)"]);
+        let (table, _) = WireTable::build(&regs, None);
+        assert_eq!(
+            table.target("conda.anaconda.org", "bioconda/noarch/repodata.json", false),
+            WireOutcome::Rewrite("/proxy/bio/noarch/repodata.json".into())
+        );
     }
 
     #[test]

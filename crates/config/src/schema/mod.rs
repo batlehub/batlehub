@@ -2643,9 +2643,11 @@ impl AppConfig {
             self.validate_retention(registry)?;
             Self::validate_registry_upstreams(registry, kind)?;
             Self::validate_registry_path_allow(registry, kind)?;
+            Self::validate_registry_fill_options(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
             Self::validate_registry_metadata_url(registry, kind)?;
+            Self::validate_registry_mise_java(registry, kind)?;
             Self::validate_registry_deny_components(registry, kind)?;
             Self::validate_registry_roles(registry, kind)?;
             Self::validate_registry_oci_entries(registry, kind)?;
@@ -2958,6 +2960,14 @@ impl AppConfig {
                 "A Node release that index.tab no longer lists reaches the gate with no \
                  publish date: 'true' refuses it, 'false' serves it"
             }
+            // Every row of mise-java's documents carries `created_at`, so the
+            // undated case is a coordinate no cached document lists any more
+            // (RFC 0048 §6.3).
+            RegistryKind::MiseJava => {
+                "every mise-java row carries 'created_at', so the only undated coordinate is a \
+                 download whose row no document lists any more: 'true' refuses it, 'false' \
+                 serves it"
+            }
             RegistryKind::Sdkman => {
                 "SDKMAN publishes no dates at all, so every artifact reaches the gate without \
                  one: 'true' refuses every download on this registry, 'false' makes the gate \
@@ -3113,6 +3123,96 @@ impl AppConfig {
                 "registry '{}': 'metadata_url' must be an absolute http(s) URL, got '{url}'",
                 registry.name
             );
+        }
+        Ok(())
+    }
+
+    /// RFC 0048 §4.3: `vendor_hosts`, `redirect_hosts` and `release_types`
+    /// are mise-java's alone, and each entry is compared exactly, so its shape
+    /// is checked here rather than discovered as a row that never matches.
+    fn validate_registry_mise_java(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::services::mise_java::{MULTI_TENANT_HOSTS, RELEASE_TYPES};
+        let name = &registry.name;
+        if kind != batlehub_core::entities::RegistryKind::MiseJava {
+            for (field, set) in [
+                ("vendor_hosts", registry.vendor_hosts.is_some()),
+                ("redirect_hosts", registry.redirect_hosts.is_some()),
+                ("release_types", registry.release_types.is_some()),
+            ] {
+                if set {
+                    bail!(
+                        "registry '{name}': '{field}' is only meaningful on a mise-java registry, \
+                         not {kind}"
+                    );
+                }
+            }
+            return Ok(());
+        }
+        let is_host = |h: &str| {
+            !h.is_empty()
+                && h.len() <= 253
+                && h.contains('.')
+                && h.parse::<std::net::IpAddr>().is_err()
+                && h.split('.').all(|l| {
+                    !l.is_empty()
+                        && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                        && !l.starts_with('-')
+                })
+        };
+        if let Some(hosts) = &registry.vendor_hosts {
+            if hosts.is_empty() || hosts.iter().any(|h| h.trim() == "*") {
+                bail!(
+                    "registry '{name}': vendor_hosts: must list at least one host/prefix; \
+                     \"*\" is not allowed"
+                );
+            }
+            for (i, entry) in hosts.iter().enumerate() {
+                let (host, path) = entry.split_once('/').unwrap_or((entry, ""));
+                let path_ok = path.is_empty()
+                    || (path.ends_with('/')
+                        && !path.contains("//")
+                        && !path.split('/').any(|s| s == ".." || s == ".")
+                        && !path.contains(['*', '?', '#', '%', '\\', ' ']));
+                if entry.contains("://") || !is_host(host) || !path_ok {
+                    bail!(
+                        "registry '{name}': vendor_hosts[{i}]: \"{entry}\": write host/prefix/ \
+                         (a host name, then a path ending in '/'), without a scheme, port, \
+                         wildcard or '..'"
+                    );
+                }
+                if path.is_empty()
+                    && MULTI_TENANT_HOSTS.contains(&host.to_ascii_lowercase().as_str())
+                {
+                    bail!(
+                        "registry '{name}': vendor_hosts[{i}]: \"{entry}\" is shared by every \
+                         account on it; name the owner or repository prefix, e.g. \
+                         \"github.com/adoptium/\""
+                    );
+                }
+            }
+        }
+        if let Some(hosts) = &registry.redirect_hosts {
+            for (i, h) in hosts.iter().enumerate() {
+                if !is_host(h) {
+                    bail!(
+                        "registry '{name}': redirect_hosts[{i}]: \"{h}\": write a host name only \
+                         (no scheme, path, port, wildcard or IP literal)"
+                    );
+                }
+            }
+        }
+        if let Some(types) = &registry.release_types {
+            if types.is_empty() {
+                bail!("registry '{name}': release_types: must name ga, ea or both");
+            }
+            for t in types {
+                if !RELEASE_TYPES.contains(&t.as_str()) {
+                    bail!("registry '{name}': release_types: \"{t}\" is not one of ga, ea");
+                }
+            }
         }
         Ok(())
     }
@@ -3380,21 +3480,76 @@ impl AppConfig {
         Ok(())
     }
 
-    /// RFC 0019 §4.3 — a raw ceiling above the global artifact limit is a
-    /// number the global one would silently win over.
+    /// RFC 0019 §4.3 — a raw ceiling above the artifact limit is a number
+    /// the artifact limit would silently win over. That limit is the
+    /// registry's own when it sets one (RFC 0048 §15 Q11), else the instance's.
     fn validate_raw_ceilings(&self) -> Result<()> {
-        let Some(global) = self.limits.max_artifact_size_bytes else {
-            return Ok(());
-        };
         for reg in &self.registries {
             let Some(raw) = &reg.raw else { continue };
-            if raw.enabled && raw.max_size_bytes > global {
+            let Some(limit) = reg
+                .max_artifact_size_bytes
+                .or(self.limits.max_artifact_size_bytes)
+            else {
+                continue;
+            };
+            if raw.enabled && raw.max_size_bytes > limit {
                 bail!(
-                    "registry '{}': raw.max_size_bytes = {} exceeds \
-                     [limits].max_artifact_size_bytes = {global}; the global ceiling \
-                     would win and the registry's number would be a lie",
+                    "registry '{}': raw.max_size_bytes = {} exceeds the artifact limit \
+                     max_artifact_size_bytes = {limit}; the artifact limit would win and \
+                     the registry's number would be a lie",
                     reg.name,
                     raw.max_size_bytes
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0048 §4.3 — the per-registry size limit and `revalidate`.
+    fn validate_registry_fill_options(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        if registry.max_artifact_size_bytes == Some(0) {
+            bail!(
+                "registry '{}': max_artifact_size_bytes must be at least 1; 0 would refuse \
+                 every artifact while looking like \"no limit\"",
+                registry.name
+            );
+        }
+        if registry.revalidate.is_empty() {
+            return Ok(());
+        }
+        if kind != batlehub_core::entities::RegistryKind::Generic {
+            bail!(
+                "registry '{}': 'revalidate' is only supported on generic registries",
+                registry.name
+            );
+        }
+        for entry in &registry.revalidate {
+            glob::Pattern::new(entry).map_err(|e| {
+                anyhow::anyhow!(
+                    "registry '{}': invalid revalidate glob '{entry}': {e}",
+                    registry.name
+                )
+            })?;
+            // The entry read as a literal path: `**` in path_allow admits the
+            // `*` of a revalidate glob as it admits any other character. Matched
+            // as the generic client matches (`path_proxy.rs`): `*` stops at `/`.
+            let opts = glob::MatchOptions {
+                require_literal_separator: true,
+                ..glob::MatchOptions::new()
+            };
+            let admitted = registry
+                .path_allow
+                .iter()
+                .filter_map(|p| glob::Pattern::new(p).ok())
+                .any(|p| p.matches_with(entry, opts));
+            if !admitted {
+                bail!(
+                    "registry '{}': revalidate entry \"{entry}\" is outside path_allow; \
+                     a revalidated path that can never be served is a typo",
+                    registry.name
                 );
             }
         }

@@ -269,6 +269,7 @@ pub async fn run(
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Godist
+        | RegistryKind::MiseJava
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         | RegistryKind::MiseVersions => {

@@ -241,6 +241,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "futures",
+ "glob",
  "hex",
  "hmac",
  "md-5",

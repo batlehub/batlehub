@@ -72,6 +72,7 @@ async fn make_app_with_ns_store(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -211,6 +212,7 @@ async fn make_ns_cargo_app_with_backend(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

@@ -630,6 +630,12 @@ fn strip(
             nodedist::strip_index_json(json, blocked)
         })),
 
+        // A row leaves when the coordinate mise would key it by is blocked;
+        // every build of a blocked release goes with it (RFC 0048 §4.2 R5).
+        RegistryKind::MiseJava => Some(with_json(doc, |json| {
+            crate::services::mise_java::strip_blocked(json, |c| blocked.contains(c))
+        })),
+
         RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
 
         RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
@@ -1170,6 +1176,23 @@ mod tests {
         ]));
         let removed = dispatch(&ctx(RegistryKind::Godist), &mut doc, &blocked);
         assert_eq!(removed, vec!["go1.25.4".to_owned()]);
+        assert_eq!(doc.body.as_json().unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_blocked_jdk_leaves_the_mise_java_document() {
+        let blocked = BlockedVersions::new(
+            RegistryKind::MiseJava,
+            vec!["temurin-21.0.5+11.0.LTS".to_owned()],
+        );
+        let row = |version: &str| {
+            serde_json::json!({"vendor": "temurin", "version": version, "image_type": "jdk",
+                               "jvm_impl": "hotspot", "url": "https://github.com/adoptium/x"})
+        };
+        let mut doc =
+            VersionDocument::json(serde_json::json!([row("21.0.5+11.0.LTS"), row("21.0.4+7")]));
+        let removed = dispatch(&ctx(RegistryKind::MiseJava), &mut doc, &blocked);
+        assert_eq!(removed, vec!["temurin-21.0.5+11.0.LTS".to_owned()]);
         assert_eq!(doc.body.as_json().unwrap().as_array().unwrap().len(), 1);
     }
 

@@ -98,6 +98,8 @@ pub fn package_names_for(kind: RegistryKind, name: &str) -> Vec<String> {
             v
         }
         RegistryKind::Sdkman => vec![name.split('/').next().unwrap_or(name).to_owned()],
+        // `java/{type}/{os}/{arch}` lists rows filed under `java`.
+        RegistryKind::MiseJava => vec![crate::services::mise_java::package_of(name).to_owned()],
         RegistryKind::Terraform => vec![terraform_listing_name(name).to_owned()],
         // A galaxy version document is addressed `{collection}@{version}`,
         // because the `(package, document)` cache key has nowhere else to put
@@ -611,6 +613,9 @@ pub fn render(
         }
         (RegistryKind::Godist, DocumentKind::Versions) => {
             VersionDocument::json(godist_releases(held)?)
+        }
+        (RegistryKind::MiseJava, DocumentKind::Versions) => {
+            VersionDocument::json(mise_java_rows(name, held)?)
         }
         (RegistryKind::Sdkman, DocumentKind::Versions) => VersionDocument::text(
             "text/plain; charset=utf-8",
@@ -1331,6 +1336,37 @@ fn godist_releases(held: &[HeldVersion]) -> Option<Value> {
         })
         .collect();
     (!releases.is_empty()).then_some(Value::Array(releases))
+}
+
+/// A `mise-java` metadata document for the platform `name` addresses
+/// (`java/{type}/{os}/{arch}`), from the held archives' rows: each archive
+/// carries the row it was resolved from, and the platforms that listed it,
+/// under `extra["mise-java"]` — written at the connected cache write and
+/// carried through a bundle as facts (RFC 0048 §6.5). The URLs are the rows'
+/// own, as upstream serves them. A held archive without its row is
+/// downloadable by URL (a lock-driven install) and not listed.
+fn mise_java_rows(name: &str, held: &[HeldVersion]) -> Option<Value> {
+    let platform = crate::services::mise_java::Platform::from_listing_name(name)?;
+    let wanted = format!(
+        "{}/{}/{}",
+        platform.release_type, platform.os, platform.arch
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    let rows: Vec<Value> = held
+        .iter()
+        .filter_map(|h| {
+            let facts = h.extra.get("mise-java")?;
+            let listed = facts
+                .get("platforms")?
+                .as_array()?
+                .iter()
+                .any(|p| p.as_str() == Some(wanted.as_str()));
+            let row = facts.get("row")?;
+            let url = row.get("url")?.as_str()?;
+            (listed && seen.insert(url.to_owned())).then(|| row.clone())
+        })
+        .collect();
+    (!rows.is_empty()).then_some(Value::Array(rows))
 }
 
 fn nodedist_index_json(held: &[HeldVersion]) -> Option<Value> {
@@ -2227,6 +2263,49 @@ mod tests {
         assert_eq!(rows[0]["files"][0]["arch"], "amd64");
         assert_eq!(rows[0]["files"][0]["sha256"], "ab".repeat(32));
         assert_eq!(rows[1]["files"][0]["arch"], "arm64");
+    }
+
+    #[test]
+    fn mise_java_lists_held_rows_of_the_platform_asked_for() {
+        let with_row = |version: &str, url: &str, platform: &str| HeldVersion {
+            extra: json!({"mise-java": {
+                "platforms": [platform],
+                "row": {"vendor": "temurin", "version": version, "url": url},
+            }}),
+            ..held(version, Some(url.trim_start_matches("https://")))
+        };
+        let set = [
+            with_row(
+                "21",
+                "https://github.com/adoptium/a.tar.gz",
+                "ga/linux/x86_64",
+            ),
+            with_row(
+                "17",
+                "https://github.com/adoptium/b.tar.gz",
+                "ga/macosx/aarch64",
+            ),
+            held("11", Some("github.com/adoptium/c.tar.gz")),
+        ];
+        let doc = render(
+            RegistryKind::MiseJava,
+            DocumentKind::Versions,
+            "java/ga/linux/x86_64",
+            &set,
+            "",
+        )
+        .unwrap();
+        let rows = doc.body.as_json().unwrap().as_array().unwrap().clone();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["url"], "https://github.com/adoptium/a.tar.gz");
+        assert!(render(
+            RegistryKind::MiseJava,
+            DocumentKind::Versions,
+            "java/ga/windows/x86_64",
+            &set,
+            ""
+        )
+        .is_none());
     }
 
     #[test]

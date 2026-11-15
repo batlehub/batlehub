@@ -120,6 +120,13 @@ check_case! {
         "BurntSushi/ripgrep", "14.1.0";
     forgejo_check, "forgejo", "mise.lock", &mise_lock("https://codeberg.org/forgejo/forgejo/releases/download/v9.0.0/forgejo.xz"),
         "forgejo/forgejo", "v9.0.0";
+    // A JDK on `github.com` is asked about on the mise-java registry, under
+    // mise's key for its row (RFC 0048 §4.3).
+    mise_java_check, "mise-java", "mise.lock",
+        &mise_lock("https://github.com/adoptium/t/releases/download/x/jdk.tar.gz")
+            .replace("tools.tool", "tools.java")
+            .replace("version = \"1\"\nbackend = \"aqua:x/y\"", "version = \"temurin-21.0.5+11.0.LTS\"\nbackend = \"core:java\""),
+        "java", "temurin-21.0.5+11.0.LTS";
 }
 
 /// A `mise.lock` with one tool downloaded from `url`, on every platform the

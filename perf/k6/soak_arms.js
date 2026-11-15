@@ -53,6 +53,7 @@ import {
   GITHUB_REGISTRY,
   GITLAB_REGISTRY,
   GO_DIST_REGISTRY,
+  MISE_JAVA_REGISTRY,
   GO_REGISTRY,
   JBMARKET_REGISTRY,
   JETBRAINS_REGISTRY,
@@ -767,6 +768,31 @@ export const ARMS = [
     doc: "the archive's .sha256, answered from the document",
     request: () => ({
       url: p(`/proxy/${GO_DIST_REGISTRY}/godist/go1.25.4.linux-amd64.tar.gz.sha256`),
+    }),
+  },
+
+  // ── mise's JVM catalogue (RFC 0048 §6.3) ──────────────────────────────────
+  {
+    op: "mise_java_document",
+    kind: "mise-java",
+    registry: MISE_JAVA_REGISTRY,
+    weight: 1,
+    expect: [200],
+    doc: "jvm/ga/linux/x86_64.json: the metadata document, filtered",
+    request: () => ({ url: p(`/proxy/${MISE_JAVA_REGISTRY}/mise-java/jvm/ga/linux/x86_64.json`) }),
+  },
+  {
+    // The download route's lookup, not its fetch: a vendor archive is https to
+    // a public host only, which the loopback mock cannot be (RFC 0048 §15 Q2).
+    // A URL no document lists is answered from the index, never fetched.
+    op: "mise_java_unlisted",
+    kind: "mise-java",
+    registry: MISE_JAVA_REGISTRY,
+    weight: 1,
+    expect: [404],
+    doc: "dl/{host}/{path} of a URL no document lists: the index lookup",
+    request: () => ({
+      url: p(`/proxy/${MISE_JAVA_REGISTRY}/mise-java/dl/github.com/adoptium/temurin21-binaries/not-a-row.tar.gz`),
     }),
   },
 

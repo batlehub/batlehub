@@ -28,6 +28,8 @@ pub(super) struct RequestPrelude {
     pub(super) policy: Option<Arc<crate::services::hot_config::RegistryPolicy>>,
     pub(super) integrity: crate::services::hot_config::IntegrityPolicy,
     pub(super) limit: u64,
+    /// RFC 0048 §15 Q12: a cached copy of this path is revalidated upstream.
+    pub(super) revalidate: bool,
     pub(super) cache_key: String,
     pub(super) ttl: Option<std::time::Duration>,
     pub(super) registry_label: Arc<str>,
@@ -120,7 +122,7 @@ impl ProxyService {
         // bytes on every `counter!`/`histogram!` invocation.
         let registry_label: Arc<str> = Arc::from(registry_name);
 
-        let (client, policy, integrity, limit, raw_limit) = {
+        let (client, policy, integrity, limit, raw_limit, revalidate) = {
             let hot = self.hot.read().await;
             let client = hot
                 .registries
@@ -147,7 +149,24 @@ impl ProxyService {
                 .get(registry_name)
                 .cloned()
                 .unwrap_or_default();
-            let limit = hot.max_artifact_size_bytes.unwrap_or(500 * 1024 * 1024);
+            // RFC 0048 §15 Q11: the registry's own limit, else the instance's.
+            let limit = hot
+                .registry_artifact_limits
+                .get(registry_name)
+                .copied()
+                .or(hot.max_artifact_size_bytes)
+                .unwrap_or(500 * 1024 * 1024);
+            let revalidate = hot
+                .generic_revalidate
+                .get(registry_name)
+                .is_some_and(|globs| {
+                    let path = req.package_id.artifact.as_deref().unwrap_or_default();
+                    let opts = glob::MatchOptions {
+                        require_literal_separator: true,
+                        ..glob::MatchOptions::new()
+                    };
+                    globs.iter().any(|g| g.matches_with(path, opts))
+                });
             // RFC 0019 §4.2 *Raw content*: a raw file has its own, lower
             // ceiling. Applied here rather than in the client so it is the
             // *stream* that stops — the file is refused, never truncated —
@@ -160,7 +179,7 @@ impl ProxyService {
                 .get(registry_name)
                 .filter(|p| p.enabled)
                 .map(|p| p.max_size_bytes);
-            (client, policy, integrity, limit, raw_limit)
+            (client, policy, integrity, limit, raw_limit, revalidate)
         };
         let limit = match (raw_limit, is_raw_coordinate(&req.package_id)) {
             (Some(raw), true) => limit.min(raw),
@@ -175,6 +194,7 @@ impl ProxyService {
             policy,
             integrity,
             limit,
+            revalidate,
             cache_key,
             ttl,
             registry_label,
@@ -718,6 +738,7 @@ impl ProxyService {
             policy,
             integrity,
             limit,
+            revalidate,
             cache_key,
             ttl,
             registry_label,
@@ -870,6 +891,7 @@ impl ProxyService {
                 metadata,
                 integrity,
                 limit,
+                revalidate,
                 registry_label,
                 start,
             )
@@ -894,6 +916,7 @@ impl ProxyService {
         metadata: crate::entities::PackageMetadata,
         integrity: crate::services::hot_config::IntegrityPolicy,
         limit: u64,
+        revalidate: bool,
         registry_label: Arc<str>,
         start: Instant,
     ) -> Result<ProxyResponse, CoreError> {
@@ -954,11 +977,49 @@ impl ProxyService {
             .await?;
 
         if let Some(artifact) = cached {
-            // ── 5a. Cache hit (see `cache::serve_cache_hit`) ──────────────────
             let timing = RequestTiming {
                 registry_label,
                 start,
             };
+            if revalidate {
+                // ── 5a'. A mutable document: refetched on every read, the
+                // cached copy served stale only when upstream fails (RFC 0048
+                // §15 Q12). shortcut: a full fetch, not a conditional GET on
+                // the stored ETag; add one if a revalidated file grows large.
+                let before = self
+                    .artifact_meta
+                    .get_artifact_checksum(&artifact_key)
+                    .await
+                    .ok()
+                    .flatten();
+                let label = timing.registry_label.clone();
+                match self
+                    .fetch_and_cache(req.clone(), client, metadata, &integrity, limit, &timing)
+                    .await
+                {
+                    Ok(resp) => {
+                        let after = self
+                            .artifact_meta
+                            .get_artifact_checksum(&artifact_key)
+                            .await
+                            .ok()
+                            .flatten();
+                        let outcome = if before.is_some() && before == after {
+                            "fresh"
+                        } else {
+                            "updated"
+                        };
+                        metrics::counter!("batlehub_generic_revalidate_total", "registry" => label, "outcome" => outcome).increment(1);
+                        return Ok(resp);
+                    }
+                    Err(e @ CoreError::Registry(_)) => {
+                        tracing::warn!(key = %artifact_key, error = %e, "revalidate: upstream failed, serving the cached copy stale");
+                        metrics::counter!("batlehub_generic_revalidate_total", "registry" => label, "outcome" => "stale_served").increment(1);
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            // ── 5a. Cache hit (see `cache::serve_cache_hit`) ──────────────────
             return self
                 .serve_cache_hit(req, artifact_key, artifact, &integrity, &timing)
                 .await;
@@ -1261,8 +1322,35 @@ impl ProxyService {
             }
         }
 
-        crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
+        // `mise-java` rows carry `created_at`: a too-young build leaves the
+        // document, so mise never picks a version the download would refuse
+        // (RFC 0048 §5.2).
+        let mut too_young = 0;
+        if kind == crate::entities::RegistryKind::MiseJava {
+            let gate = prelude.policy.as_ref().and_then(|p| {
+                p.rules
+                    .iter()
+                    .find_map(|r| r.listing_age_gate(&req.identity))
+            });
+            if let (Some(gate), Some(body)) = (gate, doc.body.as_json()) {
+                let young =
+                    crate::services::mise_java::younger_than(body, gate, chrono::Utc::now());
+                too_young = young.len();
+                blocked.extend(young);
+            }
+        }
+
+        let removed = crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
         crate::services::blocking::rewrite_urls(&ctx, &mut doc);
+        if kind == crate::entities::RegistryKind::MiseJava {
+            crate::services::mise_java::record_served(
+                &req.package_id.registry,
+                name,
+                &doc,
+                removed.len(),
+                too_young,
+            );
+        }
 
         // An allowed listing is counted, not filed. `StatsRollupService` turns
         // this into one durable row per registry per hour, so a `cargo build`

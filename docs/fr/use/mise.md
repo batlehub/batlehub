@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: 9ede8a9f2787d6f2
+sourceHash: 8d6f7cb339f371bc
 ---
 
 # Faire pointer mise vers BatleHub
@@ -129,6 +129,49 @@ les clients reprennent le registre public à leur prochain rafraîchissement.
 Les noms que vous cessez de servir vont dans `retired`, qui continue d'y
 répondre ici ; un client abandonne son archive en cache avec
 `rm -rf ~/.cache/mise/mise-registry`.
+
+### 1.3 Canaux conda et outils `dotnet:` {#conda-and-dotnet}
+
+**`conda:`.** Le backend conda de mise fait passer chaque requête de
+repodata et de paquet par `url_replacements`, et un
+[registre conda](/fr/registries/conda) sert un seul canal. Chaque registre
+reçoit la règle du canal que nomme son amont ; deux registres de deux canaux
+reçoivent donc deux règles :
+
+```toml
+[settings.url_replacements]
+"regex:^https://conda\\.anaconda\\.org/conda-forge/(.+)" = "https://hub.example.com/proxy/conda/$1"
+"regex:^https://conda\\.anaconda\\.org/bioconda/(.+)" = "https://hub.example.com/proxy/conda-bio/$1"
+```
+
+Un outil lit le canal de sa propre option `channel`, sinon `conda.channel`
+(par défaut `conda-forge`). Un registre laissé sur l'amont par défaut du
+serveur, l'hôte nu `https://conda.anaconda.org`, ne nomme aucun canal et ne
+reçoit aucune règle : elle prendrait tous les canaux de l'hôte. Deux
+registres d'un même canal laisseraient la seconde règle sans effet ; `setup`
+refuse donc le fichier mise tant que `--pick conda=<nom>` ne désigne pas
+l'un des deux.
+
+**`dotnet:`.** mise lit lui-même la liste des versions, depuis
+`dotnet.registry_url`, et installe par `dotnet tool install`, un
+sous-processus qui lit NuGet.config et ne voit jamais `url_replacements`.
+Un [registre nuget](/fr/registries/nuget) se traduit donc par deux réglages,
+pas par une règle :
+
+```toml
+[settings.dotnet]
+registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
+```
+
+et par la source NuGet.config qu'écrit
+`batlehub-cli setup apply --only nuget`. `setup` écrit le premier dans le
+fichier mise et rappelle le second quand il ne configure pas NuGet dans le
+même passage ; sans lui, la liste passe par BatleHub et le paquet non, si
+bien qu'une version bloquée s'installe quand même. La réponse de recherche
+liste la seule version que nomme chaque résultat : `mise ls-remote dotnet:…`
+via BatleHub montre cette version, pas tout l'historique ; une version exacte
+(`dotnet:tool@4.6.4`) n'est pas listée du tout, et s'installe depuis le
+flux.
 
 ## 2. Ce qu'exige une coupure réseau
 
@@ -342,17 +385,35 @@ reviendrait à défaire le blocage par accident.
   `packslip:github.com/…` passent par le type `github` ; un outil
   `packslip:{host}` lit `https://{host}/.well-known/packslip.json`, qu'aucun
   registre ne met en miroir, et le plan le dit.
-- **Les outils `dotnet:`, pour l'instant.** `registry suggest` nomme le
-  registre `nuget` dont ils ont besoin, mais `setup` n'écrit pas encore le
-  réglage `dotnet.registry_url` de mise
-  ([RFC 0047](/rfc/0047-mise-backends-coverage), phase 3), et l'installation
-  est un `dotnet tool install` qui lit NuGet.config, pas mise : lancez aussi
-  `batlehub-cli setup apply --only nuget`.
-- **Un mise plus ancien.** Les règles de cette page sont vérifiées avec mise
-  2026.11.3, la version qu'épinglent les suites heavy. Les versions
-  antérieures ne sont pas mesurées, et une version qui ne connaît pas un
-  réglage se contente d'avertir et laisse l'outil partir en direct : gardez
-  les clients en 2026.11.3 ou plus récent.
+- **Un outil `dotnet:` avec le seul bloc mise.** L'installation est un
+  `dotnet tool install` qui lit NuGet.config, pas mise
+  ([§1.3](#conda-and-dotnet)) : lancez aussi
+  `batlehub-cli setup apply --only nuget`, sinon le paquet part en direct.
+- **`core:dotnet`.** mise lance le `dotnet-install.sh` de Microsoft, dont le
+  flux de téléchargement est codé en dur et ne se règle que par
+  `--azure-feed`, que mise ne passe pas. Aucune règle de réécriture ne
+  l'atteint : `registry suggest` le liste sous *Not routable through
+  BatleHub* et `mise plan` sous `unsupported`.
+- **Les installations `core:` compilées.** `python.compile`, `ruby.compile`,
+  `node.compile` et l'Erlang construit par kerl clonent leurs outils de
+  construction par git et les lancent en sous-processus. Une entrée de
+  verrou `core:node`, `core:python`, `core:ruby` ou `core:erlang` sans URL
+  est lue comme telle, et `mise plan` la liste sous `unsupported` ; lancez
+  `mise lock` si l'installation est en réalité précompilée.
+- **Un mise plus ancien.** Une version qui ne connaît pas un réglage se
+  contente d'avertir et laisse l'outil partir en direct. Le plancher de
+  chaque règle est la plus ancienne version dans laquelle son câblage a été
+  lu, et `setup` l'affiche à côté de la règle :
+
+  | Règle | mise ≥ |
+  | --- | --- |
+  | `conda:` (le middleware `url_replacements` de rattler) | 2026.9.5 |
+  | `dotnet.registry_url` | 2026.9.5 |
+  | toutes les autres règles de cette page | 2026.11.3 |
+
+  2026.11.3 est la version qu'épinglent les suites heavy ; rien d'antérieur
+  à 2026.9.5 n'a été lu, si bien que les deux premiers planchers sont ce qui
+  a été vérifié, pas la première version qui offrait la fonction.
 - **Un hôte pour lequel vous n'avez pas de registre.** Le plan le dit ; ajoutez
   un registre ou renoncez à l'outil.
 - **La vérification de signature en direct du côté coupé.** Elle ne peut pas y
@@ -376,6 +437,38 @@ reviendrait à défaire le blocage par accident.
   le verrou nomme, et `mise plan` lit le verrou plutôt que la configuration
   parce que c'est cette liste-là que le lot doit porter. Gardez
   `lockfile = true` et versionnez le verrou.
+
+### 5.1 Les chaînes d'outils du cœur {#core-toolchains}
+
+Chacune des treize chaînes d'outils `core:` de mise a une seule route, et
+`registry suggest --mise`, `mise plan` et `setup` s'accordent sur elle
+([RFC 0048](/rfc/0048-mise-core-toolchains)) :
+
+| Outil | Route |
+| --- | --- |
+| node | le type [`nodedist`](/fr/registries/nodedist) ; le bloc règle aussi `node.mirror_url` |
+| rust | le type [`rustup`](/fr/registries/rustup), par `RUSTUP_DIST_SERVER` et `RUSTUP_UPDATE_ROOT` sous `[env]` : rustup est un sous-processus et ne lit aucune règle de réécriture |
+| go | le type [`godist`](/fr/registries/godist) |
+| python, bun, ruby | le type `github`, d'après les URL que le verrou enregistre |
+| deno | le préréglage `generic` `deno-dl` (`dl.deno.land`) |
+| zig | le préréglage `generic` `zig-dl` (`ziglang.org`), avec `zig.use_community_mirrors = false` |
+| elixir, erlang | le préréglage `generic` `hex-builds` (`builds.hex.pm`) ; erlang sous macOS vient de `erlef/otp_builds` sur GitHub |
+| swift | les préréglages `generic` `swift-dl` (`download.swift.org`, avec son propre `max_artifact_size_bytes`) et `swift-api` (l'index des versions) |
+| PyPy | le préréglage `generic` `pypy-dl` (`downloads.python.org/pypy`) |
+| java | le type `mise-java` : une règle pour `mise-java.jdx.dev` et une par hôte de fournisseur, écrites **avant** les règles `github`, afin qu'un JDK de `github.com/adoptium/` atteigne le type qui peut le bloquer |
+| dotnet | non routable, voir plus haut |
+
+Node et Rust recevaient auparavant des préréglages `generic` (`node-dist`,
+`rust-dist`) ; un miroir qu'un parc a déjà déclaré ainsi continue de
+fonctionner, et `mise plan` planifie toujours à travers lui, mais un blocage
+sur une version de Node ou une chaîne d'outils Rust ne tient que par le type
+dédié.
+
+Zig a besoin de son réglage : mise essaie dix-sept miroirs communautaires
+avant `ziglang.org`, si bien qu'une règle sur `ziglang.org` n'est atteinte
+qu'après l'échec de chacun d'eux. Le bloc généré porte toujours
+`zig.use_community_mirrors = false` ; un bloc écrit à la main n'est vérifié
+par rien, aussi `mise plan` affiche une `note:` pour chaque zig verrouillé.
 
 ## Voir aussi
 

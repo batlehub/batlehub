@@ -191,8 +191,10 @@ pub struct RegistryConfig {
     /// serving many vendors) would relay *every* path on that host.
     ///
     /// Patterns are matched against the upstream-relative path with
-    /// [`glob::Pattern`] semantics, where `*` also crosses `/`. Required for
-    /// `generic`; `["**"]` is the explicit opt-out that allows everything.
+    /// [`glob::Pattern`] semantics. On `generic`, `*` stays inside one path
+    /// segment and only `**` crosses `/` (RFC 0047 §15 Q7); on the other kinds
+    /// `*` also crosses `/`. Required for `generic`; `["**"]` is the explicit
+    /// opt-out that allows everything.
     ///
     /// ```toml
     /// path_allow = ["v*/node-v*-linux-x64.tar.*", "v*/SHASUMS256.txt*"]
@@ -245,6 +247,21 @@ pub struct RegistryConfig {
     /// reason `broker_url` is (RFC 0048 §4.1).
     #[serde(default)]
     pub metadata_url: Option<String>,
+    /// mise-java only: where a download may come from, as `host/prefix/`
+    /// entries (a bare host only where it is single-tenant). A metadata row
+    /// whose URL is under none of them is dropped from the served document and
+    /// never fetched. Defaults to the set measured in RFC 0048 §6.1.
+    #[serde(default)]
+    pub vendor_hosts: Option<Vec<String>>,
+    /// mise-java only: hosts a vendor host may redirect a download to. Every
+    /// hop must be `https://` and land on `vendor_hosts` or here, or the
+    /// download is a `502` and nothing is cached (RFC 0048 §15 Q2).
+    #[serde(default)]
+    pub redirect_hosts: Option<Vec<String>>,
+    /// mise-java only: the release types served, `ga` and/or `ea`. Default
+    /// `["ga"]` (RFC 0048 §4.1).
+    #[serde(default)]
+    pub release_types: Option<Vec<String>>,
     /// rustup only: components this registry never serves, whatever the
     /// channel manifest says.
     ///
@@ -547,6 +564,27 @@ pub struct RegistryConfig {
     /// and block on a mismatch; warn (do not block) when none is advertised.
     #[serde(default)]
     pub integrity: Option<IntegrityConfig>,
+    /// RFC 0048 §15 Q11 — this registry's artifact size limit, in bytes,
+    /// overriding `[limits] max_artifact_size_bytes` for this registry alone,
+    /// above or below it. Absent: the instance limit (500 MiB by default).
+    ///
+    /// ```toml
+    /// max_artifact_size_bytes = 1_200_000_000   # Swift tarballs reach 1 007 MB
+    /// ```
+    #[serde(default)]
+    pub max_artifact_size_bytes: Option<u64>,
+    /// RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every
+    /// read instead of cached forever, for a mutable document under an
+    /// otherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs
+    /// matched like `path_allow`, with `*` kept inside one segment; each
+    /// must also be admitted by `path_allow`. On an upstream error the cached
+    /// copy is served stale. Absent: nothing is revalidated.
+    ///
+    /// ```toml
+    /// revalidate = ["elixir/builds.txt", "otp/*/*/builds.txt"]
+    /// ```
+    #[serde(default)]
+    pub revalidate: Vec<String>,
     /// Base URL for the Go Vulnerability Database (`govulndb`) proxy endpoints.
     /// Only applies to `goproxy` registries.
     /// Absent → default to `https://vuln.go.dev`.

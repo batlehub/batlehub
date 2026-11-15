@@ -87,7 +87,15 @@ impl PathProxyRegistryClient {
         // via the admin warming flow, and `../` must never reach the
         // `{base_url}/{path}` join even when the allowlist is permissive.
         batlehub_core::services::validate_path_safe("upstream path", path)?;
-        if self.path_allow.is_empty() || self.path_allow.iter().any(|p| p.matches(path)) {
+        // RFC 0047 §15 Q7: on `generic`, `*` stays inside one segment and only
+        // `**` crosses `/`, so `go*` cannot admit `go1.25/anything/below`.
+        // The other kinds keep the default, where `*` crosses `/` too.
+        let opts = glob::MatchOptions {
+            require_literal_separator: self.registry_type == "generic",
+            ..glob::MatchOptions::new()
+        };
+        if self.path_allow.is_empty() || self.path_allow.iter().any(|p| p.matches_with(path, opts))
+        {
             return Ok(());
         }
         Err(CoreError::access_denied(format!(
@@ -302,6 +310,29 @@ mod tests {
     fn path_allow_double_star_is_the_allow_everything_opt_out() {
         let c = generic_with_allow(&["**"]);
         assert!(c.check_path_allowed("some/deep/nested/file.bin").is_ok());
+    }
+
+    /// RFC 0047 §15 Q7, §7.1 T2.
+    #[test]
+    fn generic_star_does_not_cross_a_separator() {
+        let c = generic_with_allow(&["go*"]);
+        assert!(c.check_path_allowed("go1.25.4.linux-amd64.tar.gz").is_ok());
+        assert!(matches!(
+            c.check_path_allowed("go1.25/x/y"),
+            Err(CoreError::AccessDenied(_))
+        ));
+        let c = generic_with_allow(&["v1.*/bin/**"]);
+        assert!(c
+            .check_path_allowed("v1.31.0/bin/linux/amd64/kubectl")
+            .is_ok());
+        assert!(c.check_path_allowed("v1.31.0/x/bin/kubectl").is_err());
+        // Only `generic` changed: the other path-addressed kinds keep `*`
+        // crossing `/`.
+        let deb = PathProxyRegistryClient::new("deb", "http://x", &UpstreamHttpOptions::default())
+            .unwrap()
+            .with_path_allow(&["pool/*".to_owned()])
+            .unwrap();
+        assert!(deb.check_path_allowed("pool/main/a/x.deb").is_ok());
     }
 
     #[test]

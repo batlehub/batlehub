@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: db75573b9739dcd6
+sourceHash: e30ef76fdd1edf82
 ---
 
 # batlehub-cli
@@ -245,6 +245,7 @@ en anglais : ce sont celles que la CLI imprime.
 | generic | yes — mise | n.a. — proxy only | n.a. — path-addressed: there is no version to fetch by | yes — `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | n.a. — a mirrored file has no version to ask about |
 | nodedist | yes — env + mise | n.a. — a vendor's releases, mirrored | n.a. — a Node release is a set of files — one per platform, plus headers, source and checksums — so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `.nvmrc` |
 | godist | yes — mise | n.a. — a vendor's releases, mirrored | n.a. — a Go release is one archive per platform plus a checksum each, so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | n.a. — `mise.lock` pins Go by URL; no Go lockfile maps to a registry yet |
+| mise-java | yes — mise | n.a. — a vendor's releases, mirrored | n.a. — a JVM build is one archive per platform, addressed by its vendor URL, so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `mise.lock` |
 | sdkman | yes — env | n.a. — a vendor's releases, mirrored | n.a. — an SDKMAN artifact is addressed by platform as well as version — one archive per platform — so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `.sdkmanrc` |
 | rustup | yes — env | n.a. — a vendor's releases, mirrored | n.a. — a Rust release is a manifest plus one tarball per component per target, so "fetch this version" needs a target and a profile | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `rust-toolchain.toml` |
 | galaxy | yes — `~/.ansible.cfg` | yes — collection `.tar.gz` | yes — by coordinate, checksum verified | yes — `package versions`, `package readme` | yes — the generic lifecycle endpoint | n.a. — `requirements.yml` pins no exact version |
@@ -310,8 +311,8 @@ $ batlehub-cli registry suggest --client-env
 +------------------+---------+--------------------------------------+----------------------------+
 | cargo            | cargo   | (adapter default)                    | manifest, mise.lock: …     |
 | github           | github  | (adapter default)                    | mise.lock: gitleaks, …     |
-| node-dist        | generic | https://nodejs.org/dist              | mise.lock: node            |
-| rust-dist        | generic | https://static.rust-lang.org         | mise.lock: rust            |
+| node             | nodedist| (adapter default)                    | mise.lock: node            |
+| rust             | rustup  | (adapter default)                    | mise.lock: rust            |
 | helm-bin         | generic | https://get.helm.sh                  | mise.lock: helm            |
 +------------------+---------+--------------------------------------+----------------------------+
 
@@ -319,8 +320,9 @@ Add to config.toml:
 …
 Point clients at the proxy:
 
-# node-dist (generic)
-export NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node-dist/generic"
+# node (nodedist)
+export NVM_NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node/nodedist"
+…
 ```
 
 | Option | Description |
@@ -342,9 +344,12 @@ tous les miroirs `generic`. Vérifié contre `mise install` :
   `api.github.com/repos/…/releases/assets/{id}` : c'est donc la règle sur
   `api.github.com` qui porte tout — pas celle sur
   `github.com/…/releases/download/…`.
-- `core:node` récupère **à la fois** l'archive de la plateforme et l'archive des
-  sources `node-v<ver>.tar.gz`, ce pourquoi le `path_allow` suggéré est `v*/**`
-  plutôt qu'un motif limité à une plateforme.
+- `core:node` et `core:rust` passent par leurs types dédiés, `nodedist` et
+  `rustup` ; le bloc ajoute `node.mirror_url` et, pour rustup — un
+  sous-processus qui ne lit aucune règle —, `RUSTUP_DIST_SERVER` sous `[env]`.
+  La règle de Zig vient avec `zig.use_community_mirrors = false`. La route de
+  chaque chaîne d'outils du cœur est dans
+  [mise § 5.1](/fr/use/mise#core-toolchains).
 
 Les backends qui délèguent à un autre outil (`cargo:`, `pipx:`, `npm:`, `go:`) ne
 sont **pas** couverts — ces processus lisent leur propre configuration, pas celle

@@ -664,6 +664,8 @@ mod tests {
                 upstream: None,
                 installable: None,
                 upstreams: Vec::new(),
+                vendor_hosts: Vec::new(),
+                redirect_hosts: Vec::new(),
             }];
             let t = RegistryTargets::new("https://hub.example.com", &regs);
             let out = &scan_project_types(dir.path(), &t, 0)[0].instructions;
@@ -861,6 +863,8 @@ mod tests {
             upstream: None,
             installable: None,
             upstreams: Vec::new(),
+            vendor_hosts: Vec::new(),
+            redirect_hosts: Vec::new(),
         }
     }
 

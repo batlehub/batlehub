@@ -290,6 +290,8 @@ GET /proxy/{registry}/nodedist/{version}/{file}	profiled
 GET /proxy/{registry}/godist/index.json	profiled
 GET /proxy/{registry}/godist/info/refs	skip: the same filtered document as index.json, which is profiled
 GET /proxy/{registry}/godist/{file}	profiled
+GET /proxy/{registry}/mise-java/dl/{path}	profiled
+GET /proxy/{registry}/mise-java/jvm/{release_type}/{os}/{arch}.json	profiled
 PUT /proxy/{registry}/nuget/api/v2/package	skip: no arm yet
 PUT /proxy/{registry}/nuget/api/v2/symbolpackage	skip: no arm yet
 DELETE /proxy/{registry}/nuget/v2/package/{id}/{version}	skip: no arm yet

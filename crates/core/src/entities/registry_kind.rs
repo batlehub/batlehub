@@ -219,6 +219,12 @@ pub enum RegistryKind {
     /// platform plus its `.sha256` — so a Go release can be blocked, and every
     /// archive is verified against `go.dev`'s release document (RFC 0048 §6.7).
     Godist,
+    /// The JVM builds mise's `core:java` installs: `mise-java.jdx.dev`'s
+    /// metadata documents, filtered, and each row's archive fetched from its
+    /// vendor host — so a JDK can be blocked, age-gated and air-gapped
+    /// (RFC 0048 §6.3). One package, `java`; the version is mise's own key
+    /// for the row (`temurin-21.0.5+11.0.LTS`).
+    MiseJava,
     /// SDKMAN's candidates API and download broker as one registry: the JDK,
     /// Gradle, Maven-the-distribution, Kotlin — addressed by
     /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
@@ -303,6 +309,7 @@ impl RegistryKind {
         Self::Generic,
         Self::Nodedist,
         Self::Godist,
+        Self::MiseJava,
         Self::Sdkman,
         Self::Rustup,
         Self::Galaxy,
@@ -339,6 +346,7 @@ impl RegistryKind {
             Self::Generic => "generic",
             Self::Nodedist => "nodedist",
             Self::Godist => "godist",
+            Self::MiseJava => "mise-java",
             Self::Sdkman => "sdkman",
             Self::Rustup => "rustup",
             Self::Galaxy => "galaxy",
@@ -374,6 +382,9 @@ impl RegistryKind {
             // block is a statement about the collection or the role, so the
             // address is stripped before the lookup (RFC 0031 §6.2).
             Self::Galaxy => crate::services::galaxy::package_of(package),
+            // A metadata document is addressed `java/{type}/{os}/{arch}`; a
+            // block is a statement about `java` (RFC 0048 §6.3).
+            Self::MiseJava => crate::services::mise_java::package_of(package),
             _ => package,
         }
     }
@@ -396,6 +407,7 @@ impl RegistryKind {
                 | Self::Generic
                 | Self::Nodedist
                 | Self::Godist
+                | Self::MiseJava
                 | Self::Sdkman
                 | Self::Rustup
                 | Self::MiseVersions
@@ -561,6 +573,12 @@ impl RegistryKind {
             "the release document (`index.json`)",
             &["versions"],
         )];
+        // One metadata document per release type, OS and architecture; the
+        // archives are artifacts.
+        const MISE_JAVA: &[ListingDocument] = &[ListingDocument::filtered(
+            "`jvm/{type}/{os}/{arch}.json`",
+            &["versions"],
+        )];
         const NODEDIST: &[ListingDocument] = &[
             ListingDocument::filtered("`index.tab`", &["versions"]),
             ListingDocument::filtered("`index.json`", &["index-json"]),
@@ -685,6 +703,7 @@ impl RegistryKind {
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
             Self::Godist => GODIST,
+            Self::MiseJava => MISE_JAVA,
             Self::Sdkman => SDKMAN,
             Self::Rustup => RUSTUP,
             Self::Galaxy => GALAXY,
@@ -777,6 +796,9 @@ impl RegistryKind {
                 "a Go release is a set of archives and their checksums; the release document \
                  carries no prose",
             ),
+            Self::MiseJava => ReadmeSupport::None(
+                "a JVM build is an archive named by a metadata row; neither carries prose",
+            ),
             Self::Sdkman => ReadmeSupport::None(
                 "SDKMAN describes a distribution, not a package: no document in the protocol \
                  carries prose about a candidate",
@@ -868,6 +890,8 @@ impl RegistryKind {
             Self::Nodedist => UpstreamDetailSupport::Document("versions"),
             // `go.dev`'s release document: every release, no dates.
             Self::Godist => UpstreamDetailSupport::Document("versions"),
+            // The metadata document of the default platform: every row, dated.
+            Self::MiseJava => UpstreamDetailSupport::Document("versions"),
             // `versions/all` for the candidate on the default platform — the
             // identifiers and nothing else; SDKMAN publishes no dates.
             Self::Sdkman => UpstreamDetailSupport::Document("versions"),
@@ -931,6 +955,7 @@ impl RegistryKind {
             | Self::Generic
             | Self::Nodedist
             | Self::Godist
+            | Self::MiseJava
             | Self::Sdkman
             | Self::Rustup
             | Self::Galaxy
@@ -1041,6 +1066,10 @@ impl RegistryKind {
                 "a Go release is one archive per platform plus a checksum each, so \
                  \"fetch this version\" has no single meaning",
             ),
+            Self::MiseJava => FetchSupport::None(
+                "a JVM build is one archive per platform, addressed by its vendor URL, so \
+                 \"fetch this version\" has no single meaning",
+            ),
             Self::Nodedist => FetchSupport::None(
                 "a Node release is a set of files — one per platform, plus headers, source and \
                  checksums — so \"fetch this version\" has no single meaning",
@@ -1143,6 +1172,7 @@ impl RegistryKind {
             | Self::JetbrainsMarketplace
             | Self::Nodedist
             | Self::Godist
+            | Self::MiseJava
             | Self::Sdkman
             | Self::Rustup
             | Self::Galaxy
@@ -1615,6 +1645,8 @@ mod tests {
                 "nodedist",
                 // Archives and their `.sha256`: no prose in the release document.
                 "godist",
+                // An archive per row; the metadata document carries no prose.
+                "mise-java",
                 // A distribution, not a package: no document carries prose.
                 "sdkman",
                 // A manifest and a set of tarballs; the dist tree carries no
@@ -1884,14 +1916,21 @@ mod tests {
             "rust"
         );
         assert_eq!(RegistryKind::Rustup.blocking_package_name("rust"), "rust");
+        // A mise-java document is addressed by platform; the block is on `java`.
+        assert_eq!(
+            RegistryKind::MiseJava.blocking_package_name("java/ga/linux/x86_64"),
+            "java"
+        );
         assert_eq!(
             RegistryKind::Rustup.blocking_package_name("rustup"),
             "rustup"
         );
-        for kind in RegistryKind::ALL
-            .iter()
-            .filter(|k| !matches!(k, RegistryKind::Sdkman | RegistryKind::Rustup))
-        {
+        for kind in RegistryKind::ALL.iter().filter(|k| {
+            !matches!(
+                k,
+                RegistryKind::Sdkman | RegistryKind::Rustup | RegistryKind::MiseJava
+            )
+        }) {
             assert_eq!(kind.blocking_package_name("a/b?c"), "a/b?c", "{kind}");
         }
     }

@@ -130,6 +130,10 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // mise installs a Go release through it with egress denied; the air gap
     // serves held archives and their `.sha256` by path (RFC 0048 §6.5).
     ("godist", Live::ClosedWorld("godist"), AirGap::Case),
+    // mise installs a JDK through it with egress denied, and a blocked one is
+    // refused; the air gap serves held archives by their vendor URL and
+    // composes the document from their rows (RFC 0048 §6.5).
+    ("mise-java", Live::ClosedWorld("mise-java"), AirGap::Case),
     ("sdkman", Live::ClosedWorld("sdkman"), AirGap::Case),
     ("rustup", Live::Suite("tests/heavy/rustup.sh"), AirGap::Case),
     // Two suites drive this kind and the closed world is the one that counts
@@ -237,6 +241,17 @@ fn every_live_claim_names_a_phase_that_exists() {
             ),
         }
     }
+
+    // Phases that prove a client's routes across kinds rather than one kind:
+    // `mise-core` drives mise's core toolchains through nodedist, rustup and
+    // the generic presets at once (RFC 0048 §6.P), each already claimed above.
+    claimed.insert("mise-core".to_owned());
+    // `mise-http` drives RFC 0047's `generic` presets with mise; `generic` is
+    // claimed above.
+    claimed.insert("mise-http".to_owned());
+    // `mise-backends` drives conda and nuget through mise (RFC 0047 phase 3);
+    // both kinds are claimed above.
+    claimed.insert("mise-backends".to_owned());
 
     // And the other direction: a phase nobody claims is a phase whose kind was
     // removed, or a row that was never written.

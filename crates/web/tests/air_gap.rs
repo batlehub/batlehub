@@ -2278,6 +2278,84 @@ async fn a_held_go_release_serves_its_archive_its_sha256_and_a_composed_document
     assert!(refs.ends_with("\trefs/tags/go1.25.4\n"), "{refs}");
 }
 
+/// `mise-java` (RFC 0048 §6.5, phase 3): a lock-driven install asks for the
+/// archive by its vendor URL, which the disconnected instance answers from the
+/// held archive with that key — no document, no upstream. The document is
+/// composed from the held archives' rows (carried as facts in the bundle), for
+/// the platform asked only, so `mise ls-remote java` lists what the bundle
+/// carries and a Linux JDK is never offered to a Mac.
+#[actix_web::test]
+async fn a_held_jdk_is_served_by_url_and_listed_for_its_platform_only() {
+    const LINUX: &str =
+        "github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5+11/linux.tar.gz";
+    const MAC: &str = "cdn.azul.com/zulu/bin/zulu21-macosx_aarch64.tar.gz";
+    let facts = |url: &str, vendor: &str, version: &str, platform: &str| {
+        serde_json::json!({"mise-java": {
+            "platforms": [platform],
+            "row": {"vendor": vendor, "version": version, "image_type": "jdk",
+                    "jvm_impl": "hotspot", "url": format!("https://{url}"),
+                    "checksum": "sha256:ab", "created_at": "2025-01-01T00:00:00"},
+        }})
+    };
+    let (app, _lab) = holding_lab_extra(
+        "mise-java",
+        true,
+        &[
+            (
+                "java",
+                "temurin-21.0.5+11.0.LTS",
+                Some(LINUX),
+                facts(LINUX, "temurin", "21.0.5+11.0.LTS", "ga/linux/x86_64"),
+            ),
+            (
+                "java",
+                "zulu-21.38.21",
+                Some(MAC),
+                facts(MAC, "zulu", "21.38.21", "ga/macosx/aarch64"),
+            ),
+        ],
+    )
+    .await;
+
+    // The lock's URL, `+` escaped as the vendor spells it.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/mise-java/dl/{}", LINUX.replace('+', "%2B")),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "the held archive is served by its URL");
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/mise-java/dl/cdn.azul.com/zulu/bin/not-held.tar.gz"),
+    )
+    .await;
+    assert_eq!(resp.status(), 503, "an archive not held is a gap, answered");
+
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/mise-java/jvm/ga/linux/x86_64.json"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    let rows = body.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["url"], format!("https://{LINUX}"));
+    assert_eq!(rows[0]["vendor"], "temurin");
+
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/mise-java/jvm/ga/windows/x86_64.json"),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        503,
+        "nothing held for Windows: nothing to list"
+    );
+}
+
 /// SDKMAN's listing coordinate carries the **platform** — `java/linuxx64` — and
 /// the held set is filtered by it. That is the detail worth a case: a composed
 /// list that ignored the platform would offer a linux JDK to a mac, and the

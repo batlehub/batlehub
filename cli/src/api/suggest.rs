@@ -54,6 +54,11 @@ pub struct SuggestedRegistry {
     /// `[registries.cache] warm_packages` entries, `name@version`, from the
     /// files that pin a toolchain version (`.nvmrc`, `.sdkmanrc`).
     pub warm_packages: Vec<String>,
+    /// `revalidate` globs: the preset's mutable documents (RFC 0048 §15 Q12).
+    pub revalidate: Vec<String>,
+    /// A per-registry `max_artifact_size_bytes`, for a preset whose artifacts
+    /// outgrow the instance limit (RFC 0048 §15 Q11).
+    pub max_artifact_size_bytes: Option<u64>,
 }
 
 impl SuggestedRegistry {
@@ -91,7 +96,8 @@ struct GenericPreset {
     name: &'static str,
     upstream: &'static str,
     path_allow: &'static [&'static str],
-    client_env: &'static [(&'static str, &'static str)],
+    revalidate: &'static [&'static str],
+    max_artifact_size_bytes: Option<u64>,
 }
 
 /// Hosts that speak a package protocol BatleHub has a typed adapter for. The
@@ -102,6 +108,10 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("api.github.com", "github", "github"),
     // mise's versions host (RFC 0043): every registry tool is listed through it.
     ("mise-versions.jdx.dev", "mise-versions", "mise-versions"),
+    // mise's JVM catalogue (RFC 0048 §6.3). Its archives live on vendor hosts,
+    // `github.com` among them, so a `core:java` lock entry is matched by its
+    // backend, not by its URL (`JAVA_BACKEND`).
+    ("mise-java.jdx.dev", "mise-java", "jdk"),
     ("github.com", "github", "github"),
     ("codeload.github.com", "github", "github"),
     ("raw.githubusercontent.com", "github", "github"),
@@ -120,6 +130,10 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     // Keyed by path too: the rest of the host is Android's, which `godist`
     // cannot serve (RFC 0047 §6.1).
     ("dl.google.com/go/", "godist", "godist"),
+    // The two toolchains with a typed kind of their own (RFC 0048 §6.2): a
+    // block on a Node release or a Rust toolchain holds only through these.
+    ("nodejs.org/dist/", "nodedist", "node"),
+    ("static.rust-lang.org", "rustup", "rust"),
     ("rubygems.org", "rubygems", "rubygems"),
     ("repo1.maven.org", "maven", "maven"),
     ("registry.terraform.io", "terraform", "terraform"),
@@ -152,39 +166,232 @@ fn typed_host(
 }
 
 /// Hosts with no package protocol at all, for which we know a sensible upstream
-/// root, allowlist and client mirror variable.
-fn generic_preset(host: &str) -> Option<GenericPreset> {
+/// root, allowlist and client mirror variable. Keyed by host and, where a host
+/// carries more than one tree, the URL path (RFC 0047 §6.1: `dl.google.com`).
+fn generic_preset(host: &str, path: &str) -> Option<GenericPreset> {
+    // Every `path_allow` starts with a literal product segment, so a preset
+    // never fronts the whole host (RFC 0047 §7.1 T2). `revalidate` lists the
+    // documents a client re-reads for news; everything else is immutable.
+    // Globs are matched with `*` inside one segment (`path_proxy.rs`).
     let preset = match host {
-        "nodejs.org" => GenericPreset {
-            name: "node-dist",
-            upstream: "https://nodejs.org/dist",
-            path_allow: &["v*/**"],
-            client_env: &[("NODEJS_ORG_MIRROR", "{proxy}")],
-        },
-        "static.rust-lang.org" => GenericPreset {
-            name: "rust-dist",
-            upstream: "https://static.rust-lang.org",
-            path_allow: &["dist/**", "rustup/**"],
-            client_env: &[
-                ("RUSTUP_DIST_SERVER", "{proxy}"),
-                ("RUSTUP_UPDATE_ROOT", "{proxy}/rustup"),
+        // aqua `http` (boundary, consul, nomad, packer, terraform,
+        // terraform-ls, vault, waypoint) and mise `http:` (nomad-pack,
+        // sentinel, tfc-agent), whose version list is `{product}/index.json`.
+        "releases.hashicorp.com" => GenericPreset {
+            name: "hashicorp-releases",
+            upstream: "https://releases.hashicorp.com",
+            path_allow: &[
+                "boundary/**",
+                "consul/**",
+                "nomad/**",
+                "nomad-pack/**",
+                "packer/**",
+                "sentinel/**",
+                "terraform/**",
+                "terraform-ls/**",
+                "tfc-agent/**",
+                "vault/**",
+                "waypoint/**",
             ],
+            revalidate: &[
+                "nomad-pack/index.json",
+                "sentinel/index.json",
+                "tfc-agent/index.json",
+            ],
+            max_artifact_size_bytes: None,
+        },
+        // The release dates of the three `http:` tools (`version_date_url`).
+        // The generic route drops the query, so mise's `?limit=20&after=`
+        // paging reads the first page (10 releases) and stops.
+        "api.releases.hashicorp.com" => GenericPreset {
+            name: "hashicorp-api",
+            upstream: "https://api.releases.hashicorp.com/v1/releases",
+            path_allow: &["nomad-pack", "sentinel", "tfc-agent"],
+            revalidate: &["nomad-pack", "sentinel", "tfc-agent"],
+            max_artifact_size_bytes: None,
+        },
+        // aqua kubectl and kubectl-convert: `{v}/bin/{os}/{arch}/kubectl*`,
+        // with `.sha256`, `.sig` and `.cert` beside it.
+        "dl.k8s.io" => GenericPreset {
+            name: "k8s-dl",
+            upstream: "https://dl.k8s.io",
+            path_allow: &["v1.*/bin/*/*/kubectl*", "release/stable.txt"],
+            revalidate: &["release/stable.txt"],
+            max_artifact_size_bytes: None,
+        },
+        // aqua maven, spark, tomcat; vfox ant, groovy.
+        "archive.apache.org" => GenericPreset {
+            name: "apache-archive",
+            upstream: "https://archive.apache.org/dist",
+            path_allow: &["ant/**", "groovy/**", "maven/**", "spark/**", "tomcat/**"],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
+        },
+        // mise `http:` oc and openshift-install, and their `sha256sum.txt`.
+        "mirror.openshift.com" => GenericPreset {
+            name: "openshift-mirror",
+            upstream: "https://mirror.openshift.com/pub/openshift-v4/clients",
+            path_allow: &[
+                "ocp/*/openshift-client-*",
+                "ocp/*/openshift-install-*",
+                "ocp/*/sha256sum.txt",
+            ],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
+        },
+        // mise `http:` julia: `{os}/{arch}/{minor}/julia-{v}-…` and the
+        // `versions.json` it lists and checksums from.
+        "julialang-s3.julialang.org" => GenericPreset {
+            name: "julia-dist",
+            upstream: "https://julialang-s3.julialang.org/bin",
+            path_allow: &["versions.json", "linux/**", "mac/**", "winnt/**"],
+            revalidate: &["versions.json"],
+            max_artifact_size_bytes: None,
+        },
+        // aqua docker-cli: `{os}/static/stable/{arch}/docker-{v}.{tgz,zip}`.
+        "download.docker.com" => GenericPreset {
+            name: "docker-dl",
+            upstream: "https://download.docker.com",
+            path_allow: &[
+                "linux/static/stable/**",
+                "mac/static/stable/**",
+                "win/static/stable/**",
+            ],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
+        },
+        // vfox android-sdk (command-line tools from `repository2-3.xml`),
+        // vfox aapt2 (Google's Maven) and mise `http:` android-cli. `/go/` on
+        // the same host is the typed `godist` (`TYPED_HOSTS`).
+        "dl.google.com" if path.starts_with("android/") => GenericPreset {
+            name: "android-dl",
+            upstream: "https://dl.google.com/android",
+            path_allow: &[
+                "cli/**",
+                "maven2/com/android/tools/build/aapt2/**",
+                "maven2/com/android/tools/build/group-index.xml",
+                "repository/commandlinetools-*",
+                "repository/repository2-3.xml",
+            ],
+            revalidate: &[
+                "cli/latest/debian/dists/stable/Release",
+                "cli/latest/debian/dists/stable/main/binary-amd64/Packages",
+                "maven2/com/android/tools/build/group-index.xml",
+                "repository/repository2-3.xml",
+            ],
+            max_artifact_size_bytes: None,
         },
         "get.helm.sh" => GenericPreset {
             name: "helm-bin",
             upstream: "https://get.helm.sh",
             path_allow: &["helm-v*"],
-            client_env: &[],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
         },
         "binaries.sonarsource.com" => GenericPreset {
             name: "sonar-binaries",
             upstream: "https://binaries.sonarsource.com",
             path_allow: &["Distribution/**"],
-            client_env: &[],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
+        },
+        // mise `core:deno`: `release/v{v}/deno-{triple}.zip` and its `.sha256sum`.
+        "dl.deno.land" => GenericPreset {
+            name: "deno-dl",
+            upstream: "https://dl.deno.land",
+            path_allow: &["release/**"],
+            revalidate: &[],
+            max_artifact_size_bytes: None,
+        },
+        // mise `core:zig`: `download/{v}/…` releases, `builds/…` nightlies,
+        // each with a `.minisig`; mise reads the mirror list even with the
+        // mirrors off, so it is served too.
+        "ziglang.org" => GenericPreset {
+            name: "zig-dl",
+            upstream: "https://ziglang.org",
+            path_allow: &["builds/**", "download/**"],
+            revalidate: &["download/community-mirrors.txt", "download/index.json"],
+            max_artifact_size_bytes: None,
+        },
+        // mise `core:elixir` and Linux `core:erlang`, each checked against its
+        // directory's `builds.txt`.
+        "builds.hex.pm" => GenericPreset {
+            name: "hex-builds",
+            upstream: "https://builds.hex.pm/builds",
+            path_allow: &["elixir/**", "otp/**"],
+            revalidate: &["elixir/builds.txt", "otp/*/*/builds.txt"],
+            max_artifact_size_bytes: None,
+        },
+        // mise `core:swift`: `swift-{v}-release/{platform}/…` plus `.sig`. The
+        // directory is per patch release, so the glob, not a list, holds it.
+        "download.swift.org" => GenericPreset {
+            name: "swift-dl",
+            upstream: "https://download.swift.org",
+            path_allow: &["swift-*-release/**"],
+            revalidate: &[],
+            // Measured 2026-11-14: 1 124 819 616 B (6.4.2 Linux), 1 591 283 484 B
+            // (macOS pkg), against the 500 MiB instance default. Windows'
+            // 2.1 GB installer stays refused.
+            max_artifact_size_bytes: Some(1_700_000_000),
+        },
+        // The release index mise reads to pick a Linux build (`swift.rs:543`):
+        // one document, so the upstream is its directory, not the website.
+        "www.swift.org" => GenericPreset {
+            name: "swift-api",
+            upstream: "https://www.swift.org/api/v1/install",
+            path_allow: &["releases.json"],
+            revalidate: &["releases.json"],
+            max_artifact_size_bytes: None,
+        },
+        // PyPy, a `core:python` flavour (`python.rs:38`): one flat directory
+        // of `pypy{series}-v{v}-{platform}` archives beside `versions.json`.
+        "downloads.python.org" => GenericPreset {
+            name: "pypy-dl",
+            upstream: "https://downloads.python.org/pypy",
+            path_allow: &["pypy2.7-v*", "pypy3.*-v*", "versions.json"],
+            revalidate: &["versions.json"],
+            max_artifact_size_bytes: None,
         },
         _ => return None,
     };
     Some(preset)
+}
+
+/// Hosts whose preset the CLI no longer writes because a typed kind serves
+/// them (RFC 0048 §6.2), with the upstream that preset had. An estate that
+/// already declared such a `generic` mirror still plans through it.
+const RETIRED_GENERIC: &[(&str, &str)] = &[
+    ("nodejs.org", "https://nodejs.org/dist"),
+    ("static.rust-lang.org", "https://static.rust-lang.org"),
+];
+
+/// The upstream a `generic` mirror of `host` (under `path`) is assumed to have.
+fn generic_upstream(host: &str, path: &str) -> Option<&'static str> {
+    generic_preset(host, path).map(|p| p.upstream).or_else(|| {
+        RETIRED_GENERIC
+            .iter()
+            .find(|(h, _)| *h == host)
+            .map(|(_, u)| *u)
+    })
+}
+
+/// The client variables a typed toolchain kind is pointed at its registry
+/// with, `{proxy}` standing for the registry's proxy base.
+fn typed_client_env(registry_type: &str) -> Vec<(String, String)> {
+    match registry_type {
+        "nodedist" => NODEDIST_VARS
+            .iter()
+            .map(|k| ((*k).to_owned(), "{proxy}".to_owned()))
+            .collect(),
+        "rustup" => vec![
+            ("RUSTUP_DIST_SERVER".to_owned(), "{proxy}/rustup".to_owned()),
+            (
+                "RUSTUP_UPDATE_ROOT".to_owned(),
+                "{proxy}/rustup/rustup".to_owned(),
+            ),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 /// Object-storage hosts where the first path segment is a tenant bucket. The
@@ -194,6 +401,17 @@ const BUCKET_HOSTS: &[&str] = &[
     "storage.googleapis.com",
     "s3.amazonaws.com",
     "objects.githubusercontent.com",
+];
+
+/// The version lists and release manifests mise 2026.11.3's registry names on
+/// a bucket host (`registry/*.toml`). A bucket mirror admits, and revalidates,
+/// the ones under its own bucket. dart's (the GCS JSON API, another path) and
+/// grok's (`x.ai`) are not under theirs, so they are not here.
+const BUCKET_LIST_DOCUMENTS: &[&str] = &[
+    "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest",
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json",
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_macos.json",
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json",
 ];
 
 /// mise backend prefixes that imply a registry even when the lock records no
@@ -219,11 +437,13 @@ pub(crate) fn proxy_path_for(
     // route is `/proxy/{name}/generic/v24/node.tar.gz`, and every seeded
     // entry 404s — the path-addressed kinds are exactly the ones RFC 0008's
     // toolchain estate leans on.
+    if registry_type == "mise-java" {
+        return mise_java_proxy_path(url, registry_name);
+    }
     let proxy = proxy_base_path(registry_name, registry_type);
     if registry_type == "generic" {
-        let (host, _) = split_url(url)?;
-        let preset = generic_preset(host)?;
-        let upstream = preset.upstream.trim_end_matches('/');
+        let (host, path) = split_url(url)?;
+        let upstream = generic_upstream(host, path)?.trim_end_matches('/');
         let rest = url.strip_prefix(upstream)?.trim_start_matches('/');
         return Some(format!("{proxy}/{rest}"));
     }
@@ -256,19 +476,26 @@ pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> Strin
     }
 }
 
-/// The registry *kind* a host's downloads go through, for RFC 0008's plan.
+/// The registry *kinds* a host's downloads may go through, preferred first,
+/// for RFC 0008's plan.
 ///
 /// Same table the suggester reads, asked a narrower question: planning needs
-/// to know whether *some* configured registry of that kind mirrors the host,
-/// not what a new registry should be called.
-pub(crate) fn registry_kind_for_host(host: &str, path: &str) -> Option<&'static str> {
-    if let Some((_, kind, _)) = typed_host(host, path) {
-        return Some(kind);
-    }
+/// to know whether *some* configured registry of such a kind mirrors the
+/// host, not what a new registry should be called.
+pub(crate) fn registry_kinds_for_host(host: &str, path: &str) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> = typed_host(host, path)
+        .map(|(_, k, _)| *k)
+        .into_iter()
+        .collect();
     // A generic mirror can front any host, so a host with a preset is
     // mirrorable as `generic` — and one without is not mirrorable at all
-    // until an operator writes a registry for it.
-    generic_preset(host).map(|_| "generic")
+    // until an operator writes a registry for it. Node and Rust keep the
+    // `generic` answer behind their typed kind, for the estates that
+    // declared the retired presets.
+    if generic_upstream(host, path).is_some() {
+        kinds.push("generic");
+    }
+    kinds
 }
 
 /// Why a backend cannot come through BatleHub, or `None` when it can.
@@ -302,6 +529,22 @@ pub(crate) fn unsupported_backend_reason(backend: &str) -> Option<String> {
              through BatleHub"
         ));
     }
+    if let Some(reason) = core_refusal(backend) {
+        return Some(format!("{backend}: {reason}"));
+    }
+    // Called for a lock entry with no URL: these four record one whenever
+    // they install a precompiled build, so none means mise compiles.
+    if let Some(tool) = ["core:node", "core:python", "core:ruby", "core:erlang"]
+        .into_iter()
+        .find(|b| *b == backend)
+        .and_then(|b| b.strip_prefix("core:"))
+    {
+        return Some(format!(
+            "{backend}: the lock records no download URL, so mise compiles it \
+             ({tool}.compile) with tools it clones and runs as subprocesses, which no rewrite \
+             rule reaches; run `mise lock` if this install is precompiled"
+        ));
+    }
     if backend.starts_with("core:") {
         // `core:*` downloads from a fixed host, which the URL rules cover
         // when a registry fronts it — and `unmirrored_hosts` says so when
@@ -321,7 +564,6 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     ("pypi:", "pypi", "pypi"),
     ("npm:", "npm", "npm"),
     ("go:", "goproxy", "go"),
-    ("core:go", "godist", "godist"),
     ("gem:", "rubygems", "rubygems"),
     // mise drives rattler in-process, so this one needs the URL rule below too.
     ("conda:", "conda", "conda"),
@@ -334,6 +576,56 @@ const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     ("dotnet:", "nuget", "nuget"),
     ("packslip:github.com/", "github", "github"),
 ];
+
+/// Where each `core:` toolchain downloads from, for a lock entry that records
+/// no URL (`core:rust` and `core:swift` never do) or a `mise.toml` with no
+/// lock: resolved through [`registry_for_url`] like a locked URL (RFC 0048
+/// §4.2). Absent: `core:python`, `core:bun` and `core:ruby` resolve through
+/// their locked GitHub URLs, `core:dotnet` is refused ([`core_refusal`]).
+const CORE_ROUTES: &[(&str, &[&str])] = &[
+    (JAVA_BACKEND, &["https://mise-java.jdx.dev/jvm/"]),
+    ("core:node", &["https://nodejs.org/dist/"]),
+    ("core:rust", &["https://static.rust-lang.org/"]),
+    ("core:go", &["https://dl.google.com/go/"]),
+    ("core:deno", &["https://dl.deno.land/release/"]),
+    ("core:zig", &["https://ziglang.org/download/"]),
+    ("core:elixir", &["https://builds.hex.pm/builds/elixir/"]),
+    // Linux; a macOS lock names `erlef/otp_builds` on GitHub by URL.
+    ("core:erlang", &["https://builds.hex.pm/builds/otp/"]),
+    (
+        "core:swift",
+        &[
+            "https://download.swift.org/",
+            "https://www.swift.org/api/v1/install/releases.json",
+        ],
+    ),
+];
+
+/// mise's Java backend. Every URL its lock records is a vendor host's —
+/// `github.com/adoptium/…` included — and every one of them goes through the
+/// `mise-java` kind, which is the only place a JDK can be blocked (RFC 0048
+/// §15 Q1).
+pub(crate) const JAVA_BACKEND: &str = "core:java";
+
+/// A `mise-java` download through the registry: the URL minus its scheme
+/// under `dl/` (RFC 0048 §4.4).
+pub(crate) fn mise_java_proxy_path(url: &str, registry_name: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    Some(format!(
+        "{}/dl/{rest}",
+        proxy_base_path(registry_name, "mise-java")
+    ))
+}
+
+/// Why a `core:` toolchain cannot come through BatleHub at all.
+fn core_refusal(backend: &str) -> Option<&'static str> {
+    // `dotnet-install.sh` hard-codes its feeds and takes them only from
+    // `--azure-feed`, which mise does not pass (`dotnet.rs:389-405`).
+    (backend == "core:dotnet").then_some(
+        "mise runs dotnet-install.sh, whose feed mise does not let you set; no rewrite rule \
+         reaches it",
+    )
+}
 
 /// Backends whose registry is not a prefix of the name: `packslip:{owner}/{repo}`
 /// is GitHub (no dot in the first segment, so not a host), and `spm:` is
@@ -390,12 +682,20 @@ pub(crate) fn vfox_subprocess_note(backend: &str) -> Option<String> {
 /// The note for a backend the plan resolved without a URL: a `vfox:` plugin
 /// downloads over HTTP once the lock names the URL.
 pub(crate) fn lockless_backend_note(backend: &str) -> Option<String> {
+    if backend.starts_with("dotnet:") {
+        return Some(format!("{backend}: {DOTNET_INSTALL_NOTE}"));
+    }
     backend.starts_with("vfox:").then(|| {
         format!(
             "{backend}: built into mise, downloads over HTTP; run `mise lock` so the plan knows the URL"
         )
     })
 }
+
+/// `dotnet:`'s install is a subprocess outside mise's rewriter (RFC 0047 T7):
+/// only the version list follows `dotnet.registry_url`.
+const DOTNET_INSTALL_NOTE: &str = "installed by `dotnet tool install`, which reads NuGet.config, \
+     not mise; run `batlehub-cli setup apply --only nuget` too";
 
 /// The caveat a lock-less suggestion carries above its registry.
 fn backend_suggestion_note(backend: &str) -> Option<String> {
@@ -405,6 +705,9 @@ fn backend_suggestion_note(backend: &str) -> Option<String> {
              run `mise lock` to see which."
                 .to_owned(),
         );
+    }
+    if backend.starts_with("dotnet:") {
+        return Some(format!("{DOTNET_INSTALL_NOTE}."));
     }
     if backend.starts_with("spm:") {
         return Some(
@@ -434,6 +737,8 @@ fn merge_new<T: PartialEq>(into: &mut Vec<T>, incoming: impl Iterator<Item = T>)
 #[derive(Default)]
 struct Accumulator {
     by_name: BTreeMap<String, SuggestedRegistry>,
+    /// `tool (backend) — reason` for each tool no registry can route.
+    unroutable: Vec<String>,
 }
 
 impl Accumulator {
@@ -447,9 +752,24 @@ impl Accumulator {
         merge_new(&mut existing.upstreams, reg.upstreams.drain(..));
         merge_new(&mut existing.client_env, reg.client_env.drain(..));
         merge_new(&mut existing.warm_packages, reg.warm_packages.drain(..));
+        merge_new(&mut existing.revalidate, reg.revalidate.drain(..));
+        existing.max_artifact_size_bytes = existing
+            .max_artifact_size_bytes
+            .or(reg.max_artifact_size_bytes);
         if existing.note.is_none() {
             existing.note = reg.note.take();
         }
+    }
+
+    fn refuse(&mut self, tool: &str, backend: &str) -> bool {
+        let Some(reason) = core_refusal(backend) else {
+            return false;
+        };
+        let line = format!("{tool} ({backend}) — {reason}");
+        if !self.unroutable.contains(&line) {
+            self.unroutable.push(line);
+        }
+        true
     }
 
     fn finish(self) -> Vec<SuggestedRegistry> {
@@ -472,7 +792,14 @@ impl Accumulator {
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Scan `root` and return the registries the project's downloads imply.
+#[cfg(test)]
 pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
+    suggest(root, depth).0
+}
+
+/// The registries `root`'s downloads imply, and the tools no registry can
+/// route, each as `tool (backend) — reason`.
+pub fn suggest(root: &Path, depth: usize) -> (Vec<SuggestedRegistry>, Vec<String>) {
     let mut acc = Accumulator::default();
 
     let lock = root.join("mise.lock");
@@ -500,7 +827,8 @@ pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
     collect_from_helm_chart(root, &mut acc);
     collect_from_flake(root, &mut acc);
 
-    acc.finish()
+    let unroutable = std::mem::take(&mut acc.unroutable);
+    (acc.finish(), unroutable)
 }
 
 // ── .nvmrc and .sdkmanrc ──────────────────────────────────────────────────────
@@ -556,11 +884,10 @@ fn registry_for_nvmrc(content: &str) -> SuggestedRegistry {
         upstreams: Vec::new(),
         path_allow: Vec::new(),
         sources: vec![".nvmrc".to_owned()],
-        client_env: NODEDIST_VARS
-            .iter()
-            .map(|k| ((*k).to_owned(), "{proxy}".to_owned()))
-            .collect(),
+        client_env: typed_client_env("nodedist"),
         warm_packages,
+        revalidate: Vec::new(),
+        max_artifact_size_bytes: None,
         note,
     }
 }
@@ -589,6 +916,8 @@ fn registry_for_sdkmanrc(content: &str) -> SuggestedRegistry {
             ("SDKMAN_BROKER_API".to_owned(), "{proxy}/broker".to_owned()),
         ],
         warm_packages,
+        revalidate: Vec::new(),
+        max_artifact_size_bytes: None,
         note: None,
     }
 }
@@ -689,6 +1018,8 @@ fn collect_from_ansible_files(root: &Path, acc: &mut Accumulator) {
             ),
         ],
         warm_packages: warm,
+        revalidate: Vec::new(),
+        max_artifact_size_bytes: None,
         // `roles` is written out rather than left to the default, so the egress
         // to github.com it implies is a choice visible in the file the operator
         // commits (RFC 0031 decision 9).
@@ -788,6 +1119,8 @@ fn collect_from_helm_chart(root: &Path, acc: &mut Accumulator) {
             // environment variable for a repository URL.
             client_env: Vec::new(),
             warm_packages: pins,
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: note.clone(),
         });
     }
@@ -865,6 +1198,8 @@ fn collect_from_flake(root: &Path, acc: &mut Accumulator) {
         // that is what is suggested.
         client_env: vec![("NIX_CONFIG".to_owned(), "substituters = {proxy}".to_owned())],
         warm_packages: Vec::new(),
+        revalidate: Vec::new(),
+        max_artifact_size_bytes: None,
         note: Some(
             "a flake names inputs, not store paths, so nothing can be warmed from it — the \
              paths a build substitutes are the output of an evaluation. Pre-fetch a closure \
@@ -1028,6 +1363,16 @@ fn collect_from_mise_lock_entry(
     source: &str,
     acc: &mut Accumulator,
 ) {
+    let backend = table
+        .get("backend")
+        .and_then(|b| b.as_str())
+        .unwrap_or(tool_name);
+    if backend == JAVA_BACKEND {
+        for reg in registry_for_backend(backend, source) {
+            acc.add(reg);
+        }
+        return;
+    }
     let mut saw_url = false;
     let subprocess = table
         .get("backend")
@@ -1051,12 +1396,10 @@ fn collect_from_mise_lock_entry(
     }
     // No platform block (pure-source backends like `cargo:` / `pipx:`):
     // fall back to the backend prefix.
-    let backend = table
-        .get("backend")
-        .and_then(|b| b.as_str())
-        .unwrap_or(tool_name);
-    if let Some(reg) = registry_for_backend(backend, source) {
-        acc.add(reg);
+    if !acc.refuse(tool_name, backend) {
+        for reg in registry_for_backend(backend, source) {
+            acc.add(reg);
+        }
     }
 }
 
@@ -1065,33 +1408,44 @@ fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
     let (host, path) = split_url(url)?;
 
     if let Some((_, registry_type, name)) = typed_host(host, path) {
+        // A conda registry is one channel, the URL's first segment: a
+        // bioconda URL gets a registry of its own, not conda-forge's.
+        let channel = (*registry_type == "conda")
+            .then(|| path.split('/').next().filter(|c| !c.is_empty()))
+            .flatten();
         return Some(SuggestedRegistry {
-            name: (*name).to_owned(),
+            name: match channel {
+                Some(c) if c != "conda-forge" => format!("conda-{}", slug_from_bucket(c)),
+                _ => (*name).to_owned(),
+            },
             registry_type: (*registry_type).to_owned(),
-            upstreams: Vec::new(),
+            upstreams: channel
+                .map(|c| vec![format!("https://{host}/{c}")])
+                .unwrap_or_default(),
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
-            client_env: Vec::new(),
+            client_env: typed_client_env(registry_type),
             warm_packages: Vec::new(),
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: None,
         });
     }
 
-    if let Some(preset) = generic_preset(host) {
-        // The preset upstream may include a path prefix (e.g. `/dist`, `/go`);
+    if let Some(preset) = generic_preset(host, path) {
+        // The preset upstream may include a path prefix (e.g. `/builds`);
         // the allowlist is relative to it, so the observed path is not reused.
+        let owned = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect();
         return Some(SuggestedRegistry {
             name: preset.name.to_owned(),
             registry_type: "generic".to_owned(),
             upstreams: vec![preset.upstream.to_owned()],
-            path_allow: preset.path_allow.iter().map(|s| (*s).to_owned()).collect(),
+            path_allow: owned(preset.path_allow),
             sources: vec![source.to_owned()],
-            client_env: preset
-                .client_env
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
+            client_env: Vec::new(),
             warm_packages: Vec::new(),
+            revalidate: owned(preset.revalidate),
+            max_artifact_size_bytes: preset.max_artifact_size_bytes,
             note: None,
         });
     }
@@ -1103,15 +1457,30 @@ fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
 /// (plus the bucket segment on object-storage hosts) and the allowlist is the
 /// single exact path observed — narrow by construction, since we have no basis
 /// for guessing which parts of it are version components.
+///
+/// A bucket is one tenant's, so its allowlist is widened to the observed
+/// file's directory (the checksum beside it) plus the version lists of
+/// [`BUCKET_LIST_DOCUMENTS`] in that same bucket (RFC 0047 §6.1).
 fn generic_from_unknown_url(host: &str, path: &str, source: &str) -> SuggestedRegistry {
     let is_bucket_host = BUCKET_HOSTS.contains(&host);
+    let mut lists: Vec<String> = Vec::new();
     let (upstream, allow_path, name) = if is_bucket_host {
         match path.split_once('/') {
-            Some((bucket, rest)) if !bucket.is_empty() => (
-                format!("https://{host}/{bucket}"),
-                rest.to_owned(),
-                slug_from_bucket(bucket),
-            ),
+            Some((bucket, rest)) if !bucket.is_empty() => {
+                let upstream = format!("https://{host}/{bucket}");
+                // Same host and bucket, or not admitted (T6).
+                let under = format!("{upstream}/");
+                lists = BUCKET_LIST_DOCUMENTS
+                    .iter()
+                    .filter_map(|u| u.strip_prefix(&under))
+                    .map(str::to_owned)
+                    .collect();
+                let dir = match rest.rsplit_once('/') {
+                    Some((dir, _)) => format!("{dir}/*"),
+                    None => "*".to_owned(),
+                };
+                (upstream, dir, slug_from_bucket(bucket))
+            }
             _ => (
                 format!("https://{host}"),
                 path.to_owned(),
@@ -1133,62 +1502,61 @@ fn generic_from_unknown_url(host: &str, path: &str, source: &str) -> SuggestedRe
         path_allow: if allow_path.is_empty() {
             vec!["**".to_owned()]
         } else {
-            vec![allow_path]
+            std::iter::once(allow_path).chain(lists.clone()).collect()
         },
         sources: vec![source.to_owned()],
         client_env: Vec::new(),
         warm_packages: Vec::new(),
-        note: Some(
+        revalidate: lists,
+        max_artifact_size_bytes: None,
+        note: Some(if is_bucket_host {
+            "no preset for this bucket — path_allow lists the locked files' directories; \
+             widen it (or re-run this command) when the pinned version changes"
+                .to_owned()
+        } else {
             "no preset for this host — path_allow lists the exact locked paths; \
              widen it (or re-run this command) when the pinned version changes"
-                .to_owned(),
-        ),
+                .to_owned()
+        }),
     }
 }
 
 /// Map a mise backend string (`"aqua:cli/tool"`, `"cargo:ripgrep"`, `"core:rust"`)
 /// onto a registry, for entries whose lock records no URL.
-fn registry_for_backend(backend: &str, source: &str) -> Option<SuggestedRegistry> {
+fn registry_for_backend(backend: &str, source: &str) -> Vec<SuggestedRegistry> {
     let typed = BACKEND_REGISTRIES
         .iter()
         .find(|(prefix, _, _)| backend.starts_with(prefix))
         .map(|(_, ty, name)| (*ty, *name))
         .or_else(|| predicate_registry(backend).map(|ty| (ty, ty)));
     if let Some((registry_type, name)) = typed {
-        return Some(SuggestedRegistry {
+        return vec![SuggestedRegistry {
             name: name.to_owned(),
             registry_type: registry_type.to_owned(),
-            upstreams: Vec::new(),
+            // mise's default `conda.channel`: the rule is derived from it.
+            upstreams: if registry_type == "conda" {
+                vec![CONDA_FORGE.to_owned()]
+            } else {
+                Vec::new()
+            },
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: Vec::new(),
             warm_packages: Vec::new(),
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: backend_suggestion_note(backend),
-        });
+        }];
     }
-
-    // `core:*` toolchains download from a fixed host, so they resolve to the
-    // same presets the URL path would have produced.
-    let host = match backend {
-        "core:rust" => "static.rust-lang.org",
-        "core:node" => "nodejs.org",
-        _ => return None,
-    };
-    let preset = generic_preset(host)?;
-    Some(SuggestedRegistry {
-        name: preset.name.to_owned(),
-        registry_type: "generic".to_owned(),
-        upstreams: vec![preset.upstream.to_owned()],
-        path_allow: preset.path_allow.iter().map(|s| (*s).to_owned()).collect(),
-        sources: vec![source.to_owned()],
-        client_env: preset
-            .client_env
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect(),
-        warm_packages: Vec::new(),
-        note: None,
-    })
+    // `core:*` toolchains download from fixed hosts, so they resolve to what
+    // the URL path would have produced.
+    CORE_ROUTES
+        .iter()
+        .find(|(b, _)| *b == backend)
+        .map_or(&[][..], |(_, urls)| urls)
+        .iter()
+        .filter_map(|url| registry_for_url(url, source))
+        .collect()
 }
 
 // ── mise.toml ─────────────────────────────────────────────────────────────────
@@ -1210,13 +1578,16 @@ fn collect_from_mise_toml(content: &str, file: &str, acc: &mut Accumulator) {
     let mut saw_bare_tool = false;
     for tool_key in tools.keys() {
         let source = format!("{file}: {tool_key}");
-        if let Some(reg) = registry_for_backend(tool_key, &source) {
-            acc.add(reg);
-            continue;
-        }
-        // A bare name: try it as a `core:` toolchain first.
-        if let Some(reg) = registry_for_backend(&format!("core:{tool_key}"), &source) {
-            acc.add(reg);
+        // As written, then a bare name as a `core:` toolchain.
+        let routed = [tool_key.clone(), format!("core:{tool_key}")]
+            .iter()
+            .any(|backend| {
+                let regs = registry_for_backend(backend, &source);
+                let found = !regs.is_empty() || acc.refuse(tool_key, backend);
+                regs.into_iter().for_each(|r| acc.add(r));
+                found
+            });
+        if routed {
             continue;
         }
         saw_bare_tool = true;
@@ -1228,6 +1599,8 @@ fn collect_from_mise_toml(content: &str, file: &str, acc: &mut Accumulator) {
             sources: vec![source],
             client_env: Vec::new(),
             warm_packages: Vec::new(),
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: None,
         });
     }
@@ -1286,6 +1659,8 @@ fn collect_from_manifests(root: &Path, depth: usize, acc: &mut Accumulator) {
             sources: vec![where_],
             client_env: Vec::new(),
             warm_packages: Vec::new(),
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: None,
         });
     }
@@ -1345,6 +1720,9 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
     })
 }
 
+/// mise's default `conda.channel`, the channel a lock-less `conda:` tool reads.
+const CONDA_FORGE: &str = "https://conda.anaconda.org/conda-forge";
+
 // ── mise url_replacements ─────────────────────────────────────────────────────
 
 /// The curated rules of a registry type: [`mise_wire::typed_rules`], read by
@@ -1370,18 +1748,39 @@ impl SuggestedRegistry {
             (pattern.to_owned(), replacement.replace("{proxy}", &proxy))
         };
 
-        if self.registry_type == "generic" {
-            // A generic mirror is a 1:1 path passthrough, so its rule falls
-            // straight out of the configured upstream.
-            return self
-                .upstreams
+        // generic, conda and mise-java derive their rules from the registry
+        // itself, through the one table the server's wire and `setup` use
+        // (RFC 0047/0048 phase 4); a conda suggestion with no upstream keeps
+        // the typed conda-forge rule below.
+        let derived = match self.registry_type.as_str() {
+            "generic" => Some(RegistryKind::Generic),
+            "conda" if !self.upstreams.is_empty() => Some(RegistryKind::Conda),
+            "mise-java" => Some(RegistryKind::MiseJava),
+            _ => None,
+        };
+        if let Some(kind) = derived {
+            // A suggestion has no configured vendor list: the defaults, as
+            // `setup` writes them (RFC 0048 §4.1).
+            let vendor_hosts: Vec<String> = if kind == RegistryKind::MiseJava {
+                batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let wired = mise_wire::WireRegistry {
+                name: &self.name,
+                kind,
+                upstream: self.upstreams.first().map(String::as_str),
+                upstreams: &self.upstreams,
+                path_routing: true,
+                vendor_hosts: &vendor_hosts,
+            };
+            return mise_wire::select(&[wired], mise_wire::Mode::Classic)
+                .rules
                 .iter()
-                .map(|u| {
-                    resolve(
-                        &format!("^{}/(.+)", regex_escape(u.trim_end_matches('/'))),
-                        "{proxy}/$1",
-                    )
-                })
+                .map(|r| resolve(&r.pattern, &r.replacement))
                 .collect();
         }
         typed_url_replacements(&self.registry_type)
@@ -1481,6 +1880,7 @@ pub fn render_mise_toml(
         push_mise_catch_all(&mut body, server_url);
     }
     push_mise_skipped_note(&mut body, &skipped);
+    push_mise_settings(&mut body, regs, server_url);
 
     let mut full = String::new();
     full.push_str("# Generated by `batlehub-cli registry suggest --mise`.\n");
@@ -1498,6 +1898,80 @@ pub fn render_mise_toml(
     comment_every_line(&full)
 }
 
+/// mise settings a rewrite rule needs beside it, as `(table, key, value, why)`
+/// under `[settings]` with `value` already TOML, from the `generic` upstreams
+/// wired (RFC 0048 §6.2) and the `nuget` registry's proxy base, if one is
+/// chosen (RFC 0047 §6.2). The one place such settings are decided, for
+/// `suggest` and `setup` alike.
+pub(crate) fn mise_settings_for<'a>(
+    generic_upstreams: impl IntoIterator<Item = &'a str>,
+    nuget_base: Option<&str>,
+) -> Vec<(&'static str, &'static str, String, &'static str)> {
+    let mut out = Vec::new();
+    // `dotnet:` lists versions from this service index through mise's own
+    // client (`dotnet.rs`, `nuget_search_url`). A setting, not a rule: a rule
+    // on api.nuget.org would also catch reads that are not mise's.
+    if let Some(base) = nuget_base {
+        out.push((
+            "dotnet",
+            "registry_url",
+            toml_quote(&format!("{base}/nuget/v3/index.json")),
+            "the service index `dotnet:` lists versions from",
+        ));
+    }
+    // mise tries 17 community mirrors before ziglang.org (`zig.rs:151-170`),
+    // so the rule on ziglang.org is reached only once they have all failed.
+    if generic_upstreams
+        .into_iter()
+        .any(|u| u.trim_end_matches('/') == "https://ziglang.org")
+    {
+        out.push((
+            "zig",
+            "use_community_mirrors",
+            "false".to_owned(),
+            "community mirrors are tried before ziglang.org",
+        ));
+    }
+    out
+}
+
+/// What a rule alone does not reach: the settings of [`mise_settings_for`],
+/// mise's own node mirror setting, and rustup's variables under `[env]`.
+fn push_mise_settings(body: &mut String, regs: &[SuggestedRegistry], server_url: &str) {
+    let generic = regs
+        .iter()
+        .filter(|r| r.registry_type == "generic")
+        .flat_map(|r| r.upstreams.iter().map(String::as_str));
+    let nuget = regs
+        .iter()
+        .find(|r| r.registry_type == "nuget")
+        .map(|r| r.proxy_url(server_url));
+    for (table, key, value, why) in mise_settings_for(generic, nuget.as_deref()) {
+        body.push_str(&format!(
+            "\n[settings.{table}]\n{key} = {value}   # {why}\n"
+        ));
+    }
+    if let Some(node) = regs.iter().find(|r| r.registry_type == "nodedist") {
+        // mise `Url::join`s onto it: without the slash the last segment is lost.
+        let url = format!("{}/", node.proxy_url(server_url));
+        body.push_str(&format!(
+            "\n[settings.node]\nmirror_url = {}\n",
+            toml_quote(&url)
+        ));
+    }
+    let env: Vec<_> = regs
+        .iter()
+        .filter(|r| r.registry_type == "rustup")
+        .flat_map(|r| r.resolved_env(server_url))
+        .collect();
+    if !env.is_empty() {
+        body.push_str("\n# rustup is a subprocess: it reads these, not url_replacements.\n[env]\n");
+        for (k, v) in env {
+            body.push_str(&format!("{k} = {}\n", toml_quote(&v)));
+        }
+    }
+}
+
 /// One block of rules per registry mise can rewrite for. Returns the registry
 /// types it could not, for the trailing note.
 fn push_mise_registry_rules<'a>(
@@ -1509,7 +1983,8 @@ fn push_mise_registry_rules<'a>(
     let mut skipped: Vec<&str> = Vec::new();
     for reg in regs {
         let rules = reg.mise_url_replacements(server_url);
-        if rules.is_empty() {
+        // rustup is a subprocess too, but mise hands it the `[env]` below.
+        if rules.is_empty() && reg.registry_type != "rustup" {
             if !skipped.contains(&reg.registry_type.as_str()) {
                 skipped.push(&reg.registry_type);
             }
@@ -1611,7 +2086,7 @@ fn comment_every_line(text: &str) -> String {
 
 /// Render the suggestions as `[[registries]]` blocks ready to paste into
 /// `config.toml`.
-pub fn render_toml(regs: &[SuggestedRegistry]) -> String {
+pub fn render_toml(regs: &[SuggestedRegistry], unroutable: &[String]) -> String {
     let mut out = String::new();
     out.push_str("# Generated by `batlehub-cli registry suggest`.\n");
     out.push_str("# Review before applying — names are suggestions, and RBAC below is a\n");
@@ -1619,6 +2094,17 @@ pub fn render_toml(regs: &[SuggestedRegistry]) -> String {
     for reg in regs {
         out.push('\n');
         push_registry_block(&mut out, reg);
+    }
+    // Where the operator is already reading, not only in `mise plan`.
+    if !unroutable.is_empty() {
+        out.push_str("\n# Not routable through BatleHub:\n");
+        for line in unroutable {
+            for (i, l) in wrap_comment(line).iter().enumerate() {
+                out.push_str(if i == 0 { "#   " } else { "#     " });
+                out.push_str(l);
+                out.push('\n');
+            }
+        }
     }
     out
 }
@@ -1648,12 +2134,28 @@ fn push_registry_block(out: &mut String, reg: &SuggestedRegistry) {
                 .join(", ")
         ));
     }
-    if !reg.path_allow.is_empty() {
-        out.push_str("path_allow = [\n");
-        for p in &reg.path_allow {
+    for (key, list) in [
+        ("path_allow", &reg.path_allow),
+        ("revalidate", &reg.revalidate),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        if key == "revalidate" {
+            out.push_str("# re-read upstream on every request, served stale if it fails\n");
+        }
+        out.push_str(&format!("{key:<10} = [\n"));
+        for p in list {
             out.push_str(&format!("  \"{p}\",\n"));
         }
         out.push_str("]\n");
+    }
+    if let Some(limit) = reg.max_artifact_size_bytes {
+        out.push_str(&format!(
+            "# Above [limits] max_artifact_size_bytes (500 MiB by default); this\n\
+             # registry alone is raised.\n\
+             max_artifact_size_bytes = {limit}\n"
+        ));
     }
     out.push_str("\n[registries.rbac]\n");
     // The toolchain kinds read their listings with a verb of their own.
@@ -1790,18 +2292,355 @@ mod tests {
     #[test]
     fn preset_host_maps_to_a_generic_mirror_with_version_agnostic_globs() {
         let reg = registry_for_url(
-            "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
-            "mise.lock: node",
+            "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz",
+            "mise.lock: zig",
         )
         .unwrap();
         assert_eq!(reg.registry_type, "generic");
-        assert_eq!(reg.name, "node-dist");
-        assert_eq!(reg.upstreams, vec!["https://nodejs.org/dist"]);
-        assert_eq!(reg.path_allow, vec!["v*/**"]);
+        assert_eq!(reg.name, "zig-dl");
+        assert_eq!(reg.upstreams, vec!["https://ziglang.org"]);
+        assert_eq!(reg.path_allow, vec!["builds/**", "download/**"]);
         assert_eq!(
-            reg.client_env,
-            vec![("NODEJS_ORG_MIRROR".to_owned(), "{proxy}".to_owned())]
+            reg.revalidate,
+            vec!["download/community-mirrors.txt", "download/index.json"]
         );
+        assert!(reg.client_env.is_empty());
+    }
+
+    /// RFC 0048 §6.2: Node and Rust have typed kinds, so their hosts suggest
+    /// them, with the client variables the deleted presets carried.
+    #[test]
+    fn node_and_rust_hosts_suggest_their_typed_kind() {
+        let node = registry_for_url(
+            "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
+            "s",
+        )
+        .unwrap();
+        assert_eq!(
+            (node.name.as_str(), node.registry_type.as_str()),
+            ("node", "nodedist")
+        );
+        assert!(node.upstreams.is_empty() && node.path_allow.is_empty());
+        assert_eq!(
+            node.resolved_env("https://hub.example.com")[3],
+            (
+                "NODEJS_ORG_MIRROR".to_owned(),
+                "https://hub.example.com/proxy/node/nodedist".to_owned()
+            )
+        );
+        let rust = registry_for_url(
+            "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+            "s",
+        )
+        .unwrap();
+        assert_eq!(rust.registry_type, "rustup");
+        assert_eq!(
+            rust.resolved_env("https://hub.example.com"),
+            [
+                (
+                    "RUSTUP_DIST_SERVER".to_owned(),
+                    "https://hub.example.com/proxy/rust/rustup".to_owned()
+                ),
+                (
+                    "RUSTUP_UPDATE_ROOT".to_owned(),
+                    "https://hub.example.com/proxy/rust/rustup/rustup".to_owned()
+                ),
+            ]
+        );
+        // The typed rule, and a plan path that agrees with it.
+        assert_eq!(
+            node.mise_url_replacements("https://hub.example.com"),
+            [(
+                r"^https://nodejs\.org/dist/(.+)".to_owned(),
+                "https://hub.example.com/proxy/node/nodedist/$1".to_owned()
+            )]
+        );
+        assert_eq!(
+            proxy_path_for(
+                "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
+                "node",
+                "nodedist"
+            )
+            .as_deref(),
+            Some("/proxy/node/nodedist/v24.18.0/node-v24.18.0-linux-x64.tar.gz")
+        );
+        // Either kind plans these hosts, the typed one first.
+        assert_eq!(
+            registry_kinds_for_host("nodejs.org", "dist/v1/x"),
+            ["nodedist", "generic"]
+        );
+        assert_eq!(
+            registry_kinds_for_host("static.rust-lang.org", "dist/x"),
+            ["rustup", "generic"]
+        );
+    }
+
+    /// RFC 0048 §14: every `core:` toolchain of mise 2026.11.3
+    /// (`src/plugins/core/`) has one stated route; a new one is a red test.
+    #[test]
+    fn every_core_toolchain_has_a_stated_route() {
+        let route = |tool: &str| {
+            let backend = format!("core:{tool}");
+            let regs: Vec<String> = registry_for_backend(&backend, "s")
+                .into_iter()
+                .map(|r| format!("{}:{}", r.registry_type, r.name))
+                .collect();
+            (regs, core_refusal(&backend).is_some())
+        };
+        let table: [(&str, &[&str], bool); 13] = [
+            ("node", &["nodedist:node"], false),
+            ("rust", &["rustup:rust"], false),
+            ("go", &["godist:godist"], false),
+            ("deno", &["generic:deno-dl"], false),
+            ("zig", &["generic:zig-dl"], false),
+            ("elixir", &["generic:hex-builds"], false),
+            ("erlang", &["generic:hex-builds"], false),
+            ("swift", &["generic:swift-dl", "generic:swift-api"], false),
+            // Through their locked GitHub URLs.
+            ("python", &[], false),
+            ("bun", &[], false),
+            ("ruby", &[], false),
+            ("java", &["mise-java:jdk"], false),
+            ("dotnet", &[], true),
+        ];
+        for (tool, regs, refused) in table {
+            assert_eq!(
+                route(tool),
+                (regs.iter().map(|s| (*s).to_owned()).collect(), refused),
+                "{tool}"
+            );
+        }
+        let reason = unsupported_backend_reason("core:dotnet").unwrap();
+        assert!(
+            reason.starts_with("core:dotnet: mise runs dotnet-install.sh"),
+            "{reason}"
+        );
+        // No URL for a tool whose precompiled install always records one.
+        assert!(unsupported_backend_reason("core:python")
+            .unwrap()
+            .contains("python.compile"));
+        assert_eq!(unsupported_backend_reason("core:swift"), None);
+        // A macOS erlang lock names GitHub by URL.
+        let mac = registry_for_url(
+            "https://github.com/erlef/otp_builds/releases/download/OTP-28.3/otp-aarch64-apple-darwin.tar.gz",
+            "s",
+        )
+        .unwrap();
+        assert_eq!(mac.registry_type, "github");
+    }
+
+    /// Each preset admits every path mise 2026.11.3 requests (probed
+    /// 2026-11-14) and refuses the host root and other products (RFC 0047
+    /// §7.1 T2), under today's `*`-crosses-`/` globs and RFC 0047's
+    /// `require_literal_separator` alike.
+    #[test]
+    fn presets_admit_what_mise_fetches_and_nothing_else() {
+        let corpus: &[(&str, &[&str], &[&str])] = &[
+            (
+                "ziglang.org",
+                &[
+                    "download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz",
+                    "download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz.minisig",
+                    "download/index.json",
+                    "download/community-mirrors.txt",
+                    "builds/zig-x86_64-linux-0.16.0-dev.1+abc.tar.xz",
+                ],
+                &["", "index.html", "learn/overview/"],
+            ),
+            (
+                "builds.hex.pm",
+                &[
+                    "elixir/v1.18.4-otp-27.zip",
+                    "elixir/builds.txt",
+                    "otp/amd64/ubuntu-24.04/OTP-28.3.tar.gz",
+                    "otp/amd64/ubuntu-24.04/builds.txt",
+                ],
+                &["", "installs/hex-1.csv", "builds.txt"],
+            ),
+            (
+                "dl.deno.land",
+                &[
+                    "release/v2.5.6/deno-x86_64-unknown-linux-gnu.zip",
+                    "release/v2.5.6/deno-x86_64-unknown-linux-gnu.zip.sha256sum",
+                ],
+                &["", "release-latest.txt", "canary/x.zip"],
+            ),
+            (
+                "download.swift.org",
+                &[
+                    "swift-6.2-release/ubuntu2404/swift-6.2-RELEASE/swift-6.2-RELEASE-ubuntu24.04.tar.gz",
+                    "swift-6.4.2-release/ubuntu2404-aarch64/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE-ubuntu24.04-aarch64.tar.gz.sig",
+                ],
+                &["", "development/ubuntu2404/x.tar.gz", "swiftly/linux/swiftly.tar.gz"],
+            ),
+            ("www.swift.org", &["releases.json"], &["", "index.html", "x/releases.json"]),
+            (
+                "downloads.python.org",
+                &[
+                    "versions.json",
+                    "pypy3.11-v7.3.20-linux64.tar.bz2",
+                    "pypy3.12-v7.3.21-aarch64.tar.bz2",
+                    "pypy2.7-v7.3.20-win64.zip",
+                ],
+                &["", "index.html", "ftp/python/3.13.0/Python-3.13.0.tgz"],
+            ),
+            // RFC 0047 phase 2: paths read from mise 2026.11.3's registry, its
+            // aqua registry and its embedded vfox plugins, probed 2026-11-14.
+            (
+                "releases.hashicorp.com",
+                &[
+                    "terraform/1.9.8/terraform_1.9.8_linux_amd64.zip",
+                    "terraform/1.9.8/terraform_1.9.8_SHA256SUMS",
+                    "terraform-ls/0.36.3/terraform-ls_0.36.3_linux_amd64.zip",
+                    "consul/1.20.1/consul_1.20.1_darwin_arm64.zip",
+                    "boundary/0.18.0/boundary_0.18.0_linux_amd64.zip",
+                    "nomad/1.9.3/nomad_1.9.3_linux_amd64.zip",
+                    "packer/1.11.2/packer_1.11.2_linux_amd64.zip",
+                    "vault/1.18.2/vault_1.18.2_linux_amd64.zip",
+                    "waypoint/0.11.4/waypoint_0.11.4_linux_amd64.zip",
+                    "sentinel/0.30.0/sentinel_0.30.0_linux_amd64.zip",
+                    "sentinel/index.json",
+                    "tfc-agent/index.json",
+                    "nomad-pack/index.json",
+                ],
+                &[
+                    "",
+                    "index.json",
+                    "vagrant/2.4.3/vagrant_2.4.3_linux_amd64.zip",
+                    "terraform-provider-aws/5.80.0/x.zip",
+                    "consul-template/0.39.1/x.zip",
+                ],
+            ),
+            (
+                "api.releases.hashicorp.com",
+                &["sentinel", "tfc-agent", "nomad-pack"],
+                &["", "terraform", "sentinel/0.30.0", "vault"],
+            ),
+            (
+                "dl.k8s.io",
+                &[
+                    "v1.31.0/bin/linux/amd64/kubectl",
+                    "v1.31.0/bin/linux/amd64/kubectl.sha256",
+                    "v1.31.0/bin/darwin/arm64/kubectl.sig",
+                    "v1.31.0/bin/linux/amd64/kubectl-convert",
+                    "v1.31.0/bin/windows/amd64/kubectl.exe",
+                    "release/stable.txt",
+                ],
+                &[
+                    "",
+                    "v1.31.0/bin/linux/amd64/kubelet",
+                    "v1.31.0/kubernetes-server-linux-amd64.tar.gz",
+                    "release/stable-1.31.txt",
+                ],
+            ),
+            (
+                "archive.apache.org",
+                &[
+                    "ant/binaries/apache-ant-1.10.15-bin.tar.gz",
+                    "ant/binaries/apache-ant-1.10.15-bin.tar.gz.sha512",
+                    "groovy/4.0.24/distribution/apache-groovy-binary-4.0.24.zip",
+                    "maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz.sha512",
+                    "spark/spark-3.5.3/spark-3.5.3-bin-hadoop3.tgz",
+                    "tomcat/tomcat-10/v10.1.34/bin/apache-tomcat-10.1.34.tar.gz",
+                ],
+                &["", "httpd/httpd-2.4.62.tar.gz", "hadoop/common/x.tgz", "antlr/x"],
+            ),
+            (
+                "mirror.openshift.com",
+                &[
+                    "ocp/4.17.10/openshift-client-linux.tar.gz",
+                    "ocp/4.17.10/openshift-install-linux-4.17.10.tar.gz",
+                    "ocp/4.17.10/sha256sum.txt",
+                ],
+                &[
+                    "",
+                    "ocp/4.17.10/oc-mirror.tar.gz",
+                    "ocp-dev-preview/4.18.0-ec.4/openshift-client-linux.tar.gz",
+                    "odo/v3.16.1/odo-linux-amd64",
+                ],
+            ),
+            (
+                "julialang-s3.julialang.org",
+                &[
+                    "versions.json",
+                    "linux/x64/1.11/julia-1.11.2-linux-x86_64.tar.gz",
+                    "mac/aarch64/1.11/julia-1.11.2-macaarch64.tar.gz",
+                    "winnt/x64/1.11/julia-1.11.2-win64.zip",
+                ],
+                &["", "checksums/julia-1.11.2.sha256", "freebsd/x64/1.11/x.tar.gz"],
+            ),
+            (
+                "download.docker.com",
+                &[
+                    "linux/static/stable/x86_64/docker-27.3.1.tgz",
+                    "mac/static/stable/aarch64/docker-27.3.1.tgz",
+                    "win/static/stable/x86_64/docker-27.3.1.zip",
+                ],
+                &[
+                    "",
+                    "linux/ubuntu/dists/noble/stable/binary-amd64/Packages",
+                    "linux/static/test/x86_64/docker-28.0.0-rc.1.tgz",
+                    "mac/beta/Docker.dmg",
+                ],
+            ),
+            (
+                "dl.google.com/android/",
+                &[
+                    "repository/repository2-3.xml",
+                    "repository/commandlinetools-linux-11479570_latest.zip",
+                    "maven2/com/android/tools/build/group-index.xml",
+                    "maven2/com/android/tools/build/aapt2/8.7.3-12006047/aapt2-8.7.3-12006047-linux.jar",
+                    "cli/1.1.16919734/linux_x86_64/android",
+                    "cli/1.1.16919734/linux_x86_64/android.sha256",
+                    "cli/latest/debian/dists/stable/Release",
+                    "cli/latest/debian/dists/stable/main/binary-amd64/Packages",
+                ],
+                &[
+                    "",
+                    "repository/platform-tools-latest-linux.zip",
+                    "maven2/com/android/tools/build/gradle/8.7.3/gradle-8.7.3.jar",
+                    "studio/ide-zips/2024.2.1.11/android-studio.tar.gz",
+                ],
+            ),
+        ];
+        for (key, admitted, refused) in corpus {
+            // A key with a `/` is a host plus a path prefix, as in `TYPED_HOSTS`.
+            let (host, path) = key.split_once('/').unwrap_or((key, ""));
+            let preset = generic_preset(host, path).unwrap();
+            for literal in [false, true] {
+                let opts = glob::MatchOptions {
+                    require_literal_separator: literal,
+                    ..glob::MatchOptions::new()
+                };
+                let allows = |path: &str| {
+                    preset
+                        .path_allow
+                        .iter()
+                        .any(|g| glob::Pattern::new(g).unwrap().matches_with(path, opts))
+                };
+                for path in *admitted {
+                    assert!(allows(path), "{host}: {path} must be admitted");
+                }
+                for path in *refused {
+                    assert!(!allows(path), "{host}: {path} must be refused");
+                }
+            }
+            // A revalidated path must be one the preset serves.
+            for r in preset.revalidate {
+                assert!(
+                    admitted
+                        .iter()
+                        .any(|p| glob::Pattern::new(r).unwrap().matches_with(
+                            p,
+                            glob::MatchOptions {
+                                require_literal_separator: true,
+                                ..glob::MatchOptions::new()
+                            }
+                        )),
+                    "{host}: {r}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1821,49 +2660,164 @@ mod tests {
                 "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819"
             ]
         );
+        // RFC 0047 §6.1: the file's directory, plus the version list mise
+        // reads from the same bucket, which is revalidated.
         assert_eq!(
             reg.path_allow,
-            vec!["claude-code-releases/2.1.217/linux-x64/claude"]
+            vec![
+                "claude-code-releases/2.1.217/linux-x64/*",
+                "claude-code-releases/latest"
+            ]
         );
+        assert_eq!(reg.revalidate, ["claude-code-releases/latest"]);
         assert!(
             reg.note.is_some(),
             "unknown hosts must carry the widen-me caveat"
         );
     }
 
+    /// RFC 0047 phase 2: every new preset, and a widened bucket mirror, is a
+    /// block the server loads — each `revalidate` inside its `path_allow`
+    /// under the server's own matching.
+    #[test]
+    fn phase_two_presets_render_a_config_the_server_loads() {
+        let urls = [
+            "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip",
+            "https://api.releases.hashicorp.com/v1/releases/sentinel?limit=20",
+            "https://dl.k8s.io/v1.31.0/bin/linux/amd64/kubectl",
+            "https://archive.apache.org/dist/ant/binaries/apache-ant-1.10.15-bin.tar.gz",
+            "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.17.10/openshift-client-linux.tar.gz",
+            "https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.2-linux-x86_64.tar.gz",
+            "https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz",
+            "https://dl.google.com/android/repository/commandlinetools-linux-11479570_latest.zip",
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.0-stable.tar.xz",
+        ];
+        let regs: Vec<_> = urls
+            .iter()
+            .map(|u| registry_for_url(u, "s").unwrap())
+            .collect();
+        let names: Vec<&str> = regs.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "hashicorp-releases",
+                "hashicorp-api",
+                "k8s-dl",
+                "apache-archive",
+                "openshift-mirror",
+                "julia-dist",
+                "docker-dl",
+                "android-dl",
+                "flutter_infra_release"
+            ]
+        );
+        let config = format!(
+            "[server]\nhost = \"127.0.0.1\"\nport = 8080\n[database]\ntype = \"postgresql\"\n\
+             url = \"postgresql://u:p@localhost/db\"\n[storage]\ntype = \"filesystem\"\n\
+             path = \"./tmp\"\n{}",
+            render_toml(&regs, &[])
+        );
+        batlehub_config::load_from_str(&config).unwrap_or_else(|e| panic!("{e:#}\n{config}"));
+    }
+
+    /// A bucket admits only the version lists in its own bucket on its own
+    /// host (RFC 0047 §7.1 T6): flutter's lists never reach skaffold's mirror.
+    #[test]
+    fn a_bucket_admits_only_its_own_version_lists() {
+        let flutter = registry_for_url(
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.0-stable.tar.xz",
+            "s",
+        )
+        .unwrap();
+        assert_eq!(
+            flutter.upstreams,
+            ["https://storage.googleapis.com/flutter_infra_release"]
+        );
+        assert_eq!(
+            flutter.path_allow,
+            [
+                "releases/stable/linux/*",
+                "releases/releases_linux.json",
+                "releases/releases_macos.json",
+                "releases/releases_windows.json",
+            ]
+        );
+        let skaffold = registry_for_url(
+            "https://storage.googleapis.com/skaffold/releases/v2.13.2/skaffold-linux-amd64",
+            "s",
+        )
+        .unwrap();
+        assert_eq!(skaffold.path_allow, ["releases/v2.13.2/*"]);
+        assert!(skaffold.revalidate.is_empty());
+        // A file at the bucket's root: the root's files, nothing below.
+        let root =
+            registry_for_url("https://storage.googleapis.com/some-bucket/tool.tgz", "s").unwrap();
+        assert_eq!(root.path_allow, ["*"]);
+        // Not a bucket host: still the one exact path.
+        let plain = registry_for_url("https://tool.example.com/a/b/tool.tgz", "s").unwrap();
+        assert_eq!(plain.path_allow, ["a/b/tool.tgz"]);
+    }
+
     #[test]
     fn urlless_backends_map_by_prefix() {
-        let reg = registry_for_backend("cargo:cargo-audit", "mise.lock: cargo-audit").unwrap();
+        let reg = registry_for_backend("cargo:cargo-audit", "mise.lock: cargo-audit")
+            .pop()
+            .unwrap();
         assert_eq!(reg.registry_type, "cargo");
-        let reg = registry_for_backend("pipx:semgrep", "mise.lock: semgrep").unwrap();
+        let reg = registry_for_backend("pipx:semgrep", "mise.lock: semgrep")
+            .pop()
+            .unwrap();
         assert_eq!(reg.registry_type, "pypi");
-        let reg = registry_for_backend("aqua:owner/tool", "mise.lock: tool").unwrap();
+        let reg = registry_for_backend("aqua:owner/tool", "mise.lock: tool")
+            .pop()
+            .unwrap();
         assert_eq!(reg.registry_type, "github");
-        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg").unwrap();
+        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg")
+            .pop()
+            .unwrap();
         assert_eq!(reg.registry_type, "conda");
         // core:rust ships no platform URL in the lock, so the backend must carry it.
-        let reg = registry_for_backend("core:rust", "mise.lock: rust").unwrap();
-        assert_eq!(reg.name, "rust-dist");
-        assert_eq!(reg.registry_type, "generic");
+        let reg = registry_for_backend("core:rust", "mise.lock: rust")
+            .pop()
+            .unwrap();
+        assert_eq!(
+            (reg.name.as_str(), reg.registry_type.as_str()),
+            ("rust", "rustup")
+        );
         // core:go has its typed kind (RFC 0048 phase 5), so no generic mirror.
-        let reg = registry_for_backend("core:go", "mise.lock: go").unwrap();
+        let reg = registry_for_backend("core:go", "mise.lock: go")
+            .pop()
+            .unwrap();
         assert_eq!(reg.registry_type, "godist");
         assert!(reg.upstreams.is_empty());
         let reg =
             registry_for_url("https://dl.google.com/go/go1.25.4.linux-amd64.tar.gz", "s").unwrap();
         assert_eq!(reg.registry_type, "godist");
-        // The rest of the host is Android's: the narrow generic every unknown
-        // host gets, and no kind for the plan, until a preset names it.
-        let android = "https://dl.google.com/android/repository/platform-tools-latest-linux.zip";
+        // `/android/` on the same host is the `android-dl` preset (RFC 0047
+        // §15 Q3), and the plan routes it through a `generic` registry.
+        let android =
+            "https://dl.google.com/android/repository/commandlinetools-linux-11479570_latest.zip";
         let reg = registry_for_url(android, "s").unwrap();
-        assert_eq!(reg.registry_type, "generic");
         assert_eq!(
-            reg.path_allow,
-            ["android/repository/platform-tools-latest-linux.zip"]
+            (reg.name.as_str(), reg.registry_type.as_str()),
+            ("android-dl", "generic")
         );
+        assert_eq!(reg.upstreams, ["https://dl.google.com/android"]);
         let (host, path) = split_url(android).unwrap();
-        assert_eq!(registry_kind_for_host(host, path), None);
-        assert!(registry_for_backend("core:unknown-thing", "x").is_none());
+        assert_eq!(registry_kinds_for_host(host, path), ["generic"]);
+        assert_eq!(
+            proxy_path_for(android, "android-dl", "generic").as_deref(),
+            Some("/proxy/android-dl/generic/repository/commandlinetools-linux-11479570_latest.zip")
+        );
+        // The rest of the host is neither: the narrow generic of an unknown host.
+        let other = "https://dl.google.com/linux/chrome/deb/dists/stable/Release";
+        assert_eq!(
+            registry_for_url(other, "s").unwrap().path_allow,
+            ["linux/chrome/deb/dists/stable/Release"]
+        );
+        let (host, path) = split_url(other).unwrap();
+        assert!(registry_kinds_for_host(host, path).is_empty());
+        assert!(registry_for_backend("core:unknown-thing", "x").is_empty());
     }
 
     // ── requirements.yml and galaxy.yml (RFC 0031 §6.9) ──────────────────────
@@ -2141,19 +3095,58 @@ url = "https://get.helm.sh/helm-v4.2.3-linux-amd64.tar.gz"
         collect_from_mise_lock(SAMPLE_LOCK, &mut acc);
         let regs = acc.finish();
         let got = names(&regs);
-        for expected in [
-            "github",
-            "cargo",
-            "pypi",
-            "node-dist",
-            "rust-dist",
-            "helm-bin",
-        ] {
+        for expected in ["github", "cargo", "pypi", "node", "rust", "helm-bin"] {
             assert!(got.contains(&expected), "expected {expected} in {got:?}");
         }
         // helm's *binary* is a generic mirror even though the tool is installed
         // via the aqua backend — the URL wins over the backend prefix.
         assert_eq!(find(&regs, "helm-bin").registry_type, "generic");
+    }
+
+    /// RFC 0048 §15 Q1: a locked JDK on `github.com/adoptium/` is a
+    /// mise-java download, not a forge asset — the github kind would cache it
+    /// and never block it — and its rules are the metadata host's plus one
+    /// per default vendor host.
+    #[test]
+    fn a_locked_jdk_suggests_mise_java_and_not_github() {
+        let lock = r#"
+[[tools.java]]
+version = "temurin-21.0.5+11.0.LTS"
+backend = "core:java"
+[tools.java."platforms.linux-x64"]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/x.tar.gz"
+"#;
+        let mut acc = Accumulator::default();
+        collect_from_mise_lock(lock, &mut acc);
+        let regs = acc.finish();
+        assert_eq!(names(&regs), ["jdk"]);
+        let jdk = find(&regs, "jdk");
+        assert_eq!(jdk.registry_type, "mise-java");
+        let rules = jdk.mise_url_replacements("https://hub.example.com");
+        assert_eq!(
+            rules[0],
+            (
+                r"^https://mise-java\.jdx\.dev/(.+)".to_owned(),
+                "https://hub.example.com/proxy/jdk/mise-java/$1".to_owned()
+            )
+        );
+        assert!(rules.contains(&(
+            r"^https://github\.com/adoptium/(.+)".to_owned(),
+            "https://hub.example.com/proxy/jdk/mise-java/dl/github.com/adoptium/$1".to_owned()
+        )));
+        assert_eq!(
+            rules.len(),
+            1 + batlehub_core::services::mise_java::DEFAULT_VENDOR_HOSTS.len()
+        );
+        assert_eq!(
+            proxy_path_for(
+                "https://github.com/adoptium/t/releases/download/x/a.tar.gz",
+                "jdk",
+                "mise-java"
+            )
+            .as_deref(),
+            Some("/proxy/jdk/mise-java/dl/github.com/adoptium/t/releases/download/x/a.tar.gz")
+        );
     }
 
     #[test]
@@ -2214,8 +3207,8 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         .unwrap();
         let regs = suggest_registries(dir.path(), 0);
         let got = names(&regs);
-        assert!(got.contains(&"node-dist"), "{got:?}");
-        assert!(got.contains(&"rust-dist"), "{got:?}");
+        assert!(got.contains(&"node"), "{got:?}");
+        assert!(got.contains(&"rust"), "{got:?}");
         assert!(got.contains(&"cargo"), "{got:?}");
         // `gitleaks` is unqualified → assumed to be aqua/ubi → GitHub, with a
         // caveat telling the user to run `mise lock`.
@@ -2238,7 +3231,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         .unwrap();
         let regs = suggest_registries(dir.path(), 0);
         // The fuzzy mise.toml guess ("something-odd" → github) must not appear.
-        assert_eq!(names(&regs), vec!["node-dist"]);
+        assert_eq!(names(&regs), vec!["node"]);
     }
 
     #[test]
@@ -2296,7 +3289,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             "the same variables `setup env` exports"
         );
 
-        let toml = render_toml(&regs);
+        let toml = render_toml(&regs, &[]);
         assert!(toml.contains("type       = \"nodedist\""), "{toml}");
         assert!(
             toml.contains("warm_packages = [\"node@v22.11.0\"]"),
@@ -2348,7 +3341,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         );
         let env = render_client_env(&regs, "https://hub.example.com");
         assert!(env.contains("export SDKMAN_BROKER_API="), "{env}");
-        let toml = render_toml(&regs);
+        let toml = render_toml(&regs, &[]);
         toml::from_str::<toml::Value>(&toml).expect("the rendered block is valid TOML");
         assert!(toml.contains("[registries.cache]"), "{toml}");
     }
@@ -2358,7 +3351,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         let mut acc = Accumulator::default();
         collect_from_mise_lock(SAMPLE_LOCK, &mut acc);
         let regs = acc.finish();
-        let rendered = render_toml(&regs);
+        let rendered = render_toml(&regs, &[]);
 
         let parsed: toml::Value = toml::from_str(&rendered)
             .unwrap_or_else(|e| panic!("rendered TOML must parse: {e}\n{rendered}"));
@@ -2383,12 +3376,14 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         let env = render_client_env(&regs, "https://hub.example.com/");
         assert!(
             env.contains(
-                "export NODEJS_ORG_MIRROR=\"https://hub.example.com/proxy/node-dist/generic\""
+                "export NODEJS_ORG_MIRROR=\"https://hub.example.com/proxy/node/nodedist\""
             ),
             "{env}"
         );
         assert!(
-            env.contains("export RUSTUP_UPDATE_ROOT=\"https://hub.example.com/proxy/rust-dist/generic/rustup\""),
+            env.contains(
+                "export RUSTUP_UPDATE_ROOT=\"https://hub.example.com/proxy/rust/rustup/rustup\""
+            ),
             "{env}"
         );
         assert!(
@@ -2451,10 +3446,11 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             .as_deref(),
             Some("/proxy/node-dist/generic/v24.18.0/node-v24.18.0-linux-x64.tar.gz")
         );
-        let suggested = registry_for_url("https://nodejs.org/dist/v1/x.tar.gz", "s").unwrap();
+        let suggested =
+            registry_for_url("https://ziglang.org/download/0.15.2/x.tar.xz", "s").unwrap();
         assert!(suggested
             .proxy_url("https://hub.example.com")
-            .ends_with("/proxy/node-dist/generic"));
+            .ends_with("/proxy/zig-dl/generic"));
         // GitHub routes straight off the name, and gains no segment either way.
         assert_eq!(
             proxy_path_for(
@@ -2469,14 +3465,15 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
 
     #[test]
     fn proxy_url_adds_the_type_segment_only_for_path_addressed_types() {
-        let generic = registry_for_url("https://nodejs.org/dist/v1/x.tar.gz", "s").unwrap();
+        let generic =
+            registry_for_url("https://ziglang.org/download/0.15.2/x.tar.xz", "s").unwrap();
         assert_eq!(
             generic.proxy_url("https://hub.example.com"),
-            "https://hub.example.com/proxy/node-dist/generic"
+            "https://hub.example.com/proxy/zig-dl/generic"
         );
         // GitHub routes as /proxy/{name}/{owner}/{repo}/… — a `/github/` segment
         // here would 404 every rewritten URL.
-        let github = registry_for_backend("aqua:x/y", "s").unwrap();
+        let github = registry_for_backend("aqua:x/y", "s").pop().unwrap();
         assert_eq!(
             github.proxy_url("https://hub.example.com"),
             "https://hub.example.com/proxy/github"
@@ -2505,23 +3502,25 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
     #[test]
     fn generic_mise_rule_is_derived_from_the_upstream() {
         let reg = registry_for_url(
-            "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
-            "mise.lock: node",
+            "https://builds.hex.pm/builds/elixir/v1.18.4-otp-27.zip",
+            "mise.lock: elixir",
         )
         .unwrap();
         let rules = reg.mise_url_replacements("https://hub.example.com");
         assert_eq!(
             rules,
             vec![(
-                r"^https://nodejs\.org/dist/(.+)".to_owned(),
-                "https://hub.example.com/proxy/node-dist/generic/$1".to_owned()
+                r"^https://builds\.hex\.pm/builds/(.+)".to_owned(),
+                "https://hub.example.com/proxy/hex-builds/generic/$1".to_owned()
             )]
         );
     }
 
     #[test]
     fn github_mise_rules_cover_the_api_asset_path_aqua_actually_uses() {
-        let reg = registry_for_backend("aqua:x/y", "mise.lock: y").unwrap();
+        let reg = registry_for_backend("aqua:x/y", "mise.lock: y")
+            .pop()
+            .unwrap();
         let rules = reg.mise_url_replacements("https://hub.example.com");
         // Verified against `mise install aqua:…`: assets are fetched from
         // api.github.com/repos/{o}/{r}/releases/assets/{id}, so this rule is the
@@ -2564,7 +3563,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
     /// earns — a registry, a note, or a reason naming what it reads.
     #[test]
     fn backend_verdicts_of_rfc_0047_phase_1() {
-        let ty = |b: &str| registry_for_backend(b, "s").map(|r| r.registry_type);
+        let ty = |b: &str| registry_for_backend(b, "s").pop().map(|r| r.registry_type);
         assert_eq!(ty("dotnet:dotnet-outdated-tool").as_deref(), Some("nuget"));
         assert_eq!(
             ty("packslip:github.com/acme/tool").as_deref(),
@@ -2599,14 +3598,18 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         );
 
         // The caveats ride the suggestion.
-        let aqua = registry_for_backend("aqua:kubernetes/kubectl", "s").unwrap();
+        let aqua = registry_for_backend("aqua:kubernetes/kubectl", "s")
+            .pop()
+            .unwrap();
         assert!(aqua.note.unwrap().contains("type `http`"));
         assert!(registry_for_backend("spm:acme/pkg", "s")
+            .pop()
             .unwrap()
             .note
             .unwrap()
             .contains("git"));
         assert!(registry_for_backend("cargo:ripgrep", "s")
+            .pop()
             .unwrap()
             .note
             .is_none());
@@ -2617,6 +3620,9 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             .unwrap()
             .contains("mise lock"));
         assert!(lockless_backend_note("aqua:x/y").is_none());
+        assert!(lockless_backend_note("dotnet:x")
+            .unwrap()
+            .contains("setup apply --only nuget"));
         let php = vfox_subprocess_note("vfox:mise-plugins/vfox-php").unwrap();
         assert!(php.contains("configure, make"), "{php}");
         assert!(vfox_subprocess_note("vfox:poetry").is_some());
@@ -2628,7 +3634,9 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
     #[test]
     fn conda_backend_is_supported_and_routes_the_conda_forge_channel() {
         assert_eq!(unsupported_backend_reason("conda:ffmpeg"), None);
-        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg").unwrap();
+        let reg = registry_for_backend("conda:ffmpeg", "mise.lock: ffmpeg")
+            .pop()
+            .unwrap();
         let rules = reg.mise_url_replacements("https://hub.example.com");
         assert_eq!(
             rules,
@@ -2657,9 +3665,64 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         );
     }
 
+    /// RFC 0047 §6.1: a locked conda URL names its channel's registry, whose
+    /// rule is derived from its upstream (escaped, T1), while the typed
+    /// conda-forge rule stays the plan's fallback; a channel-less upstream
+    /// derives nothing.
+    #[test]
+    fn a_conda_rule_is_derived_from_the_channel_upstream() {
+        let reg = registry_for_url(
+            "https://conda.anaconda.org/bioconda/noarch/samtools-1.21-h0_0.conda",
+            "mise.lock: samtools",
+        )
+        .unwrap();
+        assert_eq!(reg.name, "conda-bioconda");
+        assert_eq!(reg.upstreams, ["https://conda.anaconda.org/bioconda"]);
+        assert_eq!(
+            reg.mise_url_replacements("https://hub.example.com"),
+            [(
+                r"^https://conda\.anaconda\.org/bioconda/(.+)".to_owned(),
+                "https://hub.example.com/proxy/conda-bioconda/$1".to_owned()
+            )]
+        );
+        let cf = registry_for_url(
+            "https://conda.anaconda.org/conda-forge/linux-64/ffmpeg-7.1.1-h0_0.conda",
+            "mise.lock: ffmpeg",
+        )
+        .unwrap();
+        assert_eq!(cf.name, "conda");
+        let mut own = cf.clone();
+        own.upstreams = vec!["https://conda.corp.example/c++.x/".to_owned()];
+        assert_eq!(
+            own.mise_url_replacements("https://hub.example.com")[0].0,
+            r"^https://conda\.corp\.example/c\+\+\.x/(.+)"
+        );
+        own.upstreams = vec!["https://conda.anaconda.org".to_owned()];
+        assert!(own
+            .mise_url_replacements("https://hub.example.com")
+            .is_empty());
+    }
+
+    /// RFC 0047 §6.2: a `nuget` suggestion writes mise's `dotnet.registry_url`
+    /// through `mise_settings_for`, and no rule.
+    #[test]
+    fn a_nuget_suggestion_writes_dotnet_registry_url() {
+        let regs = registry_for_backend("dotnet:dotnet-outdated-tool", "mise.toml: x");
+        let out = render_mise_toml(&regs, "https://hub.example.com", false, false);
+        assert!(
+            out.contains("[settings.dotnet]\nregistry_url = \"https://hub.example.com/proxy/nuget/nuget/v3/index.json\""),
+            "{out}"
+        );
+        assert!(regs[0]
+            .mise_url_replacements("https://hub.example.com")
+            .is_empty());
+    }
+
     #[test]
     fn subprocess_driven_types_get_no_mise_rule() {
-        let reg = registry_for_backend("pipx:semgrep", "mise.lock: semgrep").unwrap();
+        let reg = registry_for_backend("pipx:semgrep", "mise.lock: semgrep")
+            .pop()
+            .unwrap();
         assert!(reg
             .mise_url_replacements("https://hub.example.com")
             .is_empty());
@@ -2681,13 +3744,107 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         let node_key = r"regex:^https://nodejs\.org/dist/(.+)";
         assert_eq!(
             repl[node_key].as_str(),
-            Some("https://hub.example.com/proxy/node-dist/generic/$1"),
+            Some("https://hub.example.com/proxy/node/nodedist/$1"),
             "{rendered}"
         );
+        // mise's own node setting, and rustup's variables where a subprocess
+        // reads them; rustup is not "not rewritable".
+        assert_eq!(
+            parsed["settings"]["node"]["mirror_url"].as_str(),
+            Some("https://hub.example.com/proxy/node/nodedist/")
+        );
+        assert_eq!(
+            parsed["env"]["RUSTUP_DIST_SERVER"].as_str(),
+            Some("https://hub.example.com/proxy/rust/rustup")
+        );
+        assert!(
+            !rendered.contains("rustup,") && !rendered.contains("pypi, rustup"),
+            "{rendered}"
+        );
+        // No zig in the lock, no zig setting.
+        assert!(parsed["settings"].get("zig").is_none());
         assert!(repl.contains_key(r"regex:^https://api\.github\.com/repos/(.+)"));
         // pypi came from `pipx:semgrep` and cannot be rewritten — it must be
         // called out rather than silently missing.
         assert!(rendered.contains("Not rewritable here: pypi"), "{rendered}");
+    }
+
+    /// RFC 0048 §4.5: the refusal is printed beside the registries, the zig
+    /// setting travels with the zig rule, and the swift mirror carries its
+    /// own size limit — and the whole output loads on the server.
+    #[test]
+    fn core_toolchains_render_their_presets_settings_and_refusals() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("mise.lock"),
+            r#"
+[[tools.zig]]
+version = "0.15.2"
+backend = "core:zig"
+[tools.zig."platforms.linux-x64"]
+url = "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+
+[[tools.elixir]]
+version = "1.18.4-otp-27"
+backend = "core:elixir"
+[tools.elixir."platforms.linux-x64"]
+url = "https://builds.hex.pm/builds/elixir/v1.18.4-otp-27.zip"
+
+[[tools.swift]]
+version = "6.2"
+backend = "core:swift"
+
+[[tools.dotnet]]
+version = "9.0.100"
+backend = "core:dotnet"
+"#,
+        )
+        .unwrap();
+        let (regs, unroutable) = suggest(dir.path(), 0);
+        assert_eq!(
+            names(&regs),
+            ["hex-builds", "swift-api", "swift-dl", "zig-dl"]
+        );
+        assert_eq!(unroutable.len(), 1);
+        assert!(unroutable[0].starts_with("dotnet (core:dotnet) — mise runs dotnet-install.sh"));
+
+        let rendered = render_toml(&regs, &unroutable);
+        assert!(
+            rendered.contains("\n# Not routable through BatleHub:\n#   dotnet (core:dotnet)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("max_artifact_size_bytes = 1700000000"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("  \"otp/*/*/builds.txt\","), "{rendered}");
+        // What `registry suggest` prints is a config the server loads.
+        let config = format!(
+            "[server]\nhost = \"127.0.0.1\"\nport = 8080\n[database]\ntype = \"postgresql\"\n\
+             url = \"postgresql://u:p@localhost/db\"\n[storage]\ntype = \"filesystem\"\n\
+             path = \"./tmp\"\n{rendered}"
+        );
+        batlehub_config::load_from_str(&config).unwrap_or_else(|e| panic!("{e:#}\n{config}"));
+
+        let mise = render_mise_toml(&regs, "https://hub.example.com", false, false);
+        let parsed: toml::Value = toml::from_str(&mise).unwrap();
+        assert_eq!(
+            parsed["settings"]["zig"]["use_community_mirrors"].as_bool(),
+            Some(false),
+            "{mise}"
+        );
+        let repl = parsed["settings"]["url_replacements"].as_table().unwrap();
+        assert_eq!(
+            repl[r"regex:^https://www\.swift\.org/api/v1/install/(.+)"].as_str(),
+            Some("https://hub.example.com/proxy/swift-api/generic/$1")
+        );
+
+        // The same refusal from a mise.toml, and no GitHub guess for it.
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("mise.toml"), "[tools]\ndotnet = \"9\"\n").unwrap();
+        let (regs, unroutable) = suggest(dir.path(), 0);
+        assert!(regs.is_empty(), "{:?}", names(&regs));
+        assert_eq!(unroutable.len(), 1);
     }
 
     #[test]
@@ -2735,7 +3892,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         assert_eq!(
             parsed["settings"]["url_replacements"][r"regex:^https://nodejs\.org/dist/(.+)"]
                 .as_str(),
-            Some("https://hub.example.com/proxy/node-dist/generic/$1")
+            Some("https://hub.example.com/proxy/node/nodedist/$1")
         );
         // …and it must be byte-identical to the uncommented rendering.
         let direct = render_mise_toml(&regs, "https://hub.example.com", false, false);
@@ -2758,6 +3915,8 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             sources: vec!["mise.lock: helm".to_owned()],
             client_env: Vec::new(),
             warm_packages: Vec::new(),
+            revalidate: Vec::new(),
+            max_artifact_size_bytes: None,
             note: None,
         }];
         let env = render_client_env(&regs, "https://hub.example.com");

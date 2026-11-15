@@ -36,6 +36,7 @@ mod godist;
 mod goproxy;
 mod helm;
 mod maven;
+mod mise_java;
 mod mise_versions;
 mod nodedist;
 mod npm;
@@ -127,6 +128,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Terraform => terraform::read(doc),
         RegistryKind::Nodedist => nodedist::read(doc),
         RegistryKind::Godist => godist::read(doc),
+        RegistryKind::MiseJava => mise_java::read(doc),
         RegistryKind::Sdkman => sdkman::read(doc),
         RegistryKind::Rustup => rustup::read(doc),
         RegistryKind::Galaxy => galaxy::read(doc),
@@ -185,6 +187,7 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Godist
+        | RegistryKind::MiseJava
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         // The versions list carries `created_at` and `requires_ansible`; the
@@ -252,6 +255,7 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Godist
+        | RegistryKind::MiseJava
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         // The `repository` link lives in `MANIFEST.json`, inside the tarball.

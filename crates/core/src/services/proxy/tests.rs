@@ -441,6 +441,7 @@ fn proxy(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     }
@@ -530,6 +531,7 @@ async fn metadata_cache_miss_then_hit() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -609,6 +611,7 @@ async fn artifact_cache_hit_returns_stored_bytes() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -672,6 +675,7 @@ async fn payload_too_large_returns_error() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -693,6 +697,7 @@ async fn unused_registry_id_in_policies_does_not_panic() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -725,6 +730,7 @@ async fn firewall_only_streams_without_storing() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -786,6 +792,7 @@ fn proxy_with_stale(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     }
@@ -985,6 +992,7 @@ async fn metadata_no_store_skips_cache() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1014,6 +1022,7 @@ async fn artifact_no_store_skips_storage() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1079,6 +1088,7 @@ async fn artifact_ttl_expired_refetches_from_upstream() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1143,6 +1153,7 @@ async fn artifact_cache_hit_records_touch() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1170,6 +1181,7 @@ async fn artifact_cache_miss_records_meta() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1209,6 +1221,7 @@ async fn metrics_artifact_miss_then_hit() {
         metrics: proxy_metrics.clone(),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1335,6 +1348,7 @@ fn proxy_with_integrity(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -1655,6 +1669,7 @@ fn reverify_proxy(
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     }
@@ -1967,6 +1982,7 @@ async fn resolve_metadata_for_miss_fetches_then_serves_from_cache() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -2077,6 +2093,7 @@ mod passthrough_rungs {
             metrics: Arc::new(ProxyMetrics::new(&[])),
             sbom: None,
             readme: None,
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
         };
@@ -2293,6 +2310,7 @@ mod search_rungs {
             metrics: Arc::new(ProxyMetrics::new(&[])),
             sbom: None,
             readme: None,
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
         }
@@ -2554,6 +2572,7 @@ mod readme_capture {
             readme: Some(Arc::new(ReadmeService::new(
                 repo as Arc<dyn ReadmeRepository>,
             ))),
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
         }
@@ -2900,6 +2919,7 @@ mod discovery {
             artifact_meta: NoopArtifactMeta::arc(),
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
             readme: None,
@@ -3264,6 +3284,7 @@ mod version_readme {
             artifact_meta: NoopArtifactMeta::arc(),
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
             readme: Some(Arc::new(ReadmeService::new(
@@ -3359,6 +3380,7 @@ mod version_readme {
             artifact_meta: NoopArtifactMeta::arc(),
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
+            fills: Default::default(),
             discovery: Default::default(),
             explore_cache: None,
             readme: Some(Arc::new(ReadmeService::new(
@@ -3567,4 +3589,290 @@ async fn an_exemption_silences_its_gate_on_a_proxied_download() {
         ),
         "a gate the exemption does not name keeps refusing"
     );
+}
+
+// ── RFC 0048 phase 1b: per-registry limit, `revalidate` ───────────────────
+
+/// An upstream whose answer the test changes between requests, counting
+/// every artifact fetch.
+struct ScriptedRegistry {
+    body: Mutex<Result<&'static str, &'static str>>,
+    fetches: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptedRegistry {
+    fn new(body: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            body: Mutex::new(Ok(body)),
+            fetches: Default::default(),
+        })
+    }
+    fn set(&self, next: Result<&'static str, &'static str>) {
+        *self.body.lock().unwrap() = next;
+    }
+    fn fetches(&self) -> usize {
+        self.fetches.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl RegistryClient for ScriptedRegistry {
+    fn registry_type(&self) -> &str {
+        "generic"
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        FixedRegistry.resolve_metadata(pkg).await
+    }
+    async fn fetch_artifact(&self, _pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        self.fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let body = (*self.body.lock().unwrap()).map_err(|e| CoreError::Registry(e.into()))?;
+        Ok(FetchedArtifact {
+            stream: Box::pin(stream::once(async move {
+                Ok::<Bytes, CoreError>(Bytes::from_static(body.as_bytes()))
+            })),
+            cache_control: None,
+        })
+    }
+}
+
+fn generic_req(path: &str) -> ProxyRequest {
+    ProxyRequest {
+        package_id: PackageId::new("gen", "repo", "_").with_artifact(path),
+        ..req("gen")
+    }
+}
+
+async fn body_of(resp: ProxyResponse) -> String {
+    use futures::StreamExt;
+    let ProxyResponse::Stream(mut s) = resp else {
+        panic!("not a stream")
+    };
+    let mut out = Vec::new();
+    while let Some(chunk) = s.next().await {
+        out.extend_from_slice(&chunk.unwrap());
+    }
+    String::from_utf8(out).unwrap()
+}
+
+async fn revalidating(client: Arc<ScriptedRegistry>) -> ProxyService {
+    let svc = proxy("gen", client, SpyRepo::new(), vec![]);
+    svc.hot.write().await.generic_revalidate.insert(
+        "gen".into(),
+        Arc::new(vec![glob::Pattern::new("release/*.txt").unwrap()]),
+    );
+    svc
+}
+
+#[tokio::test]
+async fn a_revalidated_path_is_served_stale_on_upstream_error() {
+    let client = ScriptedRegistry::new("v1");
+    let svc = revalidating(client.clone()).await;
+    let path = "release/stable.txt";
+    assert_eq!(
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+        "v1"
+    );
+
+    // Cached, yet asked upstream again: the new answer is served and stored.
+    client.set(Ok("v2"));
+    assert_eq!(
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+        "v2"
+    );
+    assert_eq!(client.fetches(), 2);
+
+    // Upstream down: the cached copy, not an error.
+    client.set(Err("upstream down"));
+    assert_eq!(
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+        "v2"
+    );
+    assert_eq!(client.fetches(), 3);
+}
+
+#[tokio::test]
+async fn an_unlisted_path_is_not_revalidated() {
+    let client = ScriptedRegistry::new("v1");
+    let svc = revalidating(client.clone()).await;
+    // `*` stays inside one segment, so a deeper path is not a match.
+    for path in ["release/1.0/tool.tar.gz", "release/sub/stable.txt"] {
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await;
+        client.set(Ok("v2"));
+        assert_eq!(
+            body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+            "v1",
+            "{path}"
+        );
+        client.set(Ok("v1"));
+    }
+    assert_eq!(client.fetches(), 2, "each path fetched once, then cached");
+}
+
+#[tokio::test]
+async fn a_registry_limit_overrides_the_instance_limit() {
+    // FixedRegistry sends more than 5 bytes.
+    let svc = proxy("npm", Arc::new(FixedRegistry), SpyRepo::new(), vec![]);
+    {
+        let mut hot = svc.hot.write().await;
+        hot.max_artifact_size_bytes = Some(5);
+        hot.registry_artifact_limits.insert("npm".into(), 1_000);
+    }
+    assert!(
+        matches!(svc.handle(req("npm")).await, Ok(ProxyResponse::Stream(_))),
+        "raised above the instance limit"
+    );
+
+    let svc = proxy("npm", Arc::new(FixedRegistry), SpyRepo::new(), vec![]);
+    svc.hot
+        .write()
+        .await
+        .registry_artifact_limits
+        .insert("npm".into(), 5);
+    assert!(
+        matches!(
+            svc.handle(req("npm")).await,
+            Err(CoreError::PayloadTooLarge(_))
+        ),
+        "lowered below the 500 MiB default"
+    );
+}
+
+// ── RFC 0048 phase 1b: the detached single-flight cold fill ───────────────
+
+/// An upstream whose body the test feeds chunk by chunk, so a fill can be
+/// observed half-way. A second fetch finds no body and fails, which is what
+/// "fetched upstream once" is asserted against.
+struct GatedRegistry {
+    body: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Result<Bytes, CoreError>>>>,
+    checksum: Option<String>,
+    fetches: std::sync::atomic::AtomicUsize,
+}
+
+impl GatedRegistry {
+    fn new(
+        checksum: Option<String>,
+    ) -> (
+        Arc<Self>,
+        tokio::sync::mpsc::UnboundedSender<Result<Bytes, CoreError>>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let reg = Arc::new(Self {
+            body: Mutex::new(Some(rx)),
+            checksum,
+            fetches: Default::default(),
+        });
+        (reg, tx)
+    }
+    fn fetches(&self) -> usize {
+        self.fetches.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl RegistryClient for GatedRegistry {
+    fn registry_type(&self) -> &str {
+        "test"
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        let mut meta = FixedRegistry.resolve_metadata(pkg).await?;
+        meta.checksum = self.checksum.clone();
+        Ok(meta)
+    }
+    async fn fetch_artifact(&self, _pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        self.fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let rx = self
+            .body
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| CoreError::Registry("fetched upstream twice".into()))?;
+        Ok(FetchedArtifact {
+            stream: Box::pin(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|c| (c, rx))
+            })),
+            cache_control: None,
+        })
+    }
+}
+
+async fn read_all(s: ByteStream) -> Result<Vec<u8>, CoreError> {
+    use futures::StreamExt;
+    let mut s = s;
+    let mut out = Vec::new();
+    while let Some(chunk) = s.next().await {
+        out.extend_from_slice(&chunk?);
+    }
+    Ok(out)
+}
+
+fn stream_of(resp: ProxyResponse) -> ByteStream {
+    match resp {
+        ProxyResponse::Stream(s) => s,
+        _ => panic!("not a stream"),
+    }
+}
+
+#[tokio::test]
+async fn concurrent_cold_misses_fetch_upstream_once() {
+    let (client, tx) = GatedRegistry::new(None);
+    let svc = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    let (a, b) = (svc.clone(), svc.clone());
+    let first = tokio::spawn(async move { read_all(stream_of(a.handle(req("npm")).await?)).await });
+    let second =
+        tokio::spawn(async move { read_all(stream_of(b.handle(req("npm")).await?)).await });
+    for part in ["one-", "two-", "three"] {
+        tx.send(Ok(Bytes::from_static(part.as_bytes()))).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(tx);
+    assert_eq!(first.await.unwrap().unwrap(), b"one-two-three");
+    assert_eq!(second.await.unwrap().unwrap(), b"one-two-three");
+    assert_eq!(client.fetches(), 1, "the second miss joined the first fill");
+}
+
+#[tokio::test]
+async fn a_client_disconnect_does_not_cancel_the_fill() {
+    let (client, tx) = GatedRegistry::new(None);
+    let svc = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    tx.send(Ok(Bytes::from_static(b"one-"))).unwrap();
+    tx.send(Ok(Bytes::from_static(b"two-"))).unwrap();
+    // Two chunks in: the first is readable, so the answer starts streaming.
+    let stream = stream_of(svc.handle(req("npm")).await.unwrap());
+    drop(stream); // the client goes away mid-body
+    tx.send(Ok(Bytes::from_static(b"three"))).unwrap();
+    drop(tx);
+    let key = proxy_artifact_key(&req("npm").package_id);
+    for _ in 0..100 {
+        if svc.storage.exists(&key).await.unwrap() && svc.fills.is_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The retry is a cache hit with the whole body, not a second fetch.
+    let body = read_all(stream_of(svc.handle(req("npm")).await.unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(body, b"one-two-three");
+    assert_eq!(client.fetches(), 1);
+}
+
+#[tokio::test]
+async fn a_streamed_mismatch_resets_and_caches_nothing() {
+    // The advertised digest is of other bytes: blocked on mismatch by default.
+    let wrong = crate::services::integrity::sha256_hex(b"not these bytes");
+    let (client, tx) = GatedRegistry::new(Some(wrong));
+    let svc = proxy("npm", client, SpyRepo::new(), vec![]);
+    tx.send(Ok(Bytes::from_static(b"one-"))).unwrap();
+    tx.send(Ok(Bytes::from_static(b"two-"))).unwrap();
+    let stream = stream_of(svc.handle(req("npm")).await.unwrap());
+    tx.send(Ok(Bytes::from_static(b"three"))).unwrap();
+    drop(tx);
+    let err = read_all(stream)
+        .await
+        .expect_err("a mismatched body must not end cleanly");
+    assert!(matches!(err, CoreError::IntegrityFailure(_)), "{err:?}");
+    let key = proxy_artifact_key(&req("npm").package_id);
+    assert!(!svc.storage.exists(&key).await.unwrap(), "nothing promoted");
 }

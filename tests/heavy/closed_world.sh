@@ -76,7 +76,7 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        mise-versions godist nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
+        mise-versions godist mise-java mise-core mise-http mise-backends nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
         dnf pacman ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
@@ -116,6 +116,36 @@ NODE_DIST_VERSION="${HEAVY_CW_NODE_DIST:-22.11.0}"
 # blocked and refused. Both are in go.dev's release document for good.
 GODIST_GO="${HEAVY_CW_GODIST_GO:-1.25.4}"
 GODIST_BLOCKED="${HEAVY_CW_GODIST_BLOCKED:-1.25.3}"
+# mise-java (RFC 0048 §6.P obs. 3-6, 12): one JDK installed, its neighbour
+# blocked — both Temurin 21 on github.com/adoptium, whose archives redirect to
+# release-assets.githubusercontent.com. The keys are mise's own
+# (`{vendor}-{version}`, java.rs:911-944), probed in the GA linux/x86_64
+# document on 2026-11-14.
+MJ_JDK="${HEAVY_CW_MJ_JDK:-temurin-21.0.6+7.0.LTS}"
+MJ_BLOCKED="${HEAVY_CW_MJ_BLOCKED:-temurin-21.0.5+11.0.LTS}"
+# mise's core toolchains (RFC 0048 §6.P): one release of each, every one
+# probed on its host on 2026-11-14. Elixir is built for the OTP it runs on.
+MC_ZIG="${HEAVY_CW_MC_ZIG:-0.15.2}"
+MC_DENO="${HEAVY_CW_MC_DENO:-2.5.6}"
+MC_OTP="${HEAVY_CW_MC_OTP:-27.3.4}"
+MC_ELIXIR="${HEAVY_CW_MC_ELIXIR:-1.18.4-otp-27}"
+MC_SWIFT="${HEAVY_CW_MC_SWIFT:-6.2}"
+MC_NODE="${HEAVY_CW_MC_NODE:-24.11.0}"
+MC_RUST="${HEAVY_CW_MC_RUST:-1.98.1}"
+MC_DOTNET="${HEAVY_CW_MC_DOTNET:-9.0.100}"
+# RFC 0047 §6.P cases 3, 4, 6: an aqua `http` tool, an embedded vfox plugin,
+# and a refused product, each probed on its host on 2026-11-14.
+MH_KUBECTL="${HEAVY_CW_MH_KUBECTL:-1.31.0}"
+MH_ANT="${HEAVY_CW_MH_ANT:-1.10.15}"
+MH_CONSUL="${HEAVY_CW_MH_CONSUL:-1.20.1}"
+# RFC 0047 §6.P cases 1, 2, 5: a conda-forge tool, a bioconda one with no
+# dependency outside its channel (mise solves against one channel only,
+# `conda.rs` `solve_packages`), and a `dotnet:` tool, each checked upstream on
+# 2026-11-14.
+MB_CONDA_JQ="${HEAVY_CW_MB_CONDA_JQ:-1.7.1}"
+MB_BIO_MOSDEPTH="${HEAVY_CW_MB_BIO_MOSDEPTH:-0.3.3}"
+MB_DOTNET_TOOL="${HEAVY_CW_MB_DOTNET_TOOL:-dotnet-outdated-tool}"
+MB_DOTNET_TOOL_VERSION="${HEAVY_CW_MB_DOTNET_TOOL_VERSION:-4.6.4}"
 SDKMAN_CLI_VERSION="${HEAVY_CW_SDKMAN_CLI:-5.23.0}"
 # The java version is *not* pinned: the phase reads it from the instance's own
 # `candidates/default/java`, so it asks for whatever SDKMAN would have given a
@@ -178,10 +208,12 @@ GEMS_REG="gems-$HEAVY_RUN"
 NUGET_REG="nuget-$HEAVY_RUN"
 COMPOSER_REG="composer-$HEAVY_RUN"
 CONDA_REG="conda-$HEAVY_RUN"
+CONDA_BIO_REG="conda-bio-$HEAVY_RUN"
 TF_REG="tf-$HEAVY_RUN"
 GITHUB_REG="github-$HEAVY_RUN"
 NODEDIST_REG="nodedist-$HEAVY_RUN"
 GODIST_REG="godist-$HEAVY_RUN"
+MJ_REG="mise-java-$HEAVY_RUN"
 SDKMAN_REG="sdkman-$HEAVY_RUN"
 OVSX_REG="ovsx-$HEAVY_RUN"
 VSCODE_REG="vscode-$HEAVY_RUN"
@@ -334,7 +366,9 @@ DENY=(env HTTP_PROXY="$CLOSED_PROXY" HTTPS_PROXY="$CLOSED_PROXY"
       http_proxy="$CLOSED_PROXY" https_proxy="$CLOSED_PROXY"
       NO_PROXY="$LOOPBACK_DIRECT" no_proxy="$LOOPBACK_DIRECT")
 
-python3 tests/heavy/closed_proxy.py "$CLOSED_PROXY_PORT" \
+CLOSED_PROXY_REFUSED="$HEAVY_WORK/closed-proxy.refused"
+: >"$CLOSED_PROXY_REFUSED"
+python3 tests/heavy/closed_proxy.py "$CLOSED_PROXY_PORT" "$CLOSED_PROXY_REFUSED" \
   >"$HEAVY_WORK/closed-proxy.err" 2>&1 &
 HEAVY_EXTRA_PIDS+=("$!")
 for _ in $(seq 1 50); do
@@ -1667,6 +1701,626 @@ EOF
   heavy_unblock "$GODIST_REG" go "$GODIST_BLOCKED"
 
   heavy_log "CLOSED-WORLD-GODIST-OK (the toolchain came from the instance: $ran)"
+}
+
+phase_mise-java() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-java" jvm="$HEAVY_TAP_BASE/proxy/$MJ_REG/mise-java"
+  out="$(cw_out mise-java)"
+  local conf="$base/config"
+  mkdir -p "$conf" "$base/app"
+
+  # The rules `client setup` writes (RFC 0048 §4.4): the metadata host, then
+  # one per vendor_hosts entry — read off the registry list, which is where
+  # setup reads them — onto `dl/`. Only these: no github rule, so a JDK that
+  # reached github.com would be refused by the closed world, not served.
+  curl -fsS "$HEAVY_BASE/api/v1/registries" -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -o "$base/registries.json" || heavy_fail "mise-java: the registry list did not answer"
+  python3 - "$base/registries.json" "$MJ_REG" "$jvm" >"$conf/config.toml" <<'PY' \
+    || heavy_fail "mise-java: the registry list carries no vendor_hosts for $MJ_REG"
+import json, sys
+regs, name, jvm = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+reg = next(r for r in regs if r["name"] == name)
+hosts = reg["vendor_hosts"]
+assert hosts, "no vendor_hosts"
+q = lambda s: s.replace("\\", "\\\\")
+print("[settings.url_replacements]")
+print(f'"{q(r"regex:^https://mise-java\.jdx\.dev/(.+)")}" = "{jvm}/$1"')
+for h in hosts:
+    h = h.rstrip("/")
+    print(f'"{q("regex:^https://" + h.replace(".", chr(92) + ".") + "/(.+)")}" = "{jvm}/dl/{h}/$1"')
+PY
+  local miseenv=(MISE_DATA_DIR="$base/data" MISE_CACHE_DIR="$base/cache"
+                 MISE_CONFIG_DIR="$conf" MISE_STATE_DIR="$base/state" MISE_YES=1)
+  local doc="$HEAVY_BASE/proxy/$MJ_REG/mise-java/jvm/ga/linux/x86_64.json"
+
+  # obs. 3 — a blocked JDK leaves the document; mise says it has no such
+  # version, and never asks for the archive.
+  heavy_block "$MJ_REG" java "$MJ_BLOCKED"
+  heavy_mark mise-java-blocked
+  heavy_log "mise-java: mise install java@$MJ_BLOCKED, blocked"
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "java@$MJ_BLOCKED"; then
+    cat "$out" >&2
+    heavy_fail "mise-java: mise installed the blocked java@$MJ_BLOCKED"
+  fi
+  heavy_wire_re_after mise-java-blocked "GET /proxy/$MJ_REG/mise-java/jvm/ga/linux/x86_64[.]json -> 200" \
+    "mise-java: mise did not read the metadata document through the registry"
+  [[ "$(heavy_wire_count_after mise-java-blocked "/proxy/$MJ_REG/mise-java/dl/")" == 0 ]] \
+    || heavy_fail "mise-java: mise asked for an archive of the blocked java@$MJ_BLOCKED"
+  heavy_client_must_say "$out" "no metadata found for version ${MJ_BLOCKED//+/[+]}" \
+    "mise-java: mise did not report the blocked version as absent"
+
+  # obs. 4 — the blocked row's URL, asked for directly as a lock would: 403
+  # with the block's reason. obs. 5 — a URL no document lists: 404.
+  curl -fsS "$doc" -o "$base/doc.json" || heavy_fail "mise-java: the document did not answer"
+  local blocked_url jdk_url jdk_sum
+  read -r blocked_url jdk_url jdk_sum < <(python3 - "$base/doc.json" "$MJ_BLOCKED" "$MJ_JDK" <<'PY'
+import json, sys
+rows, blocked, jdk = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+key = lambda r: f'{r["vendor"]}-{r["version"]}'
+plain = lambda r: r["image_type"] == "jdk" and not r["features"] and r["jvm_impl"] == "hotspot"
+# The JRE and feature builds of the same release are coordinates of their own
+# (`temurin-jre-…`), so only the plain JDK row is the blocked one.
+assert not any(key(r) == blocked and plain(r) for r in rows), "the blocked JDK is still listed"
+j = next(r for r in rows if key(r) == jdk and plain(r) and r["file_type"] == "tar.gz")
+print("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_linux_hotspot_21.0.5_11.tar.gz",
+      j["url"], j["checksum"].split(":", 1)[1])
+PY
+  ) || heavy_fail "mise-java: the document still lists $MJ_BLOCKED, or does not list $MJ_JDK"
+  local code
+  code="$(curl -s -o "$base/blocked.txt" -w '%{http_code}' "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/${blocked_url#https://}")"
+  [[ "$code" == 403 ]] || heavy_fail "mise-java: the blocked row's URL answered $code, not 403"
+  grep -q "heavy: administratively blocked" "$base/blocked.txt" \
+    || { cat "$base/blocked.txt" >&2; heavy_fail "mise-java: the 403 does not carry the block's reason"; }
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/169.254.169.254/latest/meta-data")"
+  [[ "$code" == 404 ]] || heavy_fail "mise-java: a URL no row names answered $code, not 404"
+
+  # obs. 12 — the document read, the server restarted, the archive asked for:
+  # the new process has no index and finds the row itself. github.com
+  # redirects to release-assets.githubusercontent.com (redirect_hosts).
+  heavy_stop_server
+  heavy_start_server "$CW_CONFIG"
+  curl -fsS "$HEAVY_BASE/proxy/$MJ_REG/mise-java/dl/${jdk_url#https://}" -o "$base/jdk.tar.gz" \
+    || heavy_fail "mise-java: after a restart, the archive of $MJ_JDK did not come through"
+  [[ "$(sha256sum "$base/jdk.tar.gz" | cut -d' ' -f1)" == "$jdk_sum" ]] \
+    || heavy_fail "mise-java: the archive served is not the one its row names"
+  rm -f "$base/jdk.tar.gz"
+
+  # obs. 6 — the unblocked JDK installs through the instance with egress
+  # denied, verified by the server at cache write and by mise against the row.
+  cat >"$base/app/Main.java" <<'EOF'
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("CLOSED-WORLD-RAN " + System.getProperty("java.vendor.version"));
+    }
+}
+EOF
+  heavy_mark mise-java-install
+  heavy_log "mise-java: mise install java@$MJ_JDK, egress denied"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" install "java@$MJ_JDK" \
+    || { cat "$out" >&2; heavy_fail "mise-java: the install failed inside the closed world"; }
+  heavy_wire_re_after mise-java-install "GET /proxy/$MJ_REG/mise-java/dl/github[.]com/adoptium/[^ ]+[.]tar[.]gz -> 200" \
+    "mise-java: the JDK archive did not come through the mise-java registry"
+  cw_step "$out" "$base/app" "${DENY[@]}" "${miseenv[@]}" "${mise[@]}" exec "java@$MJ_JDK" -- java Main.java \
+    || { cat "$out" >&2; heavy_fail "mise-java: the installed JDK did not run a program"; }
+  cw_ran mise-java "$out" "Temurin-21.0.6"
+  local ran
+  ran="$(grep CLOSED-WORLD-RAN "$out" | head -1)"
+  heavy_unblock "$MJ_REG" java "$MJ_BLOCKED"
+
+  heavy_log "CLOSED-WORLD-MISE-JAVA-OK (the JDK came from the instance: $ran)"
+}
+
+# ── §27. mise core toolchains ────────────────────────────────────────────────
+#
+# RFC 0048 phase 1, §6.P obs. 1, 2, 7, 8, 10 and 11: every route the CLI states
+# for a `core:` toolchain, driven by mise with the config `registry suggest
+# --mise` generates — verbatim, so a wrong preset, rule or setting is a red
+# phase rather than a document. The registries are declared in
+# `config.closed-world.toml` under the names the CLI suggests.
+#
+# A request the closed proxy refuses never reaches the tap, so what a client
+# *tried* to reach off the instance is read from the proxy's refusal log
+# (`CLOSED_PROXY_REFUSED`). `HEAVY_CW_SKIP_SWIFT=1` leaves Swift's ~1 GB
+# toolchain unmeasured, and says so.
+
+phase_mise-core() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-core"
+  out="$(cw_out mise-core)"
+  local lockdir="$base/lock" conf="$base/config"
+  mkdir -p "$lockdir" "$conf" "$base/elixir"
+
+  # What mise 2026.11.3 locks for these: a URL where it records one; none for
+  # swift, rust and dotnet (`supports_lockfile_url` is false for all three).
+  cat >"$lockdir/mise.lock" <<EOF
+[[tools.zig]]
+version = "$MC_ZIG"
+backend = "core:zig"
+[tools.zig."platforms.linux-x64"]
+url = "https://ziglang.org/download/$MC_ZIG/zig-x86_64-linux-$MC_ZIG.tar.xz"
+
+[[tools.deno]]
+version = "$MC_DENO"
+backend = "core:deno"
+[tools.deno."platforms.linux-x64"]
+url = "https://dl.deno.land/release/v$MC_DENO/deno-x86_64-unknown-linux-gnu.zip"
+
+[[tools.erlang]]
+version = "$MC_OTP"
+backend = "core:erlang"
+[tools.erlang."platforms.linux-x64"]
+url = "https://builds.hex.pm/builds/otp/amd64/ubuntu-24.04/OTP-$MC_OTP.tar.gz"
+
+[[tools.elixir]]
+version = "$MC_ELIXIR"
+backend = "core:elixir"
+[tools.elixir."platforms.linux-x64"]
+url = "https://builds.hex.pm/builds/elixir/v$MC_ELIXIR.zip"
+
+[[tools.node]]
+version = "$MC_NODE"
+backend = "core:node"
+[tools.node."platforms.linux-x64"]
+url = "https://nodejs.org/dist/v$MC_NODE/node-v$MC_NODE-linux-x64.tar.gz"
+
+[[tools.swift]]
+version = "$MC_SWIFT"
+backend = "core:swift"
+
+[[tools.rust]]
+version = "$MC_RUST"
+backend = "core:rust"
+
+[[tools.dotnet]]
+version = "$MC_DOTNET"
+backend = "core:dotnet"
+EOF
+
+  # The generated block, against the tap. `--include-existing`: the server
+  # already has these registries, and the block is wanted all the same.
+  heavy_cli "$ADMIN_TOKEN" registry suggest --dir "$lockdir" --include-existing --mise --json
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-core: registry suggest failed"; }
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+open(sys.argv[2], "w").write(d["mise_toml"])
+open(sys.argv[3], "w").write("\n".join(d["unroutable"]) + "\n")' \
+    "$HEAVY_CLI_OUT" "$base/generated.toml" "$base/unroutable.txt" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-core: registry suggest --json did not carry a mise block"; }
+  # Obs. 2's guard on the generator: the setting travels with the zig rule.
+  grep -q '^use_community_mirrors = false' "$base/generated.toml" \
+    || { cat "$base/generated.toml" >&2; heavy_fail "mise-core: the generated block does not turn zig's community mirrors off"; }
+  grep -q '^dotnet (core:dotnet) — mise runs dotnet-install.sh' "$base/unroutable.txt" \
+    || { cat "$base/unroutable.txt" >&2; heavy_fail "mise-core: registry suggest did not name dotnet as not routable"; }
+
+  # mise lists through the versions host registry (as godist does), so its
+  # rule goes first in the generated table.
+  local mv_rule
+  mv_rule="$(printf '"regex:^https://mise-versions\\\\.jdx\\\\.dev/(.+)" = "%s/$1"' \
+    "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions")"
+  # Through the environment: `awk -v` would unescape the doubled backslashes.
+  MC_RULE="$mv_rule" awk '{ print } $0 == "[settings.url_replacements]" { print ENVIRON["MC_RULE"] }' \
+    "$base/generated.toml" >"$conf/config.toml"
+
+  # mc_env <arm> — a mise of its own per arm, so no download is served from
+  # an earlier arm's store and every request below is this arm's.
+  mc_env() {
+    MC_ENV=(MISE_DATA_DIR="$base/$1/data" MISE_CACHE_DIR="$base/$1/cache"
+            MISE_STATE_DIR="$base/$1/state" MISE_CONFIG_DIR="$conf" MISE_YES=1
+            MISE_TRUSTED_CONFIG_PATHS="$base"
+            RUSTUP_HOME="$base/$1/rustup" CARGO_HOME="$base/$1/cargo")
+  }
+  local refused
+  # The hosts refused since line <n> of the log. Captured before any grep:
+  # `tail | grep -q` under pipefail reads a match as a failure.
+  mc_refused_since() { tail -n +"$(($1 + 1))" "$CLOSED_PROXY_REFUSED"; }
+
+  # Obs. 1: zig with the generated config — ziglang.org through zig-dl, its
+  # minisig too, and no attempt at a community mirror.
+  mc_env zig; heavy_mark mc-zig; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "zig@$MC_ZIG" \
+    || { cat "$out" >&2; heavy_fail "mise-core: zig did not install with the generated config"; }
+  heavy_wire_re_after mc-zig "GET /proxy/zig-dl/generic/download/$MC_ZIG/zig-x86_64-linux-$MC_ZIG[.]tar[.]xz -> 200" \
+    "mise-core: the zig archive did not come through zig-dl"
+  heavy_wire_re_after mc-zig "GET /proxy/zig-dl/generic/download/$MC_ZIG/zig-x86_64-linux-$MC_ZIG[.]tar[.]xz[.]minisig([?][^ ]*)? -> 200" \
+    "mise-core: the zig signature did not come through zig-dl"
+  [[ "$(wc -l <"$CLOSED_PROXY_REFUSED")" == "$refused" ]] || {
+    mc_refused_since "$refused" >&2
+    heavy_fail "mise-core: with use_community_mirrors = false, mise still tried hosts off the instance"
+  }
+
+  # Obs. 2: the same without the setting — the mirrors are tried first, and
+  # refused, before the rule on ziglang.org is reached.
+  mkdir -p "$base/no-zig-setting"
+  sed '/^\[settings\.zig\]$/,+1d' "$conf/config.toml" >"$base/no-zig-setting/config.toml"
+  mc_env zig-mirrors; heavy_mark mc-zig-mirrors; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" MISE_CONFIG_DIR="$base/no-zig-setting" \
+    "${mise[@]}" install "zig@$MC_ZIG" || true
+  curl -fsS "$HEAVY_BASE/proxy/zig-dl/generic/download/community-mirrors.txt" -o "$base/mirrors.txt" \
+    || heavy_fail "mise-core: zig-dl did not serve the community mirror list"
+  local tried
+  tried="$(mc_refused_since "$refused" \
+    | grep -cFf <(sed -E 's#^https?://([^/:]+).*#\1#' "$base/mirrors.txt") || true)"
+  (( tried > 0 )) || {
+    cat "$out" >&2
+    heavy_fail "mise-core: without the setting mise tried no community mirror — obs. 2 no longer holds, and the setting may be moot"
+  }
+  heavy_log "mise-core: without the setting, mise tried $tried community mirror host(s) before ziglang.org"
+
+  # Obs. 7: deno, erlang + elixir, swift — one artifact and one checksum or
+  # signature each, through its preset.
+  mc_env deno; heavy_mark mc-deno
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "deno@$MC_DENO" \
+    || { cat "$out" >&2; heavy_fail "mise-core: deno did not install"; }
+  heavy_wire_re_after mc-deno "GET /proxy/deno-dl/generic/release/v$MC_DENO/deno-x86_64-unknown-linux-gnu[.]zip -> 200" \
+    "mise-core: the deno archive did not come through deno-dl"
+  heavy_wire_re_after mc-deno "GET /proxy/deno-dl/generic/release/v$MC_DENO/deno-x86_64-unknown-linux-gnu[.]zip[.]sha256sum -> 200" \
+    "mise-core: deno's .sha256sum did not come through deno-dl — the install was not verified"
+
+  # Elixir's install runs `elixir --version`, which needs the erlang it
+  # depends on: a project file names it, and the arm installs both. mise
+  # picks hex.pm's build only on Ubuntu 20.04–24.04 by itself (`erlang.rs:277`)
+  # and otherwise compiles through kerl, fetched from GitHub — so the build is
+  # named. (`erlang.compile = false` would also move the listing to GitHub's
+  # `erlef/otp_builds`, `erlang.rs:663`.)
+  mc_env hex; heavy_mark mc-hex
+  printf '[settings]\nerlang.precompiled_os = "ubuntu-24.04"\n\n[tools]\nerlang = "%s"\nelixir = "%s"\n' \
+    "$MC_OTP" "$MC_ELIXIR" >"$base/elixir/mise.toml"
+  cw_step "$out" "$base/elixir" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install \
+    || { cat "$out" >&2; heavy_fail "mise-core: erlang and elixir did not install"; }
+  heavy_wire_re_after mc-hex "GET /proxy/hex-builds/generic/otp/amd64/[^/ ]+/OTP-$MC_OTP[.]tar[.]gz -> 200" \
+    "mise-core: the erlang build did not come through hex-builds"
+  heavy_wire_re_after mc-hex "GET /proxy/hex-builds/generic/otp/amd64/[^/ ]+/builds[.]txt -> 200" \
+    "mise-core: erlang's builds.txt did not come through hex-builds"
+  heavy_wire_re_after mc-hex "GET /proxy/hex-builds/generic/elixir/v$MC_ELIXIR[.]zip -> 200" \
+    "mise-core: the elixir archive did not come through hex-builds"
+  # No elixir `builds.txt` here: mise reads it for a lock's checksum
+  # (`elixir.rs:199-209`), not for an install without one.
+
+  if [[ "${HEAVY_CW_SKIP_SWIFT:-0}" == "1" ]]; then
+    heavy_log "mise-core: SWIFT SKIPPED (HEAVY_CW_SKIP_SWIFT=1 — swift-dl, swift-api and the size override are NOT measured)"
+  else
+    mc_env swift; heavy_mark mc-swift
+    cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "swift@$MC_SWIFT" \
+      || { cat "$out" >&2; heavy_fail "mise-core: swift did not install"; }
+    heavy_wire_re_after mc-swift "GET /proxy/swift-api/generic/releases[.]json -> 200" \
+      "mise-core: mise did not read swift's release index through swift-api"
+    # Above the instance's 500 MiB: the registry's own limit let it through.
+    heavy_wire_re_after mc-swift "GET /proxy/swift-dl/generic/swift-$MC_SWIFT-release/[^ ]*-RELEASE-[^ ]*[.]tar[.]gz -> 200" \
+      "mise-core: the ~1 GB swift toolchain did not come through swift-dl"
+    heavy_wire_re_after mc-swift "GET /proxy/swift-dl/generic/swift-$MC_SWIFT-release/[^ ]*[.]tar[.]gz[.]sig -> 200" \
+      "mise-core: swift's signature did not come through swift-dl"
+  fi
+
+  # Obs. 11: node through the typed nodedist registry, its SHASUMS256.txt and
+  # signature too, and nothing through a generic mirror.
+  mc_env node; heavy_mark mc-node
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "node@$MC_NODE" \
+    || { cat "$out" >&2; heavy_fail "mise-core: node did not install"; }
+  heavy_wire_re_after mc-node "GET /proxy/node/nodedist/v$MC_NODE/node-v$MC_NODE-linux-x64[.]tar[.](gz|xz) -> 200" \
+    "mise-core: the node archive did not come through the nodedist registry"
+  heavy_wire_re_after mc-node "GET /proxy/node/nodedist/v$MC_NODE/SHASUMS256[.]txt -> 200" \
+    "mise-core: node's SHASUMS256.txt did not come through the nodedist registry"
+  [[ "$(heavy_wire_count_after mc-node '/generic/')" == 0 ]] \
+    || heavy_fail "mise-core: node went through a generic mirror, not the typed nodedist route"
+
+  # Obs. 10: rust through the generated [env] — rustup-init, the channel and
+  # its components from the rustup registry, nothing from static.rust-lang.org.
+  mc_env rust; heavy_mark mc-rust; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "rust@$MC_RUST" \
+    || { cat "$out" >&2; heavy_fail "mise-core: rust did not install through the generated [env]"; }
+  heavy_wire_re_after mc-rust "GET /proxy/rust/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init -> 200" \
+    "mise-core: mise did not fetch rustup-init from RUSTUP_UPDATE_ROOT"
+  heavy_wire_re_after mc-rust "GET /proxy/rust/rustup/dist/channel-rust-$MC_RUST[.]toml -> 200" \
+    "mise-core: rustup did not read its channel through the rustup registry"
+  heavy_wire_re_after mc-rust "GET /proxy/rust/rustup/dist/[0-9-]+/rustc-$MC_RUST-x86_64-unknown-linux-gnu[.]tar[.](xz|gz) -> 200" \
+    "mise-core: rustc did not come through the rustup registry"
+  local since
+  since="$(mc_refused_since "$refused")"
+  if grep -q 'rust-lang[.]org\|rustup[.]rs' <<<"$since"; then
+    heavy_fail "mise-core: rust reached for static.rust-lang.org or sh.rustup.rs past the [env]"
+  fi
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" exec "rust@$MC_RUST" -- rustc --version \
+    || { cat "$out" >&2; heavy_fail "mise-core: the installed rustc did not run"; }
+  grep -q "^rustc $MC_RUST " "$out" || { cat "$out" >&2; heavy_fail "mise-core: the rustc that ran is not $MC_RUST"; }
+
+  # Obs. 8: dotnet — the plan names it unsupported before the run, and the
+  # run agrees: its only network attempt is off the instance, refused.
+  heavy_cli "$ADMIN_TOKEN" mise plan --lock "$lockdir/mise.lock" --platform linux-x64 -o "$base/plan.json"
+  grep -q "unsupported: core:dotnet: mise runs dotnet-install.sh" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-core: mise plan did not name core:dotnet unsupported"; }
+  grep -q "note: zig: community mirrors are tried before ziglang.org" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-core: mise plan did not carry the zig note"; }
+  mc_env dotnet; heavy_mark mc-dotnet; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MC_ENV[@]}" "${mise[@]}" install "dotnet@$MC_DOTNET"; then
+    cat "$out" >&2
+    heavy_fail "mise-core: dotnet installed inside the closed world — the refusal is stale"
+  fi
+  since="$(mc_refused_since "$refused")"
+  grep -qE '^(dot[.]net|builds[.]dotnet[.]microsoft[.]com)' <<<"$since" || {
+    cat "$out" >&2
+    heavy_fail "mise-core: dotnet's failure was not the refused install script the plan predicted"
+  }
+  [[ "$(heavy_wire_count_after mc-dotnet 'dotnet-install')" == 0 ]] \
+    || heavy_fail "mise-core: dotnet-install reached the instance — a rule covers it now, and the refusal is stale"
+  heavy_log "mise-core: dotnet refused as planned, off the instance: $(sort -u <<<"$since" | tr '\n' ' ')"
+
+  heavy_log "CLOSED-WORLD-MISE-CORE-OK (zig, deno, erlang, elixir$([[ "${HEAVY_CW_SKIP_SWIFT:-0}" == 1 ]] || echo ', swift'), node, rust through the generated config; dotnet refused as planned)"
+}
+
+# ── §10e. mise vendor hosts (RFC 0047 §6.P cases 3, 4, 6) ───────────────────
+#
+# The generic presets of RFC 0047 phase 2, driven by mise with the block
+# `registry suggest --mise` writes from a lock: kubectl (aqua `http`) through
+# `k8s-dl`, ant (a vfox plugin mise embeds) through `apache-archive`, and
+# consul refused by a `hashicorp-releases` registry this config narrows to
+# `terraform/**`. The registries carry the presets' names, as in `mise-core`.
+
+phase_mise-http() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise=("${HEAVY_RUNNER[@]}" mise)
+  local out base="$HEAVY_WORK/mise-http"
+  out="$(cw_out mise-http)"
+  local lockdir="$base/lock" conf="$base/config"
+  mkdir -p "$lockdir" "$conf"
+
+  cat >"$lockdir/mise.lock" <<EOF
+[[tools.kubectl]]
+version = "$MH_KUBECTL"
+backend = "aqua:kubernetes/kubernetes/kubectl"
+[tools.kubectl."platforms.linux-x64"]
+url = "https://dl.k8s.io/v$MH_KUBECTL/bin/linux/amd64/kubectl"
+
+[[tools.ant]]
+version = "$MH_ANT"
+backend = "vfox:jdx/vfox-ant"
+[tools.ant."platforms.linux-x64"]
+url = "https://archive.apache.org/dist/ant/binaries/apache-ant-$MH_ANT-bin.tar.gz"
+
+[[tools.consul]]
+version = "$MH_CONSUL"
+backend = "aqua:hashicorp/consul"
+[tools.consul."platforms.linux-x64"]
+url = "https://releases.hashicorp.com/consul/$MH_CONSUL/consul_${MH_CONSUL}_linux_amd64.zip"
+EOF
+
+  heavy_cli "$ADMIN_TOKEN" registry suggest --dir "$lockdir" --include-existing --mise --json
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-http: registry suggest failed"; }
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+open(sys.argv[2], "w").write(d["mise_toml"])' "$HEAVY_CLI_OUT" "$base/generated.toml" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-http: registry suggest --json did not carry a mise block"; }
+  local reg
+  for reg in k8s-dl apache-archive hashicorp-releases; do
+    grep -q "/proxy/$reg/generic/" "$base/generated.toml" \
+      || { cat "$base/generated.toml" >&2; heavy_fail "mise-http: the generated block has no rule for the $reg preset"; }
+  done
+
+  # The versions host first, as in `mise-core`; signature checks off, as the
+  # air-gap runbook asks: they reach Sigstore, which a closed world cannot.
+  local mv_rule
+  mv_rule="$(printf '"regex:^https://mise-versions\\\\.jdx\\\\.dev/(.+)" = "%s/$1"' \
+    "$HEAVY_TAP_BASE/proxy/$MV_REG/mise-versions")"
+  {
+    printf '[settings]\ngithub_attestations = false\n'
+    printf '[settings.aqua]\ncosign = false\nslsa = false\nminisign = false\ngithub_attestations = false\n\n'
+    MH_RULE="$mv_rule" awk '{ print } $0 == "[settings.url_replacements]" { print ENVIRON["MH_RULE"] }' \
+      "$base/generated.toml"
+  } >"$conf/config.toml"
+
+  # mh_env <arm> — a mise of its own per arm, as `mc_env` in `mise-core`.
+  mh_env() {
+    MH_ENV=(MISE_DATA_DIR="$base/$1/data" MISE_CACHE_DIR="$base/$1/cache"
+            MISE_STATE_DIR="$base/$1/state" MISE_CONFIG_DIR="$conf" MISE_YES=1
+            MISE_TRUSTED_CONFIG_PATHS="$base")
+  }
+  local refused since
+
+  # Case 3: kubectl, the aqua `http` package a lock-less `registry suggest`
+  # calls GitHub — the binary through k8s-dl, and nothing to dl.k8s.io.
+  mh_env kubectl; heavy_mark mh-kubectl; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MH_ENV[@]}" "${mise[@]}" install "kubectl@$MH_KUBECTL" \
+    || { cat "$out" >&2; heavy_fail "mise-http: kubectl did not install through k8s-dl"; }
+  heavy_wire_re_after mh-kubectl "GET /proxy/k8s-dl/generic/v$MH_KUBECTL/bin/linux/amd64/kubectl -> 200" \
+    "mise-http: the kubectl binary did not come through k8s-dl"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q '^dl[.]k8s[.]io' <<<"$since"; then
+    heavy_fail "mise-http: kubectl reached for dl.k8s.io past the rule"
+  fi
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MH_ENV[@]}" "${mise[@]}" exec "kubectl@$MH_KUBECTL" -- kubectl version --client \
+    || { cat "$out" >&2; heavy_fail "mise-http: the installed kubectl did not run"; }
+  grep -q "Client Version: v$MH_KUBECTL" "$out" \
+    || { cat "$out" >&2; heavy_fail "mise-http: the kubectl that ran is not $MH_KUBECTL"; }
+
+  # Case 4: ant, a vfox plugin built into mise — the archive through
+  # apache-archive, and no clone of the plugin: a clone would CONNECT
+  # github.com, which the closed proxy logs.
+  mh_env ant; heavy_mark mh-ant; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MH_ENV[@]}" "${mise[@]}" install "ant@$MH_ANT" \
+    || { cat "$out" >&2; heavy_fail "mise-http: ant did not install through apache-archive"; }
+  heavy_wire_re_after mh-ant "GET /proxy/apache-archive/generic/ant/binaries/apache-ant-$MH_ANT-bin[.]tar[.]gz -> 200" \
+    "mise-http: the ant archive did not come through apache-archive"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -qE '^(github[.]com|archive[.]apache[.]org)' <<<"$since"; then
+    heavy_fail "mise-http: ant reached for $(grep -E '^(github[.]com|archive[.]apache[.]org)' <<<"$since" | sort -u | tr '\n' ' ')— the plugin was cloned, or a download went past the rule"
+  fi
+
+  # Case 6: consul through a hashicorp-releases registry narrowed to
+  # terraform — a 403 the client reports, decided by the allowlist, which
+  # runs before any upstream request (`path_proxy.rs`,
+  # `disallowed_path_is_denied_before_any_upstream_request`).
+  mh_env consul; heavy_mark mh-consul
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MH_ENV[@]}" "${mise[@]}" install "consul@$MH_CONSUL"; then
+    cat "$out" >&2
+    heavy_fail "mise-http: consul installed through a registry that admits terraform only"
+  fi
+  heavy_wire_re_after mh-consul "GET /proxy/hashicorp-releases/generic/consul/$MH_CONSUL/[^ ]* -> 403" \
+    "mise-http: the consul download was not refused 403 by hashicorp-releases"
+  [[ "$(heavy_wire_count_after mh-consul "/proxy/hashicorp-releases/generic/consul/[^ ]* -> 200")" == 0 ]] \
+    || heavy_fail "mise-http: a consul path was served by the narrowed registry"
+  grep -q '403' "$out" || { cat "$out" >&2; heavy_fail "mise-http: mise did not report the 403"; }
+  local body
+  body="$(curl -sS "$HEAVY_BASE/proxy/hashicorp-releases/generic/consul/$MH_CONSUL/consul_${MH_CONSUL}_linux_amd64.zip")"
+  grep -q "not in this registry's path_allow allowlist" <<<"$body" \
+    || heavy_fail "mise-http: the 403 is not the allowlist's: $body"
+
+  heavy_log "CLOSED-WORLD-MISE-HTTP-OK (kubectl through k8s-dl, ant through apache-archive with no clone, consul refused 403 by the allowlist)"
+}
+
+# ── §10f. mise conda channels and `dotnet:` (RFC 0047 §6.P 1, 2, 5, 8) ──────
+#
+# The block is the one `batlehub-cli setup apply --only mise --only nuget`
+# writes, not a hand-written one: each conda registry's rule derived from its
+# channel, `dotnet.registry_url`, and the NuGet.config `dotnet tool install`
+# reads. Case 8 is `mise plan` on a lock, no install.
+
+phase_mise-backends() {
+  heavy_runner_for mise "$CW_MISE"
+  local mise HEAVY_RUNNER_MISE=("${HEAVY_RUNNER[@]}")
+  heavy_runner_for dotnet "dotnet@$DOTNET_VERSION"
+  local out base="$HEAVY_WORK/mise-backends"
+  out="$(cw_out mise-backends)"
+  local home="$base/home" tools="$base/tools"
+  mkdir -p "$home" "$tools"
+  heavy_cli "$ADMIN_TOKEN" --version   # sets HEAVY_CLI, building it if needed
+  # `setup` finds a client by its binary on PATH. dotnet with invariant
+  # globalization: a runner may have no libicu, and a tool install needs none.
+  local dotnet_bin
+  dotnet_bin="$("${HEAVY_RUNNER[@]}" bash -c 'command -v dotnet')" \
+    || heavy_fail "mise-backends: no dotnet binary"
+  printf '#!/bin/sh\nDOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 exec %q "$@"\n' \
+    "$dotnet_bin" >"$tools/dotnet"
+  # By absolute path: with $tools first on PATH, a bare `mise` would be this
+  # wrapper calling itself.
+  local mise_bin
+  mise_bin="$("${HEAVY_RUNNER_MISE[@]}" bash -c 'command -v mise')" || heavy_fail "mise-backends: no mise binary"
+  printf '#!/bin/sh\nexec %q "$@"\n' "$mise_bin" >"$tools/mise"
+  chmod +x "$tools/dotnet" "$tools/mise"
+  mise=("$tools/mise")
+  local menv=(HOME="$home" XDG_CONFIG_HOME="$home/.config" PATH="$tools:$PATH")
+
+  # The kinds the mise block would find two of here, picked.
+  local code=0
+  env "${menv[@]}" "$HEAVY_CLI" --server "$HEAVY_TAP_BASE" setup apply --yes \
+    --only mise --only nuget \
+    --pick "mise-versions=$MV_REG" --pick "nodedist=$NODEDIST_REG" \
+    >"$base/setup.out" 2>&1 </dev/null || code=$?
+  [[ "$code" == 0 ]] || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup apply exited $code"; }
+  local conf="$home/.config/mise/conf.d/batlehub.toml" nugetconf="$home/.nuget/NuGet/NuGet.Config"
+  [[ -f "$conf" ]] || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup wrote no mise file"; }
+  local want
+  for want in "conda-forge/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_REG/\$1\"" \
+              "bioconda/(.+)\" = \"$HEAVY_TAP_BASE/proxy/$CONDA_BIO_REG/\$1\"" \
+              "registry_url = \"$HEAVY_TAP_BASE/proxy/$NUGET_REG/nuget/v3/index.json\""; do
+    grep -qF "$want" "$conf" || { cat "$conf" "$base/setup.out" >&2; heavy_fail "mise-backends: the mise file lacks: $want"; }
+  done
+  if grep -q '"regex:[^"]*nuget' "$conf"; then
+    cat "$conf" >&2; heavy_fail "mise-backends: the mise file carries a rule on nuget.org"
+  fi
+  grep -q "mise ≥ 2026.9.5 for .*$CONDA_BIO_REG" "$base/setup.out" \
+    || { cat "$base/setup.out" >&2; heavy_fail "mise-backends: setup did not print the conda floor"; }
+  grep -q "$NUGET_REG" "$nugetconf" || heavy_fail "mise-backends: setup wrote no NuGet.config source"
+  # The block already carries the versions host (`mise-versions` is a typed
+  # rule), so mise lists through it as in `mise-core`.
+  grep -qF "/proxy/$MV_REG/mise-versions/" "$conf" \
+    || { cat "$conf" >&2; heavy_fail "mise-backends: the mise file does not list through $MV_REG"; }
+
+  # mb_env <arm> — mise and NuGet state of its own per arm.
+  mb_env() {
+    MB_ENV=("${menv[@]}" MISE_DATA_DIR="$base/$1/data" MISE_CACHE_DIR="$base/$1/cache"
+            MISE_STATE_DIR="$base/$1/state" MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS="$base"
+            NUGET_PACKAGES="$base/$1/nuget-packages" NUGET_HTTP_CACHE_PATH="$base/$1/nuget-http")
+  }
+  local refused since
+
+  # Case 1: a conda-forge tool — repodata and package under $CONDA_REG, and
+  # nothing to conda.anaconda.org.
+  mb_env jq; heavy_mark mb-conda; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "conda:jq@$MB_CONDA_JQ" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: conda:jq did not install through $CONDA_REG"; }
+  heavy_wire_re_after mb-conda "GET /proxy/$CONDA_REG/(linux-64|noarch)/repodata[^ ]* -> 200" \
+    "mise-backends: conda-forge's repodata did not come through $CONDA_REG"
+  heavy_wire_re_after mb-conda "GET /proxy/$CONDA_REG/linux-64/jq-$MB_CONDA_JQ-[^ ]* -> 200" \
+    "mise-backends: the jq package did not come through $CONDA_REG"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q '^conda[.]anaconda[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: conda:jq reached for conda.anaconda.org past the rule"
+  fi
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" exec "conda:jq@$MB_CONDA_JQ" -- jq --version \
+    || { cat "$out" >&2; heavy_fail "mise-backends: the installed jq did not run"; }
+  grep -q "jq-$MB_CONDA_JQ" "$out" || { cat "$out" >&2; heavy_fail "mise-backends: the jq that ran is not $MB_CONDA_JQ"; }
+
+  # Case 2: a bioconda tool — its reads land on $CONDA_BIO_REG and none on
+  # $CONDA_REG: each registry answers only the channel it fronts (T1).
+  mb_env bio; heavy_mark mb-bio; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  mkdir -p "$base/bio"
+  printf '[tools]\n"conda:mosdepth" = { version = "%s", channel = "bioconda" }\n' "$MB_BIO_MOSDEPTH" \
+    >"$base/bio/mise.toml"
+  cw_step "$out" "$base/bio" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install \
+    || { cat "$out" >&2; heavy_fail "mise-backends: conda:mosdepth did not install through $CONDA_BIO_REG"; }
+  heavy_wire_re_after mb-bio "GET /proxy/$CONDA_BIO_REG/[^ ]*mosdepth-$MB_BIO_MOSDEPTH-[^ ]* -> 200" \
+    "mise-backends: the mosdepth package did not come through $CONDA_BIO_REG"
+  [[ "$(heavy_wire_count_after mb-bio "/proxy/$CONDA_REG/")" == 0 ]] \
+    || heavy_fail "mise-backends: a bioconda read landed on the conda-forge registry"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q '^conda[.]anaconda[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: conda:mosdepth reached for conda.anaconda.org past the rule"
+  fi
+
+  # Case 5: a `dotnet:` tool — mise lists through `dotnet.registry_url`, and
+  # `dotnet tool install` fetches the package through the NuGet.config setup
+  # wrote; nothing reaches nuget.org.
+  mb_env dotnet; heavy_mark mb-dotnet; refused="$(wc -l <"$CLOSED_PROXY_REFUSED")"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" ls-remote "dotnet:$MB_DOTNET_TOOL" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: mise could not list dotnet:$MB_DOTNET_TOOL"; }
+  heavy_wire_re_after mb-dotnet "GET /proxy/$NUGET_REG/nuget/v3/query[?][^ ]*q=$MB_DOTNET_TOOL[^ ]* -> 200" \
+    "mise-backends: mise did not list dotnet:$MB_DOTNET_TOOL through $NUGET_REG"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION" \
+    || { cat "$out" >&2; heavy_fail "mise-backends: dotnet:$MB_DOTNET_TOOL did not install through $NUGET_REG"; }
+  heavy_wire_re_after mb-dotnet "GET /proxy/$NUGET_REG/[^ ]*$MB_DOTNET_TOOL[.]$MB_DOTNET_TOOL_VERSION[.]nupkg -> 200" \
+    "mise-backends: the $MB_DOTNET_TOOL package did not come through $NUGET_REG"
+  since="$(tail -n +"$((refused + 1))" "$CLOSED_PROXY_REFUSED")"
+  if grep -q 'nuget[.]org' <<<"$since"; then
+    heavy_fail "mise-backends: dotnet:$MB_DOTNET_TOOL reached for nuget.org past the settings"
+  fi
+
+  # Case 5, negative arm (T7): the version blocked, a cold install fails and
+  # the package is not served.
+  heavy_block "$NUGET_REG" "$MB_DOTNET_TOOL" "$MB_DOTNET_TOOL_VERSION"
+  mb_env dotnet-blocked; heavy_mark mb-dotnet-blocked
+  if cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${MB_ENV[@]}" "${mise[@]}" install "dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION"; then
+    cat "$out" >&2
+    heavy_fail "mise-backends: the blocked dotnet:$MB_DOTNET_TOOL@$MB_DOTNET_TOOL_VERSION installed"
+  fi
+  [[ "$(heavy_wire_count_after mb-dotnet-blocked "$MB_DOTNET_TOOL[.]$MB_DOTNET_TOOL_VERSION[.]nupkg -> 200")" == 0 ]] \
+    || heavy_fail "mise-backends: the blocked package was served"
+
+  # Case 8: the plan — asdf unsupported with the git reason, the embedded vfox
+  # plugin planned with its archive URL rather than called unsupported.
+  local lockdir="$base/lock"
+  mkdir -p "$lockdir"
+  printf '%s\n' '[[tools.postgres]]' 'version = "17.2"' 'backend = "asdf:mise-plugins/mise-postgres"' '' \
+    '[[tools.ant]]' "version = \"$MH_ANT\"" 'backend = "vfox:jdx/vfox-ant"' \
+    '[tools.ant."platforms.linux-x64"]' \
+    "url = \"https://archive.apache.org/dist/ant/binaries/apache-ant-$MH_ANT-bin.tar.gz\"" \
+    >"$lockdir/mise.lock"
+  heavy_cli "$ADMIN_TOKEN" mise plan --lock "$lockdir/mise.lock" --platform linux-x64 -o "$base/plan.json"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan exited $HEAVY_CLI_CODE"; }
+  grep -q "unsupported: asdf:mise-plugins/mise-postgres: a git-fetched plugin backend" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan did not name asdf unsupported"; }
+  if grep -q "unsupported: vfox" "$HEAVY_CLI_OUT"; then
+    cat "$HEAVY_CLI_OUT" >&2; heavy_fail "mise-backends: mise plan called the embedded vfox plugin unsupported"
+  fi
+  python3 -c 'import json, sys
+p = json.load(open(sys.argv[1]))
+ant = [e for e in p["entries"] if e["tool"] == "ant"]
+assert ant and ant[0]["url"].startswith("https://archive.apache.org/dist/ant/"), ant
+assert not [e for e in p["entries"] if e["tool"] == "postgres"]' "$base/plan.json" \
+    || { cat "$base/plan.json" >&2; heavy_fail "mise-backends: the plan did not carry ant's archive URL"; }
+
+  heavy_log "CLOSED-WORLD-MISE-BACKENDS-OK (conda-forge and bioconda each through their own registry; dotnet: listed and installed through nuget, refused once blocked; asdf unsupported, ant planned)"
 }
 
 # ── §11. nvm ─────────────────────────────────────────────────────────────────

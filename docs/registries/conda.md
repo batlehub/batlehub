@@ -81,7 +81,8 @@ password <your-token>
 
 - Version listings are synthesised: BatleHub scans `repodata.json` across the standard platforms (`noarch`, `linux-64`, `osx-64`, `osx-arm64`, `win-64`) to assemble the set of available versions.
 - The release-age gate keys off the package's `timestamp` field in `repodata.json`. Packages whose upstream metadata omits a timestamp cannot be age-gated, so the gate is skipped for them.
-- mise's `conda:` backend (ffmpeg, postgres, ghc, …) comes through a registry whose upstream is `https://conda.anaconda.org/conda-forge`: `batlehub-cli registry suggest --mise` writes the `url_replacements` rule for it. A tool given another channel (`channel = "bioconda"`, or `conda.channel` set globally) is not rewritten and goes direct. See [Pointing mise at BatleHub](/use/mise).
+- A package download is checked against its entry upstream (sha256, `timestamp`), read from the package's own CEP-16 shard when the channel publishes `repodata_shards.msgpack.zst` (conda-forge does), so a download costs a few kilobytes of index rather than the subdir's whole `repodata.json` (424 MiB for conda-forge `linux-64`). A channel without shards falls back to `repodata.json`, read once per uncached download, which on a large channel takes seconds.
+- mise's `conda:` backend (ffmpeg, postgres, ghc, …) comes through the registry of the channel it reads: `batlehub-cli registry suggest --mise` and `batlehub-cli setup` write one `url_replacements` rule per conda registry, derived from its upstream, so a `channel = "bioconda"` tool lands on a registry whose upstream is `https://conda.anaconda.org/bioconda`. A registry on the bare host `https://conda.anaconda.org` names no channel and gets no rule. Needs mise 2026.9.5 or later. See [Pointing mise at BatleHub](/use/mise#conda-and-dotnet).
 
 ## See also
 

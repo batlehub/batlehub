@@ -5337,3 +5337,202 @@ fn godist_loads_bare_and_metadata_url_is_its_own() {
         "godist has no publish protocol",
     );
 }
+
+/// RFC 0048 §4.3: the per-registry size limit and `revalidate`.
+#[test]
+fn per_registry_limit_and_revalidate_are_validated() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download/**"]
+        revalidate = ["download/index.json"]
+        max_artifact_size_bytes = 1_200_000_000
+        "#,
+    )
+    .validate()
+    .expect("a limit and a revalidate entry inside path_allow load");
+    let zero = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        max_artifact_size_bytes = 0
+        "#,
+        "a zero limit must not load",
+    );
+    assert!(zero.contains("at least 1"), "{zero}");
+    let outside = validation_error(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download/**"]
+        revalidate = ["builds/index.json"]
+        "#,
+        "a revalidate entry outside path_allow must not load",
+    );
+    assert!(outside.contains("outside path_allow"), "{outside}");
+    // RFC 0047 §15 Q7: `*` in path_allow no longer crosses `/`, here as on
+    // the wire, so it no longer admits a revalidate entry one segment down.
+    let star = validation_error(
+        r#"
+        [[registries]]
+        type = "generic"
+        name = "zig-dl"
+        upstreams = ["https://ziglang.org"]
+        path_allow = ["download*"]
+        revalidate = ["download/index.json"]
+        "#,
+        "a `*` must not admit a path across `/`",
+    );
+    assert!(star.contains("outside path_allow"), "{star}");
+    let typed = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        revalidate = ["x"]
+        "#,
+        "revalidate on a typed kind must not load",
+    );
+    assert!(typed.contains("only supported on generic"), "{typed}");
+}
+
+/// RFC 0048 §6.6: a raw ceiling is compared with the registry's own limit
+/// when it sets one, not only with the instance's.
+#[test]
+fn a_raw_ceiling_is_checked_against_the_registry_limit() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+        max_artifact_size_bytes = 1000
+        [registries.raw]
+        enabled = true
+        max_size_bytes = 2000
+        "#,
+        "a raw ceiling above the registry limit must not load",
+    );
+    assert!(err.contains("raw.max_size_bytes"), "{err}");
+}
+
+/// RFC 0048 §4.3: a mise-java registry loads bare, with every default.
+#[test]
+fn mise_java_loads_bare_and_its_fields_are_its_own() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        vendor_hosts = ["github.com/adoptium/", "aka.ms/download-jdk/", "d3pxv6yz143wms.cloudfront.net"]
+        redirect_hosts = ["release-assets.githubusercontent.com"]
+        release_types = ["ga", "ea"]
+        "#,
+    )
+    .validate()
+    .expect("a mise-java registry loads");
+    for field in [
+        r#"vendor_hosts = ["cdn.azul.com/zulu/"]"#,
+        r#"redirect_hosts = ["x.example"]"#,
+        r#"release_types = ["ga"]"#,
+    ] {
+        let err = validation_error(
+            &format!("[[registries]]\ntype = \"npm\"\nname = \"npm\"\n{field}\n"),
+            "a mise-java field on npm must not load",
+        );
+        assert!(err.contains("mise-java"), "{err}");
+    }
+    validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        mode = "hybrid"
+        "#,
+        "mise-java has no publish protocol",
+    );
+}
+
+/// RFC 0048 §15 Q8: `github.com` alone would admit every account's assets.
+#[test]
+fn bare_github_vendor_host_is_rejected() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        vendor_hosts = ["github.com"]
+        "#,
+        "a bare github.com must not load",
+    );
+    assert!(err.contains("github.com/adoptium/"), "{err}");
+    for bad in [
+        r#"["*"]"#,
+        "[]",
+        r#"["https://cdn.azul.com/zulu/"]"#,
+        r#"["cdn.azul.com:443/zulu/"]"#,
+        r#"["cdn.azul.com/zulu"]"#,
+        r#"["cdn.azul.com/zulu/../"]"#,
+        r#"["*.azul.com/"]"#,
+        r#"["127.0.0.1/x/"]"#,
+    ] {
+        validation_error(
+            &format!(
+                "[[registries]]\ntype = \"mise-java\"\nname = \"jdk\"\nvendor_hosts = {bad}\n"
+            ),
+            bad,
+        );
+    }
+}
+
+/// RFC 0048 §4.3: a redirect host is compared exactly against each hop's host.
+#[test]
+fn redirect_host_with_scheme_is_rejected() {
+    for bad in [
+        r#""http://cdn.example""#,
+        r#""cdn.example/path""#,
+        r#""cdn.example:8443""#,
+        r#""*.cdn.example""#,
+        r#""169.254.169.254""#,
+    ] {
+        let err = validation_error(
+            &format!(
+                "[[registries]]\ntype = \"mise-java\"\nname = \"jdk\"\nredirect_hosts = [{bad}]\n"
+            ),
+            bad,
+        );
+        assert!(err.contains("host name only"), "{err}");
+    }
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+        release_types = ["nightly"]
+        "#,
+        "an unknown release type must not load",
+    );
+    assert!(err.contains("not one of ga, ea"), "{err}");
+}
+
+/// Every mise-java row is dated, so the gate must say what an undated one is.
+#[test]
+fn mise_java_age_gate_names_its_missing_timestamp_posture() {
+    validation_error(
+        r#"
+        [[registries]]
+        type = "mise-java"
+        name = "jdk"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 604800
+        "#,
+        "deny_missing_timestamp must be explicit",
+    );
+}

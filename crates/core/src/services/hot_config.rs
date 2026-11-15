@@ -620,6 +620,11 @@ pub struct HotConfig {
     pub signed_url: Option<Arc<SignedUrlService>>,
     /// Maximum artifact size when buffering from upstream; None = 500 MiB default.
     pub max_artifact_size_bytes: Option<u64>,
+    /// RFC 0048 §15 Q11 — per-registry overrides of `max_artifact_size_bytes`.
+    pub registry_artifact_limits: HashMap<String, u64>,
+    /// RFC 0048 §15 Q12 — per `generic` registry, the paths revalidated
+    /// upstream on every read (`*` kept inside a segment).
+    pub generic_revalidate: HashMap<String, Arc<Vec<glob::Pattern>>>,
     /// How many versions one package-detail answer carries — the default for a
     /// caller that asks for no `per_page`, and the ceiling on what one may ask
     /// for. From `[limits].versions_per_page`; see the config crate for why the
@@ -700,6 +705,8 @@ impl Default for HotConfig {
             cargo_auth_required: HashMap::new(),
             signed_url: None,
             max_artifact_size_bytes: None,
+            registry_artifact_limits: HashMap::new(),
+            generic_revalidate: HashMap::new(),
             versions_per_page: DEFAULT_VERSIONS_PER_PAGE,
             packages_per_page: DEFAULT_PACKAGES_PER_PAGE,
         }

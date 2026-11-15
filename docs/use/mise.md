@@ -116,6 +116,45 @@ clients pick up the public registry at their next refresh. Names you stop
 serving go in `retired`, which keeps answering their listings here; a client
 drops its cached archive with `rm -rf ~/.cache/mise/mise-registry`.
 
+### 1.3 conda channels and `dotnet:` tools {#conda-and-dotnet}
+
+**`conda:`.** mise's conda backend sends every repodata and package request
+through `url_replacements`, and a [conda registry](/registries/conda) fronts
+one channel. Each registry gets the rule of the channel its upstream names,
+so two registries of two channels get two rules:
+
+```toml
+[settings.url_replacements]
+"regex:^https://conda\\.anaconda\\.org/conda-forge/(.+)" = "https://hub.example.com/proxy/conda/$1"
+"regex:^https://conda\\.anaconda\\.org/bioconda/(.+)" = "https://hub.example.com/proxy/conda-bio/$1"
+```
+
+A tool reads the channel of its own `channel` option, else `conda.channel`
+(default `conda-forge`). A registry left on the server's default upstream,
+the bare `https://conda.anaconda.org`, names no channel and gets no rule:
+it would claim every channel on the host. Two registries of one channel
+would leave the second rule dead, so `setup` refuses the mise file until
+`--pick conda=<name>` says which.
+
+**`dotnet:`.** mise reads the version list itself, from
+`dotnet.registry_url`, and installs with `dotnet tool install`, a
+subprocess that reads NuGet.config and never sees `url_replacements`. So a
+[nuget registry](/registries/nuget) is two settings, not a rule:
+
+```toml
+[settings.dotnet]
+registry_url = "https://hub.example.com/proxy/nuget/nuget/v3/index.json"
+```
+
+and the NuGet.config source that `batlehub-cli setup apply --only nuget`
+writes. `setup` writes the first in the mise file and prints a reminder of
+the second when it is not configuring NuGet in the same run; without it the
+listing comes through BatleHub and the package does not, so a blocked
+version still installs. The search answer lists the one version each hit
+names, so `mise ls-remote dotnet:…` through BatleHub shows that version, not
+the whole history; an exact version (`dotnet:tool@4.6.4`) is not listed at
+all, and installs from the feed.
+
 ## 2. What an air gap needs
 
 A host with no route off the site cannot install anything mise has not
@@ -316,15 +355,33 @@ would be undoing the block by accident.
   `packslip:github.com/…` come through the `github` kind; a
   `packslip:{host}` tool reads `https://{host}/.well-known/packslip.json`,
   which no registry mirrors, and the plan says so.
-- **`dotnet:` tools, for now.** `registry suggest` names the `nuget`
-  registry they need, but `setup` does not yet write mise's
-  `dotnet.registry_url` ([RFC 0047](/rfc/0047-mise-backends-coverage)
-  phase 3), and the install is a `dotnet tool install` that reads
-  NuGet.config, not mise: run `batlehub-cli setup apply --only nuget` as well.
-- **An older mise.** The rules on this page are verified against mise
-  2026.11.3, the release the heavy suites pin. Earlier releases are not
-  measured, and one that does not know a setting only warns and lets the
-  tool go direct, so keep clients at 2026.11.3 or later.
+- **A `dotnet:` tool with the mise block alone.** The install is a
+  `dotnet tool install` that reads NuGet.config, not mise
+  ([§1.3](#conda-and-dotnet)): run `batlehub-cli setup apply --only nuget`
+  as well, or the package goes direct.
+- **`core:dotnet`.** mise runs Microsoft's `dotnet-install.sh`, whose
+  download feed is hard-coded and set only by `--azure-feed`, which mise
+  does not pass. No rewrite rule reaches it: `registry suggest` lists it
+  under *Not routable through BatleHub* and `mise plan` under `unsupported`.
+- **Compiled `core:` installs.** `python.compile`, `ruby.compile`,
+  `node.compile` and kerl-built Erlang clone their build tools over git and
+  run them as subprocesses. A lock entry for `core:node`, `core:python`,
+  `core:ruby` or `core:erlang` that records no URL is read as one, and
+  `mise plan` lists it as `unsupported`; run `mise lock` if the install is
+  in fact precompiled.
+- **An older mise.** A release that does not know a setting only warns and
+  lets the tool go direct. Each rule's floor is the oldest release its
+  wiring was read in, and `setup` prints it beside the rule:
+
+  | Rule | mise ≥ |
+  | --- | --- |
+  | `conda:` (rattler's `url_replacements` middleware) | 2026.9.5 |
+  | `dotnet.registry_url` | 2026.9.5 |
+  | every other rule on this page | 2026.11.3 |
+
+  2026.11.3 is the release the heavy suites pin; nothing older than
+  2026.9.5 was read, so the two earlier floors are what was checked, not the
+  first release that had the feature.
 - **A host you have no registry for.** The plan says so; add a registry or
   drop the tool.
 - **Live signature verification on the disconnected side.** It cannot run
@@ -348,6 +405,37 @@ would be undoing the block by accident.
   asset the lock names, and `mise plan` reads the lock rather than the
   config because that is the list the bundle must carry. Keep
   `lockfile = true` and commit the lock.
+
+### 5.1 The core toolchains {#core-toolchains}
+
+Each of mise's thirteen `core:` toolchains has one route, and
+`registry suggest --mise`, `mise plan` and `setup` agree on it
+([RFC 0048](/rfc/0048-mise-core-toolchains)):
+
+| Tool | Route |
+| --- | --- |
+| node | the [`nodedist`](/registries/nodedist) kind; the block also sets `node.mirror_url` |
+| rust | the [`rustup`](/registries/rustup) kind, through `RUSTUP_DIST_SERVER` and `RUSTUP_UPDATE_ROOT` under `[env]`: rustup is a subprocess and reads no rewrite rule |
+| go | the [`godist`](/registries/godist) kind |
+| python, bun, ruby | the `github` kind, from the URLs the lock records |
+| deno | `generic` preset `deno-dl` (`dl.deno.land`) |
+| zig | `generic` preset `zig-dl` (`ziglang.org`), with `zig.use_community_mirrors = false` |
+| elixir, erlang | `generic` preset `hex-builds` (`builds.hex.pm`); erlang on macOS comes from `erlef/otp_builds` on GitHub |
+| swift | `generic` presets `swift-dl` (`download.swift.org`, its own `max_artifact_size_bytes`) and `swift-api` (the release index) |
+| PyPy | `generic` preset `pypy-dl` (`downloads.python.org/pypy`) |
+| java | the `mise-java` kind: one rule for `mise-java.jdx.dev` and one per vendor host, written **before** the `github` rules so a JDK on `github.com/adoptium/` reaches the kind that can block it |
+| dotnet | not routable, see above |
+
+Node and Rust used to get `generic` presets (`node-dist`, `rust-dist`); a
+mirror an estate already declared that way keeps working, and `mise plan`
+still plans through it, but a block on a Node release or a Rust toolchain
+only holds through the typed kind.
+
+Zig needs its setting: mise tries seventeen community mirrors before
+`ziglang.org`, so a rule on `ziglang.org` is reached only after every one of
+them has failed. The generated block always carries
+`zig.use_community_mirrors = false`; a hand-written one is checked by
+nothing, so `mise plan` prints a `note:` for every locked zig.
 
 ## See also
 

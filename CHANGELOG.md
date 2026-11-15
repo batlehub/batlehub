@@ -43,6 +43,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`registry suggest --mise` knows eight more vendor hosts** (RFC 0047
+  phase 2): `hashicorp-releases`, `hashicorp-api`, `k8s-dl`,
+  `apache-archive`, `openshift-mirror`, `julia-dist`, `docker-dl` and
+  `android-dl` (`dl.google.com/android/`, beside the `godist` kind on
+  `/go/`), each with one literal product prefix per tool and its mutable
+  documents under `revalidate`. A tool on a `storage.googleapis.com` or S3
+  bucket gets a mirror of the locked file's directory, plus the version list
+  mise reads from the same bucket, instead of the one file.
+
 - **A JSON Schema for the config file, for editors** (RFC 0049). One
   `#:schema` line at the top of `config.toml` and an editor built on taplo
   (Even Better TOML in VS Code) completes keys and flags a mistyped one as you
@@ -79,6 +88,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gains a `registry` variable; re-importing it overwrites local edits.
 
 ### Changed
+
+- **`generic` registries: `*` in `path_allow` no longer crosses `/`**
+  (RFC 0047 §15 Q7). Only `**` does, so `go*` admits
+  `go1.25.4.linux-amd64.tar.gz` and no longer `go1.25/sub/file`. **A
+  hand-written `path_allow` that relied on `*` crossing a separator now
+  answers `403` for those paths**: write `go*/**` (or whatever `**` form
+  names the subtree) instead. The change fails closed — nothing is admitted
+  that was refused — and touches `generic` only; `deb`, `rpm`, `pacman`,
+  `jetbrains` and `apk` keep the old matching. A `revalidate` entry is
+  checked against `path_allow` the same way.
 
 - **The Helm chart validates `config` and `credentials.config` against the
   server's config schema** (RFC 0049). A values file with a misspelt key

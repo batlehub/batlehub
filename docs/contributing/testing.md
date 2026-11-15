@@ -1192,6 +1192,9 @@ gems, archives, SSRF ranges):
 - `fuzz_godist_document.rs` — Go's release document round-trips through the
   struct `index.json` is re-serialised from, and every file name the `godist`
   route accepts is a separator-free `go{version}.…` with no `..`.
+- `fuzz_mise_java_filter.rs` — mise-java's metadata document round-trips, every
+  row `filter_document` keeps is an `https://` URL under a vendor host, and
+  every `(host, path)` key the download route accepts is a safe storage key.
 - `fuzz_narinfo.rs` — narinfo round-trips, the fingerprint decodes back to
   exactly what the narinfo claims, re-signing leaves one valid `Sig`, and
   `rewrite_url` never moves the fingerprint.

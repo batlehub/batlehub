@@ -52,6 +52,7 @@ async fn healthz_returns_ok_without_db() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -97,6 +98,7 @@ async fn healthz_is_unauthenticated() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });
@@ -226,6 +228,7 @@ async fn cli_download_serves_binary_when_configured() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

@@ -15,6 +15,7 @@ pub mod helm;
 pub mod jetbrains;
 pub mod jetbrains_marketplace;
 pub mod maven;
+pub mod mise_java;
 pub mod mise_versions;
 pub mod nix;
 pub mod nodedist;

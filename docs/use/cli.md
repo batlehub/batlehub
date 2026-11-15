@@ -233,6 +233,7 @@ no test.
 | generic | yes — mise | n.a. — proxy only | n.a. — path-addressed: there is no version to fetch by | yes — `package versions`, `package readme` | n.a. — proxy only: nothing published here to yank | n.a. — a mirrored file has no version to ask about |
 | nodedist | yes — env + mise | n.a. — a vendor's releases, mirrored | n.a. — a Node release is a set of files — one per platform, plus headers, source and checksums — so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `.nvmrc` |
 | godist | yes — mise | n.a. — a vendor's releases, mirrored | n.a. — a Go release is one archive per platform plus a checksum each, so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | n.a. — `mise.lock` pins Go by URL; no Go lockfile maps to a registry yet |
+| mise-java | yes — mise | n.a. — a vendor's releases, mirrored | n.a. — a JVM build is one archive per platform, addressed by its vendor URL, so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `mise.lock` |
 | sdkman | yes — env | n.a. — a vendor's releases, mirrored | n.a. — an SDKMAN artifact is addressed by platform as well as version — one archive per platform — so "fetch this version" has no single meaning | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `.sdkmanrc` |
 | rustup | yes — env | n.a. — a vendor's releases, mirrored | n.a. — a Rust release is a manifest plus one tarball per component per target, so "fetch this version" needs a target and a profile | yes — `package versions`, `package readme` | n.a. — a vendor's releases: nothing published here to yank | yes — `rust-toolchain.toml` |
 | galaxy | yes — `~/.ansible.cfg` | yes — collection `.tar.gz` | yes — by coordinate, checksum verified | yes — `package versions`, `package readme` | yes — the generic lifecycle endpoint | n.a. — `requirements.yml` pins no exact version |
@@ -296,8 +297,8 @@ $ batlehub-cli registry suggest --client-env
 +------------------+---------+--------------------------------------+----------------------------+
 | cargo            | cargo   | (adapter default)                    | manifest, mise.lock: …     |
 | github           | github  | (adapter default)                    | mise.lock: gitleaks, …     |
-| node-dist        | generic | https://nodejs.org/dist              | mise.lock: node            |
-| rust-dist        | generic | https://static.rust-lang.org         | mise.lock: rust            |
+| node             | nodedist| (adapter default)                    | mise.lock: node            |
+| rust             | rustup  | (adapter default)                    | mise.lock: rust            |
 | helm-bin         | generic | https://get.helm.sh                  | mise.lock: helm            |
 +------------------+---------+--------------------------------------+----------------------------+
 
@@ -305,8 +306,9 @@ Add to config.toml:
 …
 Point clients at the proxy:
 
-# node-dist (generic)
-export NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node-dist/generic"
+# node (nodedist)
+export NVM_NODEJS_ORG_MIRROR="https://batlehub.example.com/proxy/node/nodedist"
+…
 ```
 
 | Flag | Description |
@@ -327,9 +329,11 @@ mirror. Verified against `mise install`:
 - aqua resolves *and downloads* assets through `api.github.com/repos/…/releases/assets/{id}`,
   so the `api.github.com` rule is the load-bearing one — not the
   `github.com/…/releases/download/…` rule.
-- `core:node` fetches **both** the platform tarball and the `node-v<ver>.tar.gz`
-  source tarball, which is why the suggested `path_allow` is `v*/**` rather than
-  a platform-only glob.
+- `core:node` and `core:rust` go through their typed kinds, `nodedist` and
+  `rustup`; the block adds `node.mirror_url` and, for rustup — a subprocess
+  that reads no rule — `RUSTUP_DIST_SERVER` under `[env]`. Zig's rule comes
+  with `zig.use_community_mirrors = false`. Every core toolchain's route is in
+  [mise § 5.1](/use/mise#core-toolchains).
 
 Backends that shell out to another tool (`cargo:`, `pipx:`, `npm:`, `go:`) are
 **not** covered — those processes read their own config, not mise's. The

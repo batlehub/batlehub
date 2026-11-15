@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::suggest::{
-    lockless_backend_note, proxy_path_for, registry_kind_for_host, split_url,
+    lockless_backend_note, proxy_path_for, registry_kinds_for_host, split_url,
     unsupported_backend_reason, vfox_subprocess_note,
 };
 
@@ -166,6 +166,7 @@ pub fn plan_from_lock(
         .cloned()
         .unwrap_or_default();
 
+    let mut java_tools: BTreeSet<&str> = BTreeSet::new();
     for (tool_name, value) in &tools {
         // `[[tools.x]]` yields an array; a bare table is tolerated, as the
         // suggest path already tolerates it.
@@ -175,6 +176,12 @@ pub fn plan_from_lock(
             _ => continue,
         };
         for table in tables {
+            let backend = table.get("backend").and_then(|b| b.as_str());
+            if backend.unwrap_or(tool_name) == crate::api::suggest::JAVA_BACKEND
+                || (backend.is_none() && tool_name == "java")
+            {
+                java_tools.insert(tool_name);
+            }
             plan_one_tool(
                 tool_name,
                 table,
@@ -187,37 +194,39 @@ pub fn plan_from_lock(
         }
     }
 
-    // A host is mirrored when some configured registry has the kind that
-    // host maps to. Kind rather than name, because the plan is written
-    // before anyone chooses names and two registries of the same kind serve
-    // the same hosts.
-    let configured: BTreeSet<&str> = known.iter().map(|r| r.registry_type.as_str()).collect();
+    // A host is mirrored when some configured registry has a kind that
+    // host maps to, the preferred kind first. Kind rather than name, because
+    // the plan is written before anyone chooses names and two registries of
+    // the same kind serve the same hosts.
     for entry in &mut entries {
         let Some((host, path)) = split_url(&entry.url) else {
             continue;
         };
-        match registry_kind_for_host(host, path) {
-            Some(kind) if configured.contains(kind) => {
-                let registry =
-                    known
-                        .iter()
-                        .find(|r| r.registry_type == kind)
-                        .map(|r| PlanRegistry {
-                            name: r.name.clone(),
-                            registry_type: r.registry_type.clone(),
-                        });
-                entry.key = registry
-                    .as_ref()
-                    .map(|r| storage_key(&r.name, &entry.tool, &entry.version, &entry.url));
-                entry.proxy_path = registry
-                    .as_ref()
-                    .and_then(|r| proxy_path_for(&entry.url, &r.name, &r.registry_type));
-                entry.registry = registry;
-            }
-            _ => {
-                hosts.insert(host.to_owned());
-            }
-        }
+        // A JDK's URL is on a vendor host, `github.com` among them; it goes
+        // through `mise-java` or nowhere (RFC 0048 §15 Q1).
+        let kinds = if java_tools.contains(entry.tool.as_str()) {
+            vec!["mise-java"]
+        } else {
+            registry_kinds_for_host(host, path)
+        };
+        let found = kinds
+            .into_iter()
+            .find_map(|kind| known.iter().find(|r| r.registry_type == kind));
+        let Some(r) = found else {
+            hosts.insert(host.to_owned());
+            continue;
+        };
+        entry.key = Some(storage_key(
+            &r.name,
+            &entry.tool,
+            &entry.version,
+            &entry.url,
+        ));
+        entry.proxy_path = proxy_path_for(&entry.url, &r.name, &r.registry_type);
+        entry.registry = Some(PlanRegistry {
+            name: r.name.clone(),
+            registry_type: r.registry_type.clone(),
+        });
     }
 
     let mut platforms_out: Vec<String> = if platforms.is_empty() {
@@ -342,6 +351,14 @@ fn plan_one_tool(
         }
     }
     notes.extend(vfox_subprocess_note(backend));
+    // A hand-written block is checked by nothing else (RFC 0048 §4.3).
+    if backend == "core:zig" {
+        notes.push(
+            "zig: community mirrors are tried before ziglang.org; keep \
+             zig.use_community_mirrors = false"
+                .to_owned(),
+        );
+    }
     notes.dedup();
 }
 
@@ -618,6 +635,62 @@ backend = "vfox:mise-plugins/vfox-php"
         assert!(read.notes.is_empty());
     }
 
+    /// RFC 0048 §6.2, §13: a `node-dist` generic mirror an estate declared
+    /// before the typed suggestion still plans Node; `nodedist` wins when
+    /// both exist. `core:dotnet` is refused with its reason, and zig carries
+    /// its mirrors note.
+    #[test]
+    fn core_toolchains_plan_through_either_kind_and_dotnet_is_refused() {
+        let lock = r#"
+[[tools.node]]
+version = "24.11.0"
+backend = "core:node"
+[tools.node."platforms.linux-x64"]
+url = "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.gz"
+
+[[tools.dotnet]]
+version = "9.0.100"
+backend = "core:dotnet"
+
+[[tools.zig]]
+version = "0.15.2"
+backend = "core:zig"
+[tools.zig."platforms.linux-x64"]
+url = "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+"#;
+        let generic = KnownRegistry {
+            name: "node-dist".into(),
+            registry_type: "generic".into(),
+        };
+        let plan = plan_from_lock("mise.lock", lock, &[], std::slice::from_ref(&generic)).unwrap();
+        let node = plan.entries.iter().find(|e| e.tool == "node").unwrap();
+        assert_eq!(
+            node.proxy_path.as_deref(),
+            Some("/proxy/node-dist/generic/v24.11.0/node-v24.11.0-linux-x64.tar.gz")
+        );
+        let typed = KnownRegistry {
+            name: "node".into(),
+            registry_type: "nodedist".into(),
+        };
+        let plan = plan_from_lock("mise.lock", lock, &[], &[generic, typed]).unwrap();
+        let node = plan.entries.iter().find(|e| e.tool == "node").unwrap();
+        assert_eq!(
+            node.proxy_path.as_deref(),
+            Some("/proxy/node/nodedist/v24.11.0/node-v24.11.0-linux-x64.tar.gz")
+        );
+        assert_eq!(plan.unsupported.len(), 1, "{:?}", plan.unsupported);
+        assert!(plan.unsupported[0]
+            .reason
+            .starts_with("core:dotnet: mise runs dotnet-install.sh"));
+        assert!(
+            plan.notes
+                .iter()
+                .any(|n| n.contains("zig.use_community_mirrors = false")),
+            "{:?}",
+            plan.notes
+        );
+    }
+
     #[test]
     fn a_platform_filter_narrows_the_entries_and_not_the_platform_list() {
         let plan = plan_from_lock("mise.lock", LOCK, &["linux-x64".into()], &known()).unwrap();
@@ -749,5 +822,39 @@ url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/9
         // different thing and not an error.
         let plan = plan_from_lock("mise.lock", "", &[], &[]).unwrap();
         assert!(plan.entries.is_empty());
+    }
+
+    /// A JDK's URL is on `github.com`, and still plans through mise-java
+    /// when one is configured: only that kind can block it (RFC 0048 §15 Q1).
+    #[test]
+    fn a_locked_jdk_plans_through_mise_java() {
+        let lock = r#"
+[[tools.java]]
+version = "temurin-21.0.5+11.0.LTS"
+backend = "core:java"
+[tools.java."platforms.linux-x64"]
+url = "https://github.com/adoptium/t/releases/download/x/a.tar.gz"
+"#;
+        let known = vec![
+            KnownRegistry {
+                name: "gh".into(),
+                registry_type: "github".into(),
+            },
+            KnownRegistry {
+                name: "jdk".into(),
+                registry_type: "mise-java".into(),
+            },
+        ];
+        let plan = plan_from_lock("mise.lock", lock, &[], &known).unwrap();
+        let e = &plan.entries[0];
+        assert_eq!(e.registry.as_ref().unwrap().name, "jdk");
+        assert_eq!(
+            e.proxy_path.as_deref(),
+            Some("/proxy/jdk/mise-java/dl/github.com/adoptium/t/releases/download/x/a.tar.gz")
+        );
+        // Without a mise-java registry, the host is unmirrored, not github's.
+        let plan = plan_from_lock("mise.lock", lock, &[], &known[..1]).unwrap();
+        assert!(plan.entries[0].registry.is_none());
+        assert_eq!(plan.unmirrored_hosts, ["github.com"]);
     }
 }

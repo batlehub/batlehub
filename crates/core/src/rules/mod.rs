@@ -97,9 +97,10 @@ pub trait Rule: Send + Sync {
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision;
 
     /// What this rule would hide from a *listing* for `identity`, or `None`.
-    /// Only `release_age_gate` answers, and only the `mise-versions` kind
-    /// asks: it has no artifact for the gate to fire on (RFC 0043 §11,
-    /// decision 2).
+    /// Only `release_age_gate` answers. `mise-versions` asks because it has
+    /// no artifact for the gate to fire on (RFC 0043 §11, decision 2);
+    /// `mise-java` because a listed build its download refuses fails mise
+    /// later and louder (RFC 0048 §5.2).
     fn listing_age_gate(&self, _identity: &crate::entities::Identity) -> Option<ListingAgeGate> {
         None
     }

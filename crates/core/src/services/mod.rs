@@ -24,6 +24,7 @@ pub mod integrity;
 pub mod listing_synthesis;
 pub mod local_registry;
 pub mod metrics;
+pub mod mise_java;
 pub mod mise_versions;
 pub mod mise_wire;
 pub mod nix;

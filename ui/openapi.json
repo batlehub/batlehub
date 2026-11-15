@@ -13902,6 +13902,134 @@
         ]
       }
     },
+    "/proxy/{registry}/mise-java/dl/{path}": {
+      "get": {
+        "tags": [
+          "proxy/mise-java"
+        ],
+        "summary": "One archive, by its row's URL.",
+        "operationId": "mise_java_download",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A row's URL without its scheme: {host}/{path} (e.g. cdn.azul.com/zulu/bin/zulu21.38.21-ca-jdk21.0.5-linux_x64.tar.gz)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive (cached, verified against the row's checksum when it has a SHA-256, SHA-512 or SHA-1 one)",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the build is blocked"
+          },
+          "404": {
+            "description": "No row of this registry's documents names this URL, or unknown registry"
+          },
+          "502": {
+            "description": "The vendor failed, or redirected off https, vendor_hosts and redirect_hosts"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/mise-java/jvm/{release_type}/{os}/{arch}.json": {
+      "get": {
+        "tags": [
+          "proxy/mise-java"
+        ],
+        "summary": "One metadata document, filtered.",
+        "operationId": "mise_java_document",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "release_type",
+            "in": "path",
+            "description": "ga or ea, as the registry's release_types allow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "os",
+            "in": "path",
+            "description": "linux, macosx, windows or alpine-linux",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "path",
+            "description": "x86_64, aarch64, i686, arm32-vfp-hflt, ppc64le, s390x or riscv64",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "mise-java's metadata rows for the platform: rows outside vendor_hosts, blocked builds and builds younger than the age gate removed; URLs unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, platform or release type"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/mise-versions/_registry/latest.tar.zst": {
       "get": {
         "tags": [
@@ -29156,6 +29284,13 @@
             ],
             "description": "The registry's own hostname-rooted URL (`https://npm.acme.io`) when one is\nconfigured, otherwise `null` — clients then fall back to\n`{origin}/proxy/{name}`.\n\nShown to anonymous callers too. The endpoint already filters by\n`accessible_registries_for`, so a caller only ever sees registries they\ncan already reach; withholding the host from them would break the Setup\nGuide while hiding a name that is in public DNS anyway."
           },
+          "redirect_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hosts those vendors may redirect a download to (RFC 0048 §15 Q2)."
+          },
           "signed_downloads": {
             "type": "boolean",
             "description": "Whether this registry mints signed download URLs (RFC 0012), and can\ntherefore be closed to anonymous callers even though the client fetches\nartifacts without credentials.\n\nHere so the Setup Guide can stop telling a Terraform user to open their\nregistry when it does not need opening. Not a secret: it changes the\nadvice on a page the caller can already read, and a caller who can list\na registry can discover the same fact by fetching from it."
@@ -29176,6 +29311,13 @@
               "type": "string"
             },
             "description": "Every upstream a path-addressed registry (`generic`, `deb`, …) mirrors,\npath for path; omitted for the other kinds. `batlehub-cli setup apply`\nturns each into a mise rule `^{upstream}/(.+)` → `{proxy}/$1`\n(RFC 0038 §6.4). Shown on the same terms as `upstream`."
+          },
+          "vendor_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A `mise-java` registry's download allowlist, `host/prefix/` entries:\n`batlehub-cli setup apply` writes one mise rule per entry, before the\n`github` rules (RFC 0048 §4.4). Omitted for every other kind; shown on\nthe same terms as `upstream`."
           }
         }
       },
@@ -31706,6 +31848,10 @@
     {
       "name": "proxy/mise-versions",
       "description": "mise's versions host (mise-versions.jdx.dev) — tool version lists filtered by the block list and the age gate, the install beacon absorbed on site, the GitHub mirror refused so mise asks the rerouted GitHub API (RFC 0043)"
+    },
+    {
+      "name": "proxy/mise-java",
+      "description": "mise's JVM catalogue (mise's core:java) — mise-java.jdx.dev's metadata documents filtered by vendor_hosts, the block list and the age gate, and each row's archive fetched from its vendor over https, redirects checked against vendor_hosts and redirect_hosts, so a JDK can be blocked, age-gated and air-gapped (RFC 0048)"
     },
     {
       "name": "proxy/godist",

@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use serde::Deserialize;
 
 use crate::registry::encode_path;
@@ -33,7 +37,29 @@ pub struct CondaRegistryClient {
     /// Platforms queried when `list_versions` is called.
     /// Defaults to the five most common platforms.
     pub(super) list_platforms: Vec<String>,
+    /// How long a subdir's shard index is reused; the registry's `metadata_ttl`.
+    pub(super) shard_index_ttl: Duration,
+    /// Subdir → its CEP-16 shard index, or `None` when the channel has none.
+    pub(super) shard_indexes: Mutex<HashMap<String, CachedShardIndex>>,
 }
+
+/// One subdir's shard index as last read, and when.
+pub(super) struct CachedShardIndex {
+    pub(super) read_at: Instant,
+    pub(super) index: Option<Arc<ShardIndex>>,
+}
+
+/// A subdir's shard index, reduced to what an artifact lookup reads.
+pub(super) struct ShardIndex {
+    /// Package name → its shard's sha256, hex.
+    pub(super) shards: HashMap<String, String>,
+    /// Where the shards are: the index's directory unless `shards_base_url` says otherwise.
+    pub(super) shards_base: reqwest::Url,
+    pub(super) cache_control: Option<String>,
+}
+
+/// Used when the registry configures no `metadata_ttl`.
+const DEFAULT_SHARD_INDEX_TTL: Duration = Duration::from_secs(10 * 60);
 
 impl CondaRegistryClient {
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
@@ -43,7 +69,17 @@ impl CondaRegistryClient {
             base_url: base_url.into(),
             basic_auth: opts.basic_auth.clone(),
             list_platforms: default_list_platforms(),
+            shard_index_ttl: DEFAULT_SHARD_INDEX_TTL,
+            shard_indexes: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// How long a subdir's shard index is reused before it is re-read upstream.
+    pub fn with_index_ttl(mut self, ttl: Option<Duration>) -> Self {
+        if let Some(ttl) = ttl {
+            self.shard_index_ttl = ttl;
+        }
+        self
     }
 
     pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {

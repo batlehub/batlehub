@@ -216,6 +216,13 @@ config:
         user: ["releases:read", "source:read"]
         admin: ["*"]
 
+    - type: "mise-java"
+      name: "jdk"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
     - type: "sdkman"
       name: "sdkman"
       rbac:

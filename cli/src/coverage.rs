@@ -73,6 +73,7 @@ fn configure(kind: RegistryKind) -> Cell {
         K::Github | K::Forgejo | K::Gitlab | K::Generic => Done("mise"),
         K::Nodedist => Done("env + mise"),
         K::Godist => Done("mise"),
+        K::MiseJava => Done("mise"),
         K::MiseVersions => Done("mise"),
         K::Rustup | K::Sdkman => Done("env"),
         K::Openvsx | K::VscodeMarketplace | K::JetbrainsMarketplace => Done("`setup ide`"),
@@ -110,7 +111,7 @@ fn publish(kind: RegistryKind) -> Cell {
         K::Jetbrains | K::Github | K::Forgejo | K::Gitlab | K::Generic => {
             NotApplicable("proxy only")
         }
-        K::Nodedist | K::Godist | K::Sdkman | K::Rustup => {
+        K::Nodedist | K::Godist | K::MiseJava | K::Sdkman | K::Rustup => {
             NotApplicable("a vendor's releases, mirrored")
         }
         K::MiseVersions => NotApplicable("a version list, mirrored"),
@@ -147,6 +148,7 @@ fn consult(kind: RegistryKind) -> Cell {
         | K::Generic
         | K::Nodedist
         | K::Godist
+        | K::MiseJava
         | K::Sdkman
         | K::Rustup
         | K::MiseVersions => Done("`package versions`, `package readme`"),
@@ -179,7 +181,7 @@ fn lifecycle(kind: RegistryKind) -> Cell {
         K::Jetbrains | K::Github | K::Forgejo | K::Gitlab | K::Generic => {
             NotApplicable("proxy only: nothing published here to yank")
         }
-        K::Nodedist | K::Godist | K::Sdkman | K::Rustup => {
+        K::Nodedist | K::Godist | K::MiseJava | K::Sdkman | K::Rustup => {
             NotApplicable("a vendor's releases: nothing published here to yank")
         }
         K::MiseVersions => NotApplicable("a version list: nothing published here to yank"),
@@ -205,6 +207,7 @@ fn check(kind: RegistryKind) -> Cell {
         K::Godist => {
             NotApplicable("`mise.lock` pins Go by URL; no Go lockfile maps to a registry yet")
         }
+        K::MiseJava => Done("`mise.lock`"),
         K::Sdkman => Done("`.sdkmanrc`"),
         K::Rustup => Done("`rust-toolchain.toml`"),
         K::Maven => NotApplicable("Maven has no lockfile"),

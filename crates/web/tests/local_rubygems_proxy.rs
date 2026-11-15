@@ -64,6 +64,7 @@ async fn make_rubygems_proxy_app() -> impl actix_web::dev::Service<
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

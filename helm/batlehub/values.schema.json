@@ -1967,6 +1967,12 @@
           "$ref": "#/$defs/IntegrityConfig",
           "description": "Optional artifact integrity (checksum) verification on proxied downloads.\nWhen absent, the defaults apply: verify against any advertised checksum\nand block on a mismatch; warn (do not block) when none is advertised."
         },
+        "max_artifact_size_bytes": {
+          "description": "RFC 0048 §15 Q11 — this registry's artifact size limit, in bytes,\noverriding `[limits] max_artifact_size_bytes` for this registry alone,\nabove or below it. Absent: the instance limit (500 MiB by default).\n\n```toml\nmax_artifact_size_bytes = 1_200_000_000   # Swift tarballs reach 1 007 MB\n```",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_pending_nars": {
           "description": "How many unclaimed `nix` NAR uploads one publisher may hold at once\n(RFC 0028 §4.4). Default 64; the next one answers `429`.\n\nThe floor that matters is the client's own concurrency: `nix copy`\nparallelises over `http-connections` (default **25**), and each\nin-flight path holds at most one unclaimed NAR, so a value below that\nwill refuse legitimate copies.",
           "format": "uint32",
@@ -2005,7 +2011,7 @@
         },
         "path_allow": {
           "default": [],
-          "description": "Glob allowlist of upstream paths this registry may serve. Only meaningful\nfor path-addressed registry types (`deb`/`rpm`/`pacman`/`jetbrains`/`generic`),\nwhere the request path is passed straight through to the upstream — without\nit, a registry pointed at a shared host (`storage.googleapis.com`, a CDN\nserving many vendors) would relay *every* path on that host.\n\nPatterns are matched against the upstream-relative path with\n[`glob::Pattern`] semantics, where `*` also crosses `/`. Required for\n`generic`; `[\"**\"]` is the explicit opt-out that allows everything.\n\n```toml\npath_allow = [\"v*/node-v*-linux-x64.tar.*\", \"v*/SHASUMS256.txt*\"]\n```",
+          "description": "Glob allowlist of upstream paths this registry may serve. Only meaningful\nfor path-addressed registry types (`deb`/`rpm`/`pacman`/`jetbrains`/`generic`),\nwhere the request path is passed straight through to the upstream — without\nit, a registry pointed at a shared host (`storage.googleapis.com`, a CDN\nserving many vendors) would relay *every* path on that host.\n\nPatterns are matched against the upstream-relative path with\n[`glob::Pattern`] semantics. On `generic`, `*` stays inside one path\nsegment and only `**` crosses `/` (RFC 0047 §15 Q7); on the other kinds\n`*` also crosses `/`. Required for `generic`; `[\"**\"]` is the explicit\nopt-out that allows everything.\n\n```toml\npath_allow = [\"v*/node-v*-linux-x64.tar.*\", \"v*/SHASUMS256.txt*\"]\n```",
           "items": {
             "type": "string"
           },
@@ -2060,9 +2066,23 @@
           "$ref": "#/$defs/ReadmeConfig",
           "description": "Optional README capture configuration.\n\nUnlike [`Self::sbom`], **absent means enabled**: for the metadata-borne\nregistry kinds the text is a field of a document the proxy already\nfetches and parses, so the default costs one deserialised field\n(RFC 0007 §4.1)."
         },
+        "redirect_hosts": {
+          "description": "mise-java only: hosts a vendor host may redirect a download to. Every\nhop must be `https://` and land on `vendor_hosts` or here, or the\ndownload is a `502` and nothing is cached (RFC 0048 §15 Q2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "refs": {
           "$ref": "#/$defs/RefsConfig",
           "description": "`[registries.refs]` — how long a forge ref → commit resolution is\ntrusted (RFC 0019 §4.1). Forge kinds only; validation refuses it\nelsewhere. Absent means the defaults: branches every minute, tags every\nhour."
+        },
+        "release_types": {
+          "description": "mise-java only: the release types served, `ga` and/or `ea`. Default\n`[\"ga\"]` (RFC 0048 §4.1).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "repo_signing": {
           "$ref": "#/$defs/RepoSigningConfig",
@@ -2076,6 +2096,14 @@
         "retention": {
           "$ref": "#/$defs/RetentionConfig",
           "description": "Optional retention policy for what this registry holds *locally*\n(RFC 0016). Absent means keep everything, forever, which is what every\ninstance does today.\n\nNot to be confused with [`CachePolicy`]'s `idle_days`/`keep_latest_n`,\nwhich govern the **proxy cache** and are a different problem: an evicted\ncache entry is re-fetchable from upstream, a reclaimed local version is\nfrequently the only copy in existence (RFC 0016 §5.1). The two are\ndeliberately separate blocks with opposite defaults, and this one must not\nbe implemented by widening that one."
+        },
+        "revalidate": {
+          "default": [],
+          "description": "RFC 0048 §15 Q12 — `generic` only: paths revalidated upstream on every\nread instead of cached forever, for a mutable document under an\notherwise immutable tree (`release/stable.txt`, `builds.txt`). Globs\nmatched like `path_allow`, with `*` kept inside one segment; each\nmust also be admitted by `path_allow`. On an upstream error the cached\ncopy is served stale. Absent: nothing is revalidated.\n\n```toml\nrevalidate = [\"elixir/builds.txt\", \"otp/*/*/builds.txt\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "roles": {
           "$ref": "#/$defs/GalaxyRoleMode",
@@ -2135,6 +2163,13 @@
         "upstreams": {
           "default": [],
           "description": "Upstream URLs tried in order; if a registry returns 404 the next one is tried.\nWhen empty the adapter's built-in default (e.g. registry.npmjs.org) is used.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "vendor_hosts": {
+          "description": "mise-java only: where a download may come from, as `host/prefix/`\nentries (a bare host only where it is single-tenant). A metadata row\nwhose URL is under none of them is dropped from the served document and\nnever fetched. Defaults to the set measured in RFC 0048 §6.1.",
           "items": {
             "type": "string"
           },

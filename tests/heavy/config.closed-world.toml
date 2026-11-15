@@ -9,9 +9,10 @@
 # about reachability, not about credentials, and the authorization suites
 # already own that question.
 #
-# Rust is deliberately absent: `tests/heavy/rustup.sh` is the closed world for
+# Rust is absent as a language: `tests/heavy/rustup.sh` is the closed world for
 # rustup and cargo, and it proves more (the toolchain comes from the instance
-# too, because there rustup *is* the package manager).
+# too, because there rustup *is* the package manager). The `rust` registry
+# below is mise's route to it (`mise-core`).
 
 [server]
 host = "127.0.0.1"
@@ -151,9 +152,25 @@ name = "conda-${HEAVY_RUN}"
 mode = "proxy"
 upstreams = ["https://conda.anaconda.org/conda-forge"]
 
+# `upstreams:read` for anonymous too: `setup` derives the mise rule from the
+# channel the registry names (RFC 0047 §6.2) and the `mise-backends` phase runs
+# it without a token — without the grant both conda rules are skipped.
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read"]
-user = ["releases:read", "releases:list", "source:read"]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+admin = ["*"]
+
+# A second channel on the same host, for the `mise-backends` phase (RFC 0047
+# §6.P case 2): its own rule, and none of conda-forge's reads.
+[[registries]]
+type = "conda"
+name = "conda-bio-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/bioconda"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 admin = ["*"]
 
 # ── Terraform: registry.terraform.io ─────────────────────────────────────────
@@ -260,6 +277,139 @@ mode = "proxy"
 [registries.rbac]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise-java: mise's JVM catalogue and its vendor hosts ────────────────────
+# RFC 0048 §6.3. Every list defaulted: the measured vendor_hosts and
+# redirect_hosts, GA only. The server keeps its egress; mise has none.
+[[registries]]
+type = "mise-java"
+name = "mise-java-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise-core: the core toolchains' routes (RFC 0048 phase 1, §6.P) ─────────
+# Named exactly as `batlehub-cli registry suggest` names them, without the run
+# id, so the phase runs the generated mise block verbatim. Each `generic` block
+# is the CLI's preset, which `core_toolchains_render_their_presets_settings_and_refusals`
+# also loads through this loader.
+[[registries]]
+type = "nodedist"
+name = "node"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "rustup"
+name = "rust"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "zig-dl"
+mode = "proxy"
+upstreams = ["https://ziglang.org"]
+path_allow = ["builds/**", "download/**"]
+revalidate = ["download/community-mirrors.txt", "download/index.json"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "deno-dl"
+mode = "proxy"
+upstreams = ["https://dl.deno.land"]
+path_allow = ["release/**"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "hex-builds"
+mode = "proxy"
+upstreams = ["https://builds.hex.pm/builds"]
+path_allow = ["elixir/**", "otp/**"]
+revalidate = ["elixir/builds.txt", "otp/*/*/builds.txt"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "swift-dl"
+mode = "proxy"
+upstreams = ["https://download.swift.org"]
+path_allow = ["swift-*-release/**"]
+max_artifact_size_bytes = 1700000000
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "swift-api"
+mode = "proxy"
+upstreams = ["https://www.swift.org/api/v1/install"]
+path_allow = ["releases.json"]
+revalidate = ["releases.json"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+# ── mise-http: RFC 0047 phase 2's presets (§6.P cases 3, 4, 6) ──────────────
+# Named and shaped as `registry suggest` writes them, except
+# `hashicorp-releases`, narrowed to terraform so consul is the refusal of
+# case 6.
+[[registries]]
+type = "generic"
+name = "k8s-dl"
+mode = "proxy"
+upstreams = ["https://dl.k8s.io"]
+path_allow = ["v1.*/bin/*/*/kubectl*", "release/stable.txt"]
+revalidate = ["release/stable.txt"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "apache-archive"
+mode = "proxy"
+upstreams = ["https://archive.apache.org/dist"]
+path_allow = ["ant/**", "groovy/**", "maven/**", "spark/**", "tomcat/**"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "hashicorp-releases"
+mode = "proxy"
+upstreams = ["https://releases.hashicorp.com"]
+path_allow = ["terraform/**"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
 admin = ["*"]
 
 # ── SDKMAN: api.sdkman.io, and the broker that 302s to the vendor's CDN ──────

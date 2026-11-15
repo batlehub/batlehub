@@ -63,8 +63,8 @@ podSecurityContext:
     type: RuntimeDefault
 
 # readOnlyRootFilesystem is safe here: the server writes only to the cache mount
-# (its own volume) and never to a temp directory. If you add a feature that needs
-# scratch space, mount an emptyDir rather than relaxing this.
+# (its own volume) and to the `fillScratch` emptyDir on /tmp. If you add a
+# feature that needs scratch space, mount an emptyDir rather than relaxing this.
 # -- Container-level security context. The server writes only to the cache
 # mount, so the root filesystem stays read-only.
 securityContext:
@@ -596,6 +596,15 @@ persistence:
   # `resources.limits.ephemeral-storage` or the node evicts the pod instead of
   # the cache evicting itself.
   ephemeralSizeLimit: 1Gi
+
+# ── Cold-fill scratch ─────────────────────────────────────────────────────────
+fillScratch:
+  # -- Size of the emptyDir mounted on /tmp, where a cold fill spools the bytes
+  # it streams to clients while it stores them (RFC 0048 §15 Q9). It holds the
+  # artifacts being filled at once, each up to its registry's
+  # `max_artifact_size_bytes`. When the scratch file cannot be written the fill
+  # still runs, and is served once it has ended — store-then-serve.
+  sizeLimit: 2Gi
 
 # ── Extra / external manifests ────────────────────────────────────────────────
 # 0..N additional Kubernetes manifests rendered by this chart. Each entry:

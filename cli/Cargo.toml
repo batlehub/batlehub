@@ -69,6 +69,7 @@ rustix = { version = "1", default-features = false, features = ["std", "process"
 batlehub-web      = { path = "../crates/web" }
 batlehub-adapters = { path = "../crates/adapters" }
 batlehub-config   = { path = "../crates/config" }
+glob              = { workspace = true }
 tokio             = { workspace = true }
 actix-web         = { workspace = true }
 utoipa-actix-web  = { workspace = true }

@@ -53,7 +53,7 @@ bzip2 = "0.6"
 flate2 = "1"
 
 [dev-dependencies]
-batlehub-adapters = { path = "../adapters" }
+batlehub-adapters = { path = "../adapters", features = ["test-transport"] }
 # Test-only: sign a bundle manifest, to walk RFC 0008's import through its
 # own door rather than around it.
 ed25519-dalek = "3"

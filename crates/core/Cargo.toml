@@ -15,6 +15,8 @@ schemars = { workspace = true, optional = true }
 async-trait.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+# RFC 0048 §15 Q12: `revalidate` globs; no transitive dependencies.
+glob.workspace = true
 uuid.workspace = true
 bytes.workspace = true
 futures.workspace = true

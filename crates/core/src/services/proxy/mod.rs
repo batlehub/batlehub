@@ -1,5 +1,6 @@
 mod cache;
 mod discovery;
+mod fill;
 pub(crate) mod handle;
 mod passthrough;
 mod resolve;
@@ -25,6 +26,7 @@ use crate::services::readme::ReadmeService;
 use crate::services::sbom::SbomService;
 
 /// Input to `ProxyService::handle`.
+#[derive(Clone)]
 pub struct ProxyRequest {
     pub package_id: crate::entities::PackageId,
     pub identity: crate::entities::Identity,
@@ -185,6 +187,7 @@ impl ProxyResponse {
 }
 
 /// Caching proxy service: resolves metadata, evaluates rules, streams artifacts.
+#[derive(Clone)]
 pub struct ProxyService {
     /// Hot-swappable state (registries, policies, size limit). Replaced atomically on reload.
     pub hot: HotConfigLock,
@@ -204,6 +207,9 @@ pub struct ProxyService {
     /// would be cleared by an unrelated catalogue write. Defaulted, so a test
     /// that does not exercise the discovery read need not know it exists.
     pub discovery: Arc<crate::services::upstream_detail::UpstreamDetailCoordinator>,
+    /// The running cold fills, so a concurrent or retried miss joins one
+    /// instead of fetching upstream again (RFC 0048 §15 Q9). Defaulted.
+    pub fills: Arc<fill::FillCoordinator>,
     /// Optional README service; when `None`, README capture is disabled globally.
     ///
     /// Per-registry configuration lives in `HotConfig::readme` and defaults to

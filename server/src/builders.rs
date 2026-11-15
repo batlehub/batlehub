@@ -239,6 +239,12 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // mise's `go.download_mirror` default; the release document is
         // `metadata_url`, resolved by `second_host` (RFC 0048 §4.1).
         RegistryKind::Godist => resolve_urls(&reg.upstreams, "https://dl.google.com/go"),
+        // The only metadata host mise reads (RFC 0048 §4.1); the archives come
+        // from each row's vendor host.
+        RegistryKind::MiseJava => resolve_urls(
+            &reg.upstreams,
+            batlehub_core::services::mise_java::DEFAULT_UPSTREAM,
+        ),
         RegistryKind::MiseVersions => resolve_urls(
             &reg.upstreams,
             batlehub_adapters::registry::mise_versions::DEFAULT_BASE,
@@ -295,6 +301,8 @@ fn make_one(
     // galaxy only: how much of the v1 role surface this registry serves, and
     // whether it fetches role bytes itself (RFC 0031 §4.4).
     roles: batlehub_config::schema::GalaxyRoleMode,
+    // mise-java only: its vendor and redirect allowlists (RFC 0048 §4.1).
+    mise_java: &batlehub_adapters::registry::MiseJavaOptions,
 ) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
     // The path-addressed kinds all share one client, so the `path_allow`
     // allowlist is applied uniformly to them. Config validation has already
@@ -347,7 +355,9 @@ fn make_one(
         RegistryKind::Rubygems => Arc::new(RubyGemsRegistryClient::new(url, opts)?),
         RegistryKind::Composer => Arc::new(ComposerRegistryClient::new(url, opts)?),
         RegistryKind::Pypi => Arc::new(PypiRegistryClient::new(url, opts)?),
-        RegistryKind::Conda => Arc::new(CondaRegistryClient::new(url, opts)?),
+        RegistryKind::Conda => {
+            Arc::new(CondaRegistryClient::new(url, opts)?.with_index_ttl(metadata_ttl))
+        }
         RegistryKind::JetbrainsMarketplace => {
             Arc::new(JetbrainsMarketplaceRegistryClient::new(url, opts)?)
         }
@@ -366,6 +376,14 @@ fn make_one(
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
         RegistryKind::Godist => Arc::new(GoDistRegistryClient::new(url, broker_url, opts)?),
+        RegistryKind::MiseJava => {
+            Arc::new(batlehub_adapters::registry::MiseJavaRegistryClient::new(
+                url,
+                registry_name,
+                mise_java.clone(),
+                opts,
+            )?)
+        }
         RegistryKind::MiseVersions => {
             Arc::new(batlehub_adapters::registry::MiseVersionsRegistryClient::new(url, opts)?)
         }
@@ -445,6 +463,7 @@ pub(super) fn build_registry_client(
                 budget,
                 Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
                 reg.roles.unwrap_or_default(),
+                &mise_java_options(reg),
             ),
         )
     } else {
@@ -462,6 +481,7 @@ pub(super) fn build_registry_client(
                     budget,
                     Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
                     reg.roles.unwrap_or_default(),
+                    &mise_java_options(reg),
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -510,6 +530,16 @@ pub(super) fn build_unguarded_client(
         None,
         Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
         reg.roles.unwrap_or_default(),
+        &mise_java_options(reg),
+    )
+}
+
+/// A mise-java registry's lists, defaulted (RFC 0048 §4.1).
+fn mise_java_options(reg: &RegistryConfig) -> batlehub_adapters::registry::MiseJavaOptions {
+    batlehub_adapters::registry::MiseJavaOptions::from_config(
+        reg.vendor_hosts.as_deref(),
+        reg.redirect_hosts.as_deref(),
+        reg.release_types.as_deref(),
     )
 }
 

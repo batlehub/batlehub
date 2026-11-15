@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: f201e0c9d9526121
+sourceHash: 44b141b100299fd8
 ---
 
 # Mise en cache
@@ -38,7 +38,60 @@ flowchart TD
 - **Contrôle RBAC** : valide les permissions de registre pour le rôle de l'appelant.
 - **Contrôle des règles** : garde-fou d'âge, `deny_latest` et `require_signed_release`.
 - **Cache de métadonnées** : dans le backend de cache (memory / postgres / redis). Un HIT continue avec les métadonnées en cache ; un MISS les récupère en amont et les stocke avec un TTL.
-- **Stockage de l'artefact** : dans le stockage de blobs (fichiers / S3). Un HIT diffuse depuis le stockage ; un MISS récupère en amont, stocke le blob et le diffuse au client.
+- **Stockage de l'artefact** : dans le stockage de blobs (fichiers / S3). Un HIT diffuse depuis le stockage ; un MISS récupère en amont, stocke le blob et le diffuse au client pendant qu'il le stocke — voir [Un MISS à froid](#cold-fill).
+
+### Un MISS à froid {#cold-fill}
+
+Un MISS lance un seul **remplissage** pour la clé de stockage de l'artefact,
+détaché de la requête qui l'a lancé :
+
+- **Les octets parviennent au client à mesure qu'ils arrivent.** Une archive
+  de 475 Mo derrière un lien lent chez l'éditeur n'a plus à être stockée en
+  entier avant le premier octet : elle ne dépasse donc plus le délai de
+  lecture d'un client (30 s pour mise).
+- **Une seule récupération amont par artefact.** Toute requête concurrente ou
+  relancée pour le même artefact rejoint le remplissage en cours : elle reçoit
+  les octets déjà arrivés, puis la suite. `batlehub_proxy_fill_joined_total{registry}`
+  compte ces jonctions.
+- **Un client qui se déconnecte abandonne sa propre réponse, jamais le
+  remplissage.** La requête suivante est un HIT.
+- **Un corps complet est un corps vérifié.** Le dernier morceau reçu est
+  retenu jusqu'à ce que le remplissage ait vérifié l'empreinte et stocké
+  l'artefact ; sur une empreinte divergente, un corps trop gros ou une erreur
+  amont, la réponse est interrompue par une erreur et rien n'est mis en cache.
+- **Un registre doté de `[registries.security]` garde stocker-puis-servir** :
+  il ne sert rien qu'il n'ait jugé, donc ses clients attendent la fin du
+  remplissage.
+
+Le remplissage recopie ce qu'il diffuse dans un fichier temporaire du
+répertoire temporaire (`TMPDIR`, sinon `/tmp`) : un remplissage de 1 Go coûte
+un morceau de mémoire, pas 1 Go. Le chart Helm y monte un `emptyDir`
+(`fillScratch.sizeLimit`, 2 Gio par défaut) pour garder le système de fichiers
+racine en lecture seule. Quand ce fichier ne peut pas être écrit, le
+remplissage tourne quand même, reste partagé, et est servi une fois terminé.
+
+### Chemins revalidés {#revalidated-paths}
+
+Un miroir `generic` met chaque chemin en cache pour toujours, ce qui convient
+à une archive versionnée et pas au document qui dit quelle version est la
+courante. La liste `revalidate` du registre nomme ces documents :
+
+```toml
+[[registries]]
+type       = "generic"
+name       = "zig-dl"
+upstreams  = ["https://ziglang.org"]
+path_allow = ["download/**"]
+revalidate = ["download/index.json"]
+```
+
+Un chemin en cache qui correspond est redemandé en amont à chaque lecture. Si
+l'amont répond, la nouvelle copie est stockée et servie ; s'il échoue, la copie
+en cache est servie périmée plutôt qu'une erreur.
+`batlehub_generic_revalidate_total{registry, outcome}` compte chaque lecture en
+`fresh` (inchangée), `updated` ou `stale_served` : une panne chez l'éditeur se
+voit comme une hausse de `stale_served`. Les chemins qui ne correspondent pas
+gardent le comportement actuel, en cache pour toujours.
 
 ### Deux couches d'état
 

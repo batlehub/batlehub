@@ -85,6 +85,7 @@ async fn cargo_registry_index_fetches_from_upstream_and_returns_content() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
+        fills: Default::default(),
         discovery: Default::default(),
         explore_cache: None,
     });

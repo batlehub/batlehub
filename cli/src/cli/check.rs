@@ -121,6 +121,9 @@ fn mise_pins(text: &str, registries: &[RegistryInfo]) -> Result<Vec<(String, Str
                     let (repo, rest) = path.split_once("/releases/download/")?;
                     (repo.to_owned(), rest.split('/').next()?.to_owned())
                 }
+                // The lock's version is mise's key for the row, which is the
+                // coordinate a JDK is blocked by (RFC 0048 §4.3).
+                "mise-java" => ("java".to_owned(), e.version.clone()),
                 _ => return None,
             };
             Some((reg.name.clone(), name, version))
@@ -315,6 +318,31 @@ url = "https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14
         assert_eq!(
             mise_pins(lock, &regs).unwrap(),
             vec![("gh".into(), "BurntSushi/ripgrep".into(), "14.1.0".into())]
+        );
+    }
+
+    /// A JDK locked on `github.com/adoptium/` is asked about on the mise-java
+    /// registry, under mise's key, never on the forge (RFC 0048 §4.3).
+    #[test]
+    fn mise_lock_pins_a_jdk_on_the_mise_java_registry() {
+        let lock = r#"
+[[tools.java]]
+version = "temurin-21.0.5+11.0.LTS"
+backend = "core:java"
+[tools.java."platforms.linux-x64"]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_linux_hotspot_21.0.5_11.tar.gz"
+"#;
+        let regs = [
+            reg("gh", "github", "proxy"),
+            reg("jdk", "mise-java", "proxy"),
+        ];
+        assert_eq!(
+            mise_pins(lock, &regs).unwrap(),
+            vec![(
+                "jdk".into(),
+                "java".into(),
+                "temurin-21.0.5+11.0.LTS".into()
+            )]
         );
     }
 }

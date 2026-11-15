@@ -64,6 +64,24 @@ fn build_versioning_map(registries: &[RegistryConfig]) -> HashMap<String, Versio
     )
 }
 
+/// RFC 0048 §15 Q12 — each registry's `revalidate` globs, compiled once.
+/// Validation already refused an invalid one, so a pattern that fails here is
+/// skipped rather than taking the reload down.
+fn build_revalidate_map(registries: &[RegistryConfig]) -> HashMap<String, Arc<Vec<glob::Pattern>>> {
+    registries
+        .iter()
+        .filter(|r| !r.revalidate.is_empty())
+        .map(|r| {
+            let globs = r
+                .revalidate
+                .iter()
+                .filter_map(|g| glob::Pattern::new(g).ok())
+                .collect();
+            (r.name.clone(), Arc::new(globs))
+        })
+        .collect()
+}
+
 /// Build the per-registry integrity policy map. Only registries with an explicit
 /// `[registries.integrity]` block get an entry; the proxy applies
 /// [`IntegrityPolicy::default`] (verify + block-on-mismatch) to the rest.
@@ -405,6 +423,7 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         // io.js tree, `node` everywhere else (RFC 0010 §4.3).
         RegistryKind::Nodedist => "https://nodejs.org/dist",
         RegistryKind::Godist => "https://dl.google.com/go",
+        RegistryKind::MiseJava => batlehub_core::services::mise_java::DEFAULT_UPSTREAM,
         // `batlehub-cli setup apply` writes mise rules for these only when
         // the registry proxies the public host (RFC 0038 §6.4); the values
         // match `builders::default_upstreams`.
@@ -435,6 +454,22 @@ fn path_addressed_upstreams(registries: &[RegistryConfig]) -> HashMap<String, Ve
                 && !r.upstreams.is_empty()
         })
         .map(|r| (r.name.clone(), r.upstreams.clone()))
+        .collect()
+}
+
+/// Each `mise-java` registry's vendor and redirect hosts, defaults applied.
+fn mise_java_hosts(registries: &[RegistryConfig]) -> HashMap<String, (Vec<String>, Vec<String>)> {
+    registries
+        .iter()
+        .filter(|r| r.registry_type == RegistryKind::MiseJava.as_str())
+        .map(|r| {
+            let o = batlehub_adapters::registry::MiseJavaOptions::from_config(
+                r.vendor_hosts.as_deref(),
+                r.redirect_hosts.as_deref(),
+                None,
+            );
+            (r.name.clone(), (o.vendor_hosts, o.redirect_hosts))
+        })
         .collect()
 }
 
@@ -781,6 +816,12 @@ pub(super) fn build_hot_bundle(
             .collect(),
         feature_flags: build_feature_flags_map(&cfg.registries),
         integrity: build_integrity_map(&cfg.registries),
+        registry_artifact_limits: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.max_artifact_size_bytes.map(|l| (r.name.clone(), l)))
+            .collect(),
+        generic_revalidate: build_revalidate_map(&cfg.registries),
         beta_channel: build_beta_channel_map(Arc::clone(beta_channel_store), &cfg.registries),
         retention: build_retention_map(&cfg.registries),
         resolution: reg_resolution,
@@ -805,7 +846,9 @@ pub(super) fn build_hot_bundle(
         build_access_config(cfg),
         RegistryMap::from(reg_type_map),
         RegistryModeMap::from(reg_mode_map),
-        UpstreamMap::from(upstream_map).with_all(path_addressed_upstreams(&cfg.registries)),
+        UpstreamMap::from(upstream_map)
+            .with_all(path_addressed_upstreams(&cfg.registries))
+            .with_mise_java(mise_java_hosts(&cfg.registries)),
         build_vuln_db_map(&cfg.registries),
         build_sumdb_map(&cfg.registries),
     ))
