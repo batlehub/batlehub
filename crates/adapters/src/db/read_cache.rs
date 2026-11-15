@@ -277,7 +277,9 @@ async fn listen(pool: &sqlx::PgPool, listen_url: Option<&str>) -> Result<(), sql
         Some(url) => PgListener::connect(url).await?,
         None => PgListener::connect_with(pool).await?,
     };
-    listener.listen(CHANNEL).await?;
+    listener
+        .listen_all([CHANNEL, crate::db::ops::fill_lease::FILL_CHANNEL])
+        .await?;
     // A connected LISTEN is not a delivered NOTIFY: behind a transaction-mode
     // pooler (PgBouncer) the notifications go to whichever server connection
     // ran the LISTEN, not to this client. So the cache goes live only once a
@@ -316,7 +318,9 @@ async fn listen(pool: &sqlx::PgPool, listen_url: Option<&str>) -> Result<(), sql
                 // Another replica's heartbeat changes nothing here.
                 Some(n) if n.payload().starts_with(HEARTBEAT_PREFIX) => {}
                 // A cold fill's progress (RFC 0048-bis), for its followers.
-                Some(n) if crate::db::ops::fill_lease::route_notification(n.payload()) => {}
+                Some(n) if n.channel() == crate::db::ops::fill_lease::FILL_CHANNEL => {
+                    crate::db::ops::fill_lease::route_notification(n.payload());
+                }
                 Some(n) => CACHES.invalidate(n.payload()),
                 // The connection was lost (sqlx reconnects quietly): whatever
                 // was notified meanwhile is gone, so the caller drops `live`.

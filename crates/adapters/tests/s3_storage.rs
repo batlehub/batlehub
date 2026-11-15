@@ -469,10 +469,12 @@ fn fill_bytes(len: usize, seed: u8) -> Bytes {
 }
 
 /// A fill's staging key whose destination carries the characters a real
-/// artifact key does (`:`, `@`, `/`), which end up in every `CopySource`.
+/// artifact key does (`:`, `@`, `/`, a `+build` version, a literal `%`),
+/// which end up in every `CopySource`: S3 URL-decodes that header, so an
+/// unencoded `+` names an object that does not exist.
 fn staged_fill(name: &str) -> String {
     batlehub_core::ports::staging_key_for(&format!(
-        "artifact:npm/@scope/{}/1.0.0",
+        "artifact:npm/@scope/{}/1.0.0+build.1%25",
         unique_key(name)
     ))
 }

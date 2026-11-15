@@ -232,13 +232,14 @@ and stores the bytes is in [A cold miss](./caching#cold-fill).
   first byte comes at most one segment's transfer after the filler's: 0.84 s
   at 10 MB/s, 8.4 s at 1 MB/s.
 - **A pod that dies mid-fill is a restart, not a resume.** The lease lives
-  30 s and is renewed after 10 s without progress. When the filler dies, its
+  30 s and the filler renews it every 10 s on a timer of its own, so a quiet
+  upstream or a long S3 assembly does not let it lapse. When the filler dies, its
   readers on other replicas are cut once the lease expires (up to ~30–60 s);
   the client's retry takes the lease over, deletes the dead fill's segments
   and fetches from zero.
 - **Leftovers are swept.** Every 5 minutes one replica (elected by a
-  PostgreSQL advisory lock) deletes the segments and rows of expired leases,
-  and staging keys older than 24 h.
+  PostgreSQL advisory lock) claims each expired lease, then deletes its
+  segments and row, and deletes staging keys older than 24 h.
 
 ::: warning Add a bucket lifecycle rule on S3
 The sweep does not abort incomplete multipart uploads. Give the bucket a

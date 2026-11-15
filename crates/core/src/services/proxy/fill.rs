@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -42,9 +42,13 @@ use crate::error::CoreError;
 use crate::ports::segment_key;
 use crate::ports::storage::skip_bytes;
 use crate::ports::{
-    ByteStream, FillError, FillId, FillLeases, InMemoryFillLeases, LeaseState, Phase,
-    StorageBackend, StoreOutcome, Taken, FILL_SEGMENT_BYTES, HEARTBEAT_AFTER, STAGING_PREFIX,
+    heartbeat_every, ByteStream, FillError, FillId, FillLeases, InMemoryFillLeases, LeaseState,
+    Phase, StorageBackend, StoreOutcome, Taken, FILL_SEGMENT_BYTES, STAGING_PREFIX,
 };
+
+/// A lease call that takes longer is treated as the lease store being down
+/// (R10): the fill goes on rather than waiting out a pool's acquire timeout.
+const LEASE_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub(super) struct Progress {
@@ -145,7 +149,9 @@ impl FillCoordinator {
             open_len: 0,
             hasher: Sha256::new(),
             size: 0,
-            extended: Instant::now(),
+            lease_down_until: None,
+            lost: Arc::new(AtomicBool::new(false)),
+            beat: None,
             ended: false,
         }))
     }
@@ -181,18 +187,29 @@ pub async fn sweep_fills(
     lease_ttl: std::time::Duration,
 ) -> usize {
     let mut deleted = 0usize;
-    match leases.expired(lease_ttl).await {
+    // An in-process lease dies with its process, so every lease it lists
+    // belongs to a live fill; the staging half below cleans up after a crash.
+    let listed = if leases.shared() {
+        leases.expired(lease_ttl).await
+    } else {
+        Ok(Vec::new())
+    };
+    match listed {
         Ok(expired) => {
-            for (key, fill, written) in expired {
+            for (key, fill, _) in expired {
+                // Claim first: a holder that heartbeated since the listing
+                // keeps its row and its segments.
+                let written = match leases.reap(&key, fill).await {
+                    Ok(Some(written)) => written,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        tracing::warn!(%key, error = %e, "fill sweep: claiming an expired lease failed");
+                        continue;
+                    }
+                };
                 let staged = format!("{STAGING_PREFIX}{fill}/{key}");
                 match storage.delete_segments(&staged, written).await {
-                    Ok(()) => {
-                        deleted += written as usize;
-                        // Fenced: a takeover since `expired` keeps its row.
-                        if let Err(e) = leases.release(&key, fill).await {
-                            tracing::warn!(%key, error = %e, "fill sweep: release failed");
-                        }
-                    }
+                    Ok(()) => deleted += written as usize,
                     Err(e) => {
                         tracing::warn!(%key, %fill, error = %e, "fill sweep: deleting segments failed")
                     }
@@ -235,9 +252,53 @@ pub(super) struct FillWriter {
     open_len: usize,
     hasher: Sha256,
     size: u64,
-    /// When the lease was last extended.
-    extended: Instant,
+    /// After a lease store error, lease calls are skipped until then (R10):
+    /// an outage costs one timed-out call per heartbeat period, not one per
+    /// segment.
+    lease_down_until: Option<Instant>,
+    /// Set by the heartbeat when the lease was found taken over.
+    lost: Arc<AtomicBool>,
+    /// The heartbeat task, stopped when the fill ends.
+    beat: Option<tokio::task::AbortHandle>,
     ended: bool,
+}
+
+/// Extend `fill`'s lease every [`heartbeat_every`] until aborted, whatever
+/// the upstream and the assembly are doing; a lease found taken over sets
+/// `lost` and stops.
+fn spawn_heartbeat(
+    leases: Arc<dyn FillLeases>,
+    key: String,
+    fill: FillId,
+    lost: Arc<AtomicBool>,
+) -> tokio::task::AbortHandle {
+    let every = heartbeat_every(leases.ttl());
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            match tokio::time::timeout(LEASE_CALL_TIMEOUT.min(every), leases.heartbeat(&key, fill))
+                .await
+            {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {
+                    lost.store(true, Ordering::Relaxed);
+                    return;
+                }
+                Ok(Err(e)) => {
+                    metrics::counter!("batlehub_proxy_fill_lease_errors_total").increment(1);
+                    tracing::warn!(%key, error = %e, "fill lease heartbeat failed; continuing");
+                }
+                Err(_) => {
+                    metrics::counter!("batlehub_proxy_fill_lease_errors_total").increment(1);
+                    tracing::warn!(%key, "fill lease heartbeat timed out; continuing");
+                }
+            }
+        }
+    })
+    .abort_handle()
 }
 
 impl FillWriter {
@@ -251,13 +312,22 @@ impl FillWriter {
     }
 
     /// Take the lease and name the fill. Called once, before any byte.
-    pub(super) async fn start(&mut self, registry: Arc<str>) -> Start {
+    /// `refresh` is a request that found the artifact in storage and wants it
+    /// fetched again (a revalidated path, an expired TTL): R5 must not answer
+    /// it with the copy it is replacing.
+    pub(super) async fn start(&mut self, registry: Arc<str>, refresh: bool) -> Start {
         self.registry = registry;
         let key = self.fill.key.clone();
         let leases = Arc::clone(&self.coordinator.leases);
         let id = match leases.take(&key, &self.coordinator.holder).await {
             Ok(Taken::Started { fill, previous }) => {
                 self.lease = Some(fill);
+                self.beat = Some(spawn_heartbeat(
+                    Arc::clone(&leases),
+                    key.clone(),
+                    fill,
+                    Arc::clone(&self.lost),
+                ));
                 self.active = true;
                 metrics::gauge!("batlehub_proxy_fill_active").increment(1.0);
                 if let Some((old, written)) = previous {
@@ -273,7 +343,7 @@ impl FillWriter {
                 }
                 // R5: a fill that ended on another replica between this
                 // request's storage miss and its lease left the artifact.
-                if leases.shared() {
+                if leases.shared() && !refresh {
                     match self.fill.storage.exists(&key).await {
                         Ok(true) => return Start::Cached,
                         Ok(false) => {}
@@ -334,15 +404,22 @@ impl FillWriter {
         self.finish(end).await;
     }
 
-    /// How a followed fill whose lease went without a word ended: promoted
-    /// and released between two wake-ups, or dead.
+    /// How a followed fill whose lease went without a word ended. The
+    /// artifact in storage may be another fill's (a takeover promoted it), so
+    /// it finishes the body only when no byte of this fill was handed out,
+    /// or every byte was and was verified: never a prefix of one fill spliced
+    /// onto the rest of another (R7, T3).
     async fn vanished(&self) -> Phase {
-        match self.fill.storage.exists(&self.fill.key).await {
-            Ok(true) => Phase::Done,
-            _ => Phase::Failed(FillError::other(
-                "the cold fill stopped on the replica filling it",
-            )),
+        let safe = {
+            let p = self.fill.progress.borrow();
+            p.verified || (p.committed == 0 && p.open.is_empty())
+        };
+        if safe && matches!(self.fill.storage.exists(&self.fill.key).await, Ok(true)) {
+            return Phase::Done;
         }
+        Phase::Failed(FillError::other(
+            "the cold fill stopped on the replica filling it",
+        ))
     }
 
     /// Add `chunk` to the fill: hashed, counted, appended to the open segment,
@@ -351,8 +428,8 @@ impl FillWriter {
     pub(super) async fn push(&mut self, mut chunk: Bytes) -> Result<(), CoreError> {
         self.hasher.update(&chunk);
         self.size += chunk.len() as u64;
-        if self.lease.is_some() && self.extended.elapsed() >= HEARTBEAT_AFTER {
-            self.lease_call(LeaseCall::Heartbeat).await?;
+        if self.lease.is_some() && self.lost.load(Ordering::Relaxed) {
+            return Err(self.lease_lost());
         }
         while !chunk.is_empty() {
             if self.open_len == FILL_SEGMENT_BYTES {
@@ -420,16 +497,25 @@ impl FillWriter {
     /// unless they were promoted.
     pub(super) async fn finish(mut self, phase: Phase) {
         self.ended = true;
+        self.stop_heartbeat();
         self.deactivate();
         let failed = !matches!(phase, Phase::Done);
         if let Some(id) = self.lease {
             let key = &self.fill.key;
             let leases = &self.coordinator.leases;
-            if let Err(e) = leases.finish(key, id, phase.clone()).await {
-                tracing::warn!(%key, error = %e, "fill lease: finish failed");
+            let finished =
+                tokio::time::timeout(LEASE_CALL_TIMEOUT, leases.finish(key, id, phase.clone()))
+                    .await;
+            if !matches!(finished, Ok(Ok(_))) {
+                tracing::warn!(%key, "fill lease: finish failed or timed out");
             }
-            if let Err(e) = leases.release(key, id).await {
-                tracing::warn!(%key, error = %e, "fill lease: release failed");
+            // A shared row keeps its end phase until it expires, so a follower
+            // that polls learns how the fill ended; `take` replaces an ended
+            // row at once. In process, followers were told through the watch.
+            if !leases.shared() {
+                if let Err(e) = leases.release(key, id).await {
+                    tracing::warn!(%key, error = %e, "fill lease: release failed");
+                }
             }
         }
         self.fill.progress.send_modify(|p| p.phase = phase);
@@ -451,37 +537,56 @@ impl FillWriter {
         let Some(id) = self.lease else {
             return Ok(());
         };
+        if self.lost.load(Ordering::Relaxed) {
+            return Err(self.lease_lost());
+        }
+        if self.lease_down_until.is_some_and(|t| Instant::now() < t) {
+            return Ok(());
+        }
         let (key, leases) = (&self.fill.key, &self.coordinator.leases);
-        let r = match call {
-            LeaseCall::Commit(n) => leases.commit(key, id, n).await,
-            LeaseCall::Heartbeat => leases.heartbeat(key, id).await,
-            LeaseCall::Finish(phase) => leases.finish(key, id, phase).await,
+        let call = async {
+            match call {
+                LeaseCall::Commit(n) => leases.commit(key, id, n).await,
+                LeaseCall::Finish(phase) => leases.finish(key, id, phase).await,
+            }
         };
+        let r = tokio::time::timeout(LEASE_CALL_TIMEOUT, call)
+            .await
+            .unwrap_or_else(|_| Err(CoreError::Registry("fill lease call timed out".to_owned())));
         match r {
             Ok(true) => {
-                self.extended = Instant::now();
+                self.lease_down_until = None;
                 Ok(())
             }
-            Ok(false) => {
-                metrics::counter!("batlehub_proxy_fill_lease_lost_total", "registry" => Arc::clone(&self.registry)).increment(1);
-                tracing::warn!(%key, fill = %id, "cold fill lost its lease, stopping");
-                self.lease = None;
-                Err(CoreError::Registry(
-                    "the cold fill lost its lease".to_owned(),
-                ))
-            }
+            Ok(false) => Err(self.lease_lost()),
             // RFC 0048-bis §10.2: without the row the holder cannot be fenced;
             // it keeps filling and serves its own readers.
             Err(e) => {
                 metrics::counter!("batlehub_proxy_fill_lease_errors_total").increment(1);
                 tracing::warn!(%key, error = %e, "fill lease unavailable mid-fill; continuing");
+                self.lease_down_until =
+                    Some(Instant::now() + heartbeat_every(self.coordinator.leases.ttl()));
                 Ok(())
             }
         }
     }
+
+    fn lease_lost(&mut self) -> CoreError {
+        metrics::counter!("batlehub_proxy_fill_lease_lost_total", "registry" => Arc::clone(&self.registry)).increment(1);
+        tracing::warn!(key = %self.fill.key, "cold fill lost its lease, stopping");
+        self.lease = None;
+        self.stop_heartbeat();
+        CoreError::Registry("the cold fill lost its lease".to_owned())
+    }
 }
 
 impl FillWriter {
+    fn stop_heartbeat(&mut self) {
+        if let Some(beat) = self.beat.take() {
+            beat.abort();
+        }
+    }
+
     fn deactivate(&mut self) {
         if std::mem::take(&mut self.active) {
             metrics::gauge!("batlehub_proxy_fill_active").decrement(1.0);
@@ -501,7 +606,6 @@ pub(super) enum Start {
 
 enum LeaseCall {
     Commit(u32),
-    Heartbeat,
     Finish(Phase),
 }
 
@@ -510,6 +614,7 @@ impl Drop for FillWriter {
         if self.ended {
             return;
         }
+        self.stop_heartbeat();
         self.deactivate();
         let failed = Phase::Failed(FillError::other("the cold fill stopped before it finished"));
         self.fill.progress.send_modify(|p| p.phase = failed);
@@ -653,7 +758,10 @@ impl Reader {
                 match &p.phase {
                     Phase::Failed(e) => Step::Fail(e.to_core()),
                     _ if self.seg < p.committed => Step::Segment,
-                    Phase::Verified { .. } => Step::End,
+                    // Every byte is read, but the body ends only once the
+                    // artifact is promoted and recorded: a complete body
+                    // still means a stored one.
+                    Phase::Verified { .. } => Step::Wait,
                     Phase::Done if p.verified => Step::End,
                     Phase::Done => Step::Tail,
                     Phase::NoStore => Step::Fail(CoreError::Registry(
@@ -827,7 +935,10 @@ mod tests {
         let Joined::Started(mut writer) = coordinator.join_or_start("k", storage) else {
             panic!("the first request starts the fill")
         };
-        assert!(matches!(writer.start(Arc::from("r")).await, Start::Fill));
+        assert!(matches!(
+            writer.start(Arc::from("r"), false).await,
+            Start::Fill
+        ));
         *writer
     }
 
@@ -934,6 +1045,7 @@ mod tests {
         );
         let (count, outcome) = writer.seal().await.unwrap();
         assert_eq!((count, outcome.size), (2, 2 * FILL_SEGMENT_BYTES as u64));
+        writer.finish(Phase::Done).await;
         let rest = read_all(s).await.unwrap();
         assert_eq!(rest.len(), FILL_SEGMENT_BYTES);
         assert!(rest.iter().all(|b| *b == b'b'));
@@ -968,6 +1080,7 @@ mod tests {
             "segment 0 whole, then \"cd\""
         );
         writer.seal().await.unwrap();
+        writer.finish(Phase::Done).await;
         got.extend(read_all(s).await.unwrap());
         let mut want = vec![b'a'; half];
         want.extend(vec![b'b'; half]);
@@ -1025,12 +1138,57 @@ mod tests {
         );
     }
 
+    /// A quiet upstream keeps its lease: the heartbeat runs on a timer, not
+    /// on chunks, and stops with the fill.
+    #[tokio::test]
+    async fn a_stalled_fill_keeps_its_lease_and_the_heartbeat_stops_with_it() {
+        let ttl = Duration::from_millis(90);
+        let leases = Arc::new(InMemoryFillLeases::with_ttl(ttl));
+        let coordinator = Arc::new(FillCoordinator::new(leases.clone(), "a".into()));
+        let (_, _, storage) = setup();
+        let writer = started(&coordinator, &storage).await;
+        tokio::time::sleep(ttl * 4).await; // no byte from upstream
+        assert!(
+            matches!(leases.take("k", "b").await.unwrap(), Taken::Running(_)),
+            "still alive after four lease lifetimes of silence"
+        );
+        writer.finish(Phase::Done).await;
+        assert!(
+            matches!(leases.take("k", "b").await.unwrap(), Taken::Started { .. }),
+            "released at the end"
+        );
+    }
+
+    /// R7, T3: a follower that handed out bytes of a fill that then vanished
+    /// does not finish the body from an artifact another fill promoted.
+    #[tokio::test]
+    async fn a_vanished_fill_ends_done_only_if_no_byte_of_it_was_read() {
+        let (coordinator, _, storage) = setup();
+        let Joined::Started(writer) = coordinator.join_or_start("k", &storage) else {
+            panic!("the first request starts")
+        };
+        storage
+            .store(
+                "k",
+                Bytes::from_static(b"another fill's"),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(writer.vanished().await, Phase::Done, "nothing read yet");
+        writer.fill.progress.send_modify(|p| p.committed = 1);
+        assert!(
+            matches!(writer.vanished().await, Phase::Failed(_)),
+            "a prefix was read: reset, never spliced"
+        );
+    }
+
     /// T6: the sweep deletes an expired fill's segments and its row, and
     /// leaves a live one alone.
     #[tokio::test]
     async fn the_sweep_deletes_an_expired_fills_segments() {
         let ttl = std::time::Duration::from_millis(30);
-        let leases = InMemoryFillLeases::with_ttl(ttl);
+        let leases = InMemoryFillLeases::with_ttl(ttl).as_shared();
         let (_, mem, storage) = setup();
         let Taken::Started { fill, .. } = leases.take("k", "dead").await.unwrap() else {
             panic!("the first take starts")

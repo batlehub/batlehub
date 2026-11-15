@@ -44,9 +44,10 @@ pub use governance::{
 };
 pub use notification::{NotificationPort, NotificationSink};
 pub use ops::{
-    segments_for, BlockedIpInfo, FillError, FillId, FillLeases, InMemoryFillLeases, IpBlockStore,
-    LeaseState, NoopWarmCoordinator, Phase, QuotaOutcome, QuotaRepository, QuotaUsage,
-    RateLimitStore, Taken, UpstreamStatusPort, WarmCoordinator, HEARTBEAT_AFTER, LEASE_TTL,
+    heartbeat_every, segments_for, BlockedIpInfo, FillError, FillId, FillLeases,
+    InMemoryFillLeases, IpBlockStore, LeaseState, NoopWarmCoordinator, Phase, QuotaOutcome,
+    QuotaRepository, QuotaUsage, RateLimitStore, Taken, UpstreamStatusPort, WarmCoordinator,
+    HEARTBEAT_AFTER, LEASE_TTL,
 };
 pub use readme::{ReadmeImageFetcher, ReadmeRepository, ReadmeSearchHit};
 pub use registry::{

@@ -1088,7 +1088,12 @@ async fn artifact_ttl_expired_refetches_from_upstream() {
         metrics: Arc::new(ProxyMetrics::new(&[])),
         sbom: None,
         readme: None,
-        fills: Default::default(),
+        // Shared, as a Postgres lease is: its "already in storage?" check
+        // must not answer an expired copy with itself (review of PR 363).
+        fills: Arc::new(fill::FillCoordinator::new(
+            Arc::new(crate::ports::InMemoryFillLeases::default().as_shared()),
+            "a".into(),
+        )),
         discovery: Default::default(),
         explore_cache: None,
     };
@@ -3691,6 +3696,26 @@ async fn a_revalidated_path_is_served_stale_on_upstream_error() {
     assert_eq!(client.fetches(), 3);
 }
 
+/// Under a shared lease the fill checks storage before fetching (R5); a
+/// revalidating request found the copy there on purpose and still fetches.
+#[tokio::test]
+async fn a_revalidated_path_refetches_under_a_shared_lease() {
+    let client = ScriptedRegistry::new("v1");
+    let mut svc = revalidating(client.clone()).await;
+    svc.fills = Arc::new(fill::FillCoordinator::new(
+        Arc::new(crate::ports::InMemoryFillLeases::default().as_shared()),
+        "a".into(),
+    ));
+    let path = "release/stable.txt";
+    body_of(svc.handle(generic_req(path)).await.unwrap()).await;
+    client.set(Ok("v2"));
+    assert_eq!(
+        body_of(svc.handle(generic_req(path)).await.unwrap()).await,
+        "v2"
+    );
+    assert_eq!(client.fetches(), 2);
+}
+
 #[tokio::test]
 async fn an_unlisted_path_is_not_revalidated() {
     let client = ScriptedRegistry::new("v1");
@@ -4138,7 +4163,7 @@ async fn a_lease_taken_after_the_fill_ended_elsewhere_serves_from_storage() {
         .await
         .unwrap();
     assert!(matches!(
-        writer.start(Arc::from("npm")).await,
+        writer.start(Arc::from("npm"), false).await,
         fill::Start::Cached
     ));
     assert_eq!(client.fetches(), 0);

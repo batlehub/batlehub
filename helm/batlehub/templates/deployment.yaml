@@ -25,8 +25,9 @@
 {{- $cacheType = dig "cache" "type" $cacheType (.Values.credentials.config | default dict) }}
 {{- end }}
 {{- $opaque := or (gt $asConfigCount 0) (and .Values.credentials.enabled .Values.credentials.existingSecret) }}
-{{- if and (not $opaque) (has ($cacheType | default "memory") (list "memory")) }}
-{{- fail (printf "replicaCount %v needs a shared [cache] (config.cache.type \"postgres\" or \"redis\"): with \"memory\" every pod fills, rate-limits and bans on its own. See docs/guide/high-availability.md#config-cache" .Values.replicaCount) }}
+{{- /* The server reads any other spelling ("Postgres", "redis ") as memory. */}}
+{{- if and (not $opaque) (not (has $cacheType (list "postgres" "redis"))) }}
+{{- fail (printf "replicaCount %v needs a shared [cache] (config.cache.type exactly \"postgres\" or \"redis\", got %q): with any other value every pod fills, rate-limits and bans on its own. See docs/guide/high-availability.md#config-cache" .Values.replicaCount $cacheType) }}
 {{- end }}
 {{- end }}
 {{- if not (has .Values.writableConfig.seed (list "IfNotPresent" "Always")) }}

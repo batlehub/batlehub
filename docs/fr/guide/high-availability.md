@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: 61aa246d34ebeeb0
+sourceHash: f0dcd087115ade9e
 ---
 
 # Haute disponibilité
@@ -269,14 +269,16 @@ remplissage diffuse, vérifie et stocke les octets est décrite dans
   arrive au plus le temps de transfert d'un segment après celui du réplica qui
   remplit : 0,84 s à 10 Mo/s, 8,4 s à 1 Mo/s.
 - **La mort d'un pod en plein remplissage fait repartir de zéro.** Le bail
-  vit 30 s et est renouvelé après 10 s sans progrès. Quand le réplica qui
+  vit 30 s et le réplica qui remplit le renouvelle toutes les 10 s, par une
+  minuterie à part : un amont silencieux ou un long assemblage S3 ne le laisse
+  pas expirer. Quand le réplica qui
   remplit meurt, ses lecteurs sur les autres réplicas sont coupés une fois le
   bail expiré (jusqu'à ~30 à 60 s) ; la nouvelle tentative du client reprend le
   bail, supprime les segments du remplissage mort et récupère tout depuis le
   début.
 - **Les restes sont balayés.** Toutes les 5 minutes, un réplica (élu par un
-  verrou consultatif PostgreSQL) supprime les segments et les lignes des baux
-  expirés, ainsi que les clés de préparation de plus de 24 h.
+  verrou consultatif PostgreSQL) réclame chaque bail expiré, puis en supprime
+  les segments et la ligne, ainsi que les clés de préparation de plus de 24 h.
 
 ::: warning Ajoutez une règle de cycle de vie au bucket S3
 Le balayage n'abandonne pas les envois multipart incomplets. Dotez le bucket

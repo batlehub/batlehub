@@ -29,8 +29,15 @@ pub type FillId = uuid::Uuid;
 /// §15 Q3: a lease not extended for this long is dead, and may be taken over.
 pub const LEASE_TTL: Duration = Duration::from_secs(30);
 
-/// §15 Q3: a holder heartbeats when no `commit` extended its lease for this long.
+/// §15 Q3: a holder extends its lease this often, on a timer of its own, so a
+/// quiet upstream or a long assembly never lets a live lease expire.
 pub const HEARTBEAT_AFTER: Duration = Duration::from_secs(10);
+
+/// The heartbeat period of a lease that lives `ttl`: a third of it, so two
+/// missed beats still leave it alive.
+pub fn heartbeat_every(ttl: Duration) -> Duration {
+    ttl / 3
+}
 
 /// How many segments a fill of `total` bytes has: an empty artifact is one
 /// empty segment.
@@ -169,8 +176,13 @@ pub trait FillLeases: Send + Sync {
     fn shared(&self) -> bool {
         false
     }
-    /// Take the lease on `key`, or learn who holds it. A lease that expired,
-    /// failed or ended `no-store` is taken over.
+    /// How long a lease lives without an extension.
+    fn ttl(&self) -> Duration {
+        LEASE_TTL
+    }
+    /// Take the lease on `key`, or learn who holds it. A lease that expired
+    /// or ended (done, failed, `no-store`) is taken over; only an expired
+    /// running one is reported as `previous`, its segments to delete.
     async fn take(&self, key: &str, holder: &str) -> Result<Taken, CoreError>;
     /// Make segments `0..committed` readable and extend the lease. Fenced on
     /// `fill`: `Ok(false)` means the lease is lost and the caller must stop.
@@ -182,6 +194,10 @@ pub trait FillLeases: Send + Sync {
     async fn finish(&self, key: &str, fill: FillId, phase: Phase) -> Result<bool, CoreError>;
     /// Drop the lease, if `fill` still holds it.
     async fn release(&self, key: &str, fill: FillId) -> Result<(), CoreError>;
+    /// Drop `fill`'s lease on `key` only if it is still expired, returning the
+    /// segments it may have written: the sweep claims a dead fill before it
+    /// deletes anything, so a holder that came back in between keeps both.
+    async fn reap(&self, key: &str, fill: FillId) -> Result<Option<u32>, CoreError>;
     /// Progress of `fill`, until it ends or its lease goes; empty when `fill`
     /// does not hold `key`.
     fn follow(&self, key: &str, fill: FillId) -> BoxStream<'static, Result<LeaseState, CoreError>>;
@@ -269,17 +285,23 @@ impl FillLeases for InMemoryFillLeases {
         self.shared
     }
 
+    fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
     async fn take(&self, key: &str, holder: &str) -> Result<Taken, CoreError> {
         let mut leases = self.leases.lock().unwrap_or_else(|p| p.into_inner());
         let mut previous = None;
         if let Some(lease) = leases.get(key) {
             let state = lease.state.borrow().state.clone();
-            let dead = lease.extended().elapsed() >= self.ttl
-                || matches!(state.phase, Phase::Failed(_) | Phase::NoStore);
-            if !dead {
+            let ended = state.phase.is_terminal();
+            if !ended && lease.extended().elapsed() < self.ttl {
                 return Ok(Taken::Running(state));
             }
-            previous = Some((state.fill, lease.written));
+            // An ended fill cleaned up after itself; an expired one did not.
+            if !ended {
+                previous = Some((state.fill, lease.written));
+            }
         }
         let fill = FillId::new_v4();
         let (state, _) = watch::channel(Watched {
@@ -336,6 +358,18 @@ impl FillLeases for InMemoryFillLeases {
             leases.remove(key);
         }
         Ok(())
+    }
+
+    async fn reap(&self, key: &str, fill: FillId) -> Result<Option<u32>, CoreError> {
+        let mut leases = self.leases.lock().unwrap_or_else(|p| p.into_inner());
+        let reaped = leases
+            .get(key)
+            .filter(|l| l.fill() == fill && l.extended().elapsed() >= self.ttl)
+            .map(|l| l.written);
+        if reaped.is_some() {
+            leases.remove(key);
+        }
+        Ok(reaped)
     }
 
     fn follow(&self, key: &str, fill: FillId) -> BoxStream<'static, Result<LeaseState, CoreError>> {
@@ -477,6 +511,6 @@ mod tests {
             "a terminal state ends the follow"
         );
         let (_, previous) = started(leases.take("k", "b").await.unwrap());
-        assert_eq!(previous, Some((fill, 3)));
+        assert_eq!(previous, None, "a failed fill deleted its own segments");
     }
 }

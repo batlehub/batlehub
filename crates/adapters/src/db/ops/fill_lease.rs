@@ -3,11 +3,15 @@
 //!
 //! - `take` is one upsert that replaces only an expired, failed or `no-store`
 //!   row; every holder write is fenced on its `fill_id` (T1).
-//! - `commit` and `finish` notify `batlehub_invalidate` with
+//! - `commit` and `finish` notify [`FILL_CHANNEL`] with
 //!   `fill:<uuid>:<committed>[:<phase json>]` in the same statement, so a
 //!   follower on another replica wakes without a query of its own; the
-//!   listener of [`read_cache`](crate::db::read_cache) routes those payloads
-//!   to [`route_notification`].
+//!   listener of [`read_cache`](crate::db::read_cache) routes that channel to
+//!   [`route_notification`]. A channel of its own: a replica of an older
+//!   version, listening only on the invalidation channel, would read a fill's
+//!   progress as an unknown table and clear every read cache.
+//! - An ended row keeps its phase until it expires, so a polling follower
+//!   learns how the fill ended; `take` replaces it at once.
 //! - While that listener is not live, a follower polls its row once a second.
 
 use std::collections::HashMap;
@@ -24,7 +28,10 @@ use batlehub_core::{
     ports::{FillError, FillId, FillLeases, LeaseState, Phase, Taken, LEASE_TTL},
 };
 
-use crate::db::read_cache::{CACHES, CHANNEL};
+use crate::db::read_cache::CACHES;
+
+/// The channel a fill's progress is notified on.
+pub const FILL_CHANNEL: &str = "batlehub_fill";
 use crate::db::DbResultExt;
 
 /// The payload prefix of a fill's progress on the invalidation channel.
@@ -183,13 +190,17 @@ async fn read_row(pool: &PgPool, key: &str) -> Result<Option<(LeaseState, bool)>
 }
 
 fn dead(state: &LeaseState, expired: bool) -> bool {
-    expired || matches!(state.phase, Phase::Failed(_) | Phase::NoStore)
+    expired || state.phase.is_terminal()
 }
 
 #[async_trait]
 impl FillLeases for PgFillLeases {
     fn shared(&self) -> bool {
         true
+    }
+
+    fn ttl(&self) -> Duration {
+        self.ttl
     }
 
     async fn take(&self, key: &str, holder: &str) -> Result<Taken, CoreError> {
@@ -213,7 +224,7 @@ impl FillLeases for PgFillLeases {
                         committed = 0, written = 1, total_bytes = NULL, error = NULL,
                         started_at = NOW()
                     WHERE fill_leases.expires_at < NOW()
-                       OR fill_leases.phase IN ('failed', 'no_store')
+                       OR fill_leases.phase IN ('done', 'failed', 'no_store')
                     RETURNING fill_id
                 )
                 SELECT (SELECT fill_id FROM ins) AS taken, prev.*
@@ -235,8 +246,15 @@ impl FillLeases for PgFillLeases {
             {
                 // `prev` is the statement's snapshot: a takeover racing this
                 // one between it and the upsert leaves segments the staging
-                // sweep removes a day later.
-                let previous = prev.map(|p| (p, count(&row, "written")));
+                // sweep removes a day later. An ended fill cleaned up after
+                // itself, so only a running one that expired is a takeover.
+                let running = match row.try_get::<Option<String>, _>("phase").db_err()? {
+                    Some(phase) => !matches!(phase.as_str(), "done" | "failed" | "no_store"),
+                    None => false,
+                };
+                let previous = prev
+                    .filter(|_| running)
+                    .map(|p| (p, count(&row, "written")));
                 return Ok(Taken::Started { fill, previous });
             }
             if prev.is_some() {
@@ -275,7 +293,7 @@ impl FillLeases for PgFillLeases {
         .bind(fill)
         .bind(n)
         .bind(self.ttl_secs())
-        .bind(CHANNEL)
+        .bind(FILL_CHANNEL)
         .fetch_optional(&self.pool)
         .await
         .db_err()?;
@@ -316,7 +334,10 @@ impl FillLeases for PgFillLeases {
             WITH u AS (
                 UPDATE fill_leases SET phase = $3, total_bytes = $4, error = $5,
                        committed = COALESCE($6, committed),
-                       written = GREATEST(written, COALESCE($6, written)),
+                       -- An ended fill promoted or deleted its segments itself:
+                       -- nothing is left for a takeover or the sweep to delete.
+                       written = CASE WHEN $3 IN ('done', 'failed', 'no_store') THEN 0
+                                      ELSE GREATEST(written, COALESCE($6, written)) END,
                        expires_at = NOW() + make_interval(secs => $7)
                 WHERE storage_key = $1 AND fill_id = $2
                   AND phase NOT IN ('done', 'failed', 'no_store')
@@ -332,7 +353,7 @@ impl FillLeases for PgFillLeases {
         .bind(error)
         .bind(all)
         .bind(self.ttl_secs())
-        .bind(CHANNEL)
+        .bind(FILL_CHANNEL)
         .bind(json)
         .fetch_optional(&self.pool)
         .await
@@ -350,6 +371,20 @@ impl FillLeases for PgFillLeases {
         Ok(())
     }
 
+    async fn reap(&self, key: &str, fill: FillId) -> Result<Option<u32>, CoreError> {
+        let row = sqlx::query(
+            "DELETE FROM fill_leases \
+             WHERE storage_key = $1 AND fill_id = $2 AND expires_at < NOW() \
+             RETURNING written",
+        )
+        .bind(key)
+        .bind(fill)
+        .fetch_optional(&self.pool)
+        .await
+        .db_err()?;
+        Ok(row.map(|r| count(&r, "written")))
+    }
+
     fn follow(&self, key: &str, fill: FillId) -> BoxStream<'static, Result<LeaseState, CoreError>> {
         let follower = Follower {
             pool: self.pool.clone(),
@@ -357,6 +392,7 @@ impl FillLeases for PgFillLeases {
             ttl: self.ttl,
             followed: Followed::new(fill),
             last: None,
+            last_read: std::time::Instant::now(),
             ended: false,
         };
         Box::pin(futures::stream::unfold(follower, |mut f| async move {
@@ -407,6 +443,9 @@ struct Follower {
     ttl: Duration,
     followed: Followed,
     last: Option<LeaseState>,
+    /// The last successful read of the row or notice: a read that fails is
+    /// retried until a whole lease has gone without one.
+    last_read: std::time::Instant,
     ended: bool,
 }
 
@@ -441,10 +480,17 @@ impl Follower {
             };
             match state {
                 Some(Ok(s)) if self.last.as_ref() != Some(&s) => {
+                    self.last_read = std::time::Instant::now();
                     self.last = Some(s.clone());
                     return Some(Ok(s));
                 }
-                Some(Ok(_)) => {}
+                Some(Ok(_)) => self.last_read = std::time::Instant::now(),
+                // The holder treats a database error as "keep going" (R10);
+                // so does its follower, until a whole lease without a read.
+                Some(Err(e)) if self.last_read.elapsed() < self.ttl => {
+                    tracing::debug!(key = %self.key, error = %e, "reading a followed fill failed; retrying");
+                    tokio::time::sleep(POLL).await;
+                }
                 other => return other,
             }
         }

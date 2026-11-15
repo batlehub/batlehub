@@ -110,7 +110,58 @@ async fn a_stale_holder_cannot_commit_into_a_taken_over_fill() {
         "no commit after an end"
     );
     let (_, previous) = started(leases.take(&k, "c").await.unwrap());
-    assert_eq!(previous, Some((new, 2)));
+    assert_eq!(previous, None, "an ended fill deleted its own segments");
+}
+
+/// An ended row stays readable until it expires, so a follower that polls
+/// learns how the fill ended (not "it vanished"); `take` replaces it at once
+/// and reports no takeover.
+#[tokio::test]
+async fn an_ended_row_tells_a_late_follower_and_is_taken_over_at_once() {
+    let Some(repo) = repo().await else { return };
+    let leases = PgFillLeases::new(repo.pool());
+    let k = key();
+    let (fill, _) = started(leases.take(&k, "a").await.unwrap());
+    assert!(leases.commit(&k, fill, 2).await.unwrap());
+    let failed = Phase::Failed(FillError::other("upstream: 404"));
+    assert!(leases.finish(&k, fill, failed.clone()).await.unwrap());
+    let mut follow = leases.follow(&k, fill);
+    let s = tokio::time::timeout(Duration::from_secs(5), follow.next())
+        .await
+        .expect("the first read is a query")
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.phase, failed);
+    assert!(follow.next().await.is_none());
+    let (_, previous) = started(leases.take(&k, "b").await.unwrap());
+    assert_eq!(previous, None, "an ended fill is not a takeover");
+
+    let k = key();
+    let (fill, _) = started(leases.take(&k, "a").await.unwrap());
+    assert!(leases.finish(&k, fill, Phase::Done).await.unwrap());
+    let (_, previous) = started(leases.take(&k, "b").await.unwrap());
+    assert_eq!(previous, None, "a done row is replaced at once");
+}
+
+/// The sweep's claim is fenced on expiry: a holder that heartbeated since
+/// the listing keeps its row; a still-expired one is claimed once.
+#[tokio::test]
+async fn reap_claims_only_a_still_expired_lease() {
+    let Some(repo) = repo().await else { return };
+    let ttl = Duration::from_millis(300);
+    let leases = PgFillLeases::with_ttl(repo.pool(), ttl);
+    let k = key();
+    let (fill, _) = started(leases.take(&k, "a").await.unwrap());
+    assert!(leases.commit(&k, fill, 2).await.unwrap());
+    tokio::time::sleep(ttl * 2).await;
+    assert!(
+        leases.heartbeat(&k, fill).await.unwrap(),
+        "back from a pause"
+    );
+    assert_eq!(leases.reap(&k, fill).await.unwrap(), None, "alive again");
+    tokio::time::sleep(ttl * 2).await;
+    assert_eq!(leases.reap(&k, fill).await.unwrap(), Some(3));
+    assert_eq!(leases.reap(&k, fill).await.unwrap(), None, "claimed once");
 }
 
 /// Two concurrent takes of one key: exactly one starts, the other follows it.

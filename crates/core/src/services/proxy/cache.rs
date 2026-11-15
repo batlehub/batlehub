@@ -279,7 +279,9 @@ impl ProxyService {
     /// then served from the freshly cached entry (also streamed). When the
     /// upstream says `no-store`, falls back to a buffered serve-from-memory path
     /// (see [`Self::serve_no_store`]) since verify-before-serve has nothing to
-    /// stream from.
+    /// stream from. `refresh`: the caller found the artifact in storage and
+    /// wants it fetched again (see [`fill::FillWriter::start`]).
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn fetch_and_cache(
         &self,
         req: ProxyRequest,
@@ -288,6 +290,7 @@ impl ProxyService {
         integrity: &IntegrityPolicy,
         limit: u64,
         timing: &RequestTiming,
+        refresh: bool,
     ) -> Result<ProxyResponse, CoreError> {
         let registry = req.package_id.registry.clone();
         let registry_name = registry.as_str();
@@ -317,7 +320,10 @@ impl ProxyService {
                 let metadata = metadata.clone();
                 let (req, integrity, timing) = (req.clone(), integrity.clone(), timing.clone());
                 tokio::spawn(async move {
-                    match writer.start(Arc::clone(&timing.registry_label)).await {
+                    match writer
+                        .start(Arc::clone(&timing.registry_label), refresh)
+                        .await
+                    {
                         fill::Start::Fill => {}
                         fill::Start::Follow(state) => return writer.follow(state).await,
                         fill::Start::Cached => return writer.finish(Phase::Done).await,

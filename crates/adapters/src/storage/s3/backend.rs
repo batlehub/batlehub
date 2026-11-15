@@ -134,7 +134,7 @@ impl StorageBackend for S3StorageBackend {
             .copy_object()
             .bucket(&self.bucket)
             .key(&to_key)
-            .copy_source(format!("{}/{}", self.bucket, from_key))
+            .copy_source(copy_source(&self.bucket, &from_key))
             .send()
             .await
             .map_err(|e| {
@@ -351,6 +351,27 @@ impl StorageBackend for S3StorageBackend {
         Ok(())
     }
 
+    /// Segments are objects of their own: one `DeleteObjects` per 1 000 of
+    /// them, not a request each.
+    async fn delete_segments(&self, staged: &str, upto: u32) -> Result<(), CoreError> {
+        let mut objects = Vec::with_capacity(upto as usize);
+        for n in 0..upto {
+            let key = self.object_key(&require_segment_key(staged, n)?)?;
+            objects.push(
+                ObjectIdentifier::builder()
+                    .key(key)
+                    .build()
+                    .map_err(|e| CoreError::Storage(format!("S3 delete build: {e}")))?,
+            );
+        }
+        while !objects.is_empty() {
+            let rest = objects.split_off(objects.len().min(1000));
+            self.delete_objects(std::mem::replace(&mut objects, rest))
+                .await?;
+        }
+        Ok(())
+    }
+
     /// One object per segment (the default `put_segment`), assembled
     /// server-side: `UploadPartCopy` of each segment as a part of `dest`, so
     /// no byte passes through this process; a single segment is a `CopyObject`.
@@ -364,10 +385,9 @@ impl StorageBackend for S3StorageBackend {
         let dest_key = self.object_key(dest)?;
         let mut sources = Vec::with_capacity(count as usize);
         for n in 0..count {
-            sources.push(format!(
-                "{}/{}",
-                self.bucket,
-                self.object_key(&require_segment_key(staged, n)?)?
+            sources.push(copy_source(
+                &self.bucket,
+                &self.object_key(&require_segment_key(staged, n)?)?,
             ));
         }
         if let [only] = sources.as_slice() {
@@ -757,5 +777,33 @@ impl http_body::Body for Parts {
     fn size_hint(&self) -> http_body::SizeHint {
         let rest = self.parts.get(self.next..).unwrap_or_default();
         http_body::SizeHint::with_exact(rest.iter().map(|b| b.len() as u64).sum())
+    }
+}
+
+/// The `x-amz-copy-source` of `key` in `bucket`. S3 URL-decodes that header,
+/// so a key carrying `+` (a cargo `+build` version, a Go `+incompatible`) or
+/// `%` must be percent-encoded, or the copy names an object that does not
+/// exist. `/` stays: it separates the bucket from the key and the key's parts.
+fn copy_source(bucket: &str, key: &str) -> String {
+    let mut out = String::with_capacity(bucket.len() + key.len() + 1);
+    for b in format!("{bucket}/{key}").bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod copy_source_tests {
+    #[test]
+    fn a_copy_source_is_percent_encoded_but_keeps_its_slashes() {
+        assert_eq!(
+            super::copy_source("b", "staging:f.0/cargo/wasi/0.11.0+wasi 100%"),
+            "b/staging%3Af.0/cargo/wasi/0.11.0%2Bwasi%20100%25"
+        );
     }
 }

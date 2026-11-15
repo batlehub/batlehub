@@ -994,7 +994,15 @@ impl ProxyService {
                     .flatten();
                 let label = timing.registry_label.clone();
                 match self
-                    .fetch_and_cache(req.clone(), client, metadata, &integrity, limit, &timing)
+                    .fetch_and_cache(
+                        req.clone(),
+                        client,
+                        metadata,
+                        &integrity,
+                        limit,
+                        &timing,
+                        true,
+                    )
                     .await
                 {
                     Ok(resp) => {
@@ -1030,7 +1038,13 @@ impl ProxyService {
             registry_label,
             start,
         };
-        self.fetch_and_cache(req, client, metadata, &integrity, limit, &timing)
+        // A miss under a TTL may be an expired copy still in storage, which
+        // the fill's "already stored elsewhere?" check must not serve back.
+        // shortcut: every TTL registry loses that check, so two replicas may
+        // both fetch a cold artifact in a race; tell expired from absent if
+        // that shows up in `batlehub_proxy_fill_*`.
+        let refresh = artifact_ttl.is_some();
+        self.fetch_and_cache(req, client, metadata, &integrity, limit, &timing, refresh)
             .await
     }
 

@@ -101,9 +101,11 @@ pub async fn conda_repodata(
                 builder.content_type("application/json");
                 builder.insert_header(("X-BatleHub-Cache", "hit"));
                 mark_synthesised(&mut builder, synthesised);
-                let body = stored.stream.filter_map(|chunk| async move {
-                    chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>)
-                });
+                // A storage error mid-body aborts the response: a truncated
+                // index that ends cleanly is one conda would try to parse.
+                let body = stored
+                    .stream
+                    .map(|chunk| chunk.map_err(actix_web::error::ErrorInternalServerError));
                 return Ok(builder.streaming(body));
             }
         }
@@ -1169,9 +1171,11 @@ async fn serve_compressed_repodata(
                 builder.content_type(encoding.content_type());
                 builder.insert_header(("X-BatleHub-Cache", "hit"));
                 mark_synthesised(&mut builder, synthesised);
-                let body = stored.stream.filter_map(|chunk| async move {
-                    chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>)
-                });
+                // A storage error mid-body aborts the response: a truncated
+                // index that ends cleanly is one conda would try to parse.
+                let body = stored
+                    .stream
+                    .map(|chunk| chunk.map_err(actix_web::error::ErrorInternalServerError));
                 return Ok(builder.streaming(body));
             }
         }
