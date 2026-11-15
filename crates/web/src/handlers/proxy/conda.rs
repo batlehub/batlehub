@@ -1638,6 +1638,21 @@ pub async fn conda_publish(
 mod tests {
     use super::*;
 
+    /// A streamed document carries its cache marker, and a storage error
+    /// mid-body aborts the response instead of ending a short one cleanly.
+    #[actix_web::test]
+    async fn a_streamed_document_aborts_on_a_mid_body_error() {
+        let stream: batlehub_core::ports::ArtifactStream = Box::pin(futures::stream::iter(vec![
+            Ok(bytes::Bytes::from_static(b"{\"pack")),
+            Err(batlehub_core::error::CoreError::Registry(
+                "storage reset".into(),
+            )),
+        ]));
+        let resp = stream_to_client("application/json", stream);
+        assert_eq!(resp.headers().get("X-BatleHub-Cache").unwrap(), "stream");
+        assert!(actix_web::body::to_bytes(resp.into_body()).await.is_err());
+    }
+
     fn zstd(payload: &[u8]) -> Vec<u8> {
         zstd::encode_all(payload, 3).unwrap()
     }
