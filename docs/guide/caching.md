@@ -55,7 +55,7 @@ request that started it:
 
 The fill spools what it streams to a scratch file in the temp directory
 (`TMPDIR`, else `/tmp`), so a 1 GB fill costs one chunk of memory rather than
-1 GB. The Helm chart mounts an `emptyDir` there (`fillScratch.sizeLimit`, 2 GiB
+1 GB. The Helm chart mounts an `emptyDir` there (`fillScratch.sizeLimit`, 8 GiB
 by default) to keep the root filesystem read-only. When the scratch file
 cannot be written, the fill still runs and is still shared, and is served
 once it has ended.

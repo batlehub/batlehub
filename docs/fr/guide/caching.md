@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: 44b141b100299fd8
+sourceHash: eb6977be37e43593
 ---
 
 # Mise en cache
@@ -66,7 +66,7 @@ détaché de la requête qui l'a lancé :
 Le remplissage recopie ce qu'il diffuse dans un fichier temporaire du
 répertoire temporaire (`TMPDIR`, sinon `/tmp`) : un remplissage de 1 Go coûte
 un morceau de mémoire, pas 1 Go. Le chart Helm y monte un `emptyDir`
-(`fillScratch.sizeLimit`, 2 Gio par défaut) pour garder le système de fichiers
+(`fillScratch.sizeLimit`, 8 Gio par défaut) pour garder le système de fichiers
 racine en lecture seule. Quand ce fichier ne peut pas être écrit, le
 remplissage tourne quand même, reste partagé, et est servi une fois terminé.
 
