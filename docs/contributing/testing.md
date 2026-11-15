@@ -1259,7 +1259,9 @@ stopped.
   yara-x's `yr` by `mise which`, never the shims: a shim passes
   `command_exists` and fails in cargo-mutants' scratch copy, and without a
   real `yr` the test that kills `yara.rs`'s matching mutants skips itself.
-  **In CI**, `mutants.yaml` runs tier 1 nightly in 8 shards (red on a red
+  **In CI**, `mutants.yaml` runs tier 1 nightly, 8 of 32 shards in rotation
+  (all of tier 1 every 4 nights; crates/core mutants are tested against
+  their own crate first, and only the survivors against the workspace) (red on a red
   baseline or an empty shard, never on a survivor; the `MISSED` list is in
   the job summary and a red night opens the `mutants-nightly` issue) and,
   on a pull request touching a tier-1 file, the mutants on its changed
