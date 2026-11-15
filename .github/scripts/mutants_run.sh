@@ -21,7 +21,7 @@ if [[ $# -lt 3 ]]; then
 fi
 cm=$1 cfg=$2 out=$3
 shift 3
-mkdir -p "$out" # cargo-mutants does not create the parent of -o
+mkdir -p "$out/pass1" # cargo-mutants does not create the parent of -o
 
 # PR mode (MUTANTS_PR_BUDGET=<minutes>): a pull request's changed lines in
 # the time a CI job has. Each mutant is tested by its own package's suite —
