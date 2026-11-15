@@ -189,6 +189,9 @@ export const ARMS = [
     registry: NPM_REGISTRY,
     weight: 3,
     expect: [200],
+    // Recorded by a task spawned after the seed's fill is promoted, so the
+    // pre-flight may ask before it exists; it retries this arm, the load never.
+    settles: true,
     doc: "a document built per request rather than served",
     request: () =>
       ({ url: p(`/api/v1/sbom/${NPM_REGISTRY}/${SEED_PKG}/${SEED_VER}?format=spdx`) }),
