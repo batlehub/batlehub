@@ -7,9 +7,12 @@
 # against pypi.org or registry.npmjs.org can make (upstream_audit.sh, RFC
 # 0014, first made this shape).
 #
-#   upstream_npm_package <name> <version>       GET /<name>, tarballs/<name>-<v>.tgz
+#   upstream_npm_package <name> <version> [MiB] GET /<name>, tarballs/<name>-<v>.tgz
+#                                               (MiB: an incompressible blob of that size inside)
 #   upstream_pypi_dist <dist> <module> <version> simple/<dist>/, files/<dist>-<v>-py3-none-any.whl
-#   upstream_serve                              start it on $UPSTREAM_PORT (HEAVY_UPSTREAM_URL)
+#   upstream_serve                              start it on $UPSTREAM_PORT (HEAVY_UPSTREAM_URL);
+#                                               UPSTREAM_THROTTLE_BPS + UPSTREAM_THROTTLE_MATCH
+#                                               (a regex on the path) serve those files slowly
 #   upstream_requests [regex]                   count of GETs so far (matching regex)
 #
 # The npm packument is a file with no extension and the tarball lives under
@@ -24,10 +27,12 @@ UPSTREAM_DIR="$HEAVY_WORK/upstream"
 UPSTREAM_LOG="$HEAVY_WORK/upstream.log"
 mkdir -p "$UPSTREAM_DIR/tarballs" "$UPSTREAM_DIR/simple" "$UPSTREAM_DIR/files"
 
-upstream_npm_package() {  # <name> <version>
-  local name="$1" version="$2"
+upstream_npm_package() {  # <name> <version> [MiB]
+  local name="$1" version="$2" mib="${3:-0}"
   local build="$HEAVY_WORK/npm-build-$name-$version"
   mkdir -p "$build/package"
+  # Random, so gzip leaves it its size: a cold fill of many segments (RFC 0048-bis).
+  [[ "$mib" == "0" ]] || head -c "$((mib * 1024 * 1024))" /dev/urandom > "$build/package/blob.bin"
   cat > "$build/package/package.json" <<JSON
 { "name": "$name", "version": "$version", "description": "heavy upstream fixture", "license": "MIT", "main": "index.js" }
 JSON
@@ -92,8 +97,29 @@ HTML
 }
 
 upstream_serve() {
-  python3 -m http.server "$UPSTREAM_PORT" --bind 127.0.0.1 --directory "$UPSTREAM_DIR" \
-    >"$UPSTREAM_LOG" 2>&1 &
+  # `http.server`'s own handler and log line, so `upstream_requests` reads the
+  # same log; the matching files are written at UPSTREAM_THROTTLE_BPS, so a
+  # cold fill lasts long enough for a second replica to join it.
+  python3 -c '
+import os, re, sys, time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+port, root = int(sys.argv[1]), sys.argv[2]
+bps = int(os.environ.get("UPSTREAM_THROTTLE_BPS") or 0)
+match = re.compile(os.environ.get("UPSTREAM_THROTTLE_MATCH") or "$^")
+class H(SimpleHTTPRequestHandler):
+    def copyfile(self, src, dst):
+        if not (bps and match.search(self.path)):
+            return super().copyfile(src, dst)
+        start, sent = time.monotonic(), 0
+        while chunk := src.read(64 * 1024):
+            dst.write(chunk)
+            sent += len(chunk)
+            ahead = sent / bps - (time.monotonic() - start)
+            if ahead > 0:
+                time.sleep(ahead)
+ThreadingHTTPServer(("127.0.0.1", port), partial(H, directory=root)).serve_forever()
+' "$UPSTREAM_PORT" "$UPSTREAM_DIR" >"$UPSTREAM_LOG" 2>&1 &
   HEAVY_EXTRA_PIDS+=($!)
   for _ in $(seq 1 30); do
     curl -sf -o /dev/null "$HEAVY_UPSTREAM_URL/" && break

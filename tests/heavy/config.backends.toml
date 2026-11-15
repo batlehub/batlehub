@@ -79,3 +79,20 @@ upstreams = ["${HEAVY_UPSTREAM_URL}"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# Sections 7 to 10 (RFC 0048-bis §6.P): the cross-replica cold fill. Read
+# anonymously, so the clients of two servers need no token, and with
+# integrity on, so a tampered tarball is refused on both.
+[[registries]]
+type = "npm"
+name = "npmfill-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.integrity]
+enabled = true
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

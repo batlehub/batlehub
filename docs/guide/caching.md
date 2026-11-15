@@ -46,19 +46,22 @@ request that started it:
   counts the joins.
 - **A client that disconnects drops its own response, never the fill.** The
   next request is a cache hit.
-- **A complete body is a verified one.** The newest chunk is held back until
-  the fill has checked the digest and stored the artifact; on a mismatch, an
-  oversize body or an upstream error the response is cut short with an error
-  and nothing is cached.
+- **A complete body is a verified one.** The end of the body is held back
+  until the fill has checked the digest; on a mismatch, an oversize body or an
+  upstream error the response is cut short with an error and nothing is
+  cached.
 - **A registry with `[registries.security]` keeps store-then-serve**: it
   serves nothing it has not judged, so its clients wait for the fill to end.
 
-The fill spools what it streams to a scratch file in the temp directory
-(`TMPDIR`, else `/tmp`), so a 1 GB fill costs one chunk of memory rather than
-1 GB. The Helm chart mounts an `emptyDir` there (`fillScratch.sizeLimit`, 8 GiB
-by default) to keep the root filesystem read-only. When the scratch file
-cannot be written, the fill still runs and is still shared, and is served
-once it has ended.
+The fill writes the bytes to storage as they arrive, as 8 MiB segments under
+a staging key no route serves, and joiners read them back from there; the
+segment still being filled is read from the fill's memory. A segment becomes
+readable only once the next one has started, and the last one only once the
+digest is verified. Once verified, the segments become the artifact — on S3
+they are assembled inside the bucket, on the filesystem the one staging file
+is renamed — and are deleted; a failed fill deletes them too. A fill
+therefore costs about one segment of memory, writes nothing to the pod's
+temporary directory, and needs no scratch volume.
 
 ### Revalidated paths {#revalidated-paths}
 

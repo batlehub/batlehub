@@ -56,6 +56,21 @@ Measured with `perf/scripts/gate_levels.sh` (2026-11-09, release build, mock ups
 
 Run to run, the same level moves by up to ±0.15 ms. The per-request cost of every level is below a millisecond. What a level really costs is the **hold**: a `[registries.security]` profile serves a version only once its required scanners have answered (here, OSV over the network plus the worker's 2-second poll), and a `release_age_gate` or `security.min_age_secs` holds a version younger than its age, which is hours or days by design. Plan for the hold, not for the CPU.
 
+## What a cold fill costs {#fill-cost}
+
+A [cold miss](./caching#cold-fill) writes the artifact to storage as 8 MiB
+segments, then turns them into the blob; with several replicas the others
+[follow the fill](./high-availability#cold-fills) from storage.
+
+| Resource | Cost |
+| --- | --- |
+| Storage | The artifact twice on S3 (segments + blob) from assembly until the segments are deleted; once on the filesystem |
+| Memory | One segment (8 MiB) per running fill on the replica that holds it, plus one read chunk per reader |
+| S3 requests | Per GiB filled: 128 `PutObject` + 128 `UploadPartCopy` + 128 `DeleteObject`; each reader on another replica, 128 `GetObject` |
+| PostgreSQL | About 133 statements per 1 GiB fill (one per segment, plus ~5); none on an idle server, none at all with a `memory` cache |
+
+Leave free storage for the largest artifacts filling at once, twice over on S3.
+
 ## Database (PostgreSQL)
 
 - **Connections:** Default `max_connections = 20` per instance; see [sizing `max_connections`](./configuration#sizing-max-connections) before going higher. The DB itself should allow at least `max_connections * (number of instances) + 10` headroom.

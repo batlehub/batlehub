@@ -15,6 +15,20 @@
 {{- if gt $asConfigCount 1 }}
 {{- fail "externalManifest: only one entry may set mount.asConfig: true" }}
 {{- end }}
+{{- /* RFC 0048-bis §4.3: N pods on a `memory` cache each fill, rate-limit
+     and ban on their own. Checked where the chart can see the config; a
+     config it cannot read (an asConfig manifest, an existing credentials
+     Secret) is the operator's to get right. */}}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- $cacheType := dig "cache" "type" "" (.Values.config | default dict) }}
+{{- if .Values.credentials.enabled }}
+{{- $cacheType = dig "cache" "type" $cacheType (.Values.credentials.config | default dict) }}
+{{- end }}
+{{- $opaque := or (gt $asConfigCount 0) (and .Values.credentials.enabled .Values.credentials.existingSecret) }}
+{{- if and (not $opaque) (has ($cacheType | default "memory") (list "memory")) }}
+{{- fail (printf "replicaCount %v needs a shared [cache] (config.cache.type \"postgres\" or \"redis\"): with \"memory\" every pod fills, rate-limits and bans on its own. See docs/guide/high-availability.md#config-cache" .Values.replicaCount) }}
+{{- end }}
+{{- end }}
 {{- if not (has .Values.writableConfig.seed (list "IfNotPresent" "Always")) }}
 {{- fail (printf "writableConfig.seed must be IfNotPresent or Always, got: %v" .Values.writableConfig.seed) }}
 {{- end }}
@@ -118,9 +132,6 @@ spec:
             sizeLimit: {{ .Values.persistence.ephemeralSizeLimit | default "1Gi" }}
           {{- end }}
         {{- end }}
-        - name: fill-scratch
-          emptyDir:
-            sizeLimit: {{ .Values.fillScratch.sizeLimit }}
         {{- range .Values.externalManifest }}
         {{- if and (eq (include "batlehub.manifestEnabled" .) "true") .mount (not .mount.asConfig) }}
         - name: extra-{{ .name }}
@@ -247,10 +258,6 @@ spec:
             - name: cache
               mountPath: {{ .Values.config.storage.path }}
             {{- end }}
-            # RFC 0048 §15 Q9: a cold fill spools the bytes it streams to its
-            # clients here, so the root filesystem can stay read-only.
-            - name: fill-scratch
-              mountPath: /tmp
             {{- range .Values.externalManifest }}
             {{- if and (eq (include "batlehub.manifestEnabled" .) "true") .mount (not .mount.asConfig) }}
             - name: extra-{{ .name }}

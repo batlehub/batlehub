@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/capacity-planning.md
-sourceHash: 0898b9866ff89b27
+sourceHash: 4cddcb18fc352dc4
 ---
 
 # Dimensionnement
@@ -74,6 +74,23 @@ Mesuré avec `perf/scripts/gate_levels.sh` (2026-11-09, build release, upstream 
 | max | élevé + `license_gate`, `version_gate`, `require_signed_release`, SBOM | +0,2 à +0,75 ms | **retenu jusqu'à la réponse du scan : ~10 s** |
 
 D'une mesure à l'autre, un même niveau varie de ±0,15 ms au plus. Le coût par requête de chaque niveau reste sous la milliseconde. Ce qu'un niveau coûte vraiment, c'est la **retenue** : un profil `[registries.security]` ne sert une version qu'une fois que ses scanners requis ont répondu (ici, OSV par le réseau plus le tour de 2 secondes du worker), et une `release_age_gate` ou `security.min_age_secs` retient une version plus jeune que son âge, ce qui se compte en heures ou en jours, par construction. Prévoyez la retenue, pas le processeur.
+
+## Ce que coûte un remplissage à froid {#fill-cost}
+
+Un [MISS à froid](./caching#cold-fill) écrit l'artefact dans le stockage en
+segments de 8 Mio, puis les transforme en blob ; avec plusieurs réplicas, les
+autres [suivent le remplissage](./high-availability#cold-fills) depuis le
+stockage.
+
+| Ressource | Coût |
+| --- | --- |
+| Stockage | L'artefact deux fois sur S3 (segments + blob), de l'assemblage à la suppression des segments ; une fois sur le système de fichiers |
+| Mémoire | Un segment (8 Mio) par remplissage en cours sur le réplica qui le tient, plus un bloc de lecture par lecteur |
+| Requêtes S3 | Par Gio rempli : 128 `PutObject` + 128 `UploadPartCopy` + 128 `DeleteObject` ; chaque lecteur sur un autre réplica, 128 `GetObject` |
+| PostgreSQL | Environ 133 requêtes par remplissage de 1 Gio (une par segment, plus ~5) ; aucune sur un serveur au repos, aucune avec un cache `memory` |
+
+Gardez de l'espace libre pour les plus gros artefacts remplis en même temps,
+deux fois sur S3.
 
 ## Base de données (PostgreSQL)
 

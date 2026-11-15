@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: eb6977be37e43593
+sourceHash: aff473723c7c74e9
 ---
 
 # Mise en cache
@@ -55,20 +55,25 @@ détaché de la requête qui l'a lancé :
   compte ces jonctions.
 - **Un client qui se déconnecte abandonne sa propre réponse, jamais le
   remplissage.** La requête suivante est un HIT.
-- **Un corps complet est un corps vérifié.** Le dernier morceau reçu est
-  retenu jusqu'à ce que le remplissage ait vérifié l'empreinte et stocké
-  l'artefact ; sur une empreinte divergente, un corps trop gros ou une erreur
-  amont, la réponse est interrompue par une erreur et rien n'est mis en cache.
+- **Un corps complet est un corps vérifié.** La fin du corps est retenue
+  jusqu'à ce que le remplissage ait vérifié l'empreinte ; sur une empreinte
+  divergente, un corps trop gros ou une erreur amont, la réponse est
+  interrompue par une erreur et rien n'est mis en cache.
 - **Un registre doté de `[registries.security]` garde stocker-puis-servir** :
   il ne sert rien qu'il n'ait jugé, donc ses clients attendent la fin du
   remplissage.
 
-Le remplissage recopie ce qu'il diffuse dans un fichier temporaire du
-répertoire temporaire (`TMPDIR`, sinon `/tmp`) : un remplissage de 1 Go coûte
-un morceau de mémoire, pas 1 Go. Le chart Helm y monte un `emptyDir`
-(`fillScratch.sizeLimit`, 8 Gio par défaut) pour garder le système de fichiers
-racine en lecture seule. Quand ce fichier ne peut pas être écrit, le
-remplissage tourne quand même, reste partagé, et est servi une fois terminé.
+Le remplissage écrit les octets dans le stockage à mesure qu'ils arrivent,
+en segments de 8 Mio sous une clé de préparation qu'aucune route ne sert, et
+les requêtes qui le rejoignent les y relisent ; le segment en cours de
+remplissage est lu dans la mémoire du remplissage. Un segment ne devient
+lisible qu'une fois le suivant commencé, et le dernier qu'une fois
+l'empreinte vérifiée. Une fois vérifiés, les segments deviennent l'artefact —
+sur S3 ils sont assemblés dans le bucket, sur le système de fichiers l'unique
+fichier de préparation est renommé — puis sont supprimés ; un remplissage en
+échec les supprime aussi. Un remplissage coûte donc environ un segment de
+mémoire, n'écrit rien dans le répertoire temporaire du pod et ne demande
+aucun volume de travail.
 
 ### Chemins revalidés {#revalidated-paths}
 

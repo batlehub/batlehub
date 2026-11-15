@@ -26,7 +26,7 @@ BatleHub is a **stateless HTTP server** — all durable state lives in PostgreSQ
      └──────────┘  └──────────┘  └──────────┘
 ```
 
-All state is shared externally. No sticky sessions are needed — any replica can serve any request.
+All state is shared externally. No sticky sessions are needed — any replica can serve any request, a cold artifact included: the replicas share one fill per artifact ([Cold fills](#cold-fills)).
 
 ### What changes between single-instance and HA
 
@@ -36,10 +36,11 @@ All state is shared externally. No sticky sessions are needed — any replica ca
 | Rate limiting | `InMemoryRateLimitStore` (per-process) | Same `[cache]` backend — automatic |
 | IP blocking | `InMemoryIpBlockStore` (per-process) | Same `[cache]` backend — automatic |
 | **Global banner** | `InMemoryBannerStore` (per-process) | Same `[cache]` backend — automatic |
+| Cold-fill lease | In the process | PostgreSQL row, whenever `[cache]` is shared — automatic |
 | Artifact storage | Filesystem (`/var/cache/batlehub`) | S3-compatible object store |
 | Canonical data | PostgreSQL | PostgreSQL — already shared |
 
-The `[cache]` section controls all four in-memory stores with a single setting. Switching it also fixes rate limiting, IP blocking, and the global admin banner without any additional config.
+The `[cache]` section controls all four in-memory stores, and who fills a cold artifact, with a single setting. Switching it also fixes rate limiting, IP blocking, the global admin banner and duplicate upstream fetches without any additional config.
 
 ---
 
@@ -60,7 +61,7 @@ These are the only config changes needed to go from single-instance to multi-ins
 
 ### Cache backend {#config-cache}
 
-Replace the default in-memory cache with a shared backend. This single change covers metadata cache, rate limiting, and IP blocking.
+Replace the default in-memory cache with a shared backend. This single change covers metadata cache, rate limiting, IP blocking and the [cold-fill lease](#cold-fills). **More than one replica needs it**: with `memory`, every pod fills, rate-limits and bans on its own. The Helm chart refuses to render `replicaCount > 1` without `config.cache.type` set to `postgres` or `redis`, unless the config comes from somewhere it cannot read (an `externalManifest` entry with `mount.asConfig`, or `credentials.existingSecret`) — then it is yours to get right.
 
 **Option A — PostgreSQL** (uses your existing database, no extra service):
 
@@ -214,6 +215,43 @@ admin     = ["*"]
 
 ---
 
+## Cold fills {#cold-fills}
+
+A cold miss is **one fill per artifact across every replica** that shares the
+database, the `[cache]` and the bucket — how a single fill streams, verifies
+and stores the bytes is in [A cold miss](./caching#cold-fill).
+
+- **Who fills is a lease.** With `[cache]` set to `postgres` or `redis` it is a
+  PostgreSQL row (`fill_leases`; PostgreSQL even with a Redis cache). With
+  `memory` — one replica — it stays in the process and costs no statement.
+- **The other replicas follow the fill instead of fetching.** A replica that
+  gets a request for an artifact another one is filling reads the committed
+  8 MiB segments back from storage and makes no upstream request. It is woken
+  by a `NOTIFY` on the [`LISTEN` connection](#config-db-listen) it already
+  holds, or polls the lease once a second while that connection is down. Its
+  first byte comes at most one segment's transfer after the filler's: 0.84 s
+  at 10 MB/s, 8.4 s at 1 MB/s.
+- **A pod that dies mid-fill is a restart, not a resume.** The lease lives
+  30 s and is renewed after 10 s without progress. When the filler dies, its
+  readers on other replicas are cut once the lease expires (up to ~30–60 s);
+  the client's retry takes the lease over, deletes the dead fill's segments
+  and fetches from zero.
+- **Leftovers are swept.** Every 5 minutes one replica (elected by a
+  PostgreSQL advisory lock) deletes the segments and rows of expired leases,
+  and staging keys older than 24 h.
+
+::: warning Add a bucket lifecycle rule on S3
+The sweep does not abort incomplete multipart uploads. Give the bucket a
+lifecycle rule that aborts incomplete multipart uploads after 1 day and
+expires objects under the `staging:` prefix (below your `prefix`, if set)
+after 1 day.
+:::
+
+What a fill costs in storage, memory, S3 requests and statements is in
+[Capacity planning](./capacity-planning#fill-cost).
+
+---
+
 ## Docker Compose — single-host redundancy {#compose}
 
 Docker Compose can run multiple server replicas on a single host. This protects against process crashes but not host failure. Use it for staging environments or when you want process-level redundancy without a full Kubernetes cluster.
@@ -298,26 +336,29 @@ image:
   repository: ghcr.io/batlehub/batlehub
   tag: "1.1.0"    # pin to a specific version
 
-database:
-  url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+# The application config: the chart serialises `config` to config.toml.
+config:
+  database:
+    type: "postgresql"
+    url:  "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+  storage:
+    type:   "s3"
+    bucket: "batlehub-artifacts"
+    region: "us-east-1"
+    path:   null             # drop the chart's filesystem default
+  # Required above one replica — the chart refuses to render without it.
+  cache:
+    type: "redis"            # or "postgres" (url defaults to database.url)
+    url:  "redis://redis-svc:6379"
 
-storage:
-  type: s3
-  s3:
-    bucket:          batlehub-artifacts
-    region:          us-east-1
-    accessKeyId:     "AKIAIOSFODNN7EXAMPLE"
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# S3 credentials come from the AWS SDK chain: a pod role, or these variables.
+envFrom:
+  - secretRef:
+      name: batlehub-s3      # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 # PVC not needed — all artifacts go to S3.
 persistence:
   enabled: false
-
-# Inject the shared cache backend via extraConfig.
-extraConfig: |
-  [cache]
-  type = "redis"
-  url  = "redis://redis-svc:6379"
 
 ingress:
   enabled: true
@@ -396,7 +437,7 @@ BatleHub applies database migrations automatically on startup. Migrations are de
 Configure the Deployment strategy to guarantee zero downtime:
 
 ```yaml
-# In ha-values.yaml, under the helm chart's extraConfig or via kubectl patch:
+# The Deployment's strategy — not a chart value; apply it with the patch below:
 strategy:
   type: RollingUpdate
   rollingUpdate:
@@ -443,12 +484,36 @@ service_name = "batlehub"
 In Helm:
 
 ```yaml
-otel:
-  enabled:  true
-  endpoint: "http://otel-collector:4317"
+config:
+  otel:
+    endpoint:     "http://otel-collector:4317"
+    service_name: "batlehub"
 ```
 
 Each replica emits its own spans; the collector stitches them into complete traces by trace ID. See the [Administration guide](/guide/admin-storage-health#health) for the Jaeger quickstart.
+
+### Cold-fill metrics {#fill-metrics}
+
+| Metric | What it says |
+| --- | --- |
+| `batlehub_proxy_fill_active` | Fills running on this replica |
+| `batlehub_proxy_fill_joined_total{registry,scope}` | Requests that joined a fill, on this replica (`local`) or another one (`remote`) |
+| `batlehub_proxy_fill_first_byte_seconds{scope}` | Time to a joiner's first byte |
+| `batlehub_proxy_fill_segments_total{registry}` | Segments committed to storage |
+| `batlehub_proxy_fill_assembly_seconds` | Time to turn the segments into the blob |
+| `batlehub_proxy_fill_follow_polls_total` | Lease polls by a follower whose `LISTEN` connection is down |
+| `batlehub_proxy_fill_takeovers_total{registry}` | Fills taken over from an expired lease |
+| `batlehub_proxy_fill_lease_lost_total{registry}` | Fills that lost their lease |
+| `batlehub_proxy_fill_lease_errors_total` | Lease store failures — the replica then fills on its own, as one replica would |
+| `batlehub_proxy_fill_orphans_deleted_total` | Leftovers deleted by the sweep |
+
+Two alerts are worth having, and neither should page — both degrade cost
+(upstream traffic, a client retry), not correctness:
+
+```promql
+increase(batlehub_proxy_fill_takeovers_total[1h]) > 0     # outside a rollout: pods dying mid-fill
+increase(batlehub_proxy_fill_lease_errors_total[15m]) > 0 # replicas filling on their own
+```
 
 ---
 
@@ -468,4 +533,4 @@ These are accepted trade-offs documented in `docs/contributing/contributing.md �
 
   Both run only when `[cache]` is shared (`redis` or `postgres`), which more than one replica requires anyway: a single server with `type = "memory"` has no replica to agree with, and does not pay the statement every fifteen seconds.
 
-- **In-memory stores if misconfigured** — if `[cache]` is left at the default `type = "memory"`, each replica maintains its own independent rate-limit and IP-block state. Rate limits will be N times more permissive than configured (where N is the replica count), and IP blocks set on one replica will not propagate to others. **Always set a shared cache backend for multi-replica deployments.**
+- **In-memory stores if misconfigured** — if `[cache]` is left at the default `type = "memory"`, each replica maintains its own independent rate-limit and IP-block state. Rate limits will be N times more permissive than configured (where N is the replica count), and IP blocks set on one replica will not propagate to others, and each replica fills a cold artifact on its own. **Always set a shared cache backend for multi-replica deployments** — the Helm chart refuses to render without one when it can read the config ([Cache backend](#config-cache)).

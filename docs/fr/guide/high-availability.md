@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: d326219fcebb3472
+sourceHash: 61aa246d34ebeeb0
 ---
 
 # Haute disponibilité
@@ -36,7 +36,9 @@ fichiers local.
 ```
 
 Tout l'état est partagé à l'extérieur. Aucune affinité de session n'est
-nécessaire — n'importe quel réplica peut servir n'importe quelle requête.
+nécessaire — n'importe quel réplica peut servir n'importe quelle requête, y
+compris pour un artefact froid : les réplicas partagent un seul remplissage par
+artefact ([Remplissages à froid](#cold-fills)).
 
 ### Ce qui change entre mono-instance et haute disponibilité
 
@@ -46,12 +48,14 @@ nécessaire — n'importe quel réplica peut servir n'importe quelle requête.
 | Limitation de débit | `InMemoryRateLimitStore` (par processus) | Le même backend `[cache]` — automatique |
 | Blocage d'IP | `InMemoryIpBlockStore` (par processus) | Le même backend `[cache]` — automatique |
 | **Bandeau global** | `InMemoryBannerStore` (par processus) | Le même backend `[cache]` — automatique |
+| Bail de remplissage à froid | Dans le processus | Ligne PostgreSQL, dès que `[cache]` est partagé — automatique |
 | Stockage des artefacts | Système de fichiers (`/var/cache/batlehub`) | Magasin d'objets compatible S3 |
 | Données canoniques | PostgreSQL | PostgreSQL — déjà partagé |
 
-La section `[cache]` gouverne les quatre magasins en mémoire par un seul réglage.
-En la changeant, vous corrigez du même coup la limitation de débit, le blocage
-d'IP et le bandeau global, sans configuration supplémentaire.
+La section `[cache]` gouverne les quatre magasins en mémoire, et le choix de
+qui remplit un artefact froid, par un seul réglage. En la changeant, vous
+corrigez du même coup la limitation de débit, le blocage d'IP, le bandeau global
+et les récupérations amont en double, sans configuration supplémentaire.
 
 ---
 
@@ -78,8 +82,13 @@ multi-instance. Tout le reste est identique.
 ### Le backend de cache {#config-cache}
 
 Remplacez le cache en mémoire par défaut par un backend partagé. Ce seul
-changement couvre le cache de métadonnées, la limitation de débit et le blocage
-d'IP.
+changement couvre le cache de métadonnées, la limitation de débit, le blocage
+d'IP et le [bail de remplissage à froid](#cold-fills). **Plus d'un réplica
+l'exige** : en `memory`, chaque pod remplit, limite le débit et bannit de son
+côté. Le chart Helm refuse de rendre `replicaCount > 1` sans `config.cache.type`
+à `postgres` ou `redis`, sauf si la configuration vient d'une source qu'il ne
+peut pas lire (une entrée `externalManifest` avec `mount.asConfig`, ou
+`credentials.existingSecret`) — c'est alors à vous de la régler correctement.
 
 **Option A — PostgreSQL** (emploie votre base existante, aucun service en plus) :
 
@@ -240,6 +249,47 @@ admin     = ["*"]
 
 ---
 
+## Remplissages à froid {#cold-fills}
+
+Un MISS à froid donne **un seul remplissage par artefact pour tous les
+réplicas** qui partagent la base, le `[cache]` et le bucket. La façon dont un
+remplissage diffuse, vérifie et stocke les octets est décrite dans
+[Un MISS à froid](./caching#cold-fill).
+
+- **Qui remplit est un bail.** Avec `[cache]` à `postgres` ou `redis`, c'est
+  une ligne PostgreSQL (`fill_leases` ; PostgreSQL même avec un cache Redis).
+  En `memory` — un seul réplica — il reste dans le processus et ne coûte
+  aucune requête.
+- **Les autres réplicas suivent le remplissage au lieu de récupérer.** Un
+  réplica qui reçoit une requête pour un artefact qu'un autre remplit relit
+  depuis le stockage les segments de 8 Mio déjà validés et n'envoie aucune
+  requête amont. Il est réveillé par un `NOTIFY` sur la
+  [connexion `LISTEN`](#config-db-listen) qu'il tient déjà, ou interroge le bail
+  une fois par seconde tant que cette connexion est coupée. Son premier octet
+  arrive au plus le temps de transfert d'un segment après celui du réplica qui
+  remplit : 0,84 s à 10 Mo/s, 8,4 s à 1 Mo/s.
+- **La mort d'un pod en plein remplissage fait repartir de zéro.** Le bail
+  vit 30 s et est renouvelé après 10 s sans progrès. Quand le réplica qui
+  remplit meurt, ses lecteurs sur les autres réplicas sont coupés une fois le
+  bail expiré (jusqu'à ~30 à 60 s) ; la nouvelle tentative du client reprend le
+  bail, supprime les segments du remplissage mort et récupère tout depuis le
+  début.
+- **Les restes sont balayés.** Toutes les 5 minutes, un réplica (élu par un
+  verrou consultatif PostgreSQL) supprime les segments et les lignes des baux
+  expirés, ainsi que les clés de préparation de plus de 24 h.
+
+::: warning Ajoutez une règle de cycle de vie au bucket S3
+Le balayage n'abandonne pas les envois multipart incomplets. Dotez le bucket
+d'une règle de cycle de vie qui abandonne les envois multipart incomplets après
+1 jour et fait expirer les objets sous le préfixe `staging:` (sous votre
+`prefix`, s'il est défini) après 1 jour.
+:::
+
+Ce qu'un remplissage coûte en stockage, en mémoire, en requêtes S3 et en
+requêtes SQL figure dans [Dimensionnement](./capacity-planning#fill-cost).
+
+---
+
 ## Docker Compose — redondance sur un seul hôte {#compose}
 
 Docker Compose sait faire tourner plusieurs réplicas du serveur sur un seul
@@ -330,26 +380,29 @@ image:
   repository: ghcr.io/batlehub/batlehub
   tag: "1.1.0"    # figez une version précise
 
-database:
-  url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+# La configuration applicative : le chart sérialise `config` en config.toml.
+config:
+  database:
+    type: "postgresql"
+    url:  "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+  storage:
+    type:   "s3"
+    bucket: "batlehub-artifacts"
+    region: "us-east-1"
+    path:   null             # retire le défaut système de fichiers du chart
+  # Requis au-delà d'un réplica — le chart refuse de rendre sans lui.
+  cache:
+    type: "redis"            # ou "postgres" (url vaut database.url par défaut)
+    url:  "redis://redis-svc:6379"
 
-storage:
-  type: s3
-  s3:
-    bucket:          batlehub-artifacts
-    region:          us-east-1
-    accessKeyId:     "AKIAIOSFODNN7EXAMPLE"
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# Les identifiants S3 viennent de la chaîne du SDK AWS : un rôle de pod, ou ces variables.
+envFrom:
+  - secretRef:
+      name: batlehub-s3      # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 # Pas besoin de PVC — tous les artefacts vont sur S3.
 persistence:
   enabled: false
-
-# Injecter le backend de cache partagé par extraConfig.
-extraConfig: |
-  [cache]
-  type = "redis"
-  url  = "redis://redis-svc:6379"
 
 ingress:
   enabled: true
@@ -432,7 +485,7 @@ progressif est donc sûr :
 Configurez la stratégie du Deployment pour garantir l'absence de coupure :
 
 ```yaml
-# Dans ha-values.yaml, sous l'extraConfig du chart, ou par kubectl patch :
+# La stratégie du Deployment — pas une valeur du chart ; appliquez-la par le patch ci-dessous :
 strategy:
   type: RollingUpdate
   rollingUpdate:
@@ -487,15 +540,40 @@ service_name = "batlehub"
 En Helm :
 
 ```yaml
-otel:
-  enabled:  true
-  endpoint: "http://otel-collector:4317"
+config:
+  otel:
+    endpoint:     "http://otel-collector:4317"
+    service_name: "batlehub"
 ```
 
 Chaque réplica émet ses propres spans ; le collecteur les recoud en traces
 complètes par identifiant de trace. Voir le
 [guide d'administration](/fr/guide/admin-storage-health#health) pour le démarrage
 rapide avec Jaeger.
+
+### Métriques des remplissages à froid {#fill-metrics}
+
+| Métrique | Ce qu'elle indique |
+| --- | --- |
+| `batlehub_proxy_fill_active` | Remplissages en cours sur ce réplica |
+| `batlehub_proxy_fill_joined_total{registry,scope}` | Requêtes qui ont rejoint un remplissage, sur ce réplica (`local`) ou un autre (`remote`) |
+| `batlehub_proxy_fill_first_byte_seconds{scope}` | Délai jusqu'au premier octet d'une requête jointe |
+| `batlehub_proxy_fill_segments_total{registry}` | Segments validés dans le stockage |
+| `batlehub_proxy_fill_assembly_seconds` | Durée de l'assemblage des segments en blob |
+| `batlehub_proxy_fill_follow_polls_total` | Interrogations du bail par un suiveur dont la connexion `LISTEN` est coupée |
+| `batlehub_proxy_fill_takeovers_total{registry}` | Remplissages repris sur un bail expiré |
+| `batlehub_proxy_fill_lease_lost_total{registry}` | Remplissages qui ont perdu leur bail |
+| `batlehub_proxy_fill_lease_errors_total` | Échecs du magasin de baux — le réplica remplit alors de son côté, comme un réplica seul |
+| `batlehub_proxy_fill_orphans_deleted_total` | Restes supprimés par le balayage |
+
+Deux alertes valent la peine, et aucune ne doit réveiller quelqu'un : toutes
+deux dégradent le coût (trafic amont, une nouvelle tentative du client), pas
+la justesse :
+
+```promql
+increase(batlehub_proxy_fill_takeovers_total[1h]) > 0     # hors déploiement : des pods meurent en plein remplissage
+increase(batlehub_proxy_fill_lease_errors_total[15m]) > 0 # des réplicas remplissent de leur côté
+```
 
 ---
 
@@ -547,5 +625,8 @@ Ce sont des compromis assumés, consignés dans
   reste au défaut `type = "memory"`, chaque réplica tient son propre état de
   limitation de débit et de blocage d'IP. Les limites sont alors N fois plus
   permissives que configurées (N étant le nombre de réplicas), et un blocage
-  d'IP posé sur un réplica ne se propage pas aux autres. **Déclarez toujours un
-  backend de cache partagé pour un déploiement multi-réplicas.**
+  d'IP posé sur un réplica ne se propage pas aux autres, et chaque réplica
+  remplit un artefact froid de son côté. **Déclarez toujours un backend de
+  cache partagé pour un déploiement multi-réplicas** — le chart Helm refuse de
+  rendre sans lui lorsqu'il peut lire la configuration
+  ([Le backend de cache](#config-cache)).
