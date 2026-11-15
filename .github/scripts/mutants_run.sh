@@ -4,8 +4,8 @@
 #
 #   mutants_run.sh <cargo-mutants> <config> <out-dir> [cargo-mutants args…]
 #
-# The crates/core paths run with --test-workspace=true, because crates/web's
-# suites prove their refusals too. cargo-mutants 27.1.0 still runs *its*
+# The crates/core paths' survivors are rerun with --test-workspace=true,
+# because crates/web's suites prove their refusals too. cargo-mutants 27.1.0 still runs *its*
 # baseline per package and sets the timeout from it, so the workspace suite is
 # run here first: red, and every core mutant would read as caught; slow, and
 # every one would time out.
@@ -21,7 +21,7 @@ if [[ $# -lt 3 ]]; then
 fi
 cm=$1 cfg=$2 out=$3
 shift 3
-mkdir -p "$out" # cargo-mutants does not create the parent of -o
+mkdir -p "$out/pass1" # cargo-mutants does not create the parent of -o
 
 # PR mode (MUTANTS_PR_BUDGET=<minutes>): a pull request's changed lines in
 # the time a CI job has. Each mutant is tested by its own package's suite —
@@ -69,9 +69,39 @@ fi
 secs=$(($(date +%s) - start))
 echo "workspace baseline green in ${secs}s"
 
+# Core in two passes. Pass 1 tests each core mutant against crates/core's own
+# suite (~20 s); only its survivors go to the workspace (~6 min each, every
+# crate's tests relinked). The workspace runs that suite too, so a mutant
+# caught in pass 1 is caught there: same verdicts, a third of the time.
 core=0
-"$cm" mutants --config "$cfg" "$@" --test-workspace=true --minimum-test-timeout $((secs * 3 + 60)) \
-  --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o "$out/core" || core=$?
+"$cm" mutants --config "$cfg" "$@" \
+  --exclude 'crates/web/**' --exclude 'crates/adapters/**' -o "$out/pass1/core" || core=$?
+survivors=$(cat "$out/pass1/core/mutants.out/missed.txt" 2>/dev/null || true)
+if [[ -n "$survivors" && ($core -eq 2 || $core -eq 3) ]]; then
+  # The survivors are already this shard's: drop --shard.
+  args=()
+  skip=0
+  for a in "$@"; do
+    if [[ $skip -eq 1 ]]; then skip=0; continue; fi
+    case $a in
+      --shard) skip=1 ;;
+      --shard=*) ;;
+      *) args+=("$a") ;;
+    esac
+  done
+  # Exact names, by --re. --no-config: the config's examine_re is OR'ed with
+  # --re and would re-admit every core mutant. --file too: cargo-mutants
+  # 27.1.0 applies no --re to "delete field" mutants, so the files bound them.
+  sel=()
+  while IFS= read -r m; do
+    sel+=(--re "^$(sed 's/[][\.*^$+?(){}|]/\\&/g' <<<"$m")\$")
+  done <<<"$survivors"
+  while IFS= read -r f; do sel+=(--file "$f"); done < <(cut -d: -f1 <<<"$survivors" | sort -u)
+  echo "$(grep -c . <<<"$survivors") core mutants survived crates/core's suite; testing them against the workspace"
+  core=0
+  "$cm" mutants --no-config "${args[@]}" "${sel[@]}" --test-workspace=true \
+    --minimum-test-timeout $((secs * 3 + 60)) -o "$out/core" || core=$?
+fi
 rest=0
 "$cm" mutants --config "$cfg" "$@" --exclude 'crates/core/**' -o "$out/rest" || rest=$?
 echo "exit codes: core=$core rest=$rest"

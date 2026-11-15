@@ -2,7 +2,7 @@
 # request, like the coverage floors: a PR cannot shrink what is mutated.
 #
 # `task mutants` runs it locally (one file: `task mutants FILE=…`);
-# .github/workflows/mutants.yaml runs it nightly in 8 shards and on the changed
+# .github/workflows/mutants.yaml runs it nightly, 8 of 32 shards in rotation, and on the changed
 # lines of a pull request.
 #
 # The tier-1 paths, in full. The scanner adapters are tier 1 for mutation only,

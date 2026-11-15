@@ -5,7 +5,7 @@ name: Mutants
 #
 #   | event         | runs                                   | fails on                                  |
 #   | ------------- | -------------------------------------- | ----------------------------------------- |
-#   | nightly       | all of tier 1, `--shard k/8`           | a red baseline, a shard that tested zero mutants, a timeout of the shard |
+#   | nightly       | 8 of tier 1's 32 shards, in rotation   | a red baseline, a shard that tested zero mutants, a timeout of the shard |
 #   | pull request  | the mutants on changed tier-1 lines    | nothing yet — reported until the nightly's MISSED list is empty |
 #
 # Two invocations each time: the crates/core paths with `--test-workspace=true`,
@@ -49,11 +49,12 @@ jobs:
     name: mutants — shard ${{ matrix.shard }}/8
     if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
-    # Decision 25: a shard is ~100 mutants; one that cannot finish in an hour
-    # is a finding about the shard size, not a reason to wait longer.
-    # Over decision 25's hour: each shard now runs the workspace suite once
-    # before its mutants (mutants_run.sh). A shard that cannot finish in two is
-    # a finding about the shard size.
+    # Decision 25 measured ~100 mutants an hour; the CI runner does ~15 (a
+    # crates/web mutant relinks 113 test binaries, ~3.5 min; a core survivor
+    # the whole workspace, ~6 min), so tier 1 is ~36 runner-hours (issue 310).
+    # 32 shards of ~1.1 h, 8 a night by the day number: all of tier 1 every
+    # 4 nights, at the runner cost of 8. A shard that cannot finish in two
+    # hours is a finding about the shard size.
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -80,13 +81,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
-      - name: Mutants (shard ${{ matrix.shard }})
+      - name: Mutants (slot ${{ matrix.shard }} of tonight's 8)
         env:
-          SHARD: ${{ matrix.shard }}/8
+          SLOT: ${{ matrix.shard }}
         # No errexit (GitHub's default is `bash -e`): see mutants_run.sh.
         shell: bash --noprofile --norc {0}
         run: |
           set -uo pipefail
+          SHARD="$(( ($(date -u +%s) / 86400 % 4) * 8 + SLOT ))/32"
+          echo "SHARD=$SHARD" >>"$GITHUB_ENV"
+          echo "shard $SHARD"
           cm="$(mise which cargo-mutants)"
           # By path, never the shim: the one test that runs the real `yr` kills
           # yara.rs's matching mutants, and skips itself without one.
@@ -98,7 +102,8 @@ jobs:
           rc=0
           bash .github/scripts/mutants_run.sh "$cm" .cargo/mutants.toml mutants.out --in-place --shard "$SHARD" || rc=$?
           [ "$rc" -eq 0 ] || exit "$rc"
-          tested=$(cat mutants.out/*/mutants.out/outcomes.json | jq -s '[.[].outcomes[] | select(.scenario != "Baseline")] | length')
+          # pass1/ included: a core shard whose mutants all die in pass 1 has no core/.
+          tested=$(find mutants.out -name outcomes.json -exec cat {} + | jq -s '[.[].outcomes[] | select(.scenario != "Baseline")] | length')
           echo "mutants tested: $tested"
           if [ "$tested" -eq 0 ]; then
             echo "::error::shard $SHARD tested zero mutants — an empty MISSED list would mean nothing"
@@ -110,7 +115,7 @@ jobs:
         if: ${{ always() }}
         run: |
           {
-            echo "### Mutants, shard ${{ matrix.shard }}/8"
+            echo "### Mutants, shard ${SHARD:-?}"
             missed=$(cat mutants.out/*/mutants.out/missed.txt 2>/dev/null || true)
             if [ -n "$missed" ]; then
               echo "**MISSED** — no test noticed these changes:"

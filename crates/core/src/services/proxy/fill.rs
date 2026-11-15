@@ -979,6 +979,56 @@ mod tests {
         assert!(coordinator.is_idle());
     }
 
+    /// The same across replicas: a holding registry on a replica that follows
+    /// another's fill streams none of its committed segments, waits past
+    /// `Verified` for `Done`, and is then served the promoted artifact whole.
+    #[tokio::test]
+    async fn a_quarantined_kind_waits_for_done_on_every_replica() {
+        let leases = Arc::new(InMemoryFillLeases::default());
+        let a = Arc::new(FillCoordinator::new(leases.clone(), "a".into()));
+        let b = Arc::new(FillCoordinator::new(leases, "b".into()));
+        let (_, _, storage) = setup();
+        let mut writer = started(&a, &storage).await;
+        writer
+            .push(Bytes::from(vec![b'x'; FILL_SEGMENT_BYTES]))
+            .await
+            .unwrap();
+        writer.push(Bytes::from_static(b"y")).await.unwrap();
+        assert_eq!(writer.fill().progress.borrow().committed, 1);
+
+        let Joined::Started(mut follower) = b.join_or_start("k", &storage) else {
+            panic!("B's first request starts its own fill")
+        };
+        let Start::Follow(state) = follower.start(Arc::from("r"), false).await else {
+            panic!("B follows the fill A holds")
+        };
+        let on_b = follower.fill();
+        tokio::spawn((*follower).follow(state));
+        let held = tokio::spawn(Arc::clone(&on_b).serve(true));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!held.is_finished(), "a committed segment is not served");
+
+        let (count, outcome) = writer.seal().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!held.is_finished(), "verified is not done on B either");
+        storage
+            .promote_segments(writer.staged(), count, "k", &outcome)
+            .await
+            .unwrap();
+        writer.finish(Phase::Done).await;
+        let served = tokio::time::timeout(std::time::Duration::from_secs(5), held)
+            .await
+            .expect("B is released by A's end")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(served, Served::FromStorage));
+        let body =
+            crate::ports::collect_byte_stream(storage.retrieve("k").await.unwrap().unwrap().stream)
+                .await
+                .unwrap();
+        assert_eq!(body.len(), FILL_SEGMENT_BYTES + 1, "the whole artifact");
+    }
+
     /// The newest chunk is withheld until the fill ends, and a writer dropped
     /// without an end fails its readers instead of stranding them.
     #[tokio::test]
