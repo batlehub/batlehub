@@ -118,6 +118,7 @@ pub use governance::team_namespace::PgTeamNamespaceStore;
 pub use governance::user_block::{InMemoryUserBlockRepository, PgUserBlockRepository};
 
 #[cfg(feature = "db-postgres")]
+pub use ops::fill_lease::PgFillLeases;
 pub use ops::quota::PgQuotaRepository;
 
 #[cfg(feature = "db-postgres")]

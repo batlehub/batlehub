@@ -634,9 +634,9 @@ fn finish_stream(
     if let Some(v) = warned {
         crate::handlers::security::verdict_headers(&mut builder, v, now);
     }
-    let body =
-        stream.filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
-    builder.streaming(body)
+    // An error mid-body aborts the response, so the client sees a cut
+    // transfer and never a short body that ends cleanly (RFC 0048 T10).
+    builder.streaming(stream.map(|chunk| chunk.map_err(actix_web::error::ErrorBadGateway)))
 }
 
 /// [`proxy_stream`] for a *version listing* rather than an artifact.

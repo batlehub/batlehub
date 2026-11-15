@@ -1,6 +1,7 @@
 mod cache;
 mod discovery;
 mod fill;
+pub use fill::{sweep_fills, FillCoordinator, FILL_SWEEP_LEADER_KEY};
 pub(crate) mod handle;
 mod passthrough;
 mod resolve;

@@ -315,6 +315,8 @@ async fn listen(pool: &sqlx::PgPool, listen_url: Option<&str>) -> Result<(), sql
                 Some(n) if n.payload() == token => seen = true,
                 // Another replica's heartbeat changes nothing here.
                 Some(n) if n.payload().starts_with(HEARTBEAT_PREFIX) => {}
+                // A cold fill's progress (RFC 0048-bis), for its followers.
+                Some(n) if crate::db::ops::fill_lease::route_notification(n.payload()) => {}
                 Some(n) => CACHES.invalidate(n.payload()),
                 // The connection was lost (sqlx reconnects quietly): whatever
                 // was notified meanwhile is gone, so the caller drops `live`.

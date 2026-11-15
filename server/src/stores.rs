@@ -69,6 +69,54 @@ pub(super) fn cache_is_shared(config: &AppConfig) -> bool {
     !matches!(cache_backend(config), CacheBackend::Memory)
 }
 
+/// The lease of a cold fill (RFC 0048-bis §6.5): a Postgres row every replica
+/// sees when `[cache]` is shared, else the process's own map — a `memory`
+/// cache means one replica, and adds no statement to a cold miss.
+pub(super) fn create_fill_leases(
+    config: &AppConfig,
+    pool: sqlx::PgPool,
+) -> Arc<dyn batlehub_core::ports::FillLeases> {
+    if cache_is_shared(config) {
+        Arc::new(batlehub_adapters::db::PgFillLeases::new(pool))
+    } else {
+        Arc::new(batlehub_core::ports::InMemoryFillLeases::default())
+    }
+}
+
+/// How often the elected replica deletes what dead cold fills left (T6).
+const FILL_SWEEP_INTERVAL_SECS: u64 = 300;
+
+/// Run [`sweep_fills`](batlehub_core::services::proxy::sweep_fills) every five
+/// minutes on the one replica holding its advisory lock.
+pub(super) fn spawn_fill_sweep(
+    leases: Arc<dyn batlehub_core::ports::FillLeases>,
+    storage: Arc<dyn batlehub_core::ports::StorageBackend>,
+    pool: sqlx::PgPool,
+) {
+    use batlehub_core::ports::LeaderLock;
+    use batlehub_core::services::proxy::{sweep_fills, FILL_SWEEP_LEADER_KEY};
+    let leader = batlehub_adapters::db::PgAdvisoryLeader::new(pool, FILL_SWEEP_LEADER_KEY);
+    tokio::spawn(async move {
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(FILL_SWEEP_INTERVAL_SECS));
+        loop {
+            ticker.tick().await;
+            match leader.try_lead().await {
+                Ok(true) => {
+                    sweep_fills(
+                        leases.as_ref(),
+                        storage.as_ref(),
+                        batlehub_core::ports::LEASE_TTL,
+                    )
+                    .await;
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = %e, "fill sweep: leader election failed"),
+            }
+        }
+    });
+}
+
 /// How far back `prune_expired` reaches on each sweep. Generously larger than
 /// any realistic rate-limit window so a stale row is never pruned mid-window.
 const RATE_LIMIT_PRUNE_RETENTION_SECS: u64 = 24 * 60 * 60;

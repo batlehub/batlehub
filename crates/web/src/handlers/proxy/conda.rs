@@ -789,8 +789,8 @@ fn stream_to_client(
     stream: batlehub_core::ports::ArtifactStream,
 ) -> HttpResponse {
     use futures::StreamExt;
-    let body = stream
-        .filter_map(|chunk| async move { chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>) });
+    // An upstream error aborts the response rather than ending it short.
+    let body = stream.map(|chunk| chunk.map_err(actix_web::error::ErrorBadGateway));
     HttpResponse::Ok()
         .content_type(content_type)
         .insert_header(("X-BatleHub-Cache", "stream"))
