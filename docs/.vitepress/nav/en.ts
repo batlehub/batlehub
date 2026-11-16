@@ -374,10 +374,6 @@ export const sidebar = {
           link: "/rfc/0027-homebrew",
         },
         {
-          text: "0030 — JSR",
-          link: "/rfc/0030-jsr",
-        },
-        {
           text: "0032 — NuGet v2",
           link: "/rfc/0032-nuget-v2",
         },
@@ -517,6 +513,10 @@ export const sidebar = {
         {
           text: "0029 — Helm charts",
           link: "/rfc/0029-helm-charts",
+        },
+        {
+          text: "0030 — JSR",
+          link: "/rfc/0030-jsr",
         },
         {
           text: "0031 — Ansible Galaxy",
