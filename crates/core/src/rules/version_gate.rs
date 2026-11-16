@@ -162,6 +162,15 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
+    /// The name is what a refusal and the access log carry (as `cve_gate`'s).
+    #[test]
+    fn rule_name_is_version_gate() {
+        assert_eq!(
+            VersionGateRule::new(&[], &[], vec![]).name(),
+            "version_gate"
+        );
+    }
+
     #[tokio::test]
     async fn no_lists_allows_everything() {
         let rule = VersionGateRule::new(&[], &[], vec![]);

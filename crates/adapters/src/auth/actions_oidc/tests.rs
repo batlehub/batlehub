@@ -477,9 +477,36 @@ async fn unknown_kid_returns_auth_error() {
         Some("bad-kid"),
         json!({ "sub": "bot", "exp": future_exp(), "aud": TEST_AUDIENCE }),
     );
+    // A fresh cache refuses without a refresh: `JWKS_MIN_REFRESH` is what
+    // keeps a stream of unknown kids from hammering the issuer.
     assert!(matches!(
         p.authenticate(&bearer(&token)).await.unwrap_err(),
-        CoreError::Auth(_)
+        CoreError::Auth(m) if m == "unknown JWT signing key"
+    ));
+}
+
+/// A token for another issuer is not ours (`Ok(None)`), so the next provider
+/// gets its turn — and is not accepted either.
+#[tokio::test]
+async fn a_token_from_another_issuer_is_not_ours() {
+    let mut p = no_rules_provider();
+    p.issuer = "https://token.actions.example".to_owned();
+    let token = signed_token(
+        None,
+        json!({ "sub": "bot", "exp": future_exp(), "aud": TEST_AUDIENCE, "iss": "https://evil.example" }),
+    );
+    assert!(p.authenticate(&bearer(&token)).await.unwrap().is_none());
+}
+
+/// A token without `exp` is malformed, not someone else's: an error, never
+/// the silent `Ok(None)` an expired or foreign token gets.
+#[tokio::test]
+async fn a_token_without_exp_is_an_error() {
+    let p = no_rules_provider();
+    let token = signed_token(None, json!({ "sub": "bot", "aud": TEST_AUDIENCE }));
+    assert!(matches!(
+        p.authenticate(&bearer(&token)).await,
+        Err(CoreError::Auth(_))
     ));
 }
 

@@ -185,6 +185,13 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
+    /// `pullability` maps a refusal to its cause by this name.
+    #[test]
+    fn rule_name_is_trusted_publisher() {
+        let rule = TrustedPublisherRule::new(&[], vec![], Some(RegistryKind::Cargo));
+        assert_eq!(rule.name(), "trusted_publisher");
+    }
+
     #[tokio::test]
     async fn empty_allowlist_allows_everything() {
         let rule = TrustedPublisherRule::new(&[], vec![], Some(RegistryKind::Cargo));

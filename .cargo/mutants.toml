@@ -46,6 +46,15 @@ exclude_re = [
   # The streaming chunk size is a memory tuning, not a decision: any size
   # serves the same bytes (M11, the one survivor in storage/mod.rs).
   '^crates/adapters/src/storage/mod\.rs:\d+:\d+: replace \* with \+$',
+  # A cache or throttle window on `Instant`: `<` and `<=` differ only when the
+  # elapsed time equals the window to the nanosecond, which no test (and no
+  # caller) can arrange. Survivors of the first nightlies (RFC 0041 §6.4).
+  '^crates/adapters/src/auth/(actions_oidc/mod|kubernetes|user_token)\.rs:\d+:\d+: replace < with <= in (ActionsOidcAuthProvider::get_decoding_key|KubernetesAuthProvider::cached_review|UserTokenAuthProvider::should_record_use)$',
+  # `segments.len() > 1` → `>= 1`: a single segment is empty only when the
+  # value is, and `validate_path_safe` refuses an empty value before this runs,
+  # while `has_traversal_after_decoding` (kind `path`) exempts a trailing empty
+  # segment anyway.
+  '^crates/core/src/services/local_registry/mod\.rs:\d+:\d+: replace > with >= in reject_traversal$',
 ]
 
 # A refusal in tier 1 is often proved by the web suites, not by the mutated

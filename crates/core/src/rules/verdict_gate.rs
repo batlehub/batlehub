@@ -283,6 +283,152 @@ mod tests {
         assert!(queue.0.lock().unwrap().is_empty(), "nothing re-queued");
     }
 
+    #[test]
+    fn rule_name_is_verdict_gate() {
+        // `METADATA_DERIVED_RULES` and `pullability` key on this name.
+        let rule = gate(Arc::default(), Arc::default());
+        assert_eq!(rule.name(), "verdict_gate");
+    }
+
+    /// Only a `warned` verdict rides on the response; an `allowed` one leaves
+    /// the request slot empty (a mutation survivor, RFC 0041 §6.4).
+    #[tokio::test]
+    async fn only_a_warned_verdict_is_carried_on_the_response() {
+        for (findings, carried) in [
+            (vec![], None),
+            (
+                vec![Finding::new(
+                    "guarddog",
+                    FindingKind::InstallHook,
+                    ReasonCode::InstallHook,
+                    Severity::Low,
+                    "postinstall",
+                )],
+                Some(VerdictState::Warned),
+            ),
+        ] {
+            let verdicts = Arc::new(MemVerdicts::default());
+            verdicts
+                .upsert(&Verdict {
+                    package: PackageId::new("r", "p", "1.0.0"),
+                    state: VerdictState::Allowed,
+                    reason_codes: vec![],
+                    findings,
+                    policy_ref: "r/default".into(),
+                    available_at: None,
+                    evaluated_at: Utc::now(),
+                    last_scanned_at: Some(Utc::now()),
+                    scanners_done: vec!["osv".into()],
+                })
+                .await
+                .unwrap();
+            let rule = gate(verdicts, Arc::default());
+            let m = meta(7200);
+            let (d, noted) = crate::services::verdict::with_request_verdict(decide(
+                &rule,
+                &m,
+                crate::entities::Role::User,
+            ))
+            .await;
+            assert!(!d.is_deny());
+            assert_eq!(noted.map(|v| v.state), carried);
+        }
+    }
+
+    /// One version-tier exemption, whatever is asked.
+    struct OneExemption(String);
+    #[async_trait]
+    impl crate::ports::PolicyRepository for OneExemption {
+        async fn policy_for(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<crate::ports::StoredPolicy>, CoreError> {
+            use crate::ports::{version_node_key, NodeKind, StoredPolicy};
+            let mut p = StoredPolicy::new("r", NodeKind::Version, version_node_key("p", "1.0.0"));
+            let exemption = crate::entities::GateExemption {
+                exempt: true,
+                gate: self.0.clone(),
+                exempt_until: Utc::now() + chrono::Duration::days(30),
+                reason: "assessed".into(),
+                granted_by: Some("sec".into()),
+                self_approved: false,
+            };
+            p.rules.push(crate::entities::RuleOverride {
+                gate: self.0.clone(),
+                settings: serde_json::to_value(&exemption).unwrap(),
+            });
+            Ok(vec![p])
+        }
+        async fn put_policy(&self, _: crate::ports::StoredPolicy) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn delete_policy(
+            &self,
+            _: &str,
+            _: crate::ports::NodeKind,
+            _: &str,
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn policy_on_node(
+            &self,
+            _: &str,
+            _: crate::ports::NodeKind,
+            _: &str,
+        ) -> Result<Option<crate::ports::StoredPolicy>, CoreError> {
+            Ok(None)
+        }
+        async fn exemptions_in_registry(
+            &self,
+            _: &str,
+        ) -> Result<Vec<crate::ports::StoredPolicy>, CoreError> {
+            Ok(vec![])
+        }
+        async fn delete_package_policy(&self, _: &str, _: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    /// Only an exemption on `security_verdict` overrides a refusal; one on
+    /// another gate does not (a mutation survivor, RFC 0041 §6.4).
+    #[tokio::test]
+    async fn only_a_security_verdict_exemption_overrides_a_refusal() {
+        for (gate_name, served) in [("cve_gate", false), (VERDICT_EXEMPTION_GATE, true)] {
+            let verdicts = Arc::new(MemVerdicts::default());
+            verdicts
+                .upsert(&Verdict {
+                    package: PackageId::new("r", "p", "1.0.0"),
+                    state: VerdictState::Denied,
+                    reason_codes: vec![ReasonCode::Vulnerability],
+                    findings: vec![Finding::new(
+                        "osv",
+                        FindingKind::Vulnerability,
+                        ReasonCode::Vulnerability,
+                        Severity::Critical,
+                        "GHSA-1",
+                    )],
+                    policy_ref: "r/default".into(),
+                    available_at: None,
+                    evaluated_at: Utc::now(),
+                    last_scanned_at: Some(Utc::now()),
+                    scanners_done: vec!["osv".into()],
+                })
+                .await
+                .unwrap();
+            let mut policy = SecurityPolicy::defaults_for("r");
+            policy.min_age = Duration::from_secs(3600);
+            let rule = VerdictGateRule::new(
+                Arc::new(VerdictService::new(verdicts, Arc::<MemQueue>::default())),
+                policy,
+                Some(Arc::new(OneExemption(gate_name.into()))),
+            );
+            let d = decide(&rule, &meta(7200), crate::entities::Role::User).await;
+            assert_eq!(!d.is_deny(), served, "exemption on {gate_name}");
+        }
+    }
+
     #[tokio::test]
     async fn a_denied_verdict_refuses_an_admin_too() {
         let verdicts = Arc::new(MemVerdicts::default());
