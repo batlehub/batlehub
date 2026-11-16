@@ -392,6 +392,15 @@ export const sidebar = {
       ],
     },
     {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0050 — Security console and admin nav",
+          link: "/rfc/0050-security-console-completion-and-admin-navigation",
+        },
+      ],
+    },
+    {
       text: "Settled",
       items: [
         {
