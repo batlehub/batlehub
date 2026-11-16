@@ -3,6 +3,7 @@ import { useI18n } from "vue-i18n";
 import { onMounted, ref } from "vue";
 
 import { auditLog } from "@/client/sdk.gen";
+import type { AccessEvent } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
 import { AsyncState } from "@/components/ui/async-state";
 import {
@@ -17,15 +18,18 @@ import {
 /** The denials the audit log recorded, most recent first. */
 const { t } = useI18n();
 
-type AuditRow = {
-  timestamp?: string;
-  user_id?: string | null;
-  package_id?: string | null;
-  action?: string;
-  reason?: string | null;
-};
+const denials = ref<AccessEvent[]>([]);
 
-const denials = ref<AuditRow[]>([]);
+/** `registry/name@version`, or a dash for an event about no package. */
+function coordinate(e: AccessEvent): string {
+  const p = e.package_id;
+  return p ? `${p.registry}/${p.name}@${p.version}` : "-";
+}
+
+/** The refusal's reason; a denied event always carries one. */
+function reason(e: AccessEvent): string {
+  return e.result.outcome === "allowed" ? "-" : e.result.reason;
+}
 const denialsError = ref<string | null>(null);
 
 async function loadDenials() {
@@ -34,13 +38,12 @@ async function loadDenials() {
     // The audit log already records every denial that *happened*; this panel is
     // that list, filtered. Deliberately a different source from Shadow above:
     // one is what was refused, the other is what would have been.
-    const res = await auditLog({ query: { result: "denied", limit: 25 } as never });
+    const res = await auditLog({ query: { denied_only: true, per_page: 25 } });
     if (res.error) {
       denialsError.value = extractMessage(res.error);
       return;
     }
-    const data = res.data as unknown as { events?: AuditRow[] } | AuditRow[] | null;
-    denials.value = Array.isArray(data) ? data : (data?.events ?? []);
+    denials.value = res.data?.items ?? [];
   } catch (e: unknown) {
     denialsError.value = e instanceof Error ? e.message : String(e);
   }
@@ -71,11 +74,11 @@ onMounted(loadDenials);
           </TableRow>
         </TableHeader>
         <TableBody>
-          <TableRow v-for="(d, i) in denials" :key="i">
+          <TableRow v-for="d in denials" :key="d.id">
             <TableCell class="text-xs">{{ d.timestamp }}</TableCell>
             <TableCell class="font-mono text-xs">{{ d.user_id ?? "-" }}</TableCell>
-            <TableCell class="font-mono text-xs">{{ d.package_id ?? "-" }}</TableCell>
-            <TableCell class="text-xs">{{ d.reason ?? "-" }}</TableCell>
+            <TableCell class="font-mono text-xs">{{ coordinate(d) }}</TableCell>
+            <TableCell class="text-xs">{{ reason(d) }}</TableCell>
           </TableRow>
         </TableBody>
       </Table>
