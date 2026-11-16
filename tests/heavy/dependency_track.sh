@@ -65,7 +65,8 @@ DT_JAR="$HEAVY_CACHE/dependency-track-$DT_VERSION/dependency-track-apiserver.jar
 if ! echo "$DT_SHA256  $DT_JAR" | sha256sum -c --quiet 2>/dev/null; then
   heavy_log "Downloading Dependency-Track $DT_VERSION"
   mkdir -p "$(dirname "$DT_JAR")"
-  curl -fsSL -o "$DT_JAR.part" \
+  # `-L` follows GitHub's redirect to its asset host; `--proto-redir` keeps it on https.
+  curl -fsSL --proto '=https' --proto-redir '=https' -o "$DT_JAR.part" \
     "https://github.com/DependencyTrack/dependency-track/releases/download/$DT_VERSION/dependency-track-apiserver.jar" \
     || heavy_fail "could not download Dependency-Track $DT_VERSION"
   echo "$DT_SHA256  $DT_JAR.part" | sha256sum -c --quiet \
@@ -84,7 +85,8 @@ DT_PID=""
 
 # start_dt <n> — boot n, logging to dt-<n>.log; waits for the API.
 start_dt() {
-  DT_LOG="$HEAVY_WORK/dt-$1.log"
+  local boot="$1"
+  DT_LOG="$HEAVY_WORK/dt-$boot.log"
   ALPINE_DATA_DIRECTORY="$DT_DATA" \
     ALPINE_DATABASE_URL="jdbc:h2:$DT_DATA/db;DB_CLOSE_ON_EXIT=FALSE" \
     ALPINE_HTTP_PROXY_ADDRESS=127.0.0.1 ALPINE_HTTP_PROXY_PORT=9 \
@@ -94,12 +96,12 @@ start_dt() {
   DT_PID=$!
   HEAVY_EXTRA_PIDS+=("$DT_PID")
   for _ in $(seq 1 90); do
-    curl -sf -o /dev/null "$DT/api/version" && { heavy_log "Dependency-Track $DT_VERSION up (boot $1)"; return 0; }
-    kill -0 "$DT_PID" 2>/dev/null || { tail -50 "$DT_LOG" >&2; heavy_fail "Dependency-Track exited during boot $1"; }
+    curl -sf -o /dev/null "$DT/api/version" && { heavy_log "Dependency-Track $DT_VERSION up (boot $boot)"; return 0; }
+    kill -0 "$DT_PID" 2>/dev/null || { tail -50 "$DT_LOG" >&2; heavy_fail "Dependency-Track exited during boot $boot"; }
     sleep 2
   done
   tail -50 "$DT_LOG" >&2
-  heavy_fail "Dependency-Track did not answer within 3 minutes (boot $1)"
+  heavy_fail "Dependency-Track did not answer within 3 minutes (boot $boot)"
 }
 
 # stop_dt — SIGTERM to the process group (mise → java), wait for the port.
@@ -121,13 +123,13 @@ dt() {
 
 # wait_log <pattern> <what> <seconds>
 wait_log() {
-  local i
-  for ((i = 0; i < $3; i += 5)); do
-    grep -q "$1" "$DT_LOG" && return 0
+  local pattern="$1" what="$2" seconds="$3" i
+  for ((i = 0; i < seconds; i += 5)); do
+    grep -q "$pattern" "$DT_LOG" && return 0
     sleep 5
   done
   grep -E "WARN|ERROR" "$DT_LOG" | tail -30 >&2
-  heavy_fail "Dependency-Track: $2 not logged within $3 s"
+  heavy_fail "Dependency-Track: $what not logged within $seconds s"
 }
 
 # ── 1. Boot 1: the egress is closed ──────────────────────────────────────────

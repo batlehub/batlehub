@@ -342,16 +342,18 @@ sed -e "s#<url>$MIRROR</url>#<url>$CVE_URL</url>#" \
 grep -q "$CVE_URL" "$HEAVY_WORK/settings-cve.xml" || heavy_fail "CVE: settings-cve.xml does not point at $CVE_URL"
 # cve_repo <name> — a local repository with the plugins and no log4j-core.
 cve_repo() {
-  cp -r "$HEAVY_WORK/repopcli" "$HEAVY_WORK/$1"
-  echo "$HEAVY_WORK/$1"
+  local name="$1"
+  cp -r "$HEAVY_WORK/repopcli" "$HEAVY_WORK/$name"
+  echo "$HEAVY_WORK/$name"
   return $?
 }
 # get_log4j <repo> — mvn dependency:get of the vulnerable version through the
 # quarantined registry; its exit status.
 get_log4j() {
+  local repo="$1"
   (cd "$HEAVY_WORK" && "${HEAVY_RUNNER[@]}" mvn -B -s "$HEAVY_WORK/settings-cve.xml" \
     -Daether.connector.http.preemptiveAuth=true -Daether.transport.http.preemptiveAuth=true \
-    -Dmaven.repo.local="$1" dependency:get -Dtransitive=false \
+    -Dmaven.repo.local="$repo" dependency:get -Dtransitive=false \
     -Dartifact="$LOG4J_NAME:$LOG4J_VULN") >"$RUN_OUT" 2>&1
   return $?
 }
