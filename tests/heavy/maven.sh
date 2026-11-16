@@ -23,10 +23,16 @@
 #            RFC 0040 §6.P case 6: `batlehub-cli publish app-2.0.0.jar --pom pom.xml`
 #            PUTs the jar, the pom and their checksums, and `mvn
 #            dependency:get` resolves what it sent.
+#   CVE      What a Dependency-Track-style consumer reads from Central, through
+#            BatleHub: `maven-metadata.xml`'s latest/release agree with
+#            Central's, and a registry behind `[security]` refuses
+#            log4j-core 2.14.1 to mvn (SCAN_PENDING, then denied/VULNERABILITY)
+#            while the verdict API names Log4Shell by its GHSA and CVE ids.
+#            OSV is api.osv.dev's recorded answer, replayed by osv_fake.py.
 #
 # Run via `task test:maven-heavy` or directly. Needs network: repo1.maven.org.
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8104), HEAVY_TAP_PORT
-# (8114), COVERAGE, HEAVY_MAVEN_GROUP (org.apache.commons), HEAVY_MAVEN_ARTIFACT
+# (8114), HEAVY_OSV_PORT (8154), COVERAGE, HEAVY_MAVEN_GROUP (org.apache.commons), HEAVY_MAVEN_ARTIFACT
 # (commons-lang3), HEAVY_MAVEN_BLOCKED and HEAVY_MAVEN_PREVIOUS (default: the
 # newest two versions in Central's maven-metadata.xml, read at start-up — a
 # hard-coded pair went red the day commons-lang3 3.21.0 shipped).
@@ -50,6 +56,18 @@ fi
 PREVIOUS="${HEAVY_MAVEN_PREVIOUS:-$(sed -n 1p <<<"$NEWEST_TWO")}"
 BLOCKED="${HEAVY_MAVEN_BLOCKED:-$(sed -n 2p <<<"$NEWEST_TWO")}"
 [[ -n "$PREVIOUS" && -n "$BLOCKED" ]] || heavy_fail "no two versions to block between for $GROUP:$ARTIFACT"
+
+# The CVE axis's OSV: recorded answers only (the flip flag never exists).
+OSV_PORT="${HEAVY_OSV_PORT:-8154}"
+export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
+python3 tests/heavy/osv_fake.py "$HEAVY_WORK/no-flip" "$OSV_PORT" "pkg:none/none" \
+  tests/fixtures/supply-chain-jdd/osv >"$HEAVY_WORK/osv.err" 2>&1 &
+OSV_PID=$!
+trap 'kill "$OSV_PID" 2>/dev/null || true; heavy_cleanup' EXIT
+for _ in $(seq 1 30); do
+  curl -s -o /dev/null -X POST "$HEAVY_OSV_URL/v1/query" -d '{}' && break
+  sleep 1
+done
 
 heavy_start_server tests/heavy/config.maven.toml
 heavy_start_tap
@@ -287,4 +305,100 @@ RUN_OUT="$HEAVY_WORK/publish-cli-get.txt"
 heavy_wire_after publish-cli-get "GET $APP_PREFIX.jar -> 200" "Publish/cli: mvn did not fetch the published jar"
 heavy_log "Publish/cli: com.heavy:app:2.0.0 published by the CLI and resolved by mvn"
 
-heavy_done "maven heavy test passed: hide=omitted/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES)/$OTHER recover=$RECOVER publish-202=$PUBLISH_202"
+# ── CVE: Central's advisories, read through BatleHub ─────────────────────────
+
+CVE_REG="mvn-cve-$HEAVY_RUN"
+CVE_URL="$HEAVY_TAP_BASE/proxy/$CVE_REG/maven2"
+LOG4J_PATH="org/apache/logging/log4j/log4j-core"
+LOG4J_NAME="org.apache.logging.log4j:log4j-core"
+LOG4J_VULN="2.14.1"
+LOG4SHELL_GHSA="GHSA-jfh8-c2jp-5v3q"
+LOG4SHELL_CVE="CVE-2021-44228"
+
+# Dependency-Track's repository meta analyzer reads the newest version from
+# maven-metadata.xml; through the proxy it must be Central's.
+curl -fsS "https://repo1.maven.org/maven2/$LOG4J_PATH/maven-metadata.xml" -o "$HEAVY_WORK/log4j-central.xml" \
+  || heavy_fail "CVE: could not read log4j-core's maven-metadata.xml from Central"
+heavy_mark cve-metadata
+curl -fsS "$MIRROR/$LOG4J_PATH/maven-metadata.xml" -o "$HEAVY_WORK/log4j-proxy.xml" \
+  || heavy_fail "CVE: log4j-core's maven-metadata.xml through the proxy failed"
+heavy_wire_after cve-metadata "GET /proxy/$REG/maven2/$LOG4J_PATH/maven-metadata.xml -> 200"
+for tag in latest release; do
+  want=$(sed -n "s:.*<$tag>\(.*\)</$tag>.*:\1:p" "$HEAVY_WORK/log4j-central.xml")
+  got=$(sed -n "s:.*<$tag>\(.*\)</$tag>.*:\1:p" "$HEAVY_WORK/log4j-proxy.xml")
+  [[ -n "$want" && "$want" == "$got" ]] || heavy_fail "CVE: <$tag> through the proxy is '$got', Central says '$want'"
+done
+
+# The `*` mirror is the quarantined registry. A `*,!id` exclusion with
+# -DremoteRepositories still sent everything to the first mirror, so the repo
+# is seeded from repopcli, which already holds dependency:get's own plugin
+# deps: log4j is the only thing this mvn asks the quarantine for.
+# mvn reads as the admin (quarantine:read): an anonymous caller gets a bare
+# 403 on a hold, by design (RFC 0018 §7), and the reason headers are the
+# point here. A `<server>` with the mirror's id, sent preemptively.
+sed -e "s#<url>$MIRROR</url>#<url>$CVE_URL</url>#" \
+  -e "s#<servers>#<servers><server><id>heavy</id><username>ci-admin</username><password>$ADMIN_TOKEN</password></server>#" \
+  "$HEAVY_WORK/settings.xml" > "$HEAVY_WORK/settings-cve.xml"
+grep -q "$CVE_URL" "$HEAVY_WORK/settings-cve.xml" || heavy_fail "CVE: settings-cve.xml does not point at $CVE_URL"
+# cve_repo <name> — a local repository with the plugins and no log4j-core.
+cve_repo() {
+  cp -r "$HEAVY_WORK/repopcli" "$HEAVY_WORK/$1"
+  echo "$HEAVY_WORK/$1"
+  return $?
+}
+# get_log4j <repo> — mvn dependency:get of the vulnerable version through the
+# quarantined registry; its exit status.
+get_log4j() {
+  (cd "$HEAVY_WORK" && "${HEAVY_RUNNER[@]}" mvn -B -s "$HEAVY_WORK/settings-cve.xml" \
+    -Daether.connector.http.preemptiveAuth=true -Daether.transport.http.preemptiveAuth=true \
+    -Dmaven.repo.local="$1" dependency:get -Dtransitive=false \
+    -Dartifact="$LOG4J_NAME:$LOG4J_VULN") >"$RUN_OUT" 2>&1
+  return $?
+}
+LOG4J_FILE="GET /proxy/$CVE_REG/maven2/$LOG4J_PATH/$LOG4J_VULN/log4j-core-$LOG4J_VULN\.(pom|jar) -> 403 "
+
+heavy_mark cve-first-contact
+RUN_OUT="$HEAVY_WORK/cve-first-contact.txt"
+if get_log4j "$(cve_repo repocve1)"; then
+  cat "$RUN_OUT" >&2
+  heavy_fail "CVE: mvn resolved log4j-core $LOG4J_VULN on first contact, before any scan"
+fi
+heavy_wire_re_after cve-first-contact "$LOG4J_FILE.*X-BatleHub-Reason: SCAN_PENDING" \
+  "CVE: first contact with log4j-core $LOG4J_VULN was not held on SCAN_PENDING"
+
+VERDICT_URL="$HEAVY_BASE/api/v1/verdicts/$CVE_REG/$LOG4J_NAME/$LOG4J_VULN"
+STATE=""
+for _ in $(seq 1 100); do
+  curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$VERDICT_URL" -o "$HEAVY_WORK/log4j-verdict.json" 2>/dev/null \
+    && STATE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("state",""))' "$HEAVY_WORK/log4j-verdict.json")
+  [[ "$STATE" == "denied" ]] && break
+  sleep 3
+done
+[[ "$STATE" == "denied" ]] || { cat "$HEAVY_WORK/log4j-verdict.json" >&2; heavy_fail "CVE: log4j-core $LOG4J_VULN's verdict is '$STATE' after 5 minutes, expected denied"; }
+python3 - "$HEAVY_WORK/log4j-verdict.json" "$LOG4SHELL_GHSA" "$LOG4SHELL_CVE" <<'PY' \
+  || heavy_fail "CVE: the verdict API does not carry Log4Shell with its CVE id"
+import json, sys
+verdict, ghsa, cve = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+hits = [f for f in verdict.get("findings", []) if f.get("reference") == ghsa]
+if not hits:
+    sys.exit(f"no finding references {ghsa}: {[f.get('reference') for f in verdict.get('findings', [])]}")
+if cve not in (hits[0].get("raw") or {}).get("aliases", []):
+    sys.exit(f"{ghsa}'s finding has no {cve} alias: {hits[0].get('raw')}")
+if hits[0].get("severity") != "critical":
+    sys.exit(f"{ghsa} is rated {hits[0].get('severity')}, OSV says critical")
+cves = sorted({a for f in verdict["findings"] for a in (f.get("raw") or {}).get("aliases", []) if a.startswith("CVE-")})
+print(f"{len(verdict['findings'])} findings, CVEs: {' '.join(cves)}")
+PY
+
+heavy_mark cve-refused
+RUN_OUT="$HEAVY_WORK/cve-refused.txt"
+if get_log4j "$(cve_repo repocve2)"; then
+  cat "$RUN_OUT" >&2
+  heavy_fail "CVE: mvn resolved log4j-core $LOG4J_VULN over a denied verdict"
+fi
+heavy_wire_re_after cve-refused "$LOG4J_FILE.*X-BatleHub-Verdict: denied.*X-BatleHub-Reason: [A-Z_,]*VULNERABILITY" \
+  "CVE: log4j-core $LOG4J_VULN was not refused as denied/VULNERABILITY on the wire"
+heavy_log "CVE: $LOG4SHELL_GHSA ($LOG4SHELL_CVE) refused to mvn and named by the verdict API; mvn said:"
+heavy_client_said "$RUN_OUT" 'error'
+
+heavy_done "maven heavy test passed: hide=omitted/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES)/$OTHER recover=$RECOVER publish-202=$PUBLISH_202 cve=$LOG4SHELL_CVE"

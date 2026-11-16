@@ -467,9 +467,14 @@ tasks:
       - bash tests/heavy/go.sh
 
   test:maven-heavy:
-    desc: "Heavy Maven integration (RFC 0018 §4.4): a blocked version omitted from maven-metadata.xml so a range picks the previous one, a pinned pom refused with 403 and 404, Maven's cached failure measured on recovery, `mvn deploy:deploy-file` to a local registry on 201 and on a rewritten 202 (needs DATABASE_URL + network)"
+    desc: "Heavy Maven integration (RFC 0018 §4.4): a blocked version omitted from maven-metadata.xml so a range picks the previous one, a pinned pom refused with 403 and 404, Maven's cached failure measured on recovery, `mvn deploy:deploy-file` to a local registry on 201 and on a rewritten 202, and the CVE axis: log4j-core 2.14.1 refused to mvn by a `[security]` registry (replayed OSV) with Log4Shell's GHSA and CVE ids on the verdict API (needs DATABASE_URL + network)"
     cmds:
       - bash tests/heavy/maven.sh
+
+  test:dependency-track-heavy:
+    desc: "Heavy Dependency-Track integration: a real Dependency-Track 4.14 whose egress is closed except to this instance reads OSV, NVD, EPSS and Maven Central through four registries and finds Log4Shell (GHSA + CVE with EPSS) in a Java SBOM; the repository analyzer reads maven-metadata.xml with a token (needs DATABASE_URL + network + Java 21)"
+    cmds:
+      - bash tests/heavy/dependency_track.sh
 
   test:pathproxy-heavy:
     desc: "Heavy apt/dnf integration (RFC 0018 §4.4): the signed indexes keep naming a blocked .deb/.rpm, the download refused with 403 and 404, the same apt/dnf state recovering after the unblock (needs DATABASE_URL + network; HEAVY_PATHPROXY_SKIP_DNF=1 leaves the rpm rows unmeasured on a host without dnf)"
@@ -573,6 +578,7 @@ tasks:
       - bash tests/heavy/closed_world.sh all
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh
+      - bash tests/heavy/dependency_track.sh
       - bash tests/heavy/pathproxy.sh
       - bash tests/heavy/quarantine.sh
       - bash tests/heavy/upstream_audit.sh
