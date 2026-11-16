@@ -5,6 +5,8 @@
 [server]
 host = "127.0.0.1"
 port = 8104
+# The CVE axis needs the scan queue drained: this process is also the worker.
+roles = ["proxy", "worker"]
 
 [database]
 type = "postgresql"
@@ -22,6 +24,19 @@ user_id = "ci-admin"
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-maven-storage"
+
+[worker]
+max_concurrent = 2
+# One attempt: a scanner that cannot answer should fail the axis at once.
+max_attempts = 1
+job_timeout_secs = 120
+
+# api.osv.dev's answers, recorded in tests/fixtures/supply-chain-jdd/osv/ and
+# replayed by osv_fake.py — the live database fails closed, so a CI 429 would
+# hold the version instead of judging it (RFC 0041 phase 0).
+[scanners.osv]
+type = "osv"
+api_url = "${HEAVY_OSV_URL}/replay"
 
 # ── Proxy registry: Maven Central; the mirror for *everything* mvn asks for ──
 [[registries]]
@@ -45,3 +60,26 @@ mode = "local"
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── Quarantined registry: Maven Central behind [security] (the CVE axis) ────
+# A version OSV knows to be vulnerable is refused to mvn, and its CVE ids are
+# readable through BatleHub's verdict API — what a Dependency-Track-style
+# consumer reads instead of asking the advisory database itself.
+[[registries]]
+type = "maven"
+name = "mvn-cve-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://repo1.maven.org/maven2/"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv"]
+required_scanners = ["osv"]
+max_severity = "high"

@@ -90,6 +90,11 @@
    "purl": "pkg:npm/minimist@1.2.8",
    "expect": "allowed",
    "why": "clean control (quarantine.sh's clean version)"
+  },
+  {
+   "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1",
+   "expect": "denied",
+   "why": "Log4Shell (GHSA-jfh8-c2jp-5v3q / CVE-2021-44228, critical): maven.sh's CVE axis"
   }
  ]
 }

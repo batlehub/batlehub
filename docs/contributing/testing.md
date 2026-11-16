@@ -104,6 +104,8 @@ task test:closed-world-heavy  # egress denied to the client, kept for the server
                               # alone (`-- go` for one phase)
 task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
 task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
+task test:dependency-track-heavy # a real Dependency-Track, egress closed but to this instance:
+                              # OSV, NVD, EPSS and Maven Central through it, Log4Shell found
 task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
 task test:quarantine-heavy    # RFC 0018 from npm's side: a hold, the worker clearing it, a real OSV
                               # (and RFC 0002: a pushed flag refusing npm, then revoked)
@@ -1320,7 +1322,7 @@ stopped.
     against a local rubygems registry).
   - `heavy-client` (matrix): one job per ecosystem — `npm`, `pypi`, `openvsx`,
     `conda`, `nuget`, `composer`, `terraform`, `nvm`, `sdkman`, `mise`,
-    `cargo`, `go`, `maven`, `pathproxy`, `vscode_patch`, `che_code_patch`, `hybrid`, `quarantine`, `upstream_audit`,
+    `cargo`, `go`, `maven`, `dependency_track`, `pathproxy`, `vscode_patch`, `che_code_patch`, `hybrid`, `quarantine`, `upstream_audit`,
     `airgap` — each
     running `tests/heavy/<suite>.sh`. A matrix rather than twenty jobs because only
     the toolchain setup differs; `fail-fast: false`, because one unhappy

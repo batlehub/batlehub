@@ -933,6 +933,11 @@ jobs:
           - suite: rustup
           - suite: go
           - suite: maven
+          # A real Dependency-Track 4.14 (the release jar, pinned by checksum)
+          # with its egress closed by a dead HTTP proxy: OSV, NVD, EPSS and
+          # Maven Central reach it only through this instance. Java 21 is on
+          # the runner image (JAVA_HOME_21_X64); ~25 MB of feeds.
+          - suite: dependency_track
           - suite: pathproxy
           # vscode_patch / che_code_patch: the che-code credential patch
           # (patches/che-code) loaded into a built editor's own node and

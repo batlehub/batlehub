@@ -1,0 +1,87 @@
+# Server configuration for the heavy Dependency-Track test
+# (tests/heavy/dependency_track.sh): every feed Dependency-Track reads for a
+# Java project, relayed by this instance. See tests/heavy/config.npm.toml for
+# the env-var conventions; `${HEAVY_RUN}` keeps each run's registries apart.
+# docs/use/vulnerability-proxy.md § Maven — Dependency-Track is the same
+# configuration, minus the NVD restriction below.
+
+[server]
+host = "127.0.0.1"
+port = 8184
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+# The token Dependency-Track's repository analyzer sends as HTTP Basic.
+[[auth.tokens]]
+value = "heavy-dt-token"
+role = "user"
+user_id = "dependency-track"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-dependency-track-storage"
+
+# ── Repository analyzer: Maven Central, read with a token ───────────────────
+[[registries]]
+type = "maven"
+name = "maven-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://repo1.maven.org/maven2/"]
+
+[registries.rbac]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Vulnerability sources: Dependency-Track sends them no credential ────────
+[[registries]]
+type = "generic"
+name = "osv-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://osv-vulnerabilities.storage.googleapis.com"]
+path_allow = ["ecosystems.txt", "Maven/*"]
+revalidate = ["ecosystems.txt", "Maven/*"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+# Two feeds of the twenty-five: 2021 carries CVE-2021-44228, `modified` is what
+# a mirror reads every day. The other years are refused (403) to keep the run
+# at ~25 MB instead of ~400 MB. Dependency-Track retries a 403 for minutes, so
+# the suite's tap rewrites these refusals to 404; a real deployment does not
+# narrow this list (docs/use/vulnerability-proxy.md says why).
+[[registries]]
+type = "generic"
+name = "nvd-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://nvd.nist.gov/feeds"]
+path_allow = ["json/cve/2.0/nvdcve-2.0-2021.*", "json/cve/2.0/nvdcve-2.0-modified.*"]
+revalidate = ["json/cve/2.0/nvdcve-2.0-2021.*", "json/cve/2.0/nvdcve-2.0-modified.*"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
+
+# epss.cyentia.com answers 301 to this host.
+[[registries]]
+type = "generic"
+name = "epss-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://epss.empiricalsecurity.com"]
+path_allow = ["epss_scores-current.csv.gz"]
+revalidate = ["epss_scores-current.csv.gz"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+admin = ["*"]
