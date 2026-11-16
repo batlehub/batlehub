@@ -6,14 +6,15 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | In review                                                     |
 | Short       | Generic publish                                               |
 | Settles     | Publishing arbitrary files under {name}/{version}/{filename} to a generic registry — the equivalent of GitLab's generic packages — on the shared local-registry machinery |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
-| Co-author   | Claude Fable 5.1 <noreply@anthropic.com>                      |
+| Co-author   | Claude Fable 5.1 <noreply@anthropic.com>, Claude Opus 5.5 <noreply@anthropic.com> |
 | Created     | 2026-09-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/web`, `cli`, `ui`, docs |
+| Touches     | `crates/core` (`entities/registry_kind.rs`, `services/local_registry/`, `ports/registry/local_registry.rs`, `services/blocking/`, a new `services/generic.rs`), `crates/adapters` (the in-memory and Postgres `LocalRegistryBackend`), `crates/config` (`schema/mod.rs`), `crates/web` (`handlers/proxy/generic.rs`, `lib.rs`), `cli`, `ui` (`config/registryTypes.ts`, `locales`, `openapi.json`, `client`), `tests/heavy`, docs (`registries/generic.md`, `use/publishing.md`, `registries/index.md` and the French twins) |
+| Risk        | medium — §7 (a new authenticated write surface; a publisher-chosen `Content-Type` served from this origin is open, §15 q8) |
 
 ---
 
@@ -99,8 +100,10 @@ instance's own, and §4.2 is its specification.
    fails a `generic` registry in `local`/`hybrid` with *"mode 'local'/'hybrid'
    is not supported for generic registries (no local publish model)"*, because
    `RegistryKind::Generic::supports_local_mode()` answers `false` beside the
-   forges and the two toolchain kinds. The refusal is correct for the code as
-   it stands and is the whole gap.
+   three forges, `jetbrains` and the six toolchain kinds (`nodedist`,
+   `godist`, `mise-java`, `sdkman`, `rustup`, `mise-versions`;
+   `entities/registry_kind.rs:400-415`). The refusal is correct for the code
+   as it stands and is the whole gap.
 
 3. **The publish path is shared machinery, and it already accepts a per-file
    key.** `LocalRegistryService::publish` runs `enforce_publish_policy` (name
@@ -111,9 +114,13 @@ instance's own, and §4.2 is its specification.
    `run_publish_sbom` and `register_initial_owner`. Maven's non-POM files go
    through the same gate with `PublishPolicyRequest::artifact_key` set to
    `maven_artifact_storage_key(registry, name, version, filename)` and are
-   stored under it (`handlers/proxy/maven/proxy.rs`). A generic version is
-   the Maven shape with no `.pom`: several files, one coordinate, each file
-   its own key. Nothing new has to be invented to govern it.
+   stored under it (`handlers/proxy/maven/proxy.rs`). Nix's local mode is
+   the second precedent and states the reason sharper: a version holds many
+   store paths, so every later one would read as a replacement unless the
+   decision is taken on the NAR's own key
+   (`services/local_registry/eco_nix.rs:440-457`). A generic version is the
+   Maven shape with no `.pom`: several files, one coordinate, each file its
+   own key. Nothing new has to be invented to govern it.
 
 4. **The proxy coordinate cannot be reused, because it has no version.** The
    `generic` handler addresses everything as `PackageId::new(registry, "repo",
@@ -164,10 +171,10 @@ instance's own, and §4.2 is its specification.
   line either way.
 - **Scanning every file of a version.** Scanning and SBOM attach to the
   version through its first file, the limitation Maven's jars already have;
-  §11 q2 says where that is fixed.
+  §15 q2 says where that is fixed.
 - **Release imports into a generic registry** (RFC 0021). An import reads its
   coordinate off the asset's file name, and a generic file name carries none;
-  the tag-as-version import is a bis of 0021 (§11 q4).
+  the tag-as-version import is a bis of 0021 (§15 q4).
 - **A checksum or signature side-car protocol** (`.sha256`, `.sig` served
   beside the file). The signature is a header on download as everywhere else;
   a consumer that wants a side-car publishes one as a second file.
@@ -248,7 +255,13 @@ Yank, unyank, deprecate and unlist are the existing admin API and
 | `helm-v3.16.0-linux-amd64.tar.gz` (hybrid miss) | `repo` / `_` / `helm-v3.16.0-linux-amd64.tar.gz` | the proxy key, as today |
 | `-/installer` | `installer`, version unused | not stored: rendered from the version rows |
 
-The storage key is `maven_artifact_storage_key`'s shape — `local:{registry}/{name}/{version}/{filename}` — used for **every** file, including the first. There is no primary artifact at `local:{registry}/{name}/{version}`, because a generic version has no `.pom`: no file is more the version than another. `PublishRequest` gains an optional storage key for this (§6.1); the version row's `checksum` is the first file's, which is what `require_signed_release` and the download audit already read.
+The storage key is `maven_artifact_storage_key`'s shape —
+`local:{registry}/{name}/{version}/{filename}` — used for **every** file,
+including the first. There is no primary artifact at
+`local:{registry}/{name}/{version}`, because a generic version has no `.pom`: no
+file is more the version than another. `PublishRequest` gains an optional
+storage key for this (§6.1); the version row's `checksum` is the first file's,
+which is what `require_signed_release` and the download audit already read.
 
 **`name` is one segment**, `validate_package_name`; `version` is one segment,
 `validate_path_safe`, and is *not* required to parse as semver — an installer
@@ -320,7 +333,7 @@ blocked is absent from them the way it is absent from every other kind's
 filter is a plain array drop). In `proxy` mode the routes are `404`: a mirror
 has no listing, and RFC 0008-bis §4.3's "the path-proxy family has no listing
 this instance can compose" stays true of the mirror and stops being true of
-what is published (§6.7).
+what is published (§6.6).
 
 **The response shape.**
 
@@ -358,7 +371,99 @@ Warnings (logged and surfaced to the admin):
 | Condition | Behaviour |
 | --- | --- |
 | A `generic` registry in `local`/`hybrid` under `[registries.sbom] required = true` | Served; warned at reload that an SBOM of an opaque file is generated from what the tool can identify in it, which for a compiled installer is usually nothing, so `required` will refuse publishes the operator meant to allow. |
-| `[air_gap]` with a `generic` registry in `local`/`hybrid` | The existing `AIR_GAP_LISTING_NOT_SYNTHESISED` warning is **not** emitted for this mode (§6.7); it stays for `proxy`. |
+| `[air_gap]` with a `generic` registry in `local`/`hybrid` | The existing `AIR_GAP_LISTING_NOT_SYNTHESISED` warning is **not** emitted for this mode (§6.6); it stays for `proxy`. |
+
+### 4.6 Mocks
+
+The visible surface is the protocol's answers, the CLI's output and one tab of
+the console's setup guide. Each mock is a proposal; the error bodies are the
+shape `AppError::error_response` (`crates/web/src/error.rs`) already renders,
+and the two refusal sentences are the existing ones, quoted from the tree.
+
+**`curl --upload-file` — nominal**
+
+```text
+$ curl -fsS -H "Authorization: Bearer $BATLEHUB_TOKEN" \
+    --upload-file installer-1.4.0.run "$REG/installer/1.4.0/installer-1.4.0.run"
+{"message":"published installer 1.4.0 installer-1.4.0.run"}
+```
+
+One line naming the coordinate and the file, so a CI log shows what was
+written without a second request.
+
+**`curl --upload-file` — the same file name again (refusal, `409`)**
+
+```text
+$ curl -sS -w '%{http_code}\n' -H "Authorization: Bearer $BATLEHUB_TOKEN" \
+    --upload-file installer-1.4.0.run "$REG/installer/1.4.0/installer-1.4.0.run"
+{"error":"Conflict","message":"installer@1.4.0 already exists and this node is immutable = \"always\". Publish a new version; no permission grants a replacement here."}
+409
+```
+
+The message is `enforce_publish_policy`'s
+(`services/local_registry/publish.rs:538`), unchanged: the file key is what
+was judged, and the sentence names the version because the version is the
+unit a reader pins.
+
+**`curl --upload-file` — a deleted version (refusal, `409`)**
+
+```text
+$ curl -sS -w '%{http_code}\n' -H "Authorization: Bearer $BATLEHUB_TOKEN" \
+    --upload-file notes.txt "$REG/installer/1.3.0/notes.txt"
+{"error":"Conflict","message":"installer@1.3.0 was published and deleted on 2026-09-11 in registry 'blobs'; a published version coordinate is never reused — publish under a new version"}
+409
+```
+
+`Tombstone::burned_coordinate_message`
+(`entities/local_package.rs:185`), unchanged: a new file name does not
+reopen a burned version.
+
+**`curl` — the listings, nominal and empty**
+
+```text
+$ curl -fsS "$REG/-/installer" | jq -c '{latest, n: (.versions | length)}'
+{"latest":"1.4.0","n":3}
+
+$ curl -sS -w '%{http_code}\n' "$REG/-/never-published"
+{"error":"Not Found","message":"no versions of 'never-published' in registry 'blobs'"}
+404
+```
+
+An unknown name is a `404`, not an empty list, so a typo in a CI job fails
+loudly instead of finding "no newer version".
+
+**`batlehub-cli publish --type generic` — nominal and usage error**
+
+```text
+$ batlehub-cli publish --type generic --name installer --version 1.4.0 installer-1.4.0.run
+published installer 1.4.0 installer-1.4.0.run to blobs (48.2 MB)
+
+$ batlehub-cli publish --type generic installer-1.4.0.run
+error: --type generic needs --name and --version: a generic file name carries no coordinate
+```
+
+The usage error says why the flags are needed, so the reader does not go
+looking for a file-name convention that does not exist.
+
+**Console setup guide — `generic` registry in `local` mode**
+
+```text
+┌ Setup · blobs (generic · local) ───────────────────────────────┐
+│ [ Download ]  [ Publish ]  [ Server config ]                   │
+│                                                                │
+│ Publish a file                                                 │
+│ curl -fsS -H "Authorization: Bearer $BATLEHUB_TOKEN" \         │
+│   --upload-file <file> \                                       │
+│   https://batlehub.example.com/proxy/blobs/generic/<name>/<version>/<file> │
+│                                                                │
+│ A published version is immutable; a deleted one is never       │
+│ reused.                                                        │
+└────────────────────────────────────────────────────────────────┘
+```
+
+The *Publish* tab appears only in `local`/`hybrid`; a `proxy` registry keeps
+today's single *Download* snippet. The immutability sentence sits under the
+command because it is what a first publisher needs to know before the second.
 
 ---
 
@@ -451,11 +556,20 @@ export already carries it.
   `artifact_storage_key` (every existing caller), `Some` stores the bytes
   there instead. `execute_publish_transaction` reads it; nothing else changes.
 - `LocalRegistryBackend` gains one method,
-  `set_index_metadata(registry, name, version, value)`, so a later file can
-  be appended to the row's file list under the same transaction discipline
-  `commit_publish` uses. This is the one new port method, and the reason it
+  `put_generic_file(registry, name, version, file: GenericFile) -> bool`,
+  so a later file can be added to the row's file list under the same
+  transaction discipline `commit_publish` uses. It inserts the entry of
+  `index_metadata.files[]` whose `name` is `file.name`, or replaces that one
+  entry, and touches nothing else on the row — not the checksum, not the
+  signature columns, not another file's entry. It is called only after
+  `enforce_publish_policy` passed for that file's key, so a replacement it
+  performs is one `releases:overwrite` and `immutable` already allowed. It is
+  **required, not defaulted**, like `set_channel`, so a backend that has not
+  implemented it is a compile error rather than a silent no-op. The reason it
   is a method rather than a re-publish is that a re-publish would run the
-  tombstone and versioning checks against a row that legitimately exists.
+  tombstone and versioning checks against a row that legitimately exists;
+  the reason it is *this* method rather than a general
+  `set_index_metadata` is decision 6.
 - `services/generic.rs` — the file-list document: `GenericFile { name, size,
   sha256, content_type, signature_type, signature_b64 }`, `files_of(row)`,
   `push_file(row, file)`, the filename character rule, and the two rendered
@@ -474,7 +588,7 @@ The one file grows four handlers and keeps `generic_get`'s route last:
 
 | Route | Handler |
 | --- | --- |
-| `PUT /proxy/{registry}/generic/{name}/{version}/{filename}` | `generic_put` — `require_local_mode`; validate the three segments; `collect_payload` (bounded by `max_artifact_size_bytes`); signature headers via `extract_signature_headers`; then the §5.1 branch: `publish_and_respond` with `storage_key` set when the row is absent, `enforce_publish_policy` + `storage.store` + `set_index_metadata` when present. `201` with `MessageResponse` and the `X-Quota-*` headers `publish_and_respond` already sets. |
+| `PUT /proxy/{registry}/generic/{name}/{version}/{filename}` | `generic_put` — `require_local_mode`; validate the three segments; `collect_payload` (bounded by `max_artifact_size_bytes`); signature headers via `extract_signature_headers`; then the §5.1 branch: `publish_and_respond` with `storage_key` set when the row is absent, `enforce_publish_policy` + `storage.store` + `put_generic_file` when present. `201` with `MessageResponse` and the `X-Quota-*` headers `publish_and_respond` already sets. |
 | `DELETE /proxy/{registry}/generic/{name}/{version}` | `generic_delete` — `delete_version_audited` (the version and every file key; the tombstone is the backend's, RFC 0016 §5.2). |
 | `GET /proxy/{registry}/generic/-/{name}` | `generic_versions` — rendered from `get_index`-style rows through `check_visibility`; `releases:list`. |
 | `GET /proxy/{registry}/generic/-/{name}/{version}` | `generic_files` — the file list; `releases:list`. |
@@ -516,37 +630,7 @@ carries no coordinate and guessing one would publish under the wrong one.
   of `docs/registries/index.md` flips.
 - `ROADMAP.md` — the entry moves to done when phase 4 lands.
 
-### 6.6 `tests/heavy/generic.sh`
-
-A heavy suite, `config.generic-local.toml` beside it,
-`task test:generic-local-heavy`, and a row in the `heavy-client` matrix.
-There is no package manager for this kind; the real clients are `curl` (the
-runner image's, version recorded in the transcript) and this project's own
-CLI, both driven through the tap, with every download written into the run's
-temp directory so no step reads another's file:
-
-1. `curl --upload-file` publishes two files to one version; both `201`, the
-   `X-Quota-Used` header grows by their sizes; `-/{name}/{version}` lists
-   both with the SHA-256 `sha256sum` computes locally.
-2. A second `--upload-file` of the same file name is `409`; with a
-   `releases:overwrite` grant on an `immutable = "never"` namespace it is
-   `201` and the listing's `sha256` changes.
-3. `batlehub-cli publish --type generic` publishes a third version; `-/{name}`
-   names it as `latest`.
-4. `batlehub-cli package yank` removes it from `latest` and from the
-   listing; the file still downloads by exact coordinate.
-5. `DELETE` the version; a `PUT` of a *different* file name to it is `409`
-   with the tombstone message; `-/{name}` no longer lists it.
-6. A `hybrid` registry over `https://get.helm.sh` with `path_allow =
-   ["helm-v*"]`: the published file answers from local, `helm-v3.16.0-linux-amd64.tar.gz`
-   falls through and its cache-miss counter moves, and a path outside the
-   allowlist is `403` while the held coordinate stays `200` whatever the
-   allowlist says. Fetching the same fall-through path again moves
-   `batlehub_artifact_cache_hits_total`.
-7. The same bytes published under two names: `artifact_dedup_refs` grows by
-   one and the blob count does not.
-
-### 6.7 Air gap (RFC 0008-bis)
+### 6.6 Air gap (RFC 0008-bis)
 
 A `generic` registry in `local`/`hybrid` has a listing this instance *can*
 compose, because it is this instance's own: `-/{name}` and
@@ -556,6 +640,49 @@ gains a row, the config warning of §4.5 is narrowed to `proxy`, and the
 registry page's air-gap cell says *"held versions and their files are
 listed; a mirror path is served if held"*. The mirror half keeps its
 `503`-on-listing behaviour because a mirror still has no listing.
+
+### 6.P Proof against a real client
+
+**Not yet observed.** Everything below is the plan, to be run before phase 2
+is called done (§16); nothing in it has crossed a wire yet. There is no
+package manager for this kind; the real clients are `curl` (the runner
+image's, pinned by the image digest, its `curl --version` line recorded in
+the transcript) and this project's own `batlehub-cli`, built from the same
+commit. Both are driven through the tap, with every download written into the
+run's temp directory so no step reads another's file. The suite is
+`tests/heavy/generic.sh`, with `config.generic-local.toml` beside it,
+`task test:generic-local-heavy` and a row in the `heavy-client` matrix.
+
+1. `curl --upload-file` publishes two files to one version — both `201`, the
+   `X-Quota-Used` header grows by their sizes, and `-/{name}/{version}` lists
+   both with the SHA-256 `sha256sum` computes locally.
+2. **Refusal.** A second `--upload-file` of the same file name is `409` with
+   the `immutable` sentence of §4.6, and the listing's `sha256` for that file
+   is unchanged. With a `releases:overwrite` grant on an
+   `immutable = "never"` namespace the same request is `201` and the
+   listing's `sha256` changes.
+3. `batlehub-cli publish --type generic` publishes a third version;
+   `-/{name}` names it as `latest`.
+4. `batlehub-cli package yank` removes it from `latest` and from the listing;
+   the file still downloads by exact coordinate.
+5. **Refusal.** `DELETE` the version; a `PUT` of a *different* file name to it
+   is `409` with the tombstone message of §4.6, and `-/{name}` no longer
+   lists it.
+6. A `hybrid` registry over `https://get.helm.sh` with
+   `path_allow = ["helm-v*"]`: the published file answers from local,
+   `helm-v3.16.0-linux-amd64.tar.gz` falls through and its cache-miss counter
+   moves; **refusal:** a path outside the allowlist is `403` and the tap shows
+   no request to `get.helm.sh` for it, while the held coordinate stays `200`
+   whatever the allowlist says. Fetching the same fall-through path again
+   moves `batlehub_artifact_cache_hits_total`.
+7. The same bytes published under two names: `artifact_dedup_refs` grows by
+   one and the blob count does not.
+8. **Refusal.** An anonymous `PUT` is `401` and a token holding only
+   `releases:read` is `403`; in both cases `-/{name}` is unchanged and the
+   storage backend holds no new key.
+9. **Refusal.** `curl --path-as-is` with `..` as the version and with a `/`
+   encoded into the file name are both `400` before any storage call — the
+   tap shows the request, the storage backend shows no write.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
@@ -575,7 +702,52 @@ listed; a mirror path is served if held"*. The mirror half keeps its
 
 ---
 
-## 7. Security considerations
+## 7. Security
+
+**Rating:** medium — a new authenticated write surface on a kind whose
+mirror half is often anonymous-readable; every gate it passes already exists,
+and the one new port method is narrow by design (decision 6). The highest
+residual risk is T8: a publisher-chosen `Content-Type` served from this
+instance's origin (§15 q8).
+
+### 7.1 Threat model
+
+Assets: the bytes of a published file and the promise that a pinned
+`{name}/{version}/{filename}` never changes; the version rows and their
+file lists; the quota; the publisher identity on each row. Actors: an
+anonymous reader, an authenticated publisher, a publisher holding
+`releases:overwrite`, an administrator, and — in `hybrid` — the upstream
+mirror host.
+
+```mermaid
+flowchart LR
+    P["untrusted: publisher<br/>(curl, batlehub-cli)"] -- "B1: PUT / DELETE · token" --> H["generic_put · generic_delete"]
+    R["untrusted: reader"] -- "B2: GET file · -/ listings" --> G["generic_get · generic_versions · generic_files"]
+    H --> S["trusted: enforce_publish_policy<br/>then storage + version row"]
+    G --> S
+    G -- "B3: hybrid miss · path_allow" --> U["semi-trusted: upstream mirror"]
+```
+
+Attacker-controlled inputs are the three path segments, the body, the
+`Content-Type` header and the two signature headers (B1), the path of a read
+(B2), and the bytes the upstream returns on a fall-through (B3).
+
+| # | Threat (STRIDE) | Where | Mitigation | Residual risk |
+| --- | --- | --- | --- | --- |
+| T1 | Spoofing — publish under a name the caller does not own | B1 | auth middleware, the `releases:publish` grant, ownership and namespace membership in `enforce_publish_policy`, `register_initial_owner` on the first file; §14 *Security* | a stolen token publishes as its holder — as for every kind |
+| T2 | Tampering — replace the bytes of a pinned file | B1 | the `artifact_key` branch of `enforce_publish_policy` (`publish.rs:525`): `releases:overwrite` **and** `immutable` on the file key; §6.P case 2 | none beyond a granted overwrite on an `immutable = "never"` namespace |
+| T3 | Tampering — reoccupy a deleted version under a new file name | B1 | the RFC 0016 tombstone on `{name}/{version}`, checked on every `PUT` (`publish.rs:341`); §6.P case 5 | none known |
+| T4 | Tampering — a segment escapes its storage key (traversal, encoded `/`) | B1, B2 | `validate_package_name`, `validate_path_safe` ×2, the filename character set at the edge; `validate_coordinate` in `get_artifact_at_key`; `ensure_safe_key` in the backends; §6.P case 9 | none known |
+| T5 | Tampering — the file-list write used to rewrite a version's checksum or signature | B1 → S | `put_generic_file` writes one entry of `index_metadata.files[]` and nothing else, and is called only after `enforce_publish_policy` passed for that file's key (decision 6) | none known |
+| T6 | Information disclosure — a team-visible version's file or listing read by a non-member | B2 | `get_artifact_at_key` and `check_visibility` on the file and on both listings (§5.2) | none known |
+| T7 | Information disclosure — a blocked version advertised by `-/{name}` | B2 | the `Generic` arm of `blocking::strip`, checked by `every_advertised_filter_is_reachable_from_dispatch` | none known |
+| T8 | Tampering / elevation — a published `text/html` or `image/svg+xml` file runs script in this instance's origin when a browser opens its URL | B1 → B2 | `X-Content-Type-Options: nosniff` (stops sniffing, **not** rendering of a declared type) | **open**: a publisher can plant same-origin active content; §15 q8 recommends serving active types as an attachment |
+| T9 | Spoofing — a held file in `hybrid` shadows the upstream file of the same path | B1 | only a `releases:publish` holder on that name can hold it; the registry page states it | accepted by the operator who chooses `hybrid` |
+| T10 | Denial of service — one caller fills storage, or a version's file list grows without bound | B1 | `limits.max_artifact_size_bytes` per file, the quota reservation per file | no cap on the number of files per version; quota bounds bytes, not entries (§10.3) — accepted for phase 2 |
+| T11 | Repudiation — a later file of a version has no trace of who wrote it | B1 | every `PUT` writes the publish audit event, the second-file branch included (§10.1) | none once the branch is tested |
+| T12 | Elevation — SSRF through the fall-through | B3 | the upstream comes from configuration only; `path_allow`; the segments are validated before the path is joined; the `path_proxy` client's existing redirect guard | as for `proxy` mode today |
+
+### 7.2 Authentication and authorisation
 
 - **Trust boundary.** A publish is authenticated (`releases:publish` through
   RFC 0015 grants) and every byte it writes is under a coordinate the
@@ -583,22 +755,6 @@ listed; a mirror path is served if held"*. The mirror half keeps its
   namespace visibility, pre-release access, the rule chain, the download
   audit — all applied by `get_artifact_at_key`, never bypassed by a direct
   storage read (§5.2).
-- **Attacker-controlled inputs** are the three path segments, the body and the
-  two signature headers. Segments are validated before they touch a key;
-  `ensure_safe_key` in the storage backends is the deeper guard; the body is
-  opaque and bounded by `max_artifact_size_bytes` before it is buffered; the
-  signature pair is refused when incoherent (`check_signing_policy`), and a
-  zero-byte signature is not a signature.
-- **Content type is data, not a directive.** The `Content-Type` a publisher
-  sends is recorded and served back verbatim with `X-Content-Type-Options:
-  nosniff`, as the mirror already does for upstream types. A generic registry
-  can hold an HTML file; a browser opening it from this origin is the risk
-  every artifact download already carries and the same header answers.
-- **Immutability is the supply-chain property.** A pinned
-  `{name}/{version}/{filename}` never changes bytes without a
-  `releases:overwrite` grant *and* an `immutable` policy that allows it; a
-  deleted version can never be reoccupied. This is what makes the registry
-  usable as a lockfile target, and it is inherited, not built here.
 - **A hybrid overlay cannot shadow the mirror by accident.** A held file wins
   over the upstream path of the same name — that is the feature — and it can
   only be held by someone with `releases:publish` on that name. The registry
@@ -608,9 +764,126 @@ listed; a mirror path is served if held"*. The mirror half keeps its
   here is the one npm, NuGet and Maven publishes already stand behind.
   Adding a kind adds no new authority.
 
+### 7.3 Input handling and injection
+
+- **Attacker-controlled inputs** are the three path segments, the body and the
+  two signature headers. Segments are validated before they touch a key;
+  `ensure_safe_key` in the storage backends is the deeper guard; the body is
+  opaque and bounded by `max_artifact_size_bytes` before it is buffered; the
+  signature pair is refused when incoherent (`check_signing_policy`), and a
+  zero-byte signature is not a signature.
+- **Content type is data, not a directive.** The `Content-Type` a publisher
+  sends is recorded and served back verbatim with `X-Content-Type-Options:
+  nosniff`, as the mirror already does for upstream types. A generic registry
+  can hold an HTML file; `nosniff` does not stop a browser rendering a type
+  that is *declared* `text/html`, so this is T8 and §15 q8, not a solved case.
+
+### 7.4 Secrets and cryptography
+
+No new secret and no new primitive. The bearer token is the existing one,
+read by the existing auth middleware; signatures are Ed25519 through
+`signature::verify_ed25519`, the code every signed publish already uses.
+
+### 7.5 Abuse and resource exhaustion
+
+The body is bounded by `limits.max_artifact_size_bytes` and the quota is
+reserved per file before the write (T10). An unauthenticated caller can do
+nothing here but read and list, at the cost of a storage read or a rendered
+row; the listings render from rows already loaded for visibility, with no
+upstream call in `local`.
+
+### 7.6 Existing defences that still hold
+
+- **Immutability is the supply-chain property.** A pinned
+  `{name}/{version}/{filename}` never changes bytes without a
+  `releases:overwrite` grant *and* an `immutable` policy that allows it; a
+  deleted version can never be reoccupied. This is what makes the registry
+  usable as a lockfile target, and it is inherited, not built here.
+- `path_allow` and the mandatory upstream for the mirror half; the
+  `path_proxy` client's redirect handling; `ensure_safe_key`; the download
+  audit.
+
 ---
 
-## 8. Alternatives considered
+## 8. Supply chain
+
+No new dependency, image, action or tool: the handlers reuse actix-web, serde
+and the existing storage and backend ports, and the heavy suite drives the
+runner image's `curl` and this repository's CLI. `task audit` is unchanged.
+
+---
+
+## 9. Data and privacy
+
+| Data | Personal? | Where stored | Retention | Who can read it | Leaves the instance? |
+| --- | --- | --- | --- | --- | --- |
+| The file's bytes and `Content-Type` | not by this instance's design; a publisher can upload anything | storage, at the file key (deduplicated) | RFC 0016 retention and delete | `releases:read` holders | on download only |
+| `published_by` in `-/{name}/{version}` | **yes** — a user or service-account identity (`user:ci-release`) | the version row's publisher column, which exists today | kept: RFC 0036 decision 5 exempts publication rows from erasure under legitimate interest; `gdpr export` lists them | today the admin API; **with this RFC every `releases:list` holder, anonymous included when the registry grants it** | in the listing response only |
+| The file list — name, size, SHA-256, content type, signature type | no | `index_metadata.files[]` | compacted with the row (RFC 0016 §4.5) | `releases:list` holders | in the listing response only |
+| The publish audit event per `PUT` | yes — the actor | the audit trail | the RFC 0036 retention class of publish events; pseudonymised on erasure | administrators | no |
+| A hybrid fall-through request | no | — | — | — | yes, to the configured upstream, carrying no caller identity |
+
+- The new exposure is the `published_by` field: the console and the admin API
+  show it to administrators today, and a protocol listing would show it to
+  anyone who may list. Whether an anonymous caller should see it is §15 q9.
+- No identity, token or IP is forwarded upstream; logs and metric labels gain
+  no personal field (§10.1).
+
+---
+
+## 10. Operability
+
+### 10.1 Observability
+
+- **Metrics**: none new. Publishes, downloads and fall-throughs are counted by
+  the existing per-registry counters (`batlehub_artifact_cache_hits_total`
+  and its siblings); no label carries a package or file name.
+- **Logs and audit trail**: every `PUT` writes the publish audit event —
+  the second-file branch, which does not go through `publish()`, calls the
+  same audit writer, and the integration suite asserts one event per file.
+  An overwrite and a version delete write theirs as for every kind.
+- **Alerts**: none new; the quota and storage alerts already cover the
+  failure that matters (a full backend).
+
+### 10.2 Failure modes
+
+| Failure | Detected by | Behaviour (fail open / closed) | Recovery |
+| --- | --- | --- | --- |
+| Storage write fails after the policy passed | the `store` error | closed: `5xx`, no `files[]` entry, quota reservation released | the client retries the `PUT` |
+| Database write of the file entry fails after the bytes were stored | the `put_generic_file` error | closed: `5xx`; the bytes sit at their key unreferenced | a retry overwrites the same key with the same bytes; the dedup sweep reclaims an abandoned one |
+| Upstream down in `hybrid` | the `path_proxy` error | held files served; a miss is the mirror's existing `502` | none needed |
+| Invalid mode/upstream combination | `AppConfig::validate()` | the configuration is refused at startup and on reload | fix the file (§4.5) |
+
+### 10.3 Performance and capacity
+
+- One storage object per distinct file (deduplicated) and one `files[]` entry
+  of roughly 200 bytes per file. A version with 1 000 files is a 200 KB
+  JSONB value rewritten on every append — quadratic in the file count, and
+  the trigger the *files table* alternative (§12) names.
+- `collect_payload` buffers the body: a 1 GB installer is 1 GB of memory per
+  concurrent `PUT`, bounded by `max_artifact_size_bytes`. That is today's
+  behaviour for every publish; a streaming publish is out of scope.
+
+---
+
+## 11. Other concerns
+
+- **Accessibility**: the console change is one more tab in the existing setup
+  guide component, which already has keyboard tab navigation and focus
+  styles; no new widget.
+- **Internationalisation**: the *Publish* tab's label and its sentence are
+  added to every locale under `ui/src/locales`; the CLI output is English,
+  like every CLI message.
+- **Compliance**: no control changes; the publish audit events feed the
+  RFC 0036 trail as every other publish does, and an immutable, pinned file
+  is evidence a CRA-style SBOM can reference.
+- **Licensing**: unchanged; published files are the publisher's.
+- **Documentation**: `docs/registries/generic.md`, `docs/use/publishing.md`
+  and the registries index (§6.5), in English and the French twins.
+
+---
+
+## 12. Alternatives considered
 
 | Alternative | Why rejected |
 | --- | --- |
@@ -624,7 +897,7 @@ listed; a mirror path is served if held"*. The mirror half keeps its
 
 ---
 
-## 9. Rollout and compatibility
+## 13. Rollout and compatibility
 
 - **Default behaviour** when not configured: none. No `generic` registry
   changes mode by itself; `proxy` is untouched.
@@ -641,7 +914,7 @@ listed; a mirror path is served if held"*. The mirror half keeps its
 
 ---
 
-## 10. Test plan
+## 14. Test plan
 
 - **Unit** (`crates/core/src/services/generic.rs`): the filename rule accepts
   GitLab's set and rejects a leading `~`, a space, a `/`; `push_file` on a
@@ -664,7 +937,20 @@ listed; a mirror path is served if held"*. The mirror half keeps its
   `{path:.*}`.
 - **CLI** (`cli/tests/integration.rs`): `publish --type generic` without
   `--name` is a usage error; with both it publishes and the listing names it.
-- **Heavy** (`tests/heavy/generic.sh`): §6.6.
+- **Proof**: §6.P (`tests/heavy/generic.sh`).
+- **Security** (`crates/web/tests/local_generic_registry.rs` unless named):
+  T1 — a `PUT` to a name owned by another user is `403`; T2 — same-file
+  `PUT` without `releases:overwrite` is `409` and the stored bytes are
+  unchanged; T3 — delete then `PUT` of a new file name is `409`; T4 — `..`,
+  an encoded `/` and a leading `~` in each of the three segments are `400`
+  with no storage call; T5 — a unit test in the backend suites that
+  `put_generic_file` leaves the row's checksum and signature columns and
+  every other `files[]` entry byte-identical; T6 — the team-visibility case
+  above; T7 — the blocked-version case above; T8 — once §15 q8 is decided,
+  a published `text/html` file is served with the decided headers; T11 —
+  one publish audit event per file, the second file included; T12 — a
+  hybrid fall-through outside `path_allow` is `403` with no upstream call.
+- **Audit**: `task audit` unchanged — no new dependency (§8).
 - **Existing suites** that must pass unchanged: `local_maven_registry.rs`
   (the `artifact_key` gate this reuses), `tests/heavy/pathproxy.sh` and the
   `generic` mirror tests (`proxy` mode is untouched),
@@ -672,7 +958,7 @@ listed; a mirror path is served if held"*. The mirror half keeps its
 
 ---
 
-## 11. Decisions and open questions
+## 15. Decisions and open questions
 
 ### Resolved
 
@@ -681,6 +967,7 @@ listed; a mirror path is served if held"*. The mirror half keeps its
 | 1 | A mode on `generic`, or a new kind? | **A mode.** `hybrid` is the mirror-plus-overlay case, and it already exists. |
 | 3 | Where does the file list live? | **`index_metadata.files[]`** on the version row. Every other kind's ecosystem document lives there; retention compaction and the air-gap export already handle it. |
 | 5 | Listing routes under a reserved prefix or a trailing slash? | **`-/{name}` and `-/{name}/{version}`.** A trailing slash is a legitimate upstream path on a mirror; a reserved segment is the convention npm (`/-/`) and RFC 0019's raw scheme already use. |
+| 6 | How does a later file reach the row's file list? | **A narrow, purpose-named port method, `put_generic_file`, not a general `set_index_metadata`.** The first draft proposed `set_index_metadata(registry, name, version, value)`, which contradicts a decision already written on the port: *"a narrow, purpose-named method rather than a general `set_index_metadata`. The generic one would be a way to mutate anything on a published version — including the checksum — behind a verb that names one field, which is the shape `immutable` exists to prevent"* (`ports/registry/local_registry.rs:113-116`, beside `set_channel`). `put_generic_file` writes one `files[]` entry and nothing else (§6.1, T5). Corrected in review, 2026-11-15. |
 
 ### Still open
 
@@ -693,15 +980,40 @@ listed; a mirror path is served if held"*. The mirror half keeps its
    read a coordinate off a generic asset name; a tag-as-version rule
    (`name = <repo>`, `version = <tag>`, every asset a file) is small and
    useful. Recommendation: a bis of 0021 after this lands, not scope here.
+7. **Land phases 1–4 first; split `hybrid` and the air gap out.** Review
+   finding (2026-11-15): the demand that §2 names is a private file store
+   (`local`); `hybrid` adds the two-step read of §5.2, the path-shape rule
+   and the T9 shadowing risk, and the air gap (phase 5) adds a 0008-bis row
+   — each separable, and nothing in `local` depends on them. No user is
+   named in §2 asking for an overlay on a mirror.
+   **Recommendation: phases 1–4 deliver `local` only (validation refuses
+   `hybrid` on this kind until a later phase); `hybrid` becomes its own
+   phase after the heavy suite of §6.P is green, and the air gap stays
+   phase 5 on its own.**
+8. **A publisher-chosen `Content-Type` is served from this instance's
+   origin.** Review finding (T8): `X-Content-Type-Options: nosniff` stops
+   sniffing, not the rendering of a declared `text/html` or
+   `image/svg+xml`, so a publisher can plant script that runs in the
+   console's origin when someone opens the file's URL.
+   **Recommendation: record the type but serve every active type
+   (`text/html`, `application/xhtml+xml`, `image/svg+xml`, `text/xml`,
+   `application/xml`) as `application/octet-stream` with
+   `Content-Disposition: attachment`, and add
+   `Content-Security-Policy: sandbox` on every generic download.**
+9. **`published_by` in a protocol listing.** §9: `-/{name}/{version}` shows a
+   user identity to every `releases:list` holder, anonymous included when
+   the registry grants it, where today only administrators see it.
+   **Recommendation: render `published_by` only to an authenticated caller,
+   and omit the field for an anonymous one.**
 
 ---
 
-## 12. Implementation phases
+## 16. Implementation phases
 
 | Phase | Content |
 | --- | --- |
-| 1 | `crates/core`: `supports_local_mode`, `listing_filter` and the `Generic` strip arm, `PublishRequest::storage_key`, `LocalRegistryBackend::set_index_metadata` (in-memory and Postgres), `services/generic.rs`. `crates/config`: the §4.5 validator changes. Tree green; nothing routable yet, so phases 1 and 2 land together. |
+| 1 | `crates/core`: `supports_local_mode`, `listing_filter` and the `Generic` strip arm, `PublishRequest::storage_key`, `LocalRegistryBackend::put_generic_file` (in-memory and Postgres), `services/generic.rs`. `crates/config`: the §4.5 validator changes. Tree green; nothing routable yet, so phases 1 and 2 land together. |
 | 2 | `crates/web`: the four handlers and the local branch of `generic_get`, the two DTOs, `local_generic_registry.rs`, the conformance fixture. **Useful on its own**: publish, read, list, delete, hybrid overlay. |
 | 3 | `tests/heavy/generic.sh` and its task and matrix row. Runs before phase 2 is called done. |
-| 4 | `cli` `publish --type generic`; `ui` snippet; `docs/registries/generic.md`, `docs/use/publishing.md`, the registries index; `ROADMAP.md` ticked; the §13 note. |
+| 4 | `cli` `publish --type generic`; `ui` snippet; `docs/registries/generic.md`, `docs/use/publishing.md`, the registries index; `ROADMAP.md` ticked; the §17 note. |
 | 5 | Air gap: the composed listings and the 0008-bis table row, proven in `tests/heavy/airgap.sh`. Ships on its own. |
