@@ -318,3 +318,19 @@ impl AdvisoryRepository for InMemoryAdvisoryRepository {
         Ok(self.scan_state.read().await.values().cloned().collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use batlehub_core::rules::{FlagsRule, Rule};
+
+    /// The chain silences an exempted gate by `Rule::name`, so `FlagsRule`
+    /// must answer to the name `EXEMPTIBLE_GATES` keys it by (a mutation
+    /// survivor, RFC 0041 §6.4; core has no advisory store to build one with).
+    #[test]
+    fn the_flags_rule_answers_to_its_exemptible_gate_name() {
+        let rule = FlagsRule::new(Arc::new(InMemoryAdvisoryRepository::new()));
+        assert_eq!(rule.name(), "flags");
+        assert!(batlehub_core::entities::EXEMPTIBLE_GATES.contains(&rule.name()));
+    }
+}

@@ -1206,6 +1206,82 @@ mod tests {
     }
 
     #[test]
+    fn a_critical_forge_ref_code_denies_in_block_mode_only() {
+        let now = Utc::now();
+        let f = || {
+            Finding::new(
+                "forge_refs",
+                FindingKind::Ref,
+                ReasonCode::PinnedRefRequired,
+                Severity::Critical,
+                "a branch where a pin is required",
+            )
+        };
+        let v = evaluate(&mature(now), vec![f()], done(), &policy(), now, None);
+        assert_eq!(v.state, VerdictState::Denied);
+        let mut warn = policy();
+        warn.mode = SecurityMode::Warn;
+        let v = evaluate(&mature(now), vec![f()], done(), &warn, now, None);
+        assert_eq!(v.state, VerdictState::Warned);
+    }
+
+    /// Mutation survivors (RFC 0041 §6.4): each of these codes has its own arm
+    /// in `classify`, and none of them is judged on the finding's severity —
+    /// so a `Low` finding is what tells the arm from the threshold fallback.
+    fn coded(code: ReasonCode, severity: Severity) -> Finding {
+        Finding::new("scanner", FindingKind::Provenance, code, severity, "x")
+    }
+
+    #[test]
+    fn an_install_hook_follows_deny_install_hooks_not_its_severity() {
+        let now = Utc::now();
+        for (mode, expected) in [
+            (InstallHookMode::Deny, VerdictState::Denied),
+            (InstallHookMode::Warn, VerdictState::Warned),
+            (InstallHookMode::Ignore, VerdictState::Allowed),
+        ] {
+            let mut p = policy();
+            p.deny_install_hooks = mode;
+            let f = coded(ReasonCode::InstallHook, Severity::Low);
+            let v = evaluate(&mature(now), vec![f], done(), &p, now, None);
+            assert_eq!(v.state, expected, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn missing_provenance_denies_only_where_it_is_required() {
+        let now = Utc::now();
+        for code in [ReasonCode::ProvenanceMissing, ReasonCode::ProvenanceInvalid] {
+            for (required, expected) in
+                [(true, VerdictState::Denied), (false, VerdictState::Warned)]
+            {
+                let mut p = policy();
+                p.require_provenance = required;
+                let v = evaluate(
+                    &mature(now),
+                    vec![coded(code, Severity::Low)],
+                    done(),
+                    &p,
+                    now,
+                    None,
+                );
+                assert_eq!(v.state, expected, "{code:?} required={required}");
+            }
+        }
+    }
+
+    #[test]
+    fn unverifiable_provenance_warns_and_an_admin_override_finding_changes_nothing() {
+        let now = Utc::now();
+        let f = coded(ReasonCode::ProvenanceUnverifiable, Severity::Low);
+        let v = evaluate(&mature(now), vec![f], done(), &policy(), now, None);
+        assert_eq!(v.state, VerdictState::Warned);
+        let f = coded(ReasonCode::AdminOverride, Severity::Critical);
+        let v = evaluate(&mature(now), vec![f], done(), &policy(), now, None);
+        assert_eq!(v.state, VerdictState::Allowed);
+    }
+
+    #[test]
     fn an_unrated_finding_counts_toward_an_escalation_at_its_judged_level() {
         let now = Utc::now();
         let mut p = policy();
@@ -1663,5 +1739,81 @@ mod record_scan_tests {
             1,
             "not saved again"
         );
+    }
+
+    fn high_vuln() -> Finding {
+        Finding::new(
+            "osv",
+            FindingKind::Vulnerability,
+            ReasonCode::Vulnerability,
+            Severity::High,
+            "GHSA-1",
+        )
+    }
+
+    fn stored(pkg: &PackageMetadata, state: VerdictState, codes: Vec<ReasonCode>) -> Verdict {
+        Verdict {
+            package: pkg.id.clone(),
+            state,
+            reason_codes: codes,
+            findings: vec![high_vuln()],
+            policy_ref: "npm-public/default".into(),
+            available_at: None,
+            evaluated_at: Utc::now(),
+            last_scanned_at: Some(Utc::now()),
+            scanners_done: vec!["osv".into()],
+        }
+    }
+
+    /// `changed` in `current` is "state differs **or** codes differ": each
+    /// half alone is a transition the store has to record.
+    #[tokio::test]
+    async fn a_read_records_a_change_of_state_alone_and_of_codes_alone() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let mut warn = policy();
+        warn.mode = SecurityMode::Warn;
+        for (row, p, why) in [
+            (
+                stored(&pkg, VerdictState::Denied, vec![ReasonCode::Vulnerability]),
+                warn,
+                "same codes, the state moved to warned",
+            ),
+            (
+                stored(&pkg, VerdictState::Denied, vec![]),
+                policy(),
+                "same state, the codes moved",
+            ),
+        ] {
+            let repo = Arc::new(OneVerdict::default());
+            repo.upsert(&row).await.unwrap();
+            let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+            let v = svc.current(&pkg, &p, now).await.unwrap();
+            assert_eq!(v.reason_codes, vec![ReasonCode::Vulnerability], "{why}");
+            assert_eq!(repo.1.load(std::sync::atomic::Ordering::SeqCst), 2, "{why}");
+            assert_eq!(
+                repo.get(&pkg.id).await.unwrap().unwrap().state,
+                v.state,
+                "{why}"
+            );
+        }
+    }
+
+    /// The carry-forward of a scanner that did not run takes *its* findings,
+    /// not those of the scanner that just answered clean.
+    #[tokio::test]
+    async fn a_scanner_that_answered_clean_is_not_overruled_by_one_carried_forward() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let s = svc();
+        let mut prev = stored(&pkg, VerdictState::Denied, vec![ReasonCode::Vulnerability]);
+        prev.scanners_done = vec!["osv".into(), "guarddog".into()];
+        s.verdicts.upsert(&prev).await.unwrap();
+        let (_, v) = s
+            .record_scan(&pkg, &policy(), vec![], vec!["osv".into()], now)
+            .await
+            .unwrap();
+        assert_eq!(v.state, VerdictState::Allowed, "{:?}", v.findings);
+        assert!(v.scanners_done.contains(&"guarddog".to_owned()));
     }
 }

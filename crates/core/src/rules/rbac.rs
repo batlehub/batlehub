@@ -179,6 +179,12 @@ mod tests {
         .expect("fixture patterns are valid")
     }
 
+    /// The name is the denial reason the access log records.
+    #[test]
+    fn rule_name_is_rbac() {
+        assert_eq!(make_rule().name(), "rbac");
+    }
+
     #[tokio::test]
     async fn anonymous_can_read_releases() {
         let rule = make_rule();

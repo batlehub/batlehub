@@ -4581,6 +4581,47 @@ mod storage_key_collisions {
         assert!(validate_terraform_platform("linux", "a/b").is_err());
     }
 
+    // Mutation survivors of the first nightlies (RFC 0041 §6.4).
+
+    #[test]
+    fn a_terraform_binary_key_is_stable_and_per_platform() {
+        assert_eq!(
+            terraform_provider_binary_storage_key("r", "n", "t", "1.0.0", "linux", "amd64"),
+            "local:r/providers/n/t/1.0.0/linux-amd64",
+            "a stored key: changing it orphans every published binary"
+        );
+    }
+
+    #[test]
+    fn the_versioning_policy_is_enforced() {
+        let p = |enforce_semver, allow_prerelease, pattern: Option<&str>| VersioningPolicy {
+            enforce_semver,
+            allow_prerelease,
+            version_pattern: pattern.map(|p| regex::Regex::new(p).unwrap()),
+        };
+        assert!(validate_version("not-semver", &p(false, true, None)).is_ok());
+        assert!(validate_version("not-semver", &p(true, true, None)).is_err());
+        assert!(validate_version("1.0.0", &p(true, false, None)).is_ok());
+        assert!(validate_version("1.0.0-rc.1", &p(true, false, None)).is_err());
+        assert!(validate_version("1.0.0-rc.1", &p(true, true, None)).is_ok());
+        assert!(validate_version("1.0.0", &p(false, true, Some(r"^1\."))).is_ok());
+        assert!(validate_version("2.0.0", &p(false, true, Some(r"^1\."))).is_err());
+    }
+
+    #[test]
+    fn a_trailing_slash_is_refused_even_where_a_prefix_would_pass() {
+        // `path` exempts a trailing empty segment in `reject_traversal`; the
+        // raw-value check is what still refuses it at the edge.
+        assert!(validate_path_safe("path", "a/").is_err());
+        assert!(!has_traversal_after_decoding("a/"));
+    }
+
+    #[test]
+    fn a_truncated_escape_at_the_end_is_left_literal() {
+        assert!(validate_path_safe("name", "a%4").is_ok());
+        assert!(validate_path_safe("name", "a%").is_ok());
+    }
+
     #[test]
     fn a_path_segment_is_path_safe_and_has_no_slash() {
         assert!(validate_path_segment("x", "aws").is_ok());

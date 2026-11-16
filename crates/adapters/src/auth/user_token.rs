@@ -708,6 +708,30 @@ mod prefix_and_usage_tests {
         assert_eq!(repo.touches.load(Ordering::SeqCst), 1);
     }
 
+    /// The window ends: a use after it is recorded again (a mutation
+    /// survivor, RFC 0041 §6.4 — `last_used_at` must not freeze at first use).
+    #[test]
+    fn a_use_after_the_window_is_recorded_again() {
+        let p = UserTokenAuthProvider::new(CountingRepo::new());
+        let id = Uuid::new_v4();
+        assert!(p.should_record_use(id));
+        assert!(!p.should_record_use(id));
+        let past = Instant::now()
+            .checked_sub(LAST_USED_THROTTLE + Duration::from_secs(1))
+            .expect("the monotonic clock is past one window");
+        p.last_recorded.lock().unwrap().insert(id, past);
+        assert!(p.should_record_use(id));
+    }
+
+    /// The `provider` label of `batlehub_auth_failures_total`.
+    #[test]
+    fn the_provider_is_named_user_token() {
+        assert_eq!(
+            UserTokenAuthProvider::new(CountingRepo::new()).name(),
+            "user-token"
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_write_does_not_reject_a_valid_token() {
         struct FailingRepo(Arc<CountingRepo>);
