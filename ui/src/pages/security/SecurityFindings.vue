@@ -330,7 +330,8 @@ onMounted(async () => {
           <Label for="findings-verdict">{{ t("adminScans.verdict") }}</Label>
           <Select id="findings-verdict" v-model="verdict" :options="verdictOptions" />
         </div>
-        <div class="flex gap-1" role="group" :aria-label="t('adminFindings.groupLabel')">
+        <fieldset class="flex min-w-0 gap-1">
+          <legend class="sr-only">{{ t("adminFindings.groupLabel") }}</legend>
           <Button
             size="sm"
             :variant="byReference ? 'outline' : 'default'"
@@ -349,7 +350,7 @@ onMounted(async () => {
           >
             {{ t("adminFindings.byReference") }}
           </Button>
-        </div>
+        </fieldset>
       </div>
 
       <Alert v-if="loadError" variant="destructive" class="space-y-2" data-testid="load-error">

@@ -289,6 +289,16 @@ impl BatleHubClient {
     }
 }
 
+/// The filters of `GET /api/v1/admin/verdicts`; `None` leaves one out.
+#[derive(Default)]
+pub struct VerdictListParams<'a> {
+    pub registry: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub page: Option<u64>,
+    pub per_page: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,14 +338,4 @@ mod tests {
         assert!(!view("denied", &["BLOCK_LIST"], None).waiting_helps());
         assert!(view("warned", &["VULNERABILITY"], None).is_served());
     }
-}
-
-/// The filters of `GET /api/v1/admin/verdicts`; `None` leaves one out.
-#[derive(Default)]
-pub struct VerdictListParams<'a> {
-    pub registry: Option<&'a str>,
-    pub state: Option<&'a str>,
-    pub reason: Option<&'a str>,
-    pub page: Option<u64>,
-    pub per_page: Option<u64>,
 }

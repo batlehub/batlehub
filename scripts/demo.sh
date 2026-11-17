@@ -42,8 +42,8 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 
 log() { printf '\033[1m[demo]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[demo] %s\033[0m\n' "$*" >&2; exit 1; }
-port_up() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-need() { command -v "$1" >/dev/null || die "missing '$1' — $2"; }
+port_up() { local port="$1"; (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; }
+need() { local cmd="$1" hint="$2"; command -v "$cmd" >/dev/null || die "missing '$cmd' — $hint"; }
 
 # A process started detached, its pid kept: never stopped by pattern (a pkill
 # pattern matches the calling shell too).

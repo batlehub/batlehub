@@ -37,7 +37,7 @@ describe("ADMIN_SECTIONS", () => {
 
   it("puts every page in exactly one section", () => {
     const pages = ADMIN_SECTIONS.flatMap((section) => section.pages.map((page) => page.to));
-    expect(pages.length).toBe(new Set(pages).size);
+    expect(pages).toHaveLength(new Set(pages).size);
     for (const section of ADMIN_SECTIONS) {
       const own = section.pages.every((p) => p.to === section.to || p.to.startsWith(section.to));
       expect(own, section.to).toBe(true);

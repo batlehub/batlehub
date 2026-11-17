@@ -67,6 +67,21 @@ function coverageText(o: NonNullable<SecurityOverview["coverage"]>): string {
   return t("securityStatus.coverage", { n: o.unprotected.length, total: upstream });
 }
 
+function domainText(o: SecurityOverview, domain: Domain): string {
+  if (domain === "holds" && o.holds) return holdsText(o.holds);
+  if (domain === "flags" && o.flags) return flagsText(o.flags);
+  if (domain === "scanners" && o.scanners) return scannersText(o.scanners);
+  if (domain === "coverage" && o.coverage) return coverageText(o.coverage);
+  return "";
+}
+
+const DOMAIN_TO: Record<Domain, string> = {
+  holds: "/security/holds",
+  flags: "/security/flags",
+  scanners: "/security/scanners",
+  coverage: "/security/coverage",
+};
+
 const lines = computed<Line[]>(() => {
   const o = props.overview;
   const out: Line[] = [];
@@ -74,24 +89,12 @@ const lines = computed<Line[]>(() => {
     const block = o[domain];
     if (!block) continue;
     const state = block.state as StatusState;
-    const text =
-      state === "unknown"
-        ? t("securityStatus.couldNotRead")
-        : domain === "holds" && o.holds
-          ? holdsText(o.holds)
-          : domain === "flags" && o.flags
-            ? flagsText(o.flags)
-            : domain === "scanners" && o.scanners
-              ? scannersText(o.scanners)
-              : o.coverage
-                ? coverageText(o.coverage)
-                : "";
-    const to = {
-      holds: o.holds?.soc_verdict ? "/security/holds?reason=SOC_VERDICT" : "/security/holds",
-      flags: "/security/flags",
-      scanners: "/security/scanners",
-      coverage: "/security/coverage",
-    }[domain];
+    const text = state === "unknown" ? t("securityStatus.couldNotRead") : domainText(o, domain);
+    // A SOC's hard blocks open the holds page on them.
+    const to =
+      domain === "holds" && o.holds?.soc_verdict
+        ? "/security/holds?reason=SOC_VERDICT"
+        : DOMAIN_TO[domain];
     out.push({ domain, state, text, to });
   }
   return out;

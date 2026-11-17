@@ -71,12 +71,11 @@ const GLYPH: Record<string, string> = {
 const { can } = useAuth();
 // An exemption opens the authorization page only for whoever may read it; the
 // delegated security group (quarantine:read alone) gets the package instead.
-const decisionTo = (d: DecisionItem) =>
-  d.kind === "failed_scan"
-    ? { path: "/security/scanners", query: { tab: "failures" } }
-    : d.kind === "exemption_expiring" && can("authz:read")
-      ? "/admin/access/authorization"
-      : packagePath(d.registry, d.name);
+function decisionTo(d: DecisionItem) {
+  if (d.kind === "failed_scan") return { path: "/security/scanners", query: { tab: "failures" } };
+  if (d.kind === "exemption_expiring" && can("authz:read")) return "/admin/access/authorization";
+  return packagePath(d.registry, d.name);
+}
 /**
  * The decision sources that did not answer (`holds`, `scanners`, `exemptions`,
  * `flags`): the list is then incomplete, and says so rather than reading short.

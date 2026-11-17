@@ -820,6 +820,98 @@ fn has_rule(
 
 /// The security console's overview: one line per domain the caller may
 /// read, and *needs a decision* (RFC 0050 §4.2).
+/// Holds on a SOC hard block in `regs`; returns how many such holds the
+/// counts saw past the rows read, so the exact figure still reaches `total`:
+/// in a mass compromise the SOC must not read "1 000" for "1 400".
+fn hard_block_decisions(
+    src: &HoldsSource,
+    regs: &BTreeSet<String>,
+    out: &mut Vec<DecisionItem>,
+) -> u64 {
+    let listed = src
+        .hard_blocks
+        .iter()
+        .filter(|v| regs.contains(&v.package.registry))
+        .count() as u64;
+    let counted: u64 = src
+        .holds
+        .iter()
+        .filter(|h| regs.contains(&h.registry))
+        .map(|h| h.soc_verdict)
+        .sum();
+    out.extend(
+        src.hard_blocks
+            .iter()
+            .filter(|v| regs.contains(&v.package.registry))
+            .map(|v| DecisionItem {
+                kind: "hold_on_hard_block".into(),
+                registry: v.package.registry.clone(),
+                name: v.package.name.clone(),
+                version: v.package.version.clone(),
+                at: v.evaluated_at,
+                reason_code: Some(ReasonCode::SocVerdict.as_str().to_owned()),
+                pulls_after: None,
+                expires_at: None,
+            }),
+    );
+    counted.saturating_sub(listed)
+}
+
+/// Failed scans in `regs`, one item per version: a version whose rescan
+/// failed again has two failed jobs, newest first.
+fn failed_scan_decisions(
+    src: &ScannersSource,
+    regs: &BTreeSet<String>,
+    out: &mut Vec<DecisionItem>,
+) {
+    let mut seen = BTreeSet::new();
+    for j in src.failed.iter().filter(|j| {
+        regs.contains(&j.package.registry)
+            && seen.insert((
+                j.package.registry.as_str(),
+                j.package.name.as_str(),
+                j.package.version.as_str(),
+            ))
+    }) {
+        out.push(DecisionItem {
+            kind: "failed_scan".into(),
+            registry: j.package.registry.clone(),
+            name: j.package.name.clone(),
+            version: j.package.version.clone(),
+            at: j.completed_at.unwrap_or(j.created_at),
+            reason_code: None,
+            pulls_after: None,
+            expires_at: None,
+        });
+    }
+}
+
+/// Exemptions in `visible` that lapse within seven days.
+fn expiring_exemption_decisions(
+    src: &[ExemptionRow],
+    visible: &BTreeSet<String>,
+    now: DateTime<Utc>,
+    out: &mut Vec<DecisionItem>,
+) {
+    let soon = now + chrono::Duration::days(7);
+    out.extend(
+        src.iter()
+            .filter(|e| {
+                visible.contains(&e.registry) && e.exempt_until > now && e.exempt_until <= soon
+            })
+            .map(|e| DecisionItem {
+                kind: "exemption_expiring".into(),
+                registry: e.registry.clone(),
+                name: e.package.clone(),
+                version: e.version.clone(),
+                at: e.exempt_until,
+                reason_code: None,
+                pulls_after: None,
+                expires_at: Some(e.exempt_until),
+            }),
+    );
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/admin/security/overview",
@@ -880,77 +972,13 @@ pub async fn security_overview(
             }
         }
         if let Ok(src) = &h {
-            // Past the rows read, the exact count still reaches `total`: in a
-            // mass compromise the SOC must not read "1 000" for "1 400".
-            let listed = src
-                .hard_blocks
-                .iter()
-                .filter(|v| regs.contains(&v.package.registry))
-                .count() as u64;
-            let counted: u64 = src
-                .holds
-                .iter()
-                .filter(|h| regs.contains(&h.registry))
-                .map(|h| h.soc_verdict)
-                .sum();
-            unlisted_hard_blocks = counted.saturating_sub(listed);
-            for v in src
-                .hard_blocks
-                .iter()
-                .filter(|v| regs.contains(&v.package.registry))
-            {
-                candidates.push(DecisionItem {
-                    kind: "hold_on_hard_block".into(),
-                    registry: v.package.registry.clone(),
-                    name: v.package.name.clone(),
-                    version: v.package.version.clone(),
-                    at: v.evaluated_at,
-                    reason_code: Some(ReasonCode::SocVerdict.as_str().to_owned()),
-                    pulls_after: None,
-                    expires_at: None,
-                });
-            }
+            unlisted_hard_blocks = hard_block_decisions(src, &regs, &mut candidates);
         }
         if let Ok(src) = &s {
-            // One item per version: a version whose rescan failed again has
-            // two failed jobs, newest first.
-            let mut seen = BTreeSet::new();
-            for j in src.failed.iter().filter(|j| {
-                regs.contains(&j.package.registry)
-                    && seen.insert((
-                        j.package.registry.as_str(),
-                        j.package.name.as_str(),
-                        j.package.version.as_str(),
-                    ))
-            }) {
-                candidates.push(DecisionItem {
-                    kind: "failed_scan".into(),
-                    registry: j.package.registry.clone(),
-                    name: j.package.name.clone(),
-                    version: j.package.version.clone(),
-                    at: j.completed_at.unwrap_or(j.created_at),
-                    reason_code: None,
-                    pulls_after: None,
-                    expires_at: None,
-                });
-            }
+            failed_scan_decisions(src, &regs, &mut candidates);
         }
         if let Ok(src) = &ex {
-            let soon = now + chrono::Duration::days(7);
-            for e in src.iter().filter(|e| {
-                all_visible.contains(&e.registry) && e.exempt_until > now && e.exempt_until <= soon
-            }) {
-                candidates.push(DecisionItem {
-                    kind: "exemption_expiring".into(),
-                    registry: e.registry.clone(),
-                    name: e.package.clone(),
-                    version: e.version.clone(),
-                    at: e.exempt_until,
-                    reason_code: None,
-                    pulls_after: None,
-                    expires_at: Some(e.exempt_until),
-                });
-            }
+            expiring_exemption_decisions(src, &all_visible, now, &mut candidates);
         }
         let coords: Vec<PackageId> = candidates
             .iter()

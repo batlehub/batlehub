@@ -444,75 +444,6 @@ pub async fn run_wait(args: WaitArgs, client: &BatleHubClient, json: bool) -> Re
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn durations_parse_with_or_without_a_unit() {
-        assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
-        assert_eq!(parse_duration("90s").unwrap(), Duration::from_secs(90));
-        assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
-        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert!(parse_duration("2w").is_err());
-        assert!(parse_duration("h").is_err());
-    }
-
-    /// Decision 30 (T11): ATTENTION wins; an UNKNOWN or a block not shown is
-    /// 7, never 0.
-    #[test]
-    fn status_exit_codes() {
-        let line = |s: &str| serde_json::json!({ "state": s });
-        let all = |s: &str| serde_json::json!({ "holds": line(s), "flags": line(s), "scanners": line(s), "coverage": line(s) });
-        assert_eq!(status_exit(&all("ok")), None);
-        assert_eq!(status_exit(&all("unknown")), Some(ExitCode::Partial));
-        let mut body = all("ok");
-        body["holds"] = line("attention");
-        body["flags"] = line("unknown");
-        assert_eq!(status_exit(&body), Some(ExitCode::Failure));
-        let flags_only = serde_json::json!({ "flags": line("ok") });
-        assert_eq!(status_exit(&flags_only), Some(ExitCode::Partial));
-    }
-
-    /// The scanners line names its cause, in the UI's order, and agrees in
-    /// number; coverage counts the registries a profile can protect.
-    #[test]
-    fn status_sentences_name_the_cause() {
-        let scanners = |v: serde_json::Value| status_sentence("scanners", &v);
-        assert_eq!(
-            scanners(serde_json::json!({ "live_workers": 3, "queued": 2, "failed": 0 })),
-            "3 workers running, 2 queued, 0 failed"
-        );
-        assert_eq!(
-            scanners(serde_json::json!({ "live_workers": 1 })),
-            "1 worker running, 0 queued, 0 failed"
-        );
-        assert_eq!(
-            scanners(serde_json::json!({ "never_ran": 1, "scanners_attention": 2 })),
-            "1 scanner never ran"
-        );
-        assert_eq!(
-            scanners(serde_json::json!({ "breaker_open": true, "never_ran": 1 })),
-            "OSV is not answering: scans wait for it"
-        );
-        assert_eq!(
-            scanners(serde_json::json!({ "scanners_attention": 2, "deferred_over_day": 1 })),
-            "2 scanners failing since their last success"
-        );
-        assert_eq!(
-            scanners(serde_json::json!({ "uncovered": ["npm"], "breaker_open": true })),
-            "no live worker covers npm: new versions stay held"
-        );
-        assert_eq!(
-            status_sentence(
-                "coverage",
-                &serde_json::json!({ "registries": 5, "upstream": 3, "protected": 3, "unprotected": [] })
-            ),
-            "all 3 registries are protected"
-        );
-    }
-}
-
 // ── `security status` (RFC 0050 §4.5) ────────────────────────────────────────
 
 #[derive(clap::Subcommand, Debug)]
@@ -668,5 +599,74 @@ async fn security_status(client: &BatleHubClient, json: bool) -> Result<()> {
         Some(code) if json => Err(CliError::reported(code).into()),
         Some(code) => Err(CliError::quiet(code).into()),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_parse_with_or_without_a_unit() {
+        assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
+        assert_eq!(parse_duration("90s").unwrap(), Duration::from_secs(90));
+        assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
+        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
+        assert!(parse_duration("2w").is_err());
+        assert!(parse_duration("h").is_err());
+    }
+
+    /// Decision 30 (T11): ATTENTION wins; an UNKNOWN or a block not shown is
+    /// 7, never 0.
+    #[test]
+    fn status_exit_codes() {
+        let line = |s: &str| serde_json::json!({ "state": s });
+        let all = |s: &str| serde_json::json!({ "holds": line(s), "flags": line(s), "scanners": line(s), "coverage": line(s) });
+        assert_eq!(status_exit(&all("ok")), None);
+        assert_eq!(status_exit(&all("unknown")), Some(ExitCode::Partial));
+        let mut body = all("ok");
+        body["holds"] = line("attention");
+        body["flags"] = line("unknown");
+        assert_eq!(status_exit(&body), Some(ExitCode::Failure));
+        let flags_only = serde_json::json!({ "flags": line("ok") });
+        assert_eq!(status_exit(&flags_only), Some(ExitCode::Partial));
+    }
+
+    /// The scanners line names its cause, in the UI's order, and agrees in
+    /// number; coverage counts the registries a profile can protect.
+    #[test]
+    fn status_sentences_name_the_cause() {
+        let scanners = |v: serde_json::Value| status_sentence("scanners", &v);
+        assert_eq!(
+            scanners(serde_json::json!({ "live_workers": 3, "queued": 2, "failed": 0 })),
+            "3 workers running, 2 queued, 0 failed"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "live_workers": 1 })),
+            "1 worker running, 0 queued, 0 failed"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "never_ran": 1, "scanners_attention": 2 })),
+            "1 scanner never ran"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "breaker_open": true, "never_ran": 1 })),
+            "OSV is not answering: scans wait for it"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "scanners_attention": 2, "deferred_over_day": 1 })),
+            "2 scanners failing since their last success"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "uncovered": ["npm"], "breaker_open": true })),
+            "no live worker covers npm: new versions stay held"
+        );
+        assert_eq!(
+            status_sentence(
+                "coverage",
+                &serde_json::json!({ "registries": 5, "upstream": 3, "protected": 3, "unprotected": [] })
+            ),
+            "all 3 registries are protected"
+        );
     }
 }

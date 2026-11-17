@@ -93,7 +93,8 @@ const quiet = computed(() => {
       :description="t('instanceSecurity.description')"
     >
       <template #actions>
-        <div class="flex" role="group" :aria-label="t('instanceSecurity.window')">
+        <fieldset class="flex min-w-0">
+          <legend class="sr-only">{{ t("instanceSecurity.window") }}</legend>
           <Button
             v-for="w in WINDOWS"
             :key="w"
@@ -103,7 +104,7 @@ const quiet = computed(() => {
             @click="windowSel = w"
             >{{ t(WINDOW_LABEL[w]) }}</Button
           >
-        </div>
+        </fieldset>
       </template>
     </PageHeader>
 

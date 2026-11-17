@@ -51,11 +51,15 @@ const withFlags = computed(() => can("flags:read"));
 
 const registries = ref<string[]>([]);
 // The picker is a convenience: without it, "all registries" still works.
-securityCoverage()
-  .then(({ data }) => {
+async function loadRegistries() {
+  try {
+    const { data } = await securityCoverage();
     registries.value = (data?.registries ?? []).filter((r) => r.protected).map((r) => r.registry);
-  })
-  .catch(() => {});
+  } catch {
+    // Left empty: the picker then offers "all registries" alone.
+  }
+}
+void loadRegistries();
 const registryOptions = computed(() => [
   { value: "", label: t("securityTrends.allRegistries") },
   ...registries.value.map((r) => ({ value: r, label: r })),
@@ -178,8 +182,8 @@ const cell = (v: number | null | undefined) => (v == null ? t("trendChart.noData
     />
 
     <div class="flex flex-wrap items-end gap-4">
-      <div class="space-y-1" role="group" :aria-label="t('securityTrends.window')">
-        <p class="text-xs text-muted-foreground">{{ t("securityTrends.window") }}</p>
+      <fieldset class="min-w-0 space-y-1">
+        <legend class="text-xs text-muted-foreground">{{ t("securityTrends.window") }}</legend>
         <div class="flex">
           <Button
             v-for="w in WINDOWS"
@@ -191,7 +195,7 @@ const cell = (v: number | null | undefined) => (v == null ? t("trendChart.noData
             >{{ w }}</Button
           >
         </div>
-      </div>
+      </fieldset>
       <div class="space-y-1">
         <Label for="trends-registry">{{ t("common.registry") }}</Label>
         <Select id="trends-registry" v-model="registry" :options="registryOptions" />

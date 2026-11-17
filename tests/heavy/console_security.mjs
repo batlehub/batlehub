@@ -82,8 +82,8 @@ try {
     .then(() =>
       page.$$eval("[data-testid^='status-']", (els) =>
         els.map((e) => ({
-          line: e.getAttribute("data-testid"),
-          state: e.querySelector("[data-state]")?.getAttribute("data-state") ?? null,
+          line: e.dataset.testid,
+          state: e.querySelector("[data-state]")?.dataset.state ?? null,
         })),
       ),
     )

@@ -53,11 +53,15 @@ const goTo = (p: number) =>
 
 const registries = ref<string[]>([]);
 // The picker is a convenience: without it, "every registry" still works.
-securityCoverage()
-  .then(({ data }) => {
+async function loadRegistries() {
+  try {
+    const { data } = await securityCoverage();
     registries.value = (data?.registries ?? []).filter((r) => r.protected).map((r) => r.registry);
-  })
-  .catch(() => {});
+  } catch {
+    // Left empty: the picker then offers "all registries" alone.
+  }
+}
+void loadRegistries();
 const registryOptions = computed(() => [
   { value: "", label: t("heldVersions.allRegistries") },
   ...registries.value.map((r) => ({ value: r, label: r })),
