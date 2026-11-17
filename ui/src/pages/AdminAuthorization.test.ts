@@ -78,7 +78,7 @@ beforeEach(() => {
   mockRoute = { query: {} };
   mocks.authzShadow.mockResolvedValue(noShadow);
   mocks.listExemptions.mockResolvedValue({ data: [] });
-  mocks.auditLog.mockResolvedValue({ data: [] });
+  mocks.auditLog.mockResolvedValue({ data: { items: [], page: 0, per_page: 25, total: 0 } });
   mocks.listRegistries.mockResolvedValue({ data: [] });
   mocks.explorePackages.mockResolvedValue({ data: { packages: [] } });
   mocks.explorePackageDetail.mockResolvedValue({ data: { versions: [] } });
@@ -337,37 +337,50 @@ describe("the authorization page", () => {
   });
 
   /**
-   * The audit endpoint answers with an envelope, and the denials panel reads
-   * either shape.
-   *
-   * A bare array is what the in-memory adapter returns and `{ events: [...] }`
-   * is what the paginated one does; reading only the first renders an empty
-   * "no denials" panel against a server that is refusing requests.
+   * The denials panel asks the audit log for refusals only and reads its real
+   * envelope (`items`, rows with a `PackageId` object and the reason inside
+   * `result`). It used to send `result: "denied"` and read `events` behind an
+   * `as never` cast, so against a refusing server it always said "nothing
+   * refused" — and this test, written to the same wrong shape, agreed.
    */
-  it("reads denials out of the events envelope", async () => {
+  it("asks for refusals only and reads the audit log's real envelope", async () => {
     mocks.auditLog.mockResolvedValue({
       data: {
-        events: [
+        items: [
           {
+            id: "e1",
             timestamp: "2026-08-29T10:00:00Z",
             user_id: "alice",
-            package_id: "npm1/lodash@1.0.0",
-            action: "releases:read",
-            reason: "no grant",
+            user_role: "user",
+            package_id: { registry: "npm1", name: "lodash", version: "1.0.0" },
+            action: "download",
+            result: { outcome: "denied", reason: "no grant" },
           },
           // Every optional column absent: the row still has to render, with a
           // placeholder rather than "undefined".
-          { timestamp: "2026-08-29T11:00:00Z" },
+          {
+            id: "e2",
+            timestamp: "2026-08-29T11:00:00Z",
+            user_role: "anonymous",
+            action: "credentialrejected",
+            result: { outcome: "denied", reason: "no provider accepted it" },
+          },
         ],
+        page: 0,
+        per_page: 25,
+        total: 2,
       },
     });
     const w = await mountPage();
 
+    expect(mocks.auditLog).toHaveBeenCalledWith({ query: { denied_only: true, per_page: 25 } });
     const panel = w.get('[data-testid="panel-denials"]').text();
     expect(panel).toContain("alice");
     expect(panel).toContain("npm1/lodash@1.0.0");
     expect(panel).toContain("no grant");
+    expect(panel).toContain("no provider accepted it");
     expect(panel).not.toContain("undefined");
+    expect(panel).not.toContain("[object Object]");
   });
 
   /** All five panels §4.8 names are on the page. */
