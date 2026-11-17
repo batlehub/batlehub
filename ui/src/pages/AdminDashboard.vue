@@ -292,14 +292,14 @@ const trendText = computed(() => {
       >
         <li
           v-if="securityWarnings || configLineUnknown"
-          class="flex flex-col gap-1 py-2 sm:flex-row sm:items-baseline sm:gap-3"
+          class="flex flex-col gap-1 py-2 lg:flex-row lg:items-baseline lg:gap-3"
           data-testid="status-config"
         >
           <StateMark
             :state="!securityWarnings ? 'unknown' : securityWarnings.length ? 'attention' : 'ok'"
           />
           <span class="w-40 shrink-0 font-mono text-sm">{{ t("instanceSecurity.config") }}</span>
-          <span class="flex-1 text-sm">{{
+          <span class="min-w-0 flex-1 text-sm">{{
             !securityWarnings
               ? t("securityStatus.couldNotRead")
               : viaInstance

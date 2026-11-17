@@ -102,13 +102,21 @@ async fn repeated_increments_accumulate() {
 #[tokio::test]
 async fn independent_keys_do_not_interfere() {
     let Some(url) = db_url() else { return };
-    let s = make_store(&url).await;
-    let (a, _) = s.store.increment(&s.key("a"), 60).await.unwrap();
-    let (b, _) = s.store.increment(&s.key("b"), 60).await.unwrap();
-    let (a2, _) = s.store.increment(&s.key("a"), 60).await.unwrap();
-    assert_eq!(a, 1);
-    assert_eq!(b, 1);
-    assert_eq!(a2, 2, "second increment for 'a' should be 2");
+    // The window is wall-clock aligned: if it rolls between the calls, the
+    // counters legitimately restart, so retry on fresh keys (once is enough).
+    for attempt in 0..2 {
+        let s = make_store(&url).await;
+        let (a, wa) = s.store.increment(&s.key("a"), 60).await.unwrap();
+        let (b, _) = s.store.increment(&s.key("b"), 60).await.unwrap();
+        let (a2, wa2) = s.store.increment(&s.key("a"), 60).await.unwrap();
+        if wa != wa2 && attempt == 0 {
+            continue;
+        }
+        assert_eq!(a, 1);
+        assert_eq!(b, 1);
+        assert_eq!(a2, 2, "second increment for 'a' should be 2");
+        return;
+    }
 }
 
 #[tokio::test]
