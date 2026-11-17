@@ -48,7 +48,7 @@ async function mountPage() {
     // `Dialog` teleports, so the tree has to be in the document for the
     // dialog's own content to be reachable at all.
     attachTo: document.body,
-    global: { stubs: { RouterLink: { template: "<a><slot /></a>" }, SectionTabs: true } },
+    global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } },
   });
   await flushPromises();
   active = wrapper;

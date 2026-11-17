@@ -8,6 +8,13 @@ vi.mock("@/client/client.gen", () => ({ client: { setConfig: vi.fn() } }));
 import { router } from "@/router";
 import { ADMIN_PAGE_VERBS, ADMIN_SECTIONS, firstAdminPage } from "./adminSections";
 import { LEGACY_REDIRECTS, SECTION_INDEXES } from "./navigation";
+import { RED_PATHS } from "./redPaths";
+import {
+  firstSecurityPage,
+  SECURITY_PAGE_VERBS,
+  SECURITY_SECTIONS,
+  securitySectionOf,
+} from "./securitySections";
 
 /** The router's `/admin` children that render a page (not the redirects). */
 const adminPageRoutes = router
@@ -44,7 +51,8 @@ describe("ADMIN_SECTIONS", () => {
 
   it("points every legacy redirect and section index at a route", () => {
     for (const [from, to] of Object.entries({ ...LEGACY_REDIRECTS, ...SECTION_INDEXES })) {
-      expect(router.resolve(to).matched.length, `${from} → ${to}`).toBeGreaterThan(0);
+      const path = to.split("#")[0] ?? to;
+      expect(router.resolve(path).matched.length, `${from} → ${to}`).toBeGreaterThan(0);
     }
   });
 
@@ -54,7 +62,9 @@ describe("ADMIN_SECTIONS", () => {
    * here so a reorder of the table shows up as a unit failure first.
    */
   it.each<[string[], string | undefined]>([
-    [["quarantine:read", "findings:read", "flags:read", "audit:read"], "/admin/security/scans"],
+    // RFC 0050: scans left the admin, so the security group's first admin
+    // page is the audit log.
+    [["quarantine:read", "findings:read", "flags:read", "audit:read"], "/admin/system/audit-log"],
     [["audit:read"], "/admin/system/audit-log"],
     [["stats:read", "config:read"], "/admin/dashboard"],
     [["config:read"], "/admin/system/configuration"],
@@ -62,5 +72,61 @@ describe("ADMIN_SECTIONS", () => {
     [[], undefined],
   ])("lands %j on %s", (verbs, landing) => {
     expect(firstAdminPage((v) => verbs.includes(v))).toBe(landing);
+  });
+});
+
+/** RFC 0050 §6.6: the security space's table, checked against the router the same way (T9). */
+describe("SECURITY_SECTIONS", () => {
+  const securityRoutes = router
+    .getRoutes()
+    .filter(
+      (r) =>
+        (r.path === "/security" || r.path.startsWith("/security/")) &&
+        r.components &&
+        r.children.length === 0,
+    );
+
+  it("gives every /security route a meta verb", () => {
+    expect(securityRoutes.filter((r) => r.meta.verb === undefined).map((r) => r.path)).toEqual([]);
+  });
+
+  it("routes exactly the table's pages, plus one registry's coverage", () => {
+    const routed = securityRoutes.map((r) => r.path).filter((p) => !p.includes(":"));
+    expect(new Set(routed)).toEqual(new Set(Object.keys(SECURITY_PAGE_VERBS)));
+    expect(securityRoutes.filter((r) => r.path.includes(":")).map((r) => r.path)).toEqual([
+      "/security/coverage/:registry",
+    ]);
+  });
+
+  it("names every page once", () => {
+    const pages = SECURITY_SECTIONS.flatMap((s) => s.pages.map((p) => p.to));
+    expect(pages.length).toBe(new Set(pages).size);
+  });
+
+  /** §4.2: the space opens on the first page the viewer may read. */
+  it.each<[string[], string | undefined]>([
+    [["quarantine:read"], "/security"],
+    [["flags:read"], "/security"],
+    [["findings:read"], "/security/findings"],
+    [["audit:read"], "/security/exposure"],
+    [[], undefined],
+  ])("opens %j on %s", (verbs, landing) => {
+    expect(firstSecurityPage((v) => verbs.includes(v))).toBe(landing);
+  });
+
+  it("finds a path's group by its longest page, the overview prefixing all", () => {
+    expect(securitySectionOf("/security/holds")?.to).toBe("/security/triage");
+    expect(securitySectionOf("/security/coverage/npm")?.to).toBe("/security/follow-up");
+    expect(securitySectionOf("/security")?.to).toBe("/security");
+  });
+});
+
+/** RFC 0050 §6.6: a red path whose target has no verb would vanish from the palette. */
+describe("RED_PATHS", () => {
+  it("resolves every target to a verb", () => {
+    const missing = RED_PATHS.filter(
+      (rp) => !(rp.verb ?? ADMIN_PAGE_VERBS[rp.to] ?? SECURITY_PAGE_VERBS[rp.to]),
+    ).map((rp) => rp.id);
+    expect(missing).toEqual([]);
   });
 });

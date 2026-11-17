@@ -18,6 +18,15 @@ impl Role {
     }
 }
 
+/// Whether a static token's configured value is an argon2 PHC hash. The one
+/// rule both the verifier (which compares anything else in clear) and the
+/// config's plain-token warning read, so they cannot disagree.
+pub fn is_argon2_hash(s: &str) -> bool {
+    ["$argon2id$", "$argon2i$", "$argon2d$"]
+        .iter()
+        .any(|p| s.starts_with(p))
+}
+
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

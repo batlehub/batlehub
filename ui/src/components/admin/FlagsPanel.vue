@@ -18,6 +18,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { formatDay } from "@/lib/format";
+import CodeLabel from "@/components/admin/CodeLabel.vue";
+import { FLAG_EFFECT_LABEL_KEYS } from "@/config/codeLabels";
 
 /**
  * What every `[[flag_sources]]` entry has said (RFC 0002 §4.5): which source
@@ -109,7 +111,7 @@ onMounted(load);
       <CardTitle :count="total">{{ t("flagsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground">{{ t("flagsPanel.intro") }}</p>
+      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("flagsPanel.intro") }}</p>
 
       <div class="flex items-center gap-2">
         <Switch
@@ -129,7 +131,7 @@ onMounted(load);
         :empty-message="t('flagsPanel.empty')"
         :on-retry="load"
       >
-        <Table :label="t('flagsPanel.title')" data-testid="flags-rows">
+        <Table stacked :label="t('flagsPanel.title')" data-testid="flags-rows">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("flagsPanel.source") }}</TableHead>
@@ -142,15 +144,21 @@ onMounted(load);
           </TableHeader>
           <TableBody>
             <TableRow v-for="f in items" :key="f.id">
-              <TableCell class="font-mono text-xs">{{ f.source }}:{{ f.external_id }}</TableCell>
+              <TableCell class="font-mono text-xs" :label="t('flagsPanel.source')"
+                >{{ f.source }}:{{ f.external_id }}</TableCell
+              >
               <TableCell class="font-mono text-sm">
                 {{ f.registry }}/{{ f.package_name }}@{{ f.version }}
               </TableCell>
-              <TableCell>
-                <Badge :variant="effectVariant(f.effect)" class="text-xs">{{ f.effect }}</Badge>
+              <TableCell :label="t('flagsPanel.effect')">
+                <Badge :variant="effectVariant(f.effect)" class="text-xs">
+                  <CodeLabel :code="f.effect" :labels="FLAG_EFFECT_LABEL_KEYS" />
+                </Badge>
               </TableCell>
-              <TableCell class="font-mono text-xs">{{ f.kind }}</TableCell>
-              <TableCell class="text-xs">{{ state(f) }}</TableCell>
+              <TableCell class="font-mono text-xs" :label="t('flagsPanel.kind')">{{
+                f.kind
+              }}</TableCell>
+              <TableCell class="text-xs" :label="t('flagsPanel.state')">{{ state(f) }}</TableCell>
               <TableCell class="text-sm">
                 {{ f.summary }}
                 <a

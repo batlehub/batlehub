@@ -7,8 +7,6 @@ import { RefreshCw } from "@lucide/vue";
 
 import { listFindings, listRegistries, setGateExemption } from "@/client/sdk.gen";
 import type { FindingListRow, FindingsPage } from "@/client/types.gen";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SECURITY_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Alert } from "@/components/ui/alert";
@@ -72,7 +70,9 @@ usePreselectRegistry(
 const severity = ref("");
 const scanner = ref("");
 const reference = ref("");
-const verdict = ref("");
+// `?verdict=` preselects the state: the holds summary links here with `denied`.
+const askedVerdict = String(route.query.verdict ?? "");
+const verdict = ref((VERDICTS as readonly string[]).includes(askedVerdict) ? askedVerdict : "");
 const page = ref(0);
 const result = ref<FindingsPage | null>(null);
 const loading = ref(false);
@@ -170,6 +170,8 @@ watch([scanner, reference], () => {
   }, 300);
 });
 
+/** RFC 0050 §6.7: the ACTIONS column only when a row on the page can be exempted. */
+const anyExemptable = computed(() => (result.value?.items ?? []).some((r) => r.can_exempt));
 const coord = (r: FindingListRow) => `${r.registry}/${r.name}@${r.version}`;
 const packageHref = (r: FindingListRow) =>
   `/packages/${encodeURIComponent(r.registry)}/${encodeURIComponent(r.name)}`;
@@ -282,7 +284,6 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SECURITY_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"
@@ -373,13 +374,13 @@ onMounted(async () => {
                   <TableHead>{{ t("adminFindings.reference") }}</TableHead>
                   <TableHead>{{ t("adminFindings.summary") }}</TableHead>
                   <TableHead>{{ t("adminScans.verdict") }}</TableHead>
-                  <TableHead>{{ t("common.actions") }}</TableHead>
+                  <TableHead v-if="anyExemptable">{{ t("common.actions") }}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 <template v-for="(g, gi) in groups" :key="gi">
                   <TableRow v-if="byReference" class="bg-muted/40" data-testid="group-header">
-                    <TableCell colspan="7" class="text-sm">
+                    <TableCell :colspan="anyExemptable ? 7 : 6" class="text-sm">
                       <span class="font-mono font-medium">{{
                         g.reference || t("adminFindings.noReference")
                       }}</span>
@@ -397,7 +398,7 @@ onMounted(async () => {
                     data-testid="finding-row"
                   >
                     <TableCell class="font-mono text-xs">
-                      <RouterLink :to="packageHref(row)" class="hover:underline">{{
+                      <RouterLink :to="packageHref(row)" class="underline underline-offset-[3px]">{{
                         coord(row)
                       }}</RouterLink>
                     </TableCell>
@@ -414,7 +415,7 @@ onMounted(async () => {
                         verdictWord(row.verdict)
                       }}</Badge>
                     </TableCell>
-                    <TableCell>
+                    <TableCell v-if="anyExemptable">
                       <Button
                         v-if="row.can_exempt"
                         size="sm"

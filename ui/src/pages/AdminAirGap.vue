@@ -4,8 +4,6 @@ import { useI18n } from "vue-i18n";
 
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { AsyncState } from "@/components/ui/async-state";
@@ -18,7 +16,7 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
-import { formatDate } from "@/lib/format";
+import { DateTime } from "@/components/ui/date-time";
 
 /**
  * The air gap (RFC 0008 §6.6): what came across it, and what this instance
@@ -133,7 +131,6 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader :title="t('airGap.title')" variant="display" />
 
     <!-- Every panel below reads the one load: a failed load says so in place of
@@ -178,7 +175,7 @@ onMounted(load);
                   <TableCell class="font-mono text-xs">{{ b.bundle_id }}</TableCell>
                   <TableCell class="font-mono text-xs">{{ shortKey(b.signer_key) }}</TableCell>
                   <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                    {{ formatDate(b.imported_at) }}
+                    <DateTime :iso="b.imported_at" />
                     <span v-if="b.imported_by" class="text-muted-foreground">
                       — {{ b.imported_by }}
                     </span>
@@ -232,7 +229,7 @@ onMounted(load);
                   </TableCell>
                   <TableCell class="tabular-nums">{{ m.count }}</TableCell>
                   <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                    {{ formatDate(m.last_seen) }}
+                    <DateTime :iso="m.last_seen" />
                   </TableCell>
                 </TableRow>
               </TableBody>

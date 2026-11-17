@@ -19,7 +19,7 @@ vi.mock("vue-router", () => ({
 const fetchSpy = vi.fn();
 globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-import AdminAccessCheck from "./AdminAccessCheck.vue";
+import AuthzSimulatePanel from "./AuthzSimulatePanel.vue";
 
 const answer = (over: Record<string, unknown> = {}) => ({
   data: {
@@ -33,7 +33,7 @@ const answer = (over: Record<string, unknown> = {}) => ({
 });
 
 async function mountPage() {
-  const wrapper = mount(AdminAccessCheck, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AuthzSimulatePanel);
   await flushPromises();
   return wrapper;
 }
@@ -53,7 +53,7 @@ const uncovered = (w: Awaited<ReturnType<typeof mountPage>>) =>
  * §4.3 asks for two assertions: the query prefills, and the SDK is called
  * rather than `window.fetch`.
  */
-describe("AdminAccessCheck", () => {
+describe("AuthzSimulatePanel (RFC 0050 §17.8)", () => {
   beforeEach(() => {
     mockRoute = { query: {} };
     fetchSpy.mockReset();
@@ -79,6 +79,14 @@ describe("AdminAccessCheck", () => {
     expect(vm(wrapper).packageName).toBe("left-pad");
     expect(vm(wrapper).version).toBe("1.3.0");
     expect(vm(wrapper).userId).toBe("oidc:alice");
+  });
+
+  it("prefills the client address too, which Explain has no field for", async () => {
+    mockRoute = { query: { client_ip: "10.0.0.7", role: "user" } };
+    const wrapper = await mountPage();
+    const state = wrapper.vm as unknown as { clientIp: string; role: string };
+    expect(state.clientIp).toBe("10.0.0.7");
+    expect(state.role).toBe("user");
   });
 
   /**

@@ -10,6 +10,7 @@ pub mod flags;
 pub mod gdpr;
 pub mod governance;
 pub mod health;
+pub mod instance_security;
 pub mod notification;
 pub mod ops;
 pub mod packages;

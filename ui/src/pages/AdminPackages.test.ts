@@ -68,7 +68,7 @@ const SelectStub = {
 async function mountPage() {
   const wrapper = mount(AdminPackages, {
     attachTo: document.body,
-    global: { stubs: { SectionTabs: true, Select: SelectStub } },
+    global: { stubs: { Select: SelectStub } },
   });
   await flushPromises();
   return wrapper;
@@ -750,7 +750,7 @@ describe("AdminPackages row identity", () => {
     mocks.listPackages.mockResolvedValue(listing([named("zulu"), named("beta"), named("gamma")]));
     const wrapper = mount(AdminPackages, {
       attachTo: document.body,
-      global: { stubs: { SectionTabs: true } },
+      global: { stubs: {} },
     });
     await flushPromises();
     return wrapper;

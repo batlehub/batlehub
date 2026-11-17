@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/siem.md
-sourceHash: ba14a10b7f3855e0
+sourceHash: b733386cb4baba11
 ---
 
 # Intégration SIEM
@@ -83,10 +83,15 @@ d'autorisation ou un mot de passe.
 **`credential_rejected` est limité** : une ligne par IP source et par minute,
 par processus serveur. Les tentatives retenues sont comptées, et le compte
 voyage sur la ligne *suivante* écrite pour cette IP, dans
-`batlehub.audit.throttled_count`. Une rafale de vingt et une tentatives
-refusées en une minute donne donc une ligne avec un compte de 0, puis — si les
-tentatives continuent — une ligne une minute plus tard avec un compte de 20.
-Avec *n* réplicas, chacun écrit ses propres lignes.
+`batlehub.audit.throttled_count`. Si aucune tentative ne suit, le serveur
+écrit lui-même cette ligne dans les 10 secondes après la fin de la fenêtre,
+70 secondes au plus après la première tentative (et à un arrêt propre) : elle n'a pas d'user-agent, son heure est celle
+de son écriture, et elle représente l'une des tentatives retenues, donc son
+compte est celui des autres. Dans tous les cas, un plus `throttled_count`,
+additionné sur les lignes, donne le nombre de tentatives. Une rafale de vingt et
+une tentatives refusées en une minute qui s'arrête donne donc une ligne avec un
+compte de 0, puis une ligne avec un compte de 19. Un processus qui plante perd
+ce qu'il avait retenu. Avec *n* réplicas, chacun écrit ses propres lignes.
 
 **`token_new_source`** est vérifié au moment où la date de dernière
 utilisation du token est écrite, au plus une fois par minute et par token. Un

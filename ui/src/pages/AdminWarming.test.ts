@@ -28,7 +28,7 @@ function routes(warmResult: Record<string, unknown>) {
 }
 
 async function mountPage() {
-  const wrapper = mount(AdminWarming, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AdminWarming, { global: { stubs: {} } });
   await flushPromises();
   return wrapper;
 }

@@ -39,7 +39,8 @@ const props = defineProps<{ registries: string[] }>();
 
 type Mode = "package" | "path";
 
-const registry = ref("");
+// One registry's page hands its own name: chosen already.
+const registry = ref(props.registries.length === 1 ? (props.registries[0] ?? "") : "");
 const mode = ref<Mode>("package");
 const name = ref("");
 const version = ref("");

@@ -14,7 +14,7 @@ const CSV = "npm,left-pad,1.0.0,,CVE-2026-1\nnpm,is-odd,2.0.0,,CVE-2026-2";
 
 async function mountPage() {
   const wrapper = mount(AdminBulk, {
-    global: { stubs: { RouterLink: { template: "<a><slot /></a>" }, SectionTabs: true } },
+    global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } },
   });
   await flushPromises();
   return wrapper;

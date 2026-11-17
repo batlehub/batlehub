@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/installation.md
-sourceHash: a56638ca9a24903b
+sourceHash: 975db0642cd255a8
 ---
 
 # Installation
@@ -24,6 +24,7 @@ tranché pour vous.
 | [Binaire précompilé](/fr/guide/install/binary) | vous ne faites pas tourner de conteneurs |
 | [Depuis les sources](/fr/guide/install/source) | vous modifiez le code, ou visez une plateforme qu'aucune release ne couvre |
 | [Chart Helm](/fr/guide/install/helm) | vous déployez sur Kubernetes — trois fichiers de valeurs complets, d'un réplica à la production |
+| [La démo](/fr/guide/install/demo) | vous voulez voir chaque page de la console avec des données, depuis une copie du dépôt, en une commande — pas pour un serveur que vous gardez |
 
 ---
 

@@ -22,14 +22,14 @@ console's *Go to…* palette.
 
 | What happened | Where | Palette |
 | --- | --- | --- |
-| "I can't download X" | *Access → Access check* (`/admin/access/check`) | `refused` |
+| "I can't download X" | *Access → Authorization*, the *Simulate* panel (`/admin/access/authorization#simulate`) | `refused` |
 | An upstream is degraded | the registry's page, then *Registries → Upstream* (`/admin/registries/upstream`) | `upstream` |
 | One registry's config must change | the registry's page → *Edit configuration*, which opens *System → Configuration* on its block | `config` |
-| A CVE: which versions carry it? | *Security → Findings* (`/admin/security/findings`) | `cve` |
-| A scan failed | *Security → Scans*, failures tab (`/admin/security/scans?tab=failures`) | `rescan` |
+| A CVE: which versions carry it? | *Security → Findings* (`/security/findings`) | `cve` |
+| A scan failed | *Security → Scanners & worker*, failures tab (`/security/scanners?tab=failures`) | `rescan` |
 | Block one version | the package's page, *Admin* tab | `block` |
 | Block many versions | *Packages → Block in bulk* (`/admin/packages/bulk`) | `bulk` |
-| A leaked token or an abusive address | *Access → Blocked accounts & addresses* (`/admin/access/blocks`) | `token` |
+| A leaked token or an abusive address | *Instance security → Blocked accounts & addresses* (`/admin/instance-security/blocks`) | `token` |
 | A package looks stale | *System → Health & cache* → *Refresh explorer* (`/admin/system/health`) | `stale` |
 | Who did this? | *System → Audit log* (`/admin/system/audit-log`) | `audit` |
 | Announce maintenance | *System → Global banner* (`/admin/system/banner`) | `banner` |
@@ -42,3 +42,25 @@ history shown on *System → Configuration*.
 
 Bookmarks to the pages' former addresses, from before the sections above,
 keep working: each redirects to its new page with its query string.
+
+## The console's two spaces
+
+The console has two sidebars ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)):
+
+- **`/admin`** — the instance: registries, packages, access, **Instance
+  security** and system. *Instance security* (`/admin/instance-security`,
+  `system:read`) says what concerns this server itself over the last 24 hours
+  or 7 days: rejected credentials and their addresses, banned addresses, tokens
+  used from a new address, static tokens still stored in clear, exemptions that
+  end within a week, and the security warnings of the configuration. Addresses
+  and user ids appear only with `audit:read`. Its *Blocked accounts &
+  addresses* page is the former *Access → Blocks*.
+- **`/security`** — the packages: an **overview** that says, per domain, whether
+  anything needs attention (holds, flags, scanners & worker, coverage), then
+  *Triage* (holds, findings, flags, exposure) and *Follow-up* (trends,
+  coverage, scanners & worker). It opens on the first page your verbs read;
+  see [Security gates](/guide/security-gates#console).
+
+The admin dashboard carries the same security lines, one per domain your verbs
+read. Each sidebar group opens and closes, and the browser remembers which you
+opened; the group holding the current page is always open.

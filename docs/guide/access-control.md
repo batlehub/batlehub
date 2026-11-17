@@ -456,7 +456,7 @@ badly-named or duplicate version is accepted, so bad data lands but nothing leak
 
 ### Watching it {#watching}
 
-**`/admin/access/authorization`** gathers the five things that are otherwise
+**`/admin/access/authorization`** gathers the six things that are otherwise
 scattered:
 
 | Panel | Answers |
@@ -464,10 +464,11 @@ scattered:
 | **Shadow** | what is being served that grants would refuse, per node, with each expiry |
 | **Exemptions** | live gate exemptions, their expiry and reason, filterable to the self-approved ones |
 | **Explain** | resolve any subject against any coordinate, with provenance |
+| **Simulate** | run a whole download for an identity — blocks, gates and groups — and say whether it is served (`#simulate`; old access-check bookmarks land here) |
 | **Recent denials** | what has actually been refused |
 | **Retention** | where to review what a live run would reclaim |
 
-Three of those five are the fail-open or destructive directions of features
+Three of those six are the fail-open or destructive directions of features
 decided elsewhere. They are on one page on purpose: individually each is easy to
 forget, and collectively they are the list of everything currently trusting you
 to remember.

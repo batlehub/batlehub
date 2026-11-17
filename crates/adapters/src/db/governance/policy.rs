@@ -295,17 +295,19 @@ impl PolicyRepository for PgPolicyRepository {
 
     async fn exemptions_in_registry(&self, registry: &str) -> Result<Vec<StoredPolicy>, CoreError> {
         // `@>` against a one-element array: "the `rules` array contains an object
-        // with `exempt: true`". The GIN-friendly containment operator rather
-        // than an unrolled `jsonb_array_elements`, and the shape matters — a
-        // rule override that merely *mentions* the gate is not an exemption, so
-        // the predicate has to be about the flag rather than about the key.
+        // whose `settings` carry `exempt: true`" — a rule is stored as
+        // `{"gate", "settings": {"exempt", …}}`, so a top-level `exempt` matched
+        // nothing and every exemption was invisible. The GIN-friendly
+        // containment operator rather than an unrolled `jsonb_array_elements`,
+        // and the shape matters — a rule override that merely *mentions* the
+        // gate is not an exemption, so the predicate is about the flag.
         let rows = sqlx::query(
             "SELECT registry, node_kind, node_key, visibility, prerelease_visibility, \
                     versioning, quota, rules, set_by \
              FROM policy \
              WHERE registry = $1 \
                AND node_kind = 'version' \
-               AND rules @> '[{\"exempt\": true}]'::jsonb \
+               AND rules @> '[{\"settings\": {\"exempt\": true}}]'::jsonb \
              ORDER BY node_key",
         )
         .bind(registry)

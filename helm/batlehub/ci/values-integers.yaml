@@ -17,7 +17,7 @@ config:
     pseudonymise_after_days: 7
     seal_interval_secs: 3600
   air_gap: {miss_retention_days: 30}
-  stats: {history_retention_days: 90}
+  stats: {history_retention_days: 90, security_history_retention_days: 90}
   vulnerability_scan: {interval_secs: 3600, batch_size: 50}
   upstream_audit: {interval_secs: 3600, confirm_after: 3, confirm_min_age_secs: 600, outage_ratio: 0.5}
   cache_coherence: {interval_secs: 300}

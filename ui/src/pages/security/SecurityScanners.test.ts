@@ -15,6 +15,16 @@ vi.mock("@/client/sdk.gen", () => ({
   listVerdicts: listVerdictsMock,
   rescanVerdict: rescanVerdictMock,
   listRegistries: listRegistriesMock,
+  // The health block on top (RFC 0050 §4.5) — its own tests are the block's.
+  securityScanners: () =>
+    Promise.resolve({
+      data: {
+        computed_at: "",
+        workers: [],
+        queue: { queued: 0, deferred: 0, deferred_over_day: 0, failed: 0 },
+        scanners: [],
+      },
+    }),
 }));
 vi.mock("vue-router", async () => {
   const { reactive } = await import("vue");
@@ -23,7 +33,7 @@ vi.mock("vue-router", async () => {
 });
 
 import { useRoute } from "vue-router";
-import AdminScans from "./AdminScans.vue";
+import SecurityScanners from "./SecurityScanners.vue";
 import { Select } from "@/components/ui/select";
 import { Tabs } from "@/components/ui/tabs";
 
@@ -58,7 +68,7 @@ const mounted: { unmount: () => void }[] = [];
 async function mountPage(query: Record<string, string> = {}) {
   const route = useRoute() as unknown as { query: Record<string, string> };
   route.query = query;
-  const w = mount(AdminScans, { global: { stubs: { SectionTabs: true } } });
+  const w = mount(SecurityScanners, { global: { stubs: {} } });
   mounted.push(w);
   await flushPromises();
   return w;
@@ -81,7 +91,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("AdminScans", () => {
+describe("SecurityScanners", () => {
   it("lists the queue, scanning first, with both tab counts", async () => {
     serve(
       [
@@ -196,7 +206,7 @@ describe("AdminScans", () => {
   });
 
   it("filters both lists by registry and by queue state", async () => {
-    serve([]);
+    serve([job("a")]);
     const w = await mountPage();
     expect(selectById(w, "scans-registry").props("options")).toEqual([
       { value: "", label: "All registries" },
@@ -213,53 +223,18 @@ describe("AdminScans", () => {
     expect(listScansMock.mock.calls.map((c) => c[0].query.state)).toContain("scanning");
   });
 
-  it("asks for a registry before listing verdicts, then lists them by state", async () => {
+  /** RFC 0050 §6.7: no state filter over an empty, unfiltered queue. */
+  it("hides the state filter while the queue is empty", async () => {
     serve([]);
-    listVerdictsMock.mockResolvedValue({ data: { registry: "npm", items: [] } });
-    const w = await mountPage({ tab: "verdicts" });
-    expect(w.find('[data-testid="pick-registry"]').exists()).toBe(true);
-    expect(listVerdictsMock).not.toHaveBeenCalled();
-
-    selectById(w, "scans-registry").vm.$emit("update:modelValue", "npm");
-    await flushPromises();
-    expect(w.text()).toContain("No verdict recorded for npm.");
-    selectById(w, "verdicts-state").vm.$emit("update:modelValue", "quarantined");
-    await flushPromises();
-    expect(listVerdictsMock).toHaveBeenLastCalledWith({
-      query: { registry: "npm", state: "quarantined" },
-    });
-    expect(w.text()).toContain("No version of npm is quarantined.");
-
-    listVerdictsMock.mockResolvedValue({
-      data: {
-        registry: "npm",
-        items: [
-          {
-            package: { registry: "npm", name: "evil", version: "0.0.1" },
-            state: "quarantined",
-            reason_codes: ["MALWARE"],
-            findings: [],
-            policy_ref: "npm/default",
-            evaluated_at: "2026-11-10T12:00:00Z",
-          },
-        ],
-      },
-    });
-    selectById(w, "verdicts-state").vm.$emit("update:modelValue", "");
-    await flushPromises();
-    expect(w.text()).toContain("npm/evil@0.0.1");
-    expect(w.text()).toContain("MALWARE");
+    const w = await mountPage();
+    expect(w.find("#scans-state").exists()).toBe(false);
   });
 
-  it("shows a verdicts load error", async () => {
+  /** RFC 0050 §6.6: the verdicts tab left for Security › Holds. */
+  it("has no verdicts tab any more", async () => {
     serve([]);
-    listVerdictsMock.mockResolvedValue({
-      error: {},
-      response: { status: 404, statusText: "Not Found" },
-    });
     const w = await mountPage({ tab: "verdicts" });
-    selectById(w, "scans-registry").vm.$emit("update:modelValue", "npm");
-    await flushPromises();
-    expect(w.text()).toContain("Could not load the verdicts: 404 Not Found.");
+    expect(w.text()).not.toContain("Verdicts");
+    expect(listVerdictsMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/administration.md
-sourceHash: 1e076428333fea30
+sourceHash: f04f14fdb5956e33
 ---
 
 # Administration
@@ -44,14 +44,14 @@ palette *Aller à…* de la console.
 
 | Ce qui arrive | Où | Palette |
 | --- | --- | --- |
-| « Je ne peux pas télécharger X » | *Accès → Vérification d'accès* (`/admin/access/check`) | `refusé` |
+| « Je ne peux pas télécharger X » | *Accès → Autorisations*, panneau *Simuler* (`/admin/access/authorization#simulate`) | `refusé` |
 | Un amont est dégradé | la page du registre, puis *Registres → Amont* (`/admin/registries/upstream`) | `amont` |
 | La configuration d'un registre doit changer | la page du registre → *Modifier la configuration*, qui ouvre *Système → Configuration* sur son bloc | `config` |
-| Une CVE : quelles versions la portent ? | *Sécurité → Constats* (`/admin/security/findings`) | `cve` |
-| Une analyse a échoué | *Sécurité → Analyses*, onglet des échecs (`/admin/security/scans?tab=failures`) | `réanalyser` |
+| Une CVE : quelles versions la portent ? | *Sécurité → Constats* (`/security/findings`) | `cve` |
+| Une analyse a échoué | *Sécurité → Analyseurs et worker*, onglet des échecs (`/security/scanners?tab=failures`) | `réanalyser` |
 | Bloquer une version | la page du paquet, onglet *Admin* | `bloquer` |
 | Bloquer plusieurs versions | *Paquets → Blocage de masse* (`/admin/packages/bulk`) | `masse` |
-| Un jeton divulgué ou une adresse abusive | *Accès → Comptes et adresses bloqués* (`/admin/access/blocks`) | `jeton` |
+| Un jeton divulgué ou une adresse abusive | *Sécurité de l'instance → Comptes et adresses bloqués* (`/admin/instance-security/blocks`) | `jeton` |
 | Un paquet semble périmé | *Système → Santé et cache* → *Rafraîchir l'explorateur* (`/admin/system/health`) | `périmé` |
 | Qui a fait ceci ? | *Système → Journal d'audit* (`/admin/system/audit-log`) | `audit` |
 | Annoncer une maintenance | *Système → Bandeau global* (`/admin/system/banner`) | `bannière` |
@@ -66,3 +66,28 @@ configuration la semaine dernière** au-delà de l'historique affiché sur
 Les favoris vers les anciennes adresses des pages, d'avant les sections
 ci-dessus, fonctionnent toujours : chacun redirige vers la nouvelle page, avec
 sa chaîne de requête.
+
+## Les deux espaces de la console
+
+La console a deux barres latérales ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)) :
+
+- **`/admin`** — l'instance : registres, paquets, accès, **Sécurité de
+  l'instance** et système. *Sécurité de l'instance* (`/admin/instance-security`,
+  `system:read`) dit ce qui concerne ce serveur lui-même sur les dernières
+  24 heures ou 7 jours : identifiants refusés et leurs adresses, adresses
+  bannies, jetons utilisés depuis une nouvelle adresse, jetons statiques encore
+  conservés en clair, exemptions qui prennent fin dans la semaine, et les
+  avertissements de sécurité de la configuration. Adresses et identifiants
+  d'utilisateur n'apparaissent qu'avec `audit:read`. Sa page *Comptes et
+  adresses bloqués* est l'ancienne *Accès → Blocages*.
+- **`/security`** — les paquets : une **vue d'ensemble** qui dit, domaine par
+  domaine, si quelque chose demande de l'attention (retenues, signalements,
+  analyseurs et worker, couverture), puis *Tri* (retenues, constats,
+  signalements, exposition) et *Suivi* (tendances, couverture, analyseurs et
+  worker). Elle s'ouvre sur la première page que vos verbes lisent ; voir
+  [Contrôles de sécurité](/fr/guide/security-gates#console).
+
+Le tableau de bord d'administration porte les mêmes lignes de sécurité, une par
+domaine que vos verbes lisent. Chaque groupe de la barre latérale s'ouvre et se
+ferme, et le navigateur retient ceux que vous avez ouverts ; le groupe de la
+page courante est toujours ouvert.

@@ -11,9 +11,10 @@ vi.mock("@/composables/useAuthFetch", () => ({
 }));
 
 import AdminSbom from "./AdminSbom.vue";
+import { useAuth } from "@/composables/useAuth";
 
 async function mountPage() {
-  const wrapper = mount(AdminSbom, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AdminSbom, { global: { stubs: {} } });
   await flushPromises();
   return wrapper;
 }
@@ -85,5 +86,13 @@ describe("AdminSbom", () => {
     const wrapper = await mountPage();
     expect(wrapper.find("input#sbom-registry").exists()).toBe(false);
     expect(wrapper.find("#sbom-registry").exists()).toBe(true);
+  });
+
+  it("links to the flags only for a viewer who may read them", async () => {
+    useAuth().identity.value = { verbs: ["system:read"], registries: {} } as never;
+    expect((await mountPage()).find('[data-testid="sbom-flags-link"]').exists()).toBe(false);
+    useAuth().identity.value = { verbs: ["system:read", "flags:read"], registries: {} } as never;
+    expect((await mountPage()).find('[data-testid="sbom-flags-link"]').exists()).toBe(true);
+    useAuth().identity.value = null;
   });
 });

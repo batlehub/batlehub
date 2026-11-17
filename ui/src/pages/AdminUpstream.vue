@@ -14,8 +14,6 @@ import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Select } from "@/components/ui/select";
@@ -31,6 +29,7 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
+import { DateTime } from "@/components/ui/date-time";
 
 const { t } = useI18n();
 const { authFetch } = useAuthFetch();
@@ -182,15 +181,12 @@ watch([registryFilter, stateFilter], () => {
 });
 watch(page, () => void load());
 onMounted(load);
-
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€”");
 </script>
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader
-      :title="t('adminUpstream.title')"
+      :title="t('adminNav.upstream')"
       :description="t('adminUpstream.description')"
       variant="display"
     >
@@ -324,9 +320,9 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
                   <TableCell class="text-right tabular-nums">{{
                     row.consecutive_misses
                   }}</TableCell>
-                  <TableCell class="text-xs">{{ fmt(row.first_missed_at) }}</TableCell>
-                  <TableCell class="text-xs">{{ fmt(row.last_checked_at) }}</TableCell>
-                  <TableCell class="text-xs">{{ fmt(row.confirmed_at) }}</TableCell>
+                  <TableCell class="text-xs"><DateTime :iso="row.first_missed_at" /></TableCell>
+                  <TableCell class="text-xs"><DateTime :iso="row.last_checked_at" /></TableCell>
+                  <TableCell class="text-xs"><DateTime :iso="row.confirmed_at" /></TableCell>
                   <TableCell class="text-right">
                     <Button
                       size="sm"

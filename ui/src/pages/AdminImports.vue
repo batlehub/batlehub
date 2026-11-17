@@ -5,8 +5,6 @@ import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { REGISTRIES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Card, CardContent } from "@/components/ui/card";
@@ -152,11 +150,10 @@ onMounted(() => void loadImports());
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"
-      :title="t('adminImports.releaseImports')"
+      :title="t('adminNav.releaseImports')"
       :description="t('adminImports.configuredImportsDescription')"
     >
       <template #actions>

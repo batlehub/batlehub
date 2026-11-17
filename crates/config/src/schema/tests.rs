@@ -5536,3 +5536,73 @@ fn mise_java_age_gate_names_its_missing_timestamp_posture() {
         "deny_missing_timestamp must be explicit",
     );
 }
+
+// ── RFC 0050 §4.3: a plain static token, a long security history ─────────────
+
+#[test]
+fn a_plain_static_token_is_warned_by_path_never_by_value() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "token"
+        [[auth.tokens]]
+        value = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"
+        role = "admin"
+        [[auth.tokens]]
+        value = "s3cr3t-in-clear"
+        role = "user"
+        user_id = "ci-bot""#,
+    );
+    let plain: Vec<ConfigWarning> = cfg
+        .warnings()
+        .into_iter()
+        .filter(|w| w.code == "auth.plain-static-token")
+        .collect();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].path, "auth[0].tokens[1]");
+    let text = format!("{plain:?}");
+    assert!(
+        !text.contains("s3cr3t-in-clear") && !text.contains("ci-bot"),
+        "{text}"
+    );
+    assert_eq!(
+        cfg.plain_static_tokens(),
+        vec![("auth[0].tokens[1]".to_owned(), Some("ci-bot".to_owned()))]
+    );
+}
+
+/// The verifier compares a value it does not read as an Argon2 PHC string in
+/// clear: such a value is a plain token, even when it starts with `$argon2`.
+#[test]
+fn an_argon2_lookalike_is_a_plain_token() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "token"
+        [[auth.tokens]]
+        value = "$argon2-not-a-hash"
+        role = "admin"
+        [[auth.tokens]]
+        value = "$argon2i$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"
+        role = "admin""#,
+    );
+    assert_eq!(
+        cfg.plain_static_tokens(),
+        vec![("auth[0].tokens[0]".to_owned(), None)]
+    );
+}
+
+#[test]
+fn a_security_history_over_a_year_or_forever_is_warned() {
+    for (days, warned) in [(90, false), (365, false), (366, true), (0, true)] {
+        let cfg = parse_config(&format!(
+            "\n        [stats]\n        security_history_retention_days = {days}"
+        ));
+        assert_eq!(
+            warning_codes(&cfg).contains(&"stats.security-history-long".to_owned()),
+            warned,
+            "{days}"
+        );
+    }
+    assert_eq!(parse_config("").stats.security_history_retention_days, 90);
+}

@@ -8,7 +8,7 @@ use base64::Engine as _;
 use tokio::task::spawn_blocking;
 
 use batlehub_core::{
-    entities::{Identity, Role},
+    entities::{is_argon2_hash, Identity, Role},
     error::CoreError,
     ports::{AuthProvider, RawAuthRequest},
 };
@@ -18,10 +18,6 @@ struct TokenRecord {
     user_id: Option<String>,
     role: Role,
     groups: Vec<String>,
-}
-
-fn is_argon2_hash(s: &str) -> bool {
-    s.starts_with("$argon2id$") || s.starts_with("$argon2i$") || s.starts_with("$argon2d$")
 }
 
 /// Constant-time byte comparison for secret values. Unlike `==`, this never

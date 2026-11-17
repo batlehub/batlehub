@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: 0a879d1eb4f8fcf0
+sourceHash: 987e195abc86e95c
 ---
 
 # Contrôles de sécurité
@@ -627,9 +627,10 @@ quand la revérification SBOM du registre aura lieu (sa dernière exécution plu
 désactivée ou n'a jamais couvert le registre). L'onglet Sécurité de la page du
 paquet affiche les deux sous *Prochaine réanalyse*.
 
-### La page Scans {#scans-page}
+### La page Analyseurs et worker {#scans-page}
 
-*Admin → Sécurité → Analyses* suit la file d'analyse
+*Sécurité → Analyseurs et worker* (`/security/scanners`) s'ouvre sur ce qui
+analyse ou non ([ci-dessous](#worker)), puis suit la file d'analyse
 (`GET /api/v1/admin/scans`) :
 
 - **File d'attente** : chaque tâche ouverte, celles qu'un worker tient en
@@ -639,8 +640,6 @@ paquet affiche les deux sous *Prochaine réanalyse*.
   tentatives et qui n'a aucune tâche ouverte, avec la dernière erreur du
   worker. [Relancer l'analyse] crée une nouvelle tâche
   (`POST /api/v1/verdicts/…/rescan`) et la ligne passe dans la file.
-- **Verdicts par état** : les verdicts d'un registre, depuis
-  `GET /api/v1/admin/verdicts`.
 
 Ouvrir la page demande `quarantine:read` au niveau instance, le verbe avec
 lequel lit la console sécurité (RFC 0042) ; le `quarantine:read` de niveau
@@ -654,11 +653,11 @@ plus 200.
 
 Une tâche close avant cette version ne porte pas de marqueur d'échec : un échec
 antérieur à la mise à jour n'apparaît donc pas sous Échecs ; son verdict
-affiche toujours `SCANNER_ERROR` dans *Verdicts par état*.
+affiche toujours `SCANNER_ERROR` sur *Sécurité → Retenues*.
 
 ### La page Constats {#findings-page}
 
-*Admin → Sécurité → Constats* liste ce que les scanners ont trouvé,
+*Sécurité → Constats* (`/security/findings`) liste ce que les scanners ont trouvé,
 tous registres confondus (`GET /api/v1/admin/findings`). Chaque ligne nomme la
 version, la sévérité, le scanner, l'identifiant de l'avis et l'état du verdict
 que le constat a produit. Les filtres portent sur le registre, une sévérité
@@ -678,6 +677,70 @@ verdict de la version. [Exempter…] apparaît là où les droits configurés vo
 donnent `gates:exempt` et où le verdict retient la version ; l'endpoint
 d'exemption le vérifie à nouveau. `per_page` vaut au plus 200 ; à cause des
 namespaces scellés, une page peut contenir moins de lignes que demandé.
+
+### La console de sécurité {#console}
+
+`/security` est un espace à part, à côté de l'administration : un groupe à qui
+l'on a délégué les verbes de sécurité ([RFC 0042](/rfc/0042-security-console-by-verb))
+y accède sans aucun verbe d'administration
+([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)).
+Chaque page n'apparaît que si son verbe est détenu, et l'espace s'ouvre sur la
+première que vous pouvez lire :
+
+| Page | Verbe |
+| --- | --- |
+| Vue d'ensemble | `quarantine:read` ou `flags:read` ; chaque ligne le sien |
+| Retenues, Tendances, Couverture, Analyseurs et worker | `quarantine:read` |
+| Constats | `findings:read` |
+| Signalements | `flags:read` |
+| Exposition | `audit:read` |
+
+La **vue d'ensemble** a une ligne par domaine — *Retenues*, *Signalements*,
+*Analyseurs et worker*, *Couverture* — chacune `OK`, `ATTENTION` ou `INCONNU`.
+`INCONNU` est une source qui n'a pas répondu en 2 secondes ; elle n'est jamais
+affichée `OK`. Sous les lignes, *À décider* liste au plus dix éléments :
+retenues sur un signalement qui bloque les téléchargements, versions signalées
+téléchargées après le signalement, exemptions qui prennent fin sous 7 jours,
+analyses en échec. La page s'actualise toutes les 30 secondes pendant
+10 minutes. `batlehub-cli security status` imprime les mêmes lignes pour un
+script.
+
+Les **tendances** tracent un cumul quotidien par registre (`security_daily`),
+écrit chaque heure par un seul processus : versions retenues, téléchargements
+refusés, signalements ouverts et révoqués, analyses faites et en échec. Les
+jours sont des jours UTC. L'historique est gardé
+`[stats] security_history_retention_days` (90 par défaut, `0` pour toujours) et
+suit `[stats] history_enabled`. Les comptes de versions retenues commencent le
+jour de la mise à jour ; refus, signalements et analyses sont remplis à rebours
+aussi loin que leurs propres sources gardent des lignes, et un jour au-delà se
+lit *pas de données*, jamais zéro.
+
+La **couverture** liste chaque registre que vous pouvez voir, protégé ou non,
+avec son mode, ce qu'il refuse, ses contrôles et l'avancée des analyses ; la
+page d'un registre détaille son profil `[security]`. Un registre servant du
+trafic `proxy` ou `hybrid` sans profil `[security]` ni `cve_gate` est
+`ATTENTION` sur la vue d'ensemble.
+
+#### Analyseurs et worker {#worker}
+
+Un worker envoie un battement de cœur toutes les 30 secondes depuis sa propre
+horloge, qu'il traite une tâche ou non, et compte comme actif tant que son
+dernier battement a moins de deux minutes. Il couvre les registres que liste
+son battement — tous s'il n'en liste aucun. Sans worker
+actif couvrant un registre protégé, chaque nouvelle version de ce registre
+reste retenue : démarrez-en un avec `--roles worker` (ou `[server] roles`).
+
+#### Analyseurs {#scanners}
+
+Chaque analyseur garde une ligne d'état : son dernier succès, sa dernière
+erreur et la classe de l'erreur (`timeout`, `http_<status>`, `parse`,
+`sandbox`, `other` — jamais le texte de l'erreur), et, pour OSV, jusqu'à quand
+son disjoncteur le met en pause. Un analyseur dont la dernière erreur est plus
+récente que son dernier succès, qui n'a jamais tourné, un disjoncteur ouvert ou
+une tâche reportée depuis plus d'un jour est `ATTENTION`. La classe n'est
+montrée qu'avec `findings:read`. Sans analyseur configuré, un registre protégé
+retient chaque nouvelle version : nommez-en un dans
+`[registries.security] required_scanners`.
 
 ---
 
@@ -700,8 +763,12 @@ namespaces scellés, une page peut contenir moins de lignes que demandé.
   - `batlehub-cli why <registry>:<name>@<version>` (voir
     [la CLI](/fr/use/cli#commands-security)) ;
   - le panneau de verdict sur la page du paquet ;
-  - la page admin *Access Check*, qui exécute la même chaîne qu'un vrai
-    téléchargement, surcharges de namespace et exemptions comprises.
+  - le panneau *Simuler* d'*Admin → Accès → Autorisations*
+    (`/admin/access/authorization#simulate`), qui exécute un téléchargement
+    entier pour une identité — blocages, garde-fous et groupes, surcharges de
+    namespace et exemptions comprises. Son panneau *Expliquer* (`#explain`)
+    répond à une question plus étroite : quelles autorisations un sujet détient
+    sur une coordonnée, et à quel niveau.
 
 ---
 

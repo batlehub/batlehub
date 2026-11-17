@@ -11,8 +11,6 @@ import type { NotificationSubscription } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { eventBadgeVariant } from "@/lib/badge-variants";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
@@ -140,7 +138,6 @@ async function testSubscription(id: string) {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminNav.subscriptions')"

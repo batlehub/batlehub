@@ -283,6 +283,8 @@ pub fn embedded_migrator() -> Migrator {
             "../migrations/068_rfc0044_scan_status_indexes.sql"
         ),
         mig!(69, "fill leases", "../migrations/069_fill_leases.sql"),
+        mig!(70, "scanner status", "../migrations/070_scanner_status.sql"),
+        mig!(71, "security daily", "../migrations/071_security_daily.sql"),
     ])
 }
 

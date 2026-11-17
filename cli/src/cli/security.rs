@@ -53,8 +53,17 @@ pub struct ListArgs {
     /// `allowed`, `warned`, `quarantined` or `denied`; default every state
     #[arg(long)]
     pub state: Option<String>,
-    /// Per state (default 100, at most 1000)
+    /// Only verdicts carrying this reason code, e.g. `SOC_VERDICT`
     #[arg(long)]
+    pub reason: Option<String>,
+    /// Every protected registry you may read, not the configured one
+    #[arg(long)]
+    pub all_registries: bool,
+    /// The page to print, 1-based (default 1)
+    #[arg(long)]
+    pub page: Option<u64>,
+    /// Verdicts per page (default 100, at most 1000)
+    #[arg(long, alias = "per-page")]
     pub limit: Option<u64>,
 }
 
@@ -81,16 +90,38 @@ fn csv_wanted() -> bool {
 
 /// `verdict list`: the registry's stored verdicts, newest scan first.
 async fn list_verdicts(args: &ListArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let registry = ctx().require_registry(None)?;
+    let registry = if args.all_registries {
+        None
+    } else {
+        Some(ctx().require_registry(None)?)
+    };
     let report = client
-        .list_verdicts(&registry, args.state.as_deref(), args.limit)
+        .list_verdicts(&crate::api::security::VerdictListParams {
+            registry: registry.as_deref(),
+            state: args.state.as_deref(),
+            reason: args.reason.as_deref(),
+            page: args.page,
+            per_page: args.limit,
+        })
         .await?;
     if json {
         crate::render::data(&report)?;
         return Ok(());
     }
     let items = report["items"].as_array().cloned().unwrap_or_default();
-    println!("{} verdict(s) in {registry}", items.len());
+    let total = report["total"].as_u64().unwrap_or(items.len() as u64);
+    let page = report["page"].as_u64().unwrap_or(1);
+    let per_page = report["per_page"]
+        .as_u64()
+        .unwrap_or(items.len() as u64)
+        .max(1);
+    let scope = registry.as_deref().unwrap_or("every registry");
+    let pages = total.div_ceil(per_page).max(1);
+    if pages > 1 {
+        println!("{total} verdict(s) in {scope} — page {page} of {pages}");
+    } else {
+        println!("{total} verdict(s) in {scope}");
+    }
     if items.is_empty() {
         return Ok(());
     }
@@ -425,5 +456,217 @@ mod tests {
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
         assert!(parse_duration("2w").is_err());
         assert!(parse_duration("h").is_err());
+    }
+
+    /// Decision 30 (T11): ATTENTION wins; an UNKNOWN or a block not shown is
+    /// 7, never 0.
+    #[test]
+    fn status_exit_codes() {
+        let line = |s: &str| serde_json::json!({ "state": s });
+        let all = |s: &str| serde_json::json!({ "holds": line(s), "flags": line(s), "scanners": line(s), "coverage": line(s) });
+        assert_eq!(status_exit(&all("ok")), None);
+        assert_eq!(status_exit(&all("unknown")), Some(ExitCode::Partial));
+        let mut body = all("ok");
+        body["holds"] = line("attention");
+        body["flags"] = line("unknown");
+        assert_eq!(status_exit(&body), Some(ExitCode::Failure));
+        let flags_only = serde_json::json!({ "flags": line("ok") });
+        assert_eq!(status_exit(&flags_only), Some(ExitCode::Partial));
+    }
+
+    /// The scanners line names its cause, in the UI's order, and agrees in
+    /// number; coverage counts the registries a profile can protect.
+    #[test]
+    fn status_sentences_name_the_cause() {
+        let scanners = |v: serde_json::Value| status_sentence("scanners", &v);
+        assert_eq!(
+            scanners(serde_json::json!({ "live_workers": 3, "queued": 2, "failed": 0 })),
+            "3 workers running, 2 queued, 0 failed"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "live_workers": 1 })),
+            "1 worker running, 0 queued, 0 failed"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "never_ran": 1, "scanners_attention": 2 })),
+            "1 scanner never ran"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "breaker_open": true, "never_ran": 1 })),
+            "OSV is not answering: scans wait for it"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "scanners_attention": 2, "deferred_over_day": 1 })),
+            "2 scanners failing since their last success"
+        );
+        assert_eq!(
+            scanners(serde_json::json!({ "uncovered": ["npm"], "breaker_open": true })),
+            "no live worker covers npm: new versions stay held"
+        );
+        assert_eq!(
+            status_sentence(
+                "coverage",
+                &serde_json::json!({ "registries": 5, "upstream": 3, "protected": 3, "unprotected": [] })
+            ),
+            "all 3 registries are protected"
+        );
+    }
+}
+
+// ── `security status` (RFC 0050 §4.5) ────────────────────────────────────────
+
+#[derive(clap::Subcommand, Debug)]
+pub enum SecurityCommand {
+    /// One line per security domain — holds, flags, scanners, coverage; exit 1
+    /// on any ATTENTION, 7 when a line is UNKNOWN or not readable by this token
+    Status,
+}
+
+pub async fn run_security(cmd: SecurityCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    match cmd {
+        SecurityCommand::Status => security_status(client, json).await,
+    }
+}
+
+/// The four lines in their order: label, body key, console page.
+const STATUS_LINES: [(&str, &str, &str); 4] = [
+    ("HOLDS", "holds", "/security/holds"),
+    ("FLAGS", "flags", "/security/flags"),
+    ("SCANNERS", "scanners", "/security/scanners"),
+    ("COVERAGE", "coverage", "/security/coverage"),
+];
+
+fn n(block: &serde_json::Value, key: &str) -> u64 {
+    block[key].as_u64().unwrap_or(0)
+}
+
+/// The sentence of one line, from its block.
+fn status_sentence(key: &str, b: &serde_json::Value) -> String {
+    if b["state"] == "unknown" {
+        return "could not be read".to_owned();
+    }
+    match key {
+        "holds" if n(b, "held") == 0 => "nothing held".to_owned(),
+        "holds" => format!(
+            "{} versions held, {} for malware",
+            n(b, "held"),
+            n(b, "malware")
+        ),
+        "flags" if n(b, "blocking") == 0 => "no flag blocks a download".to_owned(),
+        "flags" => {
+            let mut s = format!("{} flags block downloads", n(b, "blocking"));
+            if n(b, "pulled_after_flag") > 0 {
+                s.push_str(&format!(
+                    "; {} downloaded after they were flagged",
+                    n(b, "pulled_after_flag")
+                ));
+            }
+            s
+        }
+        // The cause first, in the UI's order (`SecurityStatusStrip.vue`).
+        "scanners" => {
+            let plural = |n: u64, one: &str, many: &str| if n == 1 { one } else { many }.to_owned();
+            let uncovered: Vec<&str> = b["uncovered"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            if !uncovered.is_empty() {
+                return format!(
+                    "no live worker covers {}: new versions stay held",
+                    uncovered.join(", ")
+                );
+            }
+            if b["breaker_open"] == true {
+                return "OSV is not answering: scans wait for it".to_owned();
+            }
+            let never = n(b, "never_ran");
+            if never > 0 {
+                return format!("{never} {} never ran", plural(never, "scanner", "scanners"));
+            }
+            let failing = n(b, "scanners_attention");
+            if failing > 0 {
+                return format!(
+                    "{failing} {} since {} last success",
+                    plural(failing, "scanner failing", "scanners failing"),
+                    plural(failing, "its", "their")
+                );
+            }
+            let deferred = n(b, "deferred_over_day");
+            if deferred > 0 {
+                return format!(
+                    "{deferred} {} for more than a day",
+                    plural(deferred, "job deferred", "jobs deferred")
+                );
+            }
+            let live = n(b, "live_workers");
+            format!(
+                "{live} {} running, {} queued, {} failed",
+                plural(live, "worker", "workers"),
+                n(b, "queued"),
+                n(b, "failed")
+            )
+        }
+        _ => {
+            let unprotected = b["unprotected"].as_array().map_or(0, Vec::len) as u64;
+            if n(b, "protected") == 0 && unprotected == n(b, "registries") {
+                "no registry is protected: nothing is scanned".to_owned()
+            } else if unprotected == 0 {
+                // `upstream`: the registries that serve one, the only ones a
+                // profile can protect.
+                format!("all {} registries are protected", n(b, "upstream"))
+            } else {
+                format!(
+                    "{unprotected} of {} registries not protected",
+                    n(b, "registries")
+                )
+            }
+        }
+    }
+}
+
+/// The exit code of an overview (decision 30): ATTENTION wins (`1`), then
+/// an UNKNOWN or a block not shown (`7`), else `0`.
+pub fn status_exit(body: &serde_json::Value) -> Option<ExitCode> {
+    let states: Vec<Option<&str>> = STATUS_LINES
+        .iter()
+        .map(|(_, key, _)| body.get(*key).and_then(|b| b["state"].as_str()))
+        .collect();
+    if states.contains(&Some("attention")) {
+        Some(ExitCode::Failure)
+    } else if states.iter().any(|s| s.is_none() || *s == Some("unknown")) {
+        Some(ExitCode::Partial)
+    } else {
+        None
+    }
+}
+
+async fn security_status(client: &BatleHubClient, json: bool) -> Result<()> {
+    let body = client.security_overview().await?;
+    if json {
+        crate::render::data(&body)?;
+    } else {
+        let mut hidden = Vec::new();
+        for (label, key, page) in STATUS_LINES {
+            let Some(block) = body.get(key) else {
+                hidden.push(label);
+                continue;
+            };
+            let state = block["state"].as_str().unwrap_or("unknown").to_uppercase();
+            println!(
+                "{label:<10} {state:<10} {:<40} {page}",
+                status_sentence(key, block)
+            );
+        }
+        if !hidden.is_empty() {
+            println!(
+                "not shown: {} (this token cannot read them)",
+                hidden.join(", ")
+            );
+        }
+    }
+    match status_exit(&body) {
+        Some(code) if json => Err(CliError::reported(code).into()),
+        Some(code) => Err(CliError::quiet(code).into()),
+        None => Ok(()),
     }
 }

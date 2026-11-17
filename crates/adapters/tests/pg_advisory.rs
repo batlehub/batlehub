@@ -303,3 +303,65 @@ async fn scan_state_is_one_row_per_registry() {
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].artifacts_scanned, 2);
 }
+
+/// RFC 0050 *Needs a decision*: pulls after a flag are summed per version
+/// over every consumer, counted once under two flags, and a revoked flag no
+/// longer counts.
+#[tokio::test]
+async fn pulls_after_live_flags_sums_per_version_and_skips_dead_flags() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let repo = PgAdvisoryRepository::new(pool.clone());
+    let t0 = Utc::now() - Duration::hours(3);
+    let mut exact = flag(&reg, "EXACT", "1.3.1", FlagEffect::HardBlock);
+    exact.first_seen = t0;
+    let mut any = flag(&reg, "ANY", "*", FlagEffect::Inform);
+    any.first_seen = t0;
+    let mut dead = flag(&reg, "DEAD", "1.3.0", FlagEffect::HardBlock);
+    dead.first_seen = t0;
+    for f in [&exact, &any, &dead] {
+        repo.upsert_flag(f.clone()).await.unwrap();
+    }
+    repo.revoke_flag("soc", &dead.external_id, Utc::now())
+        .await
+        .unwrap();
+    // 1.3.1: one pull before the flags, three after by two consumers.
+    pull(&pool, &reg, "alice", "1.3.1", t0 - Duration::minutes(5)).await;
+    for (user, m) in [("alice", 10), ("bob", 20), ("bob", 30)] {
+        pull(&pool, &reg, user, "1.3.1", t0 + Duration::minutes(m)).await;
+    }
+    // 1.3.0: the `*` flag covers it; its exact flag is revoked.
+    pull(&pool, &reg, "carol", "1.3.0", t0 + Duration::minutes(40)).await;
+
+    let mine = |rows: Vec<batlehub_core::ports::FlagPulls>| {
+        let mut rows: Vec<_> = rows.into_iter().filter(|r| r.registry == reg).collect();
+        rows.sort_by(|a, b| a.version.cmp(&b.version));
+        rows
+    };
+    let from = Utc::now() - Duration::days(30);
+    let rows = mine(repo.pulls_after_live_flags(from, Utc::now()).await.unwrap());
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        (rows[0].version.as_str(), rows[0].pulls_after),
+        ("1.3.0", 1)
+    );
+    // Two consumers summed, each pull once under its two live flags.
+    assert_eq!(
+        (rows[1].version.as_str(), rows[1].pulls_after),
+        ("1.3.1", 3)
+    );
+    assert_eq!(
+        rows[1].last_pull.timestamp(),
+        (t0 + Duration::minutes(30)).timestamp()
+    );
+    // With `*` revoked, 1.3.0 has only a dead flag: no decision any more.
+    repo.revoke_flag("soc", &any.external_id, Utc::now())
+        .await
+        .unwrap();
+    let rows = mine(repo.pulls_after_live_flags(from, Utc::now()).await.unwrap());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].version, "1.3.1");
+}

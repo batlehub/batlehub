@@ -198,3 +198,43 @@ curl -s -X DELETE \
 Blocked IPs receive `403 Forbidden` with `X-Block-Expires`. The check runs before authentication. Violation counts and blocks are stored in the same backend as the rate-limit store (`memory` / `postgres` / `redis`).
 
 See the [Access Control guide](/guide/access-control#ip-blocking) for the full reference including load-balancer setup and storage backend comparison.
+
+---
+
+## Instance security {#instance-security}
+
+*Admin → Instance security* (`/admin/instance-security`, `system:read`) gathers
+what concerns this server itself, over the last 24 hours or 7 days
+([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)):
+
+- **Sign-ins** — credentials rejected, by kind (single sign-on, token); with
+  `audit:read`, the addresses they came from.
+- **Bans** — addresses banned, and how many automatically (above), with
+  `blocks:read`. The *Blocked accounts & addresses* page
+  (`/admin/instance-security/blocks`) is where a ban is lifted or added.
+- **Token sources** — tokens used from an address they had not been seen from;
+  with `audit:read`, whose and from where.
+- **Static tokens** — `[[auth.tokens]]` values stored in clear (below).
+- **Exemptions** — gate exemptions ending within 7 days, and those approved by
+  their own requester, with `quarantine:read`.
+- **Config** — the security warnings of the configuration in force, with
+  `config:read`.
+
+Reading this page is not audited, as reading the audit log is not.
+
+### Static tokens in clear {#static-tokens}
+
+A static token whose value has no `$argon2` prefix is accepted, and raises the
+`auth.plain-static-token` warning at startup and on every reload. The warning
+names the token's place in the configuration (`auth[0].tokens[2]`), never its
+value; the instance security page adds whose token it is, with `audit:read`.
+Replace the value with its hash:
+
+```bash
+batlehub hash-token "$TOKEN"   # prints an Argon2id PHC string for the config
+```
+
+`[auth]` is read at startup only: a reload does not change which tokens the
+server accepts. The warning and the *Static tokens* line describe the tokens
+the running server accepts, so after you hash a value they stay until the
+server restarts.

@@ -62,6 +62,9 @@ pub mod packages;
 pub mod stats_history;
 
 #[cfg(feature = "db-postgres")]
+pub mod security_daily;
+
+#[cfg(feature = "db-postgres")]
 pub mod vulnerability;
 
 #[cfg(feature = "db-postgres")]
@@ -100,7 +103,7 @@ pub use cluster::PgClusterState;
 #[cfg(feature = "db-postgres")]
 pub use config_change::PgConfigChangeRepository;
 pub use forge::{PgRateLimitBudget, PgRefResolutionRepository};
-pub use security::{PgScanQueue, PgVerdictRepository, PgWorkerRegistry};
+pub use security::{PgScanQueue, PgScannerStatusRepository, PgVerdictRepository, PgWorkerRegistry};
 
 #[cfg(feature = "db-postgres")]
 pub use governance::beta_channel::PgBetaChannelStore;
@@ -130,6 +133,9 @@ pub use packages::audit_trail::PgAdvisoryLeader;
 pub use ops::upstream_status::PgUpstreamStatusStore;
 #[cfg(feature = "db-postgres")]
 pub use stats_history::PgStatsHistoryRepository;
+
+#[cfg(feature = "db-postgres")]
+pub use security_daily::PgSecurityDailyRepository;
 
 #[cfg(feature = "db-postgres")]
 pub use readme::{

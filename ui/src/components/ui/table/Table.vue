@@ -3,7 +3,18 @@ import { type HTMLAttributes } from "vue";
 import { useI18n } from "vue-i18n";
 import { cn } from "@/lib/utils";
 
-const props = defineProps<{ class?: HTMLAttributes["class"]; label?: string }>();
+const props = defineProps<{
+  class?: HTMLAttributes["class"];
+  label?: string;
+  /**
+   * RFC 0050 §6.7: below `md`, each row stacks into a block instead of
+   * clipping its columns at 390 px. The header stays for screen readers.
+   */
+  stacked?: boolean;
+}>();
+
+const STACKED =
+  "max-md:[&_thead]:sr-only max-md:[&_tr]:block max-md:[&_tr]:py-2 max-md:[&_td]:block max-md:[&_td]:px-0 max-md:[&_td]:py-1";
 
 const { t } = useI18n();
 </script>
@@ -38,7 +49,7 @@ const { t } = useI18n();
     tabindex="0"
     :aria-label="label ?? t('a11y.tableScroll')"
   >
-    <table :class="cn('w-full caption-bottom text-sm', props.class)">
+    <table :class="cn('w-full caption-bottom text-sm', props.stacked && STACKED, props.class)">
       <slot />
     </table>
   </section>

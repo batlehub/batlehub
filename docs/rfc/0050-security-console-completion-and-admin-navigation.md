@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted                                                      |
+| Status      | Accepted — every phase built 2026-11-17, validated on the demo instance (§17) |
 | Short       | Security console and admin nav                                |
 | Settles     | What the security console shows beyond today's four panels — summary, trends, coverage, scanner and worker health — where it lives, how instance security reaches the admin, and how the admin shell navigates |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -254,8 +254,10 @@ security_history_retention_days = 90
     deferred for more than 24 h.
   - *Coverage*: `ATTENTION` when a registry serving `proxy` or `hybrid` traffic
     has no `[security]` profile and no `cve_gate`.
-- **"Needs a decision"** below the strip lists at most ten items, newest first,
-  with the total and a link to the full list: holds on a live `hard_block`,
+- **"Needs a decision"** below the strip lists at most ten items by urgency —
+  hard-block holds and pulls after a flag newest first, then exemptions
+  soonest-ending first, then failed scans — with the total, the sources that
+  could not be read (`unknown`), and a link to the full list: holds on a live `hard_block`,
   flags whose version was downloaded after the flag (`pulls_before < pulls`),
   exemptions expiring within 7 days, and failed scan jobs. Each item links to
   the page that acts on it, and each coordinate passes the same `sealed_out`
@@ -1325,3 +1327,436 @@ land later than the surface they protect.
 | 4 | **Trends.** `071_security_daily`, the rollup under its lock with the gap fill, the trends endpoint and page, the retention key, its warning, the config and Helm schemas. §10.3's refusals and gap-fill measurements first. | obs. 8; T8 |
 | 5 | **Instance security.** The endpoint, the admin section, Blocks moved, `auth.plain-static-token`. | obs. 9; T3, T4, T6 |
 | 6 | **The remaining verdicts of §6.7** (Access check merged, Configuration, Health, Audit log, Findings column, stacked rows on mobile), `PRODUCT.md`, docs. | the rendered design gate |
+
+---
+
+## 17. Implementation progress
+
+Kept current as each phase lands, so the state of the work is read here rather
+than reconstructed from pull requests.
+
+| Phase | State | Pull request | Proof run |
+| --- | --- | --- | --- |
+| 0 | done | #383 (`e43cb201`) | obs. 12 in CI |
+| 1 | built 2026-11-17 | one PR for all phases (§17.0) | Vitest, lint, build green; obs. 11 written, **not yet run** (§17.1) |
+| 2 | built 2026-11-17 (UI) | same | Vitest green; obs. 10–11 written (§17.2) |
+| 3 | built 2026-11-17 | same | unit, integration, pg and CLI tests green; obs. 1–3, 7 written in `authz.sh`, **not yet run** (§17.3) |
+| 4 | built 2026-11-17 | same | rollup unit and pg tests green; obs. 8 **not yet run** (§17.4) |
+| 5 | built 2026-11-17 | same | integration tests (T3, T4, T6) green; obs. 9 written, **not yet run** (§17.5) |
+| 6 | built 2026-11-17 (UI, docs) | same | Vitest green (§17.6) |
+
+### 17.0 Review against the tree (2026-11-17)
+
+Before phase 1, the RFC's citations were checked against `main` at
+`65a9dd4b`; every one that a phase depends on holds:
+
+- `SectionTabs` is placed by exactly 20 pages and `RegistryScopedList.vue`,
+  and named by 23 test files (21 page tests, its own, `catalogues.test.ts`).
+- The five `ScanQueue` fakes are the five §6.1 lists; with
+  `PgScanQueue` and `InMemoryScanQueue` they are every implementation.
+- The 18 security warning codes of §6.4 exist, once each, in
+  `crates/config/src/schema/warnings.rs`; `auth.plain-static-token` does not yet.
+- `069_fill_leases.sql` is the last migration: `070` and `071` are free.
+- `StatsConfig` is `deny_unknown_fields`; `read_cache` is
+  `schema/server.rs:206`.
+- `LEGACY_REDIRECTS`, `REVERSE_REDIRECTS` and `SECTION_INDEXES` hold the
+  entries §6.6 retargets or removes, at the lines it cites.
+
+Nothing blocks the plan. Three points the text left open are settled in the
+build and recorded below (§17.1, items 1–3).
+
+**Delivery, amended (decision 20).** The maintainer asked on 2026-11-17 for
+the whole RFC in one go, committed once after validating it on a demo
+instance: the phases are built in order but land as **one** pull request, not
+six. Each phase's proof is still listed against it.
+
+### 17.1 Phase 1 — navigation (built 2026-11-17)
+
+What landed:
+
+- `layouts/ConsoleLayout.vue`: the sidebar of §5.3 — verb filtering, a
+  one-page section as a link, groups as `<button aria-expanded aria-controls>`,
+  the opened groups in `localStorage` under `batlehub.nav.<key>`, and the
+  phone menu. `AdminLayout.vue` is now a four-line wrapper handing it
+  `ADMIN_SECTIONS`.
+- `components/admin/SectionTabs.vue`, its test and the five `*_TABS` exports
+  deleted; the 20 pages and `RegistryScopedList.vue` no longer place it, and
+  the page tests no longer stub it. `ADMIN_SIDEBAR` went with them (its last
+  readers were tests).
+- `usePoll(fn, active, { interval })`, 5 s by default, with a test at 30 s.
+- h1 = nav label on the eight pages whose title differed: Upstream, Warming,
+  Release imports, Block in bulk, SBOM export, Configuration, Health & cache,
+  Blocked accounts & addresses. The headers now read the `adminNav.*` key
+  itself, so the two cannot drift again; four catalogue keys left orphaned
+  (and `a11y.inThisSection`, the tab strip's label) are removed from `en` and
+  `fr`.
+- Intro width: `PageHeader` already capped its description at 64 ch; the three
+  intros the detector measured at ~212 characters (Holds, Flags, Exposure
+  panels) are capped at 70 ch.
+- One date format: `formatDate` renders `2026-11-16 17:44` in the browser's
+  zone, everywhere it is used; `AdminUpstream.vue`'s own `toLocaleString` now
+  calls it.
+- `tests/heavy/console_security.mjs --nav 1` and its assertion in
+  `console_fetch.sh`: observation 11's phase-1 half.
+
+Where the build differs from the text:
+
+1. **A group nobody opened is closed.** §4.2 named the fallback for an
+   unreadable store ("current group open, others closed") but not the default
+   for an empty one. The build uses the same rule for both — the critique's
+   persona flags were the 23 always-expanded links and the tab stops before
+   content — so the store holds the groups the reader *opened*. Observation 11
+   therefore reads "opens *Access*, reloads, *Access* is still open", not
+   "collapses".
+2. **The current group's header is text, not a button.** It is always open
+   (§4.2), so a toggle on it would be a control that does nothing; as text it
+   also costs no tab stop. It keeps its ▾ glyph.
+3. **One `<nav>` for both widths.** The phone menu is the sidebar's own `<nav>`
+   shown under the trigger, not a second list, so the two cannot disagree; the
+   trigger reads *Admin › Section › Page*.
+4. **Moved to phase 6:** the relative time in a `title` beside each absolute
+   date (§6.7, "one date format"), and the Access check page's title (that page
+   is merged into Authorization in phase 6).
+
+Checks run: `vitest run` (136 files, 1641 tests), `vue-tsc`, oxlint, eslint,
+oxfmt, `impeccable detect ui/src`, `i18n:check` (0), `pnpm run build` — all
+green. **Not run here:** `console_fetch.sh` (observation 11) and the rendered
+design gate at four viewports — the browser and PostgreSQL sidecars were down
+in this workspace; both run in CI's heavy and design jobs on the pull request.
+
+### 17.2 Phase 2 — the `/security` space (built 2026-11-17)
+
+What landed:
+
+- `config/securitySections.ts` (the table, `SECURITY_PAGE_VERBS`,
+  `firstSecurityPage`, `securitySectionOf`) and `layouts/SecurityLayout.vue`,
+  a wrapper over `ConsoleLayout` like `AdminLayout`. `AdminPage.verb` is now
+  `string | string[]` (any one opens the page) for the overview's
+  `quarantine:read` *or* `flags:read`; `ADMIN_PAGE_VERBS` keeps only
+  single-verb pages, so a list-verb admin page would be refused (fail closed).
+- `router/index.ts`: the `/security` children are generated from one map with
+  `meta.verb` from the table; the guard refuses a `/security` route without a
+  verb (T9) and sends a refused viewer to the first page they may read in the
+  same group, else in the space, else `/`. `handleLegacyPath` splits a hash
+  out of a target (decision 34), and `scrollBehavior` scrolls to it.
+- Pages under `pages/security/`: Holds, Flags, Exposure (the panels, each
+  under its own h1), Findings and Scanners & worker (`git mv` of
+  `AdminFindings.vue` and `AdminScans.vue`, tests moved). `SecurityDashboard`,
+  `FindingsPanel` (the drawer) and their tests are deleted; the Holds row links
+  to `/security/findings?registry=`.
+- The §6.6 redirect table, `SECTION_INDEXES` and `REVERSE_REDIRECTS` exactly as
+  written; RP-1/4/5/8 retargeted, RP-1 with `hash: "#explain"`; the palette
+  lists `/security` pages from the table and reads `SECURITY_PAGE_VERBS`, and a
+  test asserts every red path resolves a verb.
+- FlagsPanel left `AdminSbom`, ExposurePanel left `AuditLog`; each is a link.
+- `config/codeLabels.ts` and `components/admin/CodeLabel.vue`: 31 reason
+  codes, 4 flag effects and 46 audit actions as labels in `en` and `fr`, the
+  raw code beside each in mono; used by Holds, Flags, Exposure, the audit log.
+- Inventories: `design-routes.mjs` gains `SECURITY_ROUTES` (nine) and the
+  floor moves 40 → 47; `adminSections*.test.ts` check `SECURITY_SECTIONS`
+  against the router and the design list.
+- Heavy: `console_security.mjs --nav 1` (obs. 11). Observation 10's browser
+  half and the moved cases of `console_fetch.sh` are listed in §17.7.
+
+Where the build differs from the text:
+
+1. **A refused page lands in its own group first.** §4.2 says "the first page
+   they may read", and observation 10 says a `flags:read` viewer opening Holds
+   lands on Flags — which is the first readable page of Holds's group, not of
+   the space (that would be the overview). The guard does what the observation
+   says, as the admin guard already does by section.
+2. **The two group keys are routes.** `/security/triage` and
+   `/security/follow-up` redirect to their first page, so the link-target gate
+   can resolve them.
+3. **The Holds/Flags/Exposure panels keep their card title** under the page's
+   h1; their intros are the page's description.
+
+### 17.3 Phase 3 — overview, coverage, scanners (built 2026-11-17)
+
+Backend: `070_scanner_status.sql`, `ports/security.rs` (`ScannerStatusRepository`,
+`WorkerRegistry::workers()`), `services/security_overview.rs` (the status rules
+of §4.2), `handlers/security_console.rs` (the four endpoints and the source
+cache), the worker's status write in `scan_worker.rs`, the breaker persisted as
+`unavailable_until` and `batlehub_osv_breaker_open{scanner}`, the Postgres and
+in-memory adapters, `batlehub-cli security status` (`cli/security.rs`,
+`api/security.rs`, `docs/use/cli.md#security-status`), `perf/profile_routes.txt`
+and two soak arms. UI: `SecurityOverview.vue` with `SecurityStatusStrip` and
+`StateMark` (glyph + word, `UNKNOWN` never `OK`), `SecurityCoverage.vue`,
+`SecurityCoverageRegistry.vue` with `CoverageProtection`, `ScannerHealthBlock`
+on top of Scanners & worker, and the dashboard's security lines.
+
+The JSON as served: `SecurityOverview {computed_at, holds?, flags?, scanners?,
+coverage?, decisions {total, items}}`, one block per domain (`state`,
+`unknown_reason?` and its counts), `DecisionItem {kind, registry, name, version,
+at, reason_code?, pulls_after?, expires_at?}`; `CoverageList`/`CoverageRow`;
+`ScannerHealth {computed_at, workers, queue, scanners}`. The generated SDK
+functions are `securityOverview`, `securityCoverage`,
+`securityCoverageRegistry`, `securityScanners`.
+
+Where the build differs from the text:
+
+1. **The stores sit on `HotConfig`** (`worker_registry`, `scanner_status`,
+   `security_daily`, `plain_static_tokens`), as every per-process store does,
+   and heartbeats are read through `WorkerRegistry::workers()` (default body:
+   empty) rather than the `ScanQueue::workers()` §6.1 names — the heartbeats
+   already live behind `WorkerRegistry`, so the five `ScanQueue` fakes never
+   change either way.
+2. **The source cache** is one process-wide `SourceCache`, built outside the
+   actix factory (a factory runs per worker), switched by
+   `[database] read_cache`.
+3. **The breaker is persisted by the worker**, after each scanner call, from
+   the scanner's `unavailable_for()`; `vulnerability/osv.rs` is unchanged.
+4. **"Live worker" is a fixed 720 s** (the default `job_timeout_secs` + 120 s):
+   the console does not read `[worker]`. Marked `shortcut:` in the code; a
+   raised job timeout makes a slow worker read as dead.
+5. **The malware, waiting and pending counts** are taken over at most 1 000
+   held versions per state per registry; the held totals are exact.
+6. **A hold on a hard block** is a held version whose reason is `SOC_VERDICT`
+   — what a `hard_block` flag produces.
+7. **No `error_class` on a failed-scan decision, no `warn_at` and no
+   `last_scan_at` on coverage**: the profile has no warn threshold, and the
+   last scan would be another query per registry. Coverage carries
+   `security_mode` (`block`/`warn`) instead, which is what says "refuses" or
+   "warns".
+8. **The dashboard's Config line** reads the warnings from
+   `GET /admin/instance-security`, so it needs `system:read` as well as
+   `config:read`; a second list of the security codes in the UI would drift
+   from the server's.
+9. **Not done**: the Grafana panels of §10.1, and the §10.3 measurement of the
+   summary on 1 M verdicts — it needs a seeded database.
+
+### 17.4 Phase 4 — trends (built 2026-11-17)
+
+`071_security_daily.sql`, `ports/security_daily.rs`,
+`services/security_rollup.rs` (startup and hourly, under its own leader key,
+14 gap rows per run, `NULL` beyond a source's retention, state columns for
+today only), `GET /admin/security/trends` (`SecurityTrends`, `TrendDay`; SDK
+`securityTrends`), `[stats] security_history_retention_days` with
+`stats.security-history-long`, the config and Helm schemas, and
+`ci/values-integers.yaml`. UI: `SecurityTrends.vue` (7/30/90 in the address,
+*Show as table*, a gap never a zero) over `StatsTrendChart`, which now takes up
+to two series told apart by fill and outline; its six §11 criteria are
+`StatsTrendChart.test.ts` and the Trends table test.
+
+Where the build differs: the rollup writes a row for **every configured
+registry**, not only protected ones; `access_events` counts as holding a day
+from its oldest row on (that day may be partly purged — `shortcut:` in the
+code); with retention `0` the gap fill looks back 365 days. The refusals and
+gap-fill measurements of §10.3 were not taken.
+
+### 17.5 Phase 5 — instance security (built 2026-11-17)
+
+`handlers/back_office/instance_security.rs` (`InstanceSecurity`, SDK
+`instanceSecurity`), `auth.plain-static-token` in `schema/warnings.rs` (the
+path only, never the value or the user id), the named set of 19 security codes
+with its test, the admin section *Instance security* with `AdminInstanceSecurity.vue`
+and Blocks moved to `/admin/instance-security/blocks`, and
+`guide/admin-access.md#instance-security`/`#static-tokens`. `sign_ins.by_kind`
+is keyed by audit action (`sign_in_failed`, `credential_rejected`), drawn with
+their translated labels.
+
+### 17.6 Phase 6 — the remaining verdicts (built 2026-11-17)
+
+- *Access check* is deleted and `/admin/access/check` lands on
+  `/admin/access/authorization#explain`; the old page's 20 catalogue keys went
+  with it. `batlehub-cli authz check` is unchanged.
+- Configuration: a staged edit's warnings omit the ones already in force, so a
+  warning is drawn once (`ConfigEditorCard` gets `activeWarnings`).
+- Health: *Delete cached artifact* moved to one registry's Overview tab,
+  preselected on that registry.
+- Audit log: Retention is behind a `<details>` disclosure.
+- Findings: the ACTIONS column only when a row on the page can be exempted;
+  coordinates underlined at rest.
+- Scanners & worker: the *Verdicts by state* tab is removed (Holds has it); the
+  state filter is hidden on an empty, unfiltered queue.
+- *Recent denials* is *Refused requests* (`Requêtes refusées`).
+- Stacked rows below `md`: `Table` gains a `stacked` prop, used by Holds,
+  Flags, Coverage and the scanners table.
+- One date format: `components/ui/date-time/DateTime.vue` draws `formatDate`
+  with the relative time in `title` and the instant in `datetime`; every
+  `{{ formatDate(x) }}` of an admin or security page uses it. This closes the
+  item §17.1 had moved here.
+- The dashboard no longer says "of 0 artifact downloads"
+  (`adminDashboard.cacheSummaryNone`), and its date is a `DateTime`.
+- `PRODUCT.md`'s surface paragraph restated; `CHANGELOG.md`; docs:
+  `guide/administration.md` (red-path table, the two spaces),
+  `guide/security-gates.md` (`#console`, `#worker`, `#scanners`, the moved
+  pages), `guide/admin-access.md` (`#instance-security`, `#static-tokens`),
+  and their French twins.
+
+### 17.7 Checks, and what has not run (2026-11-17)
+
+| Check | Result |
+| --- | --- |
+| `cargo clippy --workspace --all-targets -D warnings`, `cargo fmt` | clean |
+| `batlehub-config`, `batlehub-core --lib`, `batlehub-server`, `batlehub-cli` (unit + `security status` integration) | pass |
+| `batlehub-web`, every target, `--no-fail-fast` (`security_console.rs`, `openapi_contract`, the profile and authz gates) | pass, after `ui/openapi.json` was regenerated |
+| `pg_security_daily`, `pg_scanner_status` against a real PostgreSQL 17 | pass (not skipped) |
+| `vitest run` | 144 files, 1 701 tests, pass (after the three review rounds) |
+| `vue-tsc`, oxlint, eslint, oxfmt, `i18n:check`, `pnpm run build` | clean |
+| `task docs:i18n:check`, `docs:audience`, `docs:structure`, `docs:cli-commands`, `rfc:index:check` | pass |
+| the demo's generated config through `batlehub explain-config` | parses |
+
+**Not run yet**, and to run before the status moves to *Implemented*: every
+observation of §6.P — the heavy suites (`console_fetch.sh`,
+`console_security.mjs`, `authz.sh` section 13-bis) were written or rewritten
+and parse, but none has run (the browser sidecar was down in this workspace);
+the rendered design gate at four viewports over the nine `/security` routes;
+the §10.3 measurements. `config.authz.toml` has no `flags:read`-only token, so
+observation 2 and the exit-7 path are proven by the integration and unit tests
+only.
+
+**The demo** (`scripts/demo.sh`, `scripts/demo_seed.py`,
+`guide/install/demo.md`) stands up every surface of this RFC with real traffic
+— five registries, one per security state, six personas, a signed SOC flag on a
+version already pulled, rejected credentials, a ban, an expiring exemption —
+and is how the maintainer validates the whole before the one commit.
+
+
+### 17.8 Review of the whole change (2026-11-17)
+
+**First round** — ten findings, all in the backend, all fixed, each but the
+doc comment with a test that fails without its fix:
+
+| # | Finding | Fix | Test |
+| --- | --- | --- | --- |
+| 1 | `/security/scanners` listed every worker's registries, sealed ones included (decision 27); `live_workers` counted workers serving only sealed registries | a worker shows only the caller's registries; one serving only sealed ones is absent | `a_worker_names_no_sealed_registry` |
+| 2 | the plain-token warning read `$argon2…` as hashed, the verifier only `$argon2id$`, `$argon2i$`, `$argon2d$`: `$argon2-x` was a clear token nobody was warned of | the verifier's prefixes | `an_argon2_lookalike_is_a_plain_token` |
+| 3 | trends' `history_starts` was the oldest day of every registry, sealed ones included | over the caller's registries only | `history_starts_ignores_a_sealed_registry` |
+| 4 | `failed` and `deferred_over_day` were counted from one page of 1 000 jobs | `queued()` counts `deferred_over_day` in its `GROUP BY`; failed counts are per-registry totals once past a page | in-memory and pg `queued_counts_jobs_deferred_over_a_day` |
+| 5 | an exemption over two gates was two decisions and two counts | one row per version, the earlier end | `an_exemption_over_two_gates_counts_once` |
+| 6 | the `scanner_status` throttle marked a write before it ran, process-wide: a failed write hid the state for 30 s | per worker; a failed write is forgotten | `a_failed_status_write_is_retried_by_the_next_outcome` |
+| 7 | `unavailable_until` was the last writer's: two workers flipped the breaker | an open breaker only extends; only a success closes it | in-memory and pg `the_breaker_only_extends_until_a_success` |
+| 8 | Instance security answered 500/503 when the ban or policy store failed | that block alone is `unknown_reason`, the line *Could not be read* | `a_ban_store_down_is_one_unknown_line`, Vitest |
+| 9 | the holds source read 2 × N queries one after the other under its 2 s timeout | concurrently | — |
+| 10 | `spawn_rescan_scheduler`'s doc comment sat on `spawn_security_rollup` | moved back | — |
+
+**Second round** — two fresh reviewers, one on the backend (the first round's
+fixes included), one on the UI, which the first round had only skimmed. All
+points fixed except the one marked:
+
+| Area | Finding | Fix |
+| --- | --- | --- |
+| backend | `list_by_state` read the findings one query per row (N+1, up to 1 000 per registry and state) and the holds source ran it for every registry at once: on a large estate the line stays UNKNOWN and the pool is taken from downloads | one batched findings query per page (`findings_for_many`), so the three existing callers gain too; per-registry reads 4 at a time |
+| backend | an exemption with one lapsed gate merged into "ended yesterday" and dropped out of every list | only gates still running are merged (test extended) |
+| backend | a source load only advanced while a request awaited it: a client gone mid-load kept its connections and its timeout never ran | the load runs in its own task |
+| backend | Coverage showed a failed source as real zeros | `scanned`, `waiting`, `failed` are `null` then; the page says *Could not be read* |
+| backend | Instance security counted at most 10 000 events, silently | `sign_ins.partial`; the page shows `≥` with an explanation (the count is weighted, so `count_events` cannot give it) |
+| backend | two writes of one worker landing reversed could reopen a closed breaker | a breaker opens only from an error no older than the last success; only a newer success closes it (tests extended) |
+| backend | the ban read had no timeout | the page's 2 s budget |
+| backend | a day where one registry had a figure and another none showed the partial sum | a gap (`a_day_missing_one_registrys_figure_is_a_gap`) |
+| backend | a failed-scan decision per failed job: two items, one Vue key, for a version whose rescan failed again | one per version |
+| backend | `/security/scanners` drew a lapsed breaker as open | an `unavailable_until` in the past is not sent |
+| backend | a worker serving only visible unprotected registries is hidden | **kept**: workers scan protected registries only, so such a worker has nothing to report |
+| UI | the scanners line was always singular (`3 worker running`) | the plural rides on `n` (test) |
+| UI | stacked tables lost their column names below `md` | `TableCell` `label`, printed below `md` only, `aria-hidden` (the header stays for screen readers) |
+| UI | a registry under `cve_gate` alone read as covered and not covered on the same pages; the overview said "nothing is protected" | covered everywhere; the hint shows only while a registry is not (test) |
+| UI | the palette no longer found the security pages by "security" | the space's name is a keyword of its pages (test) |
+| UI | Instance security drew `● OK` beside bans, new token sources and expiring exemptions | those lines carry no state, as the §4.5 mock; only *unknown* is marked |
+| UI | a hash naming nothing opened the page at the previous offset | top of the page |
+| UI | the old access check's `name`, `user_id`, `role` were carried but nothing read them | renamed to `package` and `subject` (test); `client_ip` has no counterpart |
+| UI | links into pages the viewer cannot open (Authorization from an expiring exemption, the audit log) | drawn only with the page's verb; an exemption without `authz:read` opens the package |
+| UI | Trends: a coverage failure was an unhandled rejection, an older answer could overwrite a newer one, flag columns read *no data* without `flags:read` | caught; the last choice wins; the columns follow the verb |
+| UI | a refused `/admin/instance-security/blocks` landed outside its section | on the section listing the page |
+| UI | a failed Instance security read hid the dashboard's *Config* line | the line reads UNKNOWN |
+
+Not checked by either round: rendering in a real browser at phone width, and
+VoiceOver on a stacked table (`display: block` on table parts may cost WebKit
+its table semantics).
+
+**Third round** — `/code-review` at max effort over the whole tree (both
+earlier rounds included): 15 findings plus about 20 smaller ones, all
+confirmed by a verifier, fixed by four agents on disjoint files, then
+integrated (spec and client regenerated, temporary types removed). Two
+choices were the maintainer's: the access check's whole-download
+**simulation comes back** as a panel on Authorization (`#simulate`; RP-1
+and the old bookmarks land there, Explain stays grants-only), and the
+plain-token list is **taken at startup**, as `[auth]` is.
+
+| Area | Finding | Fix |
+| --- | --- | --- |
+| worker | a scanner run as an enricher (mlab), or unable to scan any protected kind, never wrote `scanner_status`: Scanners at ATTENTION forever, CLI exit 1 | enrichers record their outcome; the console counts a scanner only for the kinds it scans (`scanner_kinds`, built at startup) |
+| worker | an `Unsupported` artifact marked the scanner failing | recorded as an answer; the verdict keeps `SCANNER_UNSUPPORTED` |
+| worker | the heartbeat was written once per pass: a busy worker read as dead | a 30 s ticker beside the poll loop; `LIVE_WORKER` = 120 s |
+| server | the plain-token list was recomputed on reload while `[auth]` is restart-only: a revoked clear token read as gone while it still authenticated | built once from the startup config |
+| console | the Holds line, `pending_over_hour`, malware/waiting and hard-block decisions came from the newest 1 000 holds | store-side `hold_counts` and `list_held_with_code`; no findings loaded |
+| console | Coverage's gates looked in the rule chain, from which a `[security]` registry's gates are moved to scanners | read from `internal_scanners` too |
+| console | pulls after a flag counted revoked flags, one consumer's pulls, and a global page of 1 000 | `pulls_after_live_flags`: live flags only, summed per version, no global page |
+| console | decisions sorted by `at`, an exemption's future end on top | by urgency (above) |
+| console | refusals on purged days written as 0; a recompute could shrink a stored count | held-from from the download rows; counts only grow |
+| console | Trends: a new registry blanked the summed past; a day missing a registry's row read as whole | a registry counts from its first figure; after that a missing figure is a gap |
+| console | "All N registries are protected" counted local ones; a failed source dropped its decisions silently; `history_starts` counted empty backfill rows; one failed rollup step stalled the rest | `coverage.upstream`; `decisions.unknown`; first day with a figure; steps independent |
+| instance | Token sources read 0 when the audit read failed, exact when the read was cut | `token_sources.unknown_reason`, `partial` |
+| CLI | the scanners sentence named no cause and was singular | the UI's cause order, plurals, `upstream` |
+| config | a second copy of the argon2 prefixes | one `is_argon2_hash` in `core::entities` |
+| UI | warn mode read "refuses critical and above" | "warns on … and above, still refuses known malware" |
+| UI | `0` (never) read "0 days"; spans rounded to days and hours | `formatSpan` / `formatEvery`, exact units |
+| UI | an exemption ending in 5 days read "ends Just now" | `formatRelative` handles the future |
+| UI | the config editor hid a new warning at a reused positional path; a dismissed warning vanished from validation | match on code, path and message, and only while the code's count did not grow; validation reads every warning |
+| UI | 36 of 46 audit actions unlabelled (the audit JSON spells `signinfailed`) | both spellings keyed (test over the generated `AccessAction`) |
+| UI | the window toggle could show the other window; paths hidden from `audit:read`; the dashboard's Config line missing for `config:read` alone; Holds → Findings lost the held filter; SBOM → Flags drawn without `flags:read`; the hash decoded twice; hourly charts said "days" | each fixed with a test |
+| demo | the ban lived in the memory cache the seeding's restart wipes; downloads after the `hard_block` are refused, so no "pulled after flag" | `[cache] type = "postgres"`; a `warn` flag on `minimist@1.2.8` pulled after it |
+| demo docs | "exit 7" for the SOC token (it is 1: ATTENTION wins), "secops has no admin page" (it reads the audit log), the warn-mode wording | corrected, en and fr |
+| heavy | `console_fetch.sh` expected four status lines from a config with no `[security]` | a sealed `[security]` registry in its config |
+| gates | `docs:cli-commands` skipped `security`; the design-gate stub had no fixtures for the six endpoints | both added |
+| docs | Explain described as running the whole chain; the liveness window; the restart rule for plain tokens | Simulate vs Explain, "a heartbeat every 30 s, live under two minutes", `[auth]` at startup |
+
+Known limits left, each with a `shortcut:` comment or noted here: past 1 000
+`SOC_VERDICT` holds the oldest are neither listed nor counted; Trends read 90
+days, so a registry's start is its first figure within them; the scanner-kind
+map comes from the console process's own `[scanners]`, so a worker with a
+different section would disagree; if every download row has been purged, the
+access log reads as fresh.
+
+**After the third round — the mass-compromise case.** Asked by the maintainer:
+a global supply-chain incident recently left more than 1 400 packages with
+malicious versions; were it to recur, the SOC must see every one of them. The
+overview's decision total was cut at the 1 000 SOC holds it reads, and nothing
+listed held versions past 10 per registry (`GET /admin/verdicts`: at most
+1 000 per state and registry, no paging, no reason filter). Now:
+
+- **Exact figures at any volume.** `hold_counts` counts `SOC_VERDICT` holds per
+  registry (`holds.soc_verdict`); the Holds line reads "1 400 versions held,
+  1 400 on a SOC's hard block", and the decision total adds the hard blocks
+  past the rows read, so it says 1 400, not 1 000.
+- **The full list, paged.** `GET /admin/verdicts` takes `reason`, `page`,
+  `per_page` and `state=held`, answers the exact `total`, and without
+  `registry` covers every protected registry the caller reads (a sealed one is
+  absent). `/security/holds` gains *Every held version*: paged, filtered by
+  registry and reason from the URL, so the Holds line and the overview link to
+  `/security/holds?reason=SOC_VERDICT`. The CLI: `verdict list
+  --all-registries --state held --reason SOC_VERDICT --page N`.
+- Proven by `a_mass_compromise_is_counted_and_listed_in_full` (1 400 SOC holds
+  across two registries, walked in three pages to all 1 400),
+  `the_cross_registry_listing_leaves_a_sealed_registry_out`, pg
+  `page_verdicts` assertions (order, filter, total past the last page), and the
+  UI tests of the list and the overview.
+
+`verdict list --limit` was per state; it is now the page size (`--limit` and
+`per_page` are the same thing), and the response gains `total`, `page`,
+`per_page` — `registry` is omitted when the listing spans registries.
+
+**Found by the demo, before this RFC.** `PgPolicyRepository::exemptions_in_registry`
+matched `rules @> '[{"exempt": true}]'`, but a rule is stored as
+`{"gate", "settings": {"exempt", …}}`: on Postgres no exemption was ever found
+— not by this console, not by the existing exemptions list of Authorization —
+while the in-memory store, which reads `settings.exempt`, agreed with every
+in-process test. Fixed to `rules @> '[{"settings": {"exempt": true}}]'`, with a
+two-store test in `pg_policy.rs` (`exemptions_in_registry_reads_the_flag_in_settings`)
+that fails on the old query.
+
+**Found by the demo, before this RFC (2).** `RejectionThrottle` writes one
+`credential_rejected` row per IP per minute and carried the attempts it held
+back on the *next* row for that IP: a burst that stopped was never counted.
+The demo's 24 refused tokens read as 1 on Instance security, and the
+`credential_rejected_burst` Sigma rule (`throttled_count >= 10`) never fired on
+a burst shorter than a minute. `CredentialRejectionAudit::spawn_flusher` now
+writes, every 10 s, a row for each IP whose window elapsed while holding
+attempts (and every IP at a clean shutdown); that row stands for one of them,
+so `1 + throttled_count` still sums to the attempts. The `SWEEP_AT` sweep keeps
+such entries for the flusher instead of dropping them. Tests:
+`a_burst_that_stops_is_taken_once_its_window_elapses`,
+`the_sweep_keeps_held_attempts_for_the_flusher` (auth.rs) and
+`a_burst_that_stops_is_counted_in_full_once_flushed` (24 attempts → 24).
+Rate limiting and IP auto-ban are untouched: they act on every request, not on
+the audit rows.

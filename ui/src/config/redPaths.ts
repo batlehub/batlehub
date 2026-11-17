@@ -2,8 +2,8 @@
  * The red paths of RFC 0046 §2.1 as palette actions: one entry per row, with
  * the words an operator under pressure types in either language.
  *
- * `to` is an admin page (a key of `ADMIN_PAGE_VERBS`, gated by its verb like
- * every other palette row) or, for an action that needs a package first, the
+ * `to` is an admin or security page (a key of `ADMIN_PAGE_VERBS` or
+ * `SECURITY_PAGE_VERBS`, gated by its verb like every other palette row) or, for an action that needs a package first, the
  * catalog — then `verb` names what the action needs and the palette hands the
  * query to the search (RP-6). `adminSections.test.ts` refuses a target the
  * router does not know (§4.3).
@@ -15,6 +15,8 @@ export interface RedPath {
   keywords: { en: string[]; fr: string[] };
   to: string;
   query?: Record<string, string>;
+  /** An anchor on the page (`#explain`). */
+  hash?: string;
   /** Only for a non-admin target: the verb the action itself needs. */
   verb?: string;
 }
@@ -27,7 +29,10 @@ export const RED_PATHS: RedPath[] = [
       en: ["download", "denied", "refused", "forbidden", "why", "access"],
       fr: ["téléchargement", "refusé", "interdit", "pourquoi", "accès"],
     },
-    to: "/admin/access/check",
+    // RFC 0050 §17.8: the access check is Authorization's simulation panel,
+    // which runs the whole download (blocks too), not Explain's grants alone.
+    to: "/admin/access/authorization",
+    hash: "#simulate",
   },
   {
     id: "RP-2",
@@ -54,7 +59,7 @@ export const RED_PATHS: RedPath[] = [
       en: ["cve", "vulnerability", "advisory", "finding", "ghsa"],
       fr: ["cve", "vulnérabilité", "alerte", "constat", "ghsa"],
     },
-    to: "/admin/security/findings",
+    to: "/security/findings",
   },
   {
     id: "RP-5",
@@ -63,7 +68,7 @@ export const RED_PATHS: RedPath[] = [
       en: ["rescan", "scan", "failed", "failure", "retry"],
       fr: ["réanalyser", "analyse", "échec", "échoué", "relancer"],
     },
-    to: "/admin/security/scans",
+    to: "/security/scanners",
     query: { tab: "failures" },
   },
   {
@@ -92,7 +97,7 @@ export const RED_PATHS: RedPath[] = [
       en: ["token", "leaked", "ip", "abuse", "block", "unblock", "user"],
       fr: ["jeton", "fuite", "ip", "abus", "bloquer", "débloquer", "utilisateur"],
     },
-    to: "/admin/access/blocks",
+    to: "/admin/instance-security/blocks",
   },
   {
     id: "RP-9",

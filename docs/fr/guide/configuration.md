@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: cabce79ef4266d56
+sourceHash: 576af4e509931e43
 ---
 
 # Référence de configuration
@@ -3206,6 +3206,7 @@ une seule question d'opérateur — même si les deux moitiés diffèrent :
 [stats]
 history_enabled        = true   # défaut
 history_retention_days = 30     # défaut ; 0 désactive l'élagage, pas l'historique
+security_history_retention_days = 90  # défaut : les tendances de sécurité de la console
 metrics_enabled        = true   # défaut : le comportement d'avant la RFC 0004
 # Liens de monitoring (absents par défaut : pas de bouton)
 dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
@@ -3216,6 +3217,7 @@ registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batl
 |---|---|---|---|
 | `history_enabled` | booléen | `true` | Enregistrer le cumul horaire du cache derrière la tendance du tableau de bord. `false` rétablit le tableau de bord d'avant la RFC 0004, qui n'affiche que les compteurs depuis le démarrage du processus courant |
 | `history_retention_days` | u32 | `30` | Supprimer les lignes de cumul plus anciennes. `0` garde toutes les lignes — cela désactive l'*élagage*, pas l'historique |
+| `security_history_retention_days` | u32 | `90` | Jours du cumul quotidien de sécurité derrière *Sécurité → Tendances* ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)). Suit `history_enabled`. `0` garde chaque jour ; au-delà de `365` ou à `0`, lève `stats.security-history-long`, le cumul survivant alors aux lignes d'audit qu'il résume. Une version antérieure à la RFC 0050 refuse cette clé : retirez-la avant un retour arrière |
 | `metrics_enabled` | booléen | `true` | Installer le collecteur Prometheus et servir `/metrics`. `false` fait répondre `503 metrics not configured` à `/metrics` |
 | `dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de *Admin → Tableau de bord*. Aucun paramètre |
 | `registry_dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de chaque page de registre. `{registry}` est son seul paramètre, et il est obligatoire ; il est remplacé encodé en pourcentage, le modèle doit donc le placer dans la requête |

@@ -96,6 +96,8 @@ struct FakeOsv {
     /// Off: this fake does not cover the registry's kind, as osv does not
     /// cover deb or terraform.
     uncovered: std::sync::atomic::AtomicBool,
+    /// On: every artifact is one this scanner cannot read.
+    unsupported: std::sync::atomic::AtomicBool,
 }
 
 impl FakeOsv {
@@ -109,6 +111,7 @@ impl FakeOsv {
             rate_limited: Mutex::new(false),
             open_for: Mutex::new(None),
             uncovered: std::sync::atomic::AtomicBool::new(false),
+            unsupported: std::sync::atomic::AtomicBool::new(false),
         })
     }
     fn vuln(&self, version: &str, severity: Severity) {
@@ -175,6 +178,9 @@ impl ArtifactScanner for FakeOsv {
         if *self.fail.lock().unwrap() {
             return Err(ScannerError::Upstream("osv down".into()));
         }
+        if self.unsupported.load(Ordering::SeqCst) {
+            return Err(ScannerError::Unsupported("not this artifact".into()));
+        }
         Ok(self
             .findings
             .lock()
@@ -182,6 +188,25 @@ impl ArtifactScanner for FakeOsv {
             .get(&input.package.id.version)
             .cloned()
             .unwrap_or_default())
+    }
+}
+
+/// An enricher (`mlab`'s shape) that answers or fails on demand.
+#[derive(Default)]
+struct FakeEnricher {
+    fail: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl batlehub_core::ports::FindingEnricher for FakeEnricher {
+    fn name(&self) -> &str {
+        "mlab"
+    }
+    async fn enrich(&self, _: &mut Vec<Finding>) -> Result<(), ScannerError> {
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(ScannerError::Upstream("mlab down".into()));
+        }
+        Ok(())
     }
 }
 
@@ -214,6 +239,8 @@ impl NotificationSink for RecordingSink {
 
 struct Lab {
     osv: Arc<FakeOsv>,
+    /// Wired as `mlab`, run only where a profile names it.
+    mlab: Arc<FakeEnricher>,
     queue: Arc<InMemoryScanQueue>,
     verdicts: Arc<InMemoryVerdictRepository>,
     worker: Arc<ScanWorker>,
@@ -321,6 +348,7 @@ async fn lab_keyed(
         ),
     );
     let sink = Arc::new(RecordingSink::default());
+    let mlab = Arc::new(FakeEnricher::default());
     let worker = Arc::new(ScanWorker {
         config: WorkerConfig {
             worker_id: "test-worker".into(),
@@ -336,11 +364,15 @@ async fn lab_keyed(
         sboms: None,
         hot: parts.proxy_svc.hot.clone(),
         scanners,
-        enrichers: HashMap::new(),
+        enrichers: HashMap::from([(
+            "mlab".to_owned(),
+            Arc::clone(&mlab) as Arc<dyn batlehub_core::ports::FindingEnricher>,
+        )]),
         storage: Some(Arc::clone(&parts.proxy_svc.storage)),
         max_artifact_bytes: 64 * 1024 * 1024,
         notifier: Some(Arc::clone(&sink) as Arc<dyn NotificationSink>),
         events: Some(Arc::clone(&parts.proxy_svc.repo) as Arc<dyn PackageRepository>),
+        status_writes: Default::default(),
     });
     let hot = parts.proxy_svc.hot.clone();
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
@@ -348,6 +380,7 @@ async fn lab_keyed(
         app,
         Lab {
             osv,
+            mlab,
             queue,
             verdicts,
             worker,
@@ -780,6 +813,74 @@ async fn a_failing_scanner_holds_and_exhausted_attempts_become_scanner_error() {
 }
 
 /// The undated case: held open-ended by default, with no clock.
+use batlehub_core::ports::ScannerStatusRepository as _;
+
+/// A `scanner_status` store that refuses every write while `down`.
+struct FlakyStatus {
+    down: std::sync::atomic::AtomicBool,
+    calls: std::sync::atomic::AtomicUsize,
+    rows: Arc<batlehub_adapters::in_memory::InMemoryScannerStatus>,
+}
+
+#[async_trait::async_trait]
+impl batlehub_core::ports::ScannerStatusRepository for FlakyStatus {
+    async fn record(
+        &self,
+        s: &batlehub_core::ports::ScannerStatus,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.down.load(Ordering::SeqCst) {
+            return Err(batlehub_core::error::CoreError::Database("down".into()));
+        }
+        self.rows.record(s).await
+    }
+    async fn list(
+        &self,
+    ) -> Result<Vec<batlehub_core::ports::ScannerStatus>, batlehub_core::error::CoreError> {
+        self.rows.list().await
+    }
+}
+
+/// RFC 0050 §6.1's throttle: a status write that failed is not remembered
+/// as written, so the next outcome of the same scanner retries it at once.
+#[actix_web::test]
+async fn a_failed_status_write_is_retried_by_the_next_outcome() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let status_repo = Arc::new(FlakyStatus {
+        down: std::sync::atomic::AtomicBool::new(true),
+        calls: Default::default(),
+        rows: batlehub_adapters::in_memory::InMemoryScannerStatus::new(),
+    });
+    lab.hot.write().await.scanner_status =
+        Some(Arc::clone(&status_repo) as Arc<dyn batlehub_core::ports::ScannerStatusRepository>);
+    for version in ["1.0.0", "1.1.0"] {
+        status(&app, &tarball(version)).await;
+        lab.worker.run_once().await.unwrap();
+        for _ in 0..100 {
+            if status_repo.calls.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Let every write of this round land (and fail) before the store
+        // comes back.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        status_repo.down.store(false, Ordering::SeqCst);
+    }
+    for _ in 0..100 {
+        if !status_repo.rows.list().await.unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let rows = status_repo.rows.list().await.unwrap();
+    let osv = rows.iter().find(|r| r.scanner == "osv");
+    assert!(
+        osv.is_some_and(|r| r.last_ok_at.is_some()),
+        "the second outcome wrote the row: {rows:?}"
+    );
+}
+
 #[actix_web::test]
 async fn an_undated_version_is_held_open_ended() {
     let (app, lab) = lab(SecurityMode::Block, HashMap::from([("1.1.0", None)])).await;
@@ -1199,7 +1300,7 @@ async fn the_admin_listing_lists_by_state_and_bulk_rescan_queues_each() {
     let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
     assert_eq!(body["items"].as_array().unwrap().len(), 1);
     assert_eq!(
-        get_as(&app, &format!("{uri}&state=held"), Some(ADMIN_TOKEN))
+        get_as(&app, &format!("{uri}&state=bogus"), Some(ADMIN_TOKEN))
             .await
             .status(),
         400
@@ -1928,4 +2029,93 @@ async fn a_code_this_release_does_not_know_is_refused_and_left_alone() {
         "nor did the worker"
     );
     assert!(lab.queue.open_jobs().await.is_empty(), "the job closed");
+}
+
+// ── RFC 0050: what the worker tells the console ─────────────────────────────
+
+/// A fresh `scanner_status` store on the lab's hot config.
+async fn status_store(lab: &Lab) -> Arc<batlehub_adapters::in_memory::InMemoryScannerStatus> {
+    let store = batlehub_adapters::in_memory::InMemoryScannerStatus::new();
+    lab.hot.write().await.scanner_status =
+        Some(Arc::clone(&store) as Arc<dyn batlehub_core::ports::ScannerStatusRepository>);
+    store
+}
+
+/// The row the worker's spawned write leaves for `scanner`, once it lands.
+async fn status_row(
+    store: &batlehub_adapters::in_memory::InMemoryScannerStatus,
+    scanner: &str,
+) -> Option<batlehub_core::ports::ScannerStatus> {
+    for _ in 0..100 {
+        let row = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.scanner == scanner);
+        if row.is_some() {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    None
+}
+
+/// An artifact the scanner cannot read is the verdict's business: the
+/// scanner answered, so the console must not draw it as failing.
+#[actix_web::test]
+async fn an_unsupported_artifact_does_not_mark_the_scanner_failing() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let store = status_store(&lab).await;
+    lab.osv.unsupported.store(true, Ordering::SeqCst);
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let row = status_row(&store, "osv").await.expect("a row");
+    assert!(row.last_error_at.is_none(), "{row:?}");
+    assert!(row.last_ok_at.is_some(), "{row:?}");
+}
+
+/// An enricher named in a profile writes its state like any scanner: it
+/// used to have no row at all, read as never ran for good.
+#[actix_web::test]
+async fn an_enricher_outcome_is_recorded() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let store = status_store(&lab).await;
+    if let Some(p) = lab.hot.write().await.security.get_mut(REG) {
+        p.scanners.push("mlab".into());
+    }
+    lab.mlab.fail.store(true, Ordering::SeqCst);
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let row = status_row(&store, "mlab").await.expect("a row");
+    assert_eq!(row.last_error_class.as_deref(), Some("upstream"), "{row:?}");
+}
+
+/// A profile scanner that cannot scan the registry's kind never runs there:
+/// counting it drew a never-ran scanner, and `security status` exited 1, for
+/// good.
+#[actix_web::test]
+async fn a_scanner_that_cannot_scan_the_kind_is_not_listed() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    status_store(&lab).await;
+    let uri = "/api/v1/admin/security/scanners";
+    let names = |body: &serde_json::Value| -> Vec<String> {
+        body["scanners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let read = || async {
+        let resp = get_as(&app, uri, Some(ADMIN_TOKEN)).await;
+        assert_eq!(resp.status(), 200);
+        actix_web::test::read_body_json::<serde_json::Value, _>(resp).await
+    };
+    assert_eq!(names(&read().await), vec!["osv"]);
+    lab.hot.write().await.scanner_kinds = Arc::new(HashMap::from([(
+        "osv".to_owned(),
+        vec![RegistryKind::Pypi],
+    )]));
+    assert!(names(&read().await).is_empty());
 }

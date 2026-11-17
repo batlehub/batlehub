@@ -8,8 +8,6 @@ import { RouterLink } from "vue-router";
 
 import { adminStats } from "@/client/sdk.gen";
 import type { StatsResponse } from "@/client/types.gen";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { REGISTRIES_TABS } from "@/config/adminSections";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { PageHeader } from "@/components/ui/page-header";
@@ -35,7 +33,6 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminRegistries.title')"

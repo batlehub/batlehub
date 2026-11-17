@@ -42,7 +42,7 @@ function routes(listing: unknown, importResult: Record<string, unknown> = {}) {
 }
 
 async function mountPage() {
-  const wrapper = mount(AdminImports, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AdminImports, { global: { stubs: {} } });
   await flushPromises();
   return wrapper;
 }

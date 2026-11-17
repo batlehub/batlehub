@@ -1,10 +1,9 @@
 /**
- * Admin navigation data: the sidebar, and the tab strip for each
- * `/admin/<section>` route.
+ * Admin navigation data: the sidebar of every `/admin/<section>` route.
  *
  * `label` holds an **i18n key**, not a string, matching `navigation.ts`. These
  * were English literals until the audit learned to look inside `<script>`:
- * every one of them rendered untranslated through `SectionTabs` and
+ * every one of them rendered untranslated through the tab strips and
  * `AdminLayout`, and the template-only scan could not see them, so the gate
  * read zero while the whole admin navigation stayed in English.
  *
@@ -12,13 +11,24 @@
  * reason: `catalogues.test.ts` can only prove a label resolves if it can import
  * it, and an array inside `<script setup>` cannot be imported.
  */
-import { FolderKey, LayoutDashboard, Package, Server, Settings, Shield } from "@lucide/vue";
+import { FolderKey, LayoutDashboard, Package, Server, Settings, ShieldAlert } from "@lucide/vue";
 
-/** One admin page: its path, its i18n label and the verb its own reads ask for. */
+/**
+ * The verb a page asks for, or (RFC 0050's security overview) a list of which
+ * any one opens it.
+ */
+export type PageVerb = string | readonly string[];
+
+/** Whether `can` opens a page gated on `verb`. */
+export function canOpen(can: (verb: string) => boolean, verb: PageVerb): boolean {
+  return typeof verb === "string" ? can(verb) : verb.some((v) => can(v));
+}
+
+/** One console page: its path, its i18n label and the verb its own reads ask for. */
 export interface AdminPage {
   to: string;
   label: string;
-  verb: string;
+  verb: PageVerb;
 }
 
 export interface AdminSection {
@@ -33,7 +43,7 @@ export interface AdminSection {
 
 /**
  * RFC 0046 §5: the one table every admin consumer is derived from — the router
- * guard (`ADMIN_PAGE_VERBS`), the sidebar, the tab strips, and the design
+ * guard (`ADMIN_PAGE_VERBS`), the sidebar, the palette, and the design
  * gate's route list (checked by `adminSections.test.ts`). There used to be
  * five hand-kept copies, and RFC 0046 §2.2(6) is what drifting copies produce:
  * eight admin pages no design gate measured.
@@ -85,34 +95,37 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     ],
   },
   {
-    to: "/admin/security",
-    label: "adminNav.security",
-    icon: Shield,
-    pages: [
-      // RFC 0044 phase 2: GET /admin/scans is instance-tier quarantine:read.
-      { to: "/admin/security/scans", label: "adminNav.scans", verb: "quarantine:read" },
-      // RFC 0044 phase 3. shortcut: the server also answers findings:read held
-      // on one registry only; the console checks the instance tier, like the
-      // security console's panel.
-      { to: "/admin/security/findings", label: "adminNav.findings", verb: "findings:read" },
-    ],
-  },
-  {
     to: "/admin/access",
     label: "adminNav.access",
     icon: FolderKey,
     pages: [
-      // Both answer "why was this refused?", whichever of two mechanisms
-      // produced it (RFC 0015 §4.8).
-      { to: "/admin/access/check", label: "adminNav.accessCheck", verb: "authz:read" },
+      // RFC 0050 §6.7: the access check is Authorization's *Explain* panel now
+      // (one simulator, not two), and blocks are Instance security's.
       { to: "/admin/access/authorization", label: "adminNav.authorization", verb: "authz:read" },
-      { to: "/admin/access/blocks", label: "adminNav.blocks", verb: "blocks:read" },
       {
         to: "/admin/access/team-namespaces",
         label: "adminNav.teamNamespaces",
         verb: "owners:read",
       },
       { to: "/admin/access/beta-channel", label: "adminNav.betaChannel", verb: "owners:read" },
+    ],
+  },
+  /*
+   * RFC 0050 §4.2: the security of this server — who failed to sign in, who
+   * is banned, tokens kept in clear — as opposed to the packages it serves,
+   * which are the `/security` space's.
+   */
+  {
+    to: "/admin/instance-security",
+    label: "adminNav.instanceSecurity",
+    icon: ShieldAlert,
+    pages: [
+      {
+        to: "/admin/instance-security",
+        label: "adminNav.instanceSecuritySummary",
+        verb: "system:read",
+      },
+      { to: "/admin/instance-security/blocks", label: "adminNav.blocks", verb: "blocks:read" },
     ],
   },
   {
@@ -148,7 +161,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
  * the router would refuse it — and never gated on the role.
  */
 export const ADMIN_PAGE_VERBS: Record<string, string> = Object.fromEntries(
-  ADMIN_SECTIONS.flatMap((section) => section.pages.map((page) => [page.to, page.verb])),
+  // Every admin page asks one verb; a list-of-verbs page (the security
+  // overview's shape) would be left out here and so refused — fail closed.
+  ADMIN_SECTIONS.flatMap((section) =>
+    section.pages.flatMap((page) => (typeof page.verb === "string" ? [[page.to, page.verb]] : [])),
+  ),
 );
 
 /** The first page under `prefix` the caller may open, in table order. */
@@ -157,16 +174,3 @@ export function firstAdminPage(can: (verb: string) => boolean, prefix = "/admin/
     ([path, verb]) => path.startsWith(prefix) && can(verb),
   )?.[0];
 }
-
-export const ADMIN_SIDEBAR = ADMIN_SECTIONS.map(({ to, label, icon }) => ({ to, label, icon }));
-
-function tabsOf(root: string) {
-  const section = ADMIN_SECTIONS.find((s) => s.to === root);
-  return (section?.pages ?? []).map(({ to, label }) => ({ to, label }));
-}
-
-export const REGISTRIES_TABS = tabsOf("/admin/registries");
-export const PACKAGES_TABS = tabsOf("/admin/packages");
-export const SECURITY_TABS = tabsOf("/admin/security");
-export const ACCESS_TABS = tabsOf("/admin/access");
-export const SYSTEM_TABS = tabsOf("/admin/system");

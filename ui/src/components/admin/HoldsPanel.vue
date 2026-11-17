@@ -5,7 +5,6 @@ import { RouterLink } from "vue-router";
 
 import { verdictSummary } from "@/client/sdk.gen";
 import type { RegistryVerdictSummary } from "@/client/types.gen";
-import { Button } from "@/components/ui/button";
 import { Resolution } from "@/components/ui/resolution";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { AsyncState } from "@/components/ui/async-state";
@@ -20,20 +19,18 @@ import {
 import { formatDay } from "@/lib/format";
 import { packagePath } from "@/config/navigation";
 import { HOLD_LABEL_KEYS, HOLD_RESOLUTION } from "@/config/verdict";
+import CodeLabel from "@/components/admin/CodeLabel.vue";
+import { REASON_LABEL_KEYS } from "@/config/codeLabels";
 
 /**
  * What the supply-chain layer holds, across every registry with a
  * `[security]` profile (RFC 0042 §5.2): counts per state, then the most
  * recent holds with their reason codes. Never the findings — those stay
- * behind `findings:read`: with `canOpenFindings`, each registry row offers
- * its listing, which the dashboard draws as its own section.
+ * behind `findings:read`: with `canOpenFindings`, each registry row links to
+ * its findings on `/security/findings?registry=` (RFC 0050 §6.6: the inline
+ * drawer is gone, one home per table).
  */
-const props = defineProps<{
-  canOpenFindings?: boolean;
-  /** The registry whose findings are open, so its row reads as pressed. */
-  findingsFor?: string | null;
-}>();
-const emit = defineEmits<{ openFindings: [registry: string] }>();
+const props = defineProps<{ canOpenFindings?: boolean }>();
 
 const { t } = useI18n();
 
@@ -68,7 +65,7 @@ onMounted(load);
       <CardTitle>{{ t("holdsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground">{{ t("holdsPanel.intro") }}</p>
+      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("holdsPanel.intro") }}</p>
       <AsyncState
         :loading="loading"
         :error="error"
@@ -76,7 +73,7 @@ onMounted(load);
         :empty-message="t('holdsPanel.empty')"
         :on-retry="load"
       >
-        <Table :label="t('holdsPanel.title')" data-testid="holds-counts">
+        <Table stacked :label="t('holdsPanel.title')" data-testid="holds-counts">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.registry") }}</TableHead>
@@ -92,27 +89,35 @@ onMounted(load);
           <TableBody>
             <TableRow v-for="r in registries" :key="r.registry">
               <TableCell class="font-mono text-sm">{{ r.registry }}</TableCell>
-              <TableCell class="font-mono text-sm">{{ r.counts.denied }}</TableCell>
-              <TableCell class="font-mono text-sm">{{ r.counts.quarantined }}</TableCell>
-              <TableCell class="font-mono text-sm">{{ r.counts.warned }}</TableCell>
-              <TableCell class="font-mono text-sm">{{ r.counts.allowed }}</TableCell>
+              <TableCell class="font-mono text-sm" :label="t('holdsPanel.denied')">{{
+                r.counts.denied
+              }}</TableCell>
+              <TableCell class="font-mono text-sm" :label="t('holdsPanel.quarantined')">{{
+                r.counts.quarantined
+              }}</TableCell>
+              <TableCell class="font-mono text-sm" :label="t('holdsPanel.warned')">{{
+                r.counts.warned
+              }}</TableCell>
+              <TableCell class="font-mono text-sm" :label="t('holdsPanel.allowed')">{{
+                r.counts.allowed
+              }}</TableCell>
               <TableCell v-if="props.canOpenFindings" class="text-right">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :aria-pressed="props.findingsFor === r.registry"
-                  :aria-label="t('findingsPanel.openFor', { registry: r.registry })"
+                <RouterLink
+                  :to="{
+                    path: '/security/findings',
+                    query: { registry: r.registry, verdict: 'denied' },
+                  }"
+                  class="text-sm text-primary underline underline-offset-[3px]"
+                  :aria-label="t('holdsPanel.findingsOf', { registry: r.registry })"
                   :data-testid="`open-findings-${r.registry}`"
-                  @click="emit('openFindings', r.registry)"
+                  >{{ t("securityNav.findings") }}</RouterLink
                 >
-                  {{ t("findingsPanel.open") }}
-                </Button>
               </TableCell>
             </TableRow>
           </TableBody>
         </Table>
 
-        <Table :label="t('holdsPanel.recent')" data-testid="holds-recent">
+        <Table stacked :label="t('holdsPanel.recent')" data-testid="holds-recent">
           <TableHeader>
             <TableRow>
               <TableHead>{{ t("common.package") }}</TableHead>
@@ -129,7 +134,7 @@ onMounted(load);
                     {{ r.registry }}/{{ h.name }}@{{ h.version }}
                   </RouterLink>
                 </TableCell>
-                <TableCell>
+                <TableCell :label="t('holdsPanel.state')">
                   <Resolution
                     v-if="HOLD_RESOLUTION[h.state]"
                     :state="HOLD_RESOLUTION[h.state]!"
@@ -137,8 +142,19 @@ onMounted(load);
                   />
                   <span v-else class="font-mono text-xs uppercase">{{ h.state }}</span>
                 </TableCell>
-                <TableCell class="font-mono text-xs">{{ h.reason_codes.join(", ") }}</TableCell>
-                <TableCell class="text-xs">{{ formatDay(h.evaluated_at) }}</TableCell>
+                <TableCell :label="t('holdsPanel.reasons')" class="text-xs"
+                  ><span class="flex flex-col gap-1">
+                    <CodeLabel
+                      v-for="code in h.reason_codes"
+                      :key="code"
+                      :code="code"
+                      :labels="REASON_LABEL_KEYS"
+                    />
+                  </span>
+                </TableCell>
+                <TableCell :label="t('holdsPanel.evaluated')" class="text-xs">{{
+                  formatDay(h.evaluated_at)
+                }}</TableCell>
               </TableRow>
             </template>
           </TableBody>

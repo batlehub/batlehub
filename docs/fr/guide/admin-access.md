@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-access.md
-sourceHash: 6347746d0c436c8c
+sourceHash: 0e6e86de3ff4ebeb
 ---
 
 # Accès et audit
@@ -223,3 +223,47 @@ stockés dans le même backend que les compteurs de limitation de débit
 Voir le [guide du contrôle d'accès](/fr/guide/access-control#ip-blocking) pour la
 référence complète, y compris la mise en place derrière un répartiteur de charge
 et la comparaison des backends de stockage.
+
+---
+
+## Sécurité de l'instance {#instance-security}
+
+*Admin → Sécurité de l'instance* (`/admin/instance-security`, `system:read`)
+rassemble ce qui concerne ce serveur lui-même, sur les dernières 24 heures ou
+7 jours ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)) :
+
+- **Connexions** — les identifiants refusés, par type (authentification
+  unique, jeton) ; avec `audit:read`, les adresses d'où ils venaient.
+- **Bannissements** — les adresses bannies, et combien automatiquement
+  (ci-dessus), avec `blocks:read`. La page *Comptes et adresses bloqués*
+  (`/admin/instance-security/blocks`) est celle où l'on lève ou pose un
+  bannissement.
+- **Sources de jetons** — les jetons utilisés depuis une adresse où ils
+  n'avaient pas été vus ; avec `audit:read`, à qui et d'où.
+- **Jetons statiques** — les valeurs `[[auth.tokens]]` conservées en clair
+  (ci-dessous).
+- **Exemptions** — les exemptions de contrôle qui prennent fin sous 7 jours, et
+  celles approuvées par leur propre demandeur, avec `quarantine:read`.
+- **Config** — les avertissements de sécurité de la configuration en vigueur,
+  avec `config:read`.
+
+La lecture de cette page n'est pas auditée, pas plus que celle du journal
+d'audit.
+
+### Jetons statiques en clair {#static-tokens}
+
+Un jeton statique dont la valeur n'a pas de préfixe `$argon2` est accepté, et
+lève l'avertissement `auth.plain-static-token` au démarrage et à chaque
+rechargement. L'avertissement nomme la place du jeton dans la configuration
+(`auth[0].tokens[2]`), jamais sa valeur ; la page de sécurité de l'instance
+ajoute à qui il appartient, avec `audit:read`. Remplacez la valeur par son
+empreinte :
+
+```bash
+batlehub hash-token "$TOKEN"   # imprime une chaîne PHC Argon2id pour la config
+```
+
+`[auth]` n'est lu qu'au démarrage : un rechargement ne change pas les jetons
+que le serveur accepte. L'avertissement et la ligne *Jetons statiques* décrivent
+les jetons qu'accepte le serveur en cours d'exécution ; après avoir haché une
+valeur, vous les voyez donc jusqu'au redémarrage du serveur.

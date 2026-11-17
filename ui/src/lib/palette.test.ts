@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
+import { SECURITY_PAGE_VERBS } from "@/config/securitySections";
 import { RED_PATHS } from "@/config/redPaths";
 import {
   actionEntries,
@@ -25,7 +26,12 @@ function viewer(verbs: string[], extra: Partial<PaletteViewer> = {}): PaletteVie
   };
 }
 
-const ALL = [...new Set(Object.values(ADMIN_PAGE_VERBS))];
+const ALL = [
+  ...new Set([
+    ...Object.values(ADMIN_PAGE_VERBS),
+    ...Object.values(SECURITY_PAGE_VERBS).flatMap((v) => (typeof v === "string" ? [v] : v)),
+  ]),
+];
 
 /**
  * RFC 0046 §7.1 T2: the palette's admin rows are exactly the pages the router
@@ -96,6 +102,15 @@ describe("palette matching", () => {
     expect(matchEntries(index, "audit zzz")).toEqual([]);
   });
 
+  it("finds the security pages by the space's name", () => {
+    const tr = (k: string) => (k === "nav.security" ? "Security" : k);
+    const keys = matchEntries(pageEntries(viewer(["quarantine:read"]), tr), "security").map(
+      (e) => e.key,
+    );
+    expect(keys).toContain("page:/security");
+    expect(keys).toContain("page:/security/holds");
+  });
+
   it("matches nothing on an empty query: the empty state is the caller's", () => {
     expect(matchEntries(pageEntries(viewer(ALL), t), "  ")).toEqual([]);
   });
@@ -128,10 +143,10 @@ describe("credential-shaped queries", () => {
 
 /** §4.3: a red path's target is a page the router knows. */
 describe("red paths", () => {
-  it("point at an admin page, or name the verb a hand-off needs", () => {
+  it("point at an admin or security page, or name the verb a hand-off needs", () => {
     for (const rp of RED_PATHS) {
       if (rp.verb) expect(rp.to.startsWith("/admin/")).toBe(false);
-      else expect(ADMIN_PAGE_VERBS[rp.to], rp.id).toBeDefined();
+      else expect(ADMIN_PAGE_VERBS[rp.to] ?? SECURITY_PAGE_VERBS[rp.to], rp.id).toBeDefined();
     }
   });
 

@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   listRegistries: vi.fn(),
   explorePackages: vi.fn(),
   explorePackageDetail: vi.fn(),
+  listSubjects: vi.fn(),
+  adminAccessCheck: vi.fn(),
 }));
 vi.mock("@/client/sdk.gen", () => mocks);
 
@@ -26,6 +28,15 @@ vi.mock("vue-router", () => ({
   useRoute: () => mockRoute,
   RouterLink: { template: "<a><slot/></a>" },
 }));
+
+const held = vi.hoisted(() => ({ verbs: ["authz:read"] }));
+vi.mock("@/composables/useAuth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/composables/useAuth")>();
+  return {
+    ...actual,
+    useAuth: () => ({ ...actual.useAuth(), can: (v: string) => held.verbs.includes(v) }),
+  };
+});
 
 import AdminAuthorization from "./AdminAuthorization.vue";
 import AuthzExemptionsPanel from "@/components/admin/authorization/AuthzExemptionsPanel.vue";
@@ -82,10 +93,12 @@ beforeEach(() => {
   mocks.listRegistries.mockResolvedValue({ data: [] });
   mocks.explorePackages.mockResolvedValue({ data: { packages: [] } });
   mocks.explorePackageDetail.mockResolvedValue({ data: { versions: [] } });
+  mocks.listSubjects.mockResolvedValue({ data: { items: [], truncated: false } });
+  held.verbs = ["authz:read"];
 });
 
 async function mountPage() {
-  const wrapper = mount(AdminAuthorization, { global: { stubs: { SectionTabs: true } } });
+  const wrapper = mount(AdminAuthorization, { global: { stubs: {} } });
   await flushPromises();
   return wrapper;
 }
@@ -386,8 +399,16 @@ describe("the authorization page", () => {
   /** All five panels §4.8 names are on the page. */
   it("renders every panel", async () => {
     const w = await mountPage();
-    for (const panel of ["shadow", "exemptions", "explain", "denials", "retention"]) {
+    for (const panel of ["shadow", "exemptions", "explain", "simulate", "denials", "retention"]) {
       expect(w.find(`[data-testid="panel-${panel}"]`).exists()).toBe(true);
     }
+    // RFC 0050 §17.8: the red path and the old access-check URLs land here.
+    expect(w.find("#simulate").exists()).toBe(true);
+  });
+
+  it("draws no simulation without the verb its endpoint needs", async () => {
+    held.verbs = [];
+    const w = await mountPage();
+    expect(w.find('[data-testid="panel-simulate"]').exists()).toBe(false);
   });
 });

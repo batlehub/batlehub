@@ -162,6 +162,10 @@ export const sidebar = {
       ],
     },
     {
+      text: "Try it",
+      items: [{ text: "Deploying the demo", link: "/guide/install/demo" }],
+    },
+    {
       text: "Migration",
       items: [{ text: "Migrating from Nexus", link: "/guide/install/migrate-from-nexus" }],
     },

@@ -148,19 +148,34 @@ const ADMIN_ROUTES = [
   "/admin/packages/all",
   "/admin/packages/bulk",
   "/admin/packages/sbom",
-  "/admin/security/scans",
-  "/admin/security/findings",
-  "/admin/access/check",
   "/admin/access/authorization",
-  "/admin/access/blocks",
   "/admin/access/team-namespaces",
   "/admin/access/beta-channel",
+  "/admin/instance-security",
+  "/admin/instance-security/blocks",
   "/admin/system/configuration",
   "/admin/system/banner",
   "/admin/system/health",
   "/admin/system/audit-log",
   "/admin/system/notifications",
   "/admin/system/inbound-events",
+];
+
+/*
+ * Every page of `ui/src/config/securitySections.ts` (RFC 0050 §6.6), plus one
+ * registry's coverage. `adminSections.test.ts` fails when the two differ, as
+ * for the admin list: a `/security` route escaped every gate until this.
+ */
+const SECURITY_ROUTES = [
+  "/security",
+  "/security/holds",
+  "/security/findings",
+  "/security/flags",
+  "/security/exposure",
+  "/security/trends",
+  "/security/coverage",
+  "/security/coverage/npm",
+  "/security/scanners",
 ];
 
 // `/me/tokens` is OIDC-only: the plan seeds `OIDC_PROVIDER_KEY` beside the
@@ -218,7 +233,7 @@ const plans = [
         {
           role: "admin",
           token: process.env.BATLEHUB_ADMIN_TOKEN,
-          routes: [...ADMIN_ROUTES, ...USER_ROUTES],
+          routes: [...ADMIN_ROUTES, ...SECURITY_ROUTES, ...USER_ROUTES],
         },
         { role: "user", token: process.env.BATLEHUB_USER_TOKEN, routes: USER_ROUTES },
       ]),
@@ -268,6 +283,16 @@ const EXPECTED_FAIL = {};
 //                             ──
 //                             40
 //
+// RFC 0050 §6.6 moves it +7: the admin list loses scans, findings, access
+// check and blocks (-4) and gains instance security and its blocks (+2), and
+// the nine `/security` routes join the admin plan (+9):
+//
+//   admin  21 admin + 9 security + 5 user = 35
+//   user                                   5
+//   anonymous                              7
+//                                         ──
+//                                         47
+//
 // The number tracks real coverage, which is the point — it may only change in
 // the commit that changes the routes.
 //
@@ -276,7 +301,7 @@ const EXPECTED_FAIL = {};
 // figure (40 pairs → "160 route/role/viewport combination(s) scanned"). Two
 // numbers 4× apart in one run's output invite someone to "fix" the wrong one,
 // so: this is the coverage floor, that is the work done.
-const EXPECTED_COMBINATIONS = publicOnly ? PUBLIC_ROUTES.length : 40;
+const EXPECTED_COMBINATIONS = publicOnly ? PUBLIC_ROUTES.length : 47;
 const planned = plans.reduce((n, p) => n + p.routes.length, 0);
 if (planned < EXPECTED_COMBINATIONS) {
   console.error(

@@ -1,7 +1,7 @@
 //! In-memory verdicts, scan queue and worker registry (RFC 0018), for tests
 //! and for a deployment with no database.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -10,11 +10,18 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use batlehub_core::entities::{
-    FindingRow, FindingsFilter, PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict,
-    VerdictState, EXHAUSTED_PREFIX,
+    FindingRow, FindingsFilter, PackageId, ReasonCode, ScanJob, ScanJobFilter, ScanTrigger,
+    Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
-use batlehub_core::ports::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
+use batlehub_core::ports::{
+    HoldCounts, QueuedCount, ScanQueue, VerdictPage, VerdictRepository, WorkerHeartbeat,
+    WorkerRegistry,
+};
+use batlehub_core::services::security_overview::{
+    is_blocking_quarantine, is_malware, is_waiting, pending_over_hour, DEFERRED_ATTENTION,
+    PENDING_ATTENTION,
+};
 
 #[derive(Default)]
 pub struct InMemoryVerdictRepository {
@@ -170,15 +177,114 @@ impl VerdictRepository for InMemoryVerdictRepository {
         state: VerdictState,
         limit: u64,
     ) -> Result<Vec<Verdict>, CoreError> {
-        Ok(self
+        // Newest first, as Postgres's `ORDER BY evaluated_at DESC`: a page
+        // must be the same page in both stores.
+        let mut out: Vec<Verdict> = self
             .rows
             .read()
             .await
             .values()
             .filter(|v| v.package.registry == registry && v.state == state)
-            .take(limit as usize)
             .cloned()
-            .collect())
+            .collect();
+        out.sort_by_key(|v| std::cmp::Reverse(v.evaluated_at));
+        out.truncate(limit as usize);
+        Ok(out)
+    }
+
+    async fn hold_counts(
+        &self,
+        pending_before: DateTime<Utc>,
+    ) -> Result<Vec<HoldCounts>, CoreError> {
+        // `pending_over_hour` reads `now - evaluated_at > 1 h`: the cutoff
+        // as that `now`.
+        let now = pending_before + PENDING_ATTENTION;
+        let mut out: BTreeMap<String, HoldCounts> = BTreeMap::new();
+        for v in self
+            .rows
+            .read()
+            .await
+            .values()
+            .filter(|v| matches!(v.state, VerdictState::Denied | VerdictState::Quarantined))
+        {
+            let c = out
+                .entry(v.package.registry.clone())
+                .or_insert_with(|| HoldCounts {
+                    registry: v.package.registry.clone(),
+                    ..Default::default()
+                });
+            c.quarantined_blocking += u64::from(is_blocking_quarantine(v));
+            c.malware += u64::from(is_malware(v));
+            c.waiting += u64::from(is_waiting(v));
+            c.pending_over_hour += u64::from(pending_over_hour(v, now));
+            c.soc_verdict += u64::from(v.reason_codes.contains(&ReasonCode::SocVerdict));
+        }
+        Ok(out.into_values().collect())
+    }
+
+    async fn page_verdicts(&self, page: &VerdictPage) -> Result<(Vec<Verdict>, u64), CoreError> {
+        let mut all: Vec<Verdict> = self
+            .rows
+            .read()
+            .await
+            .values()
+            .filter(|v| {
+                page.registries.contains(&v.package.registry)
+                    && page.states.contains(&v.state)
+                    && page
+                        .reason
+                        .as_deref()
+                        .is_none_or(|r| v.reason_codes.iter().any(|c| c.as_str() == r))
+            })
+            .cloned()
+            .collect();
+        // Postgres's order: the most severe state, the newest evaluation,
+        // then the coordinate.
+        let rank = |s: VerdictState| match s {
+            VerdictState::Denied => 0,
+            VerdictState::Quarantined => 1,
+            VerdictState::Warned => 2,
+            _ => 3,
+        };
+        all.sort_by(|a, b| {
+            rank(a.state)
+                .cmp(&rank(b.state))
+                .then_with(|| b.evaluated_at.cmp(&a.evaluated_at))
+                .then_with(|| a.package.registry.cmp(&b.package.registry))
+                .then_with(|| a.package.name.cmp(&b.package.name))
+                .then_with(|| a.package.version.cmp(&b.package.version))
+        });
+        let total = all.len() as u64;
+        let items = all
+            .into_iter()
+            .skip(usize::try_from(page.offset).unwrap_or(usize::MAX))
+            .take(usize::try_from(page.limit).unwrap_or(usize::MAX))
+            .collect();
+        Ok((items, total))
+    }
+
+    async fn list_held_with_code(
+        &self,
+        code: ReasonCode,
+        limit: u64,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        let mut out: Vec<Verdict> = self
+            .rows
+            .read()
+            .await
+            .values()
+            .filter(|v| {
+                matches!(v.state, VerdictState::Denied | VerdictState::Quarantined)
+                    && v.reason_codes.contains(&code)
+            })
+            .map(|v| Verdict {
+                findings: Vec::new(),
+                ..v.clone()
+            })
+            .collect();
+        out.sort_by_key(|v| std::cmp::Reverse(v.evaluated_at));
+        out.truncate(limit as usize);
+        Ok(out)
     }
 }
 
@@ -524,11 +630,19 @@ impl ScanQueue for InMemoryScanQueue {
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {
         let now = Utc::now();
-        let mut counts: HashMap<(String, ScanTrigger), (u64, u64)> = HashMap::new();
+        let mut counts: HashMap<(String, ScanTrigger), (u64, u64, u64)> = HashMap::new();
         for r in self.rows.read().await.iter().filter(|r| !r.completed) {
             let e = counts
                 .entry((r.job.package.registry.clone(), r.job.trigger))
                 .or_default();
+            let live = r.job.leased_by.is_some() && r.job.leased_until.is_some_and(|u| u > now);
+            if !live
+                && r.job
+                    .deferred_since
+                    .is_some_and(|t| now - t > DEFERRED_ATTENTION)
+            {
+                e.2 += 1;
+            }
             match r.job.leased_until {
                 None => e.0 += 1,
                 Some(u) if u < now => e.0 += 1,
@@ -538,19 +652,22 @@ impl ScanQueue for InMemoryScanQueue {
         }
         Ok(counts
             .into_iter()
-            .map(|((registry, trigger), (count, deferred))| QueuedCount {
-                registry,
-                trigger,
-                count,
-                deferred,
-            })
+            .map(
+                |((registry, trigger), (count, deferred, deferred_over_day))| QueuedCount {
+                    registry,
+                    trigger,
+                    count,
+                    deferred,
+                    deferred_over_day,
+                },
+            )
             .collect())
     }
 }
 
 #[derive(Default)]
 pub struct InMemoryWorkerRegistry {
-    seen: RwLock<HashMap<String, DateTime<Utc>>>,
+    seen: RwLock<HashMap<String, WorkerHeartbeat>>,
 }
 
 impl InMemoryWorkerRegistry {
@@ -561,11 +678,15 @@ impl InMemoryWorkerRegistry {
 
 #[async_trait]
 impl WorkerRegistry for InMemoryWorkerRegistry {
-    async fn heartbeat(&self, worker_id: &str, _: &[String]) -> Result<(), CoreError> {
-        self.seen
-            .write()
-            .await
-            .insert(worker_id.to_owned(), Utc::now());
+    async fn heartbeat(&self, worker_id: &str, registries: &[String]) -> Result<(), CoreError> {
+        self.seen.write().await.insert(
+            worker_id.to_owned(),
+            WorkerHeartbeat {
+                worker_id: worker_id.to_owned(),
+                last_seen: Utc::now(),
+                registries: registries.to_vec(),
+            },
+        );
         Ok(())
     }
     async fn live_count(&self, within_secs: u64) -> Result<u64, CoreError> {
@@ -575,8 +696,28 @@ impl WorkerRegistry for InMemoryWorkerRegistry {
             .read()
             .await
             .values()
-            .filter(|t| **t > cutoff)
+            .filter(|w| w.last_seen > cutoff)
             .count() as u64)
+    }
+
+    async fn workers(&self) -> Result<Vec<WorkerHeartbeat>, CoreError> {
+        let mut out: Vec<WorkerHeartbeat> = self.seen.read().await.values().cloned().collect();
+        out.sort_by_key(|w| std::cmp::Reverse(w.last_seen));
+        Ok(out)
+    }
+}
+
+impl InMemoryWorkerRegistry {
+    /// A heartbeat at a chosen instant: tests of liveness need an old one.
+    pub async fn beat_at(&self, worker_id: &str, at: DateTime<Utc>, registries: &[String]) {
+        self.seen.write().await.insert(
+            worker_id.to_owned(),
+            WorkerHeartbeat {
+                worker_id: worker_id.to_owned(),
+                last_seen: at,
+                registries: registries.to_vec(),
+            },
+        );
     }
 }
 
@@ -586,6 +727,27 @@ mod tests {
 
     fn pkg(v: &str) -> PackageId {
         PackageId::new("r", "p", v)
+    }
+
+    /// RFC 0050: a job deferred for over a day is counted by the store, so
+    /// the console's figure does not depend on a page of rows.
+    #[tokio::test]
+    async fn queued_counts_jobs_deferred_over_a_day() {
+        let q = InMemoryScanQueue::new();
+        for v in ["1", "2"] {
+            q.enqueue(&pkg(v), None, ScanTrigger::FirstSeen)
+                .await
+                .unwrap();
+        }
+        for job in q.lease("w", &[], 2, 60, 3).await.unwrap() {
+            q.defer(job.id, "w", Utc::now() + Duration::minutes(5))
+                .await
+                .unwrap();
+        }
+        q.rows.write().await[0].job.deferred_since = Some(Utc::now() - Duration::hours(25));
+        let counts = q.queued().await.unwrap();
+        assert_eq!(counts.len(), 1, "{counts:?}");
+        assert_eq!((counts[0].deferred, counts[0].deferred_over_day), (2, 1));
     }
 
     /// The queue's contract, on the in-memory store: idempotent enqueue,

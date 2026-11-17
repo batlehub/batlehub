@@ -17,8 +17,6 @@ import {
 import { REGISTRY_TYPE_VARIANTS, variantFromMap } from "@/lib/badge-variants";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
@@ -32,7 +30,6 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
-import DeleteCachedArtifact from "@/components/admin/DeleteCachedArtifact.vue";
 
 const { t } = useI18n();
 
@@ -161,9 +158,8 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader
-      :title="t('adminHealth.registryHealth')"
+      :title="t('adminNav.health')"
       :description="t('adminHealth.liveSnapshotOfEachRegistry')"
       variant="display"
     >
@@ -457,9 +453,6 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
           </CardContent>
         </Card>
       </div>
-      <!-- Split out of `/admin/operations/warming`: the two cache-eviction
-           controls now sit on one route instead of two sections apart. -->
-      <DeleteCachedArtifact :registries="(data ?? []).map((r) => r.registry)" />
     </AsyncState>
   </div>
 

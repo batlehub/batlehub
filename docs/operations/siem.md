@@ -74,10 +74,16 @@ password.
 
 **`credential_rejected` is throttled**: one row per source IP per minute, per
 server process. The attempts held back are counted, and the count rides on the
-*next* row written for that IP as `batlehub.audit.throttled_count`. A burst of
-twenty-one refused attempts in a minute is therefore one row with a count of 0,
-then — if the attempts continue — a row a minute later with a count of 20. With
-*n* replicas each writes its own rows.
+*next* row written for that IP as `batlehub.audit.throttled_count`. When no
+attempt follows, the server writes that row itself within 10 seconds of the
+window's end, at most 70 seconds after the first attempt (and at a clean
+shutdown): it has no user agent, its time is
+when it was written, and it stands for one of the held-back attempts, so its
+count is the others. Either way, one plus `throttled_count`, summed over the
+rows, is the number of attempts. A burst of twenty-one refused attempts in a
+minute that then stops is therefore one row with a count of 0, then a row with
+a count of 19. A process that crashes loses what it held back. With *n*
+replicas each writes its own rows.
 
 **`token_new_source`** is checked when the token's last-used time is written,
 at most once a minute per token. A token with no recorded address yet — the

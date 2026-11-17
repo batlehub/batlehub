@@ -22,6 +22,9 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { formatDate } from "@/lib/format";
+import CodeLabel from "@/components/admin/CodeLabel.vue";
+import { FLAG_EFFECT_LABEL_KEYS } from "@/config/codeLabels";
+import { DateTime } from "@/components/ui/date-time";
 
 /**
  * The exposure report (RFC 0002 §4.6): who pulled a flagged version, one
@@ -149,7 +152,7 @@ onMounted(() => load());
       <CardTitle>{{ t("exposurePanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground">{{ t("exposurePanel.intro") }}</p>
+      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("exposurePanel.intro") }}</p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl">
         <div class="space-y-2">
@@ -220,9 +223,9 @@ onMounted(() => load());
                 {{ r.registry }}/{{ r.package_name }}@{{ r.version }}
               </TableCell>
               <TableCell class="text-sm">
-                <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">{{
-                  r.effect
-                }}</Badge>
+                <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">
+                  <CodeLabel :code="r.effect" :labels="FLAG_EFFECT_LABEL_KEYS" />
+                </Badge>
                 <span class="font-mono text-xs text-muted-foreground">
                   {{ r.source }}:{{ r.external_id }}
                 </span>
@@ -230,7 +233,7 @@ onMounted(() => load());
               <TableCell class="tabular-nums">{{ r.pulls }}</TableCell>
               <TableCell class="tabular-nums">{{ r.pulls_before_flag }}</TableCell>
               <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                {{ formatDate(r.last_pull) }}
+                <DateTime :iso="r.last_pull" />
               </TableCell>
             </TableRow>
           </TableBody>

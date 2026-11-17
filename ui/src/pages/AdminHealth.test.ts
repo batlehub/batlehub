@@ -38,7 +38,7 @@ const health = (over: Record<string, unknown> = {}) => ({
 
 async function mountPage() {
   const wrapper = mount(AdminHealth, {
-    global: { stubs: { SectionTabs: true, RouterLink: true, DeleteCachedArtifact: true } },
+    global: { stubs: { RouterLink: true, DeleteCachedArtifact: true } },
   });
   await flushPromises();
   return wrapper;

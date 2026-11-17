@@ -119,6 +119,11 @@ pub enum Command {
         #[command(subcommand)]
         cmd: security::VerdictsCommand,
     },
+    /// The security console's status, for on-call scripts (RFC 0050)
+    Security {
+        #[command(subcommand)]
+        cmd: security::SecurityCommand,
+    },
     /// The audit log: query, purge, export, verify, and what an identity pulled
     Audit {
         #[command(subcommand)]

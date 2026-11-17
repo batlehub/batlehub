@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { severityVariant } from "@/lib/badge-variants";
 import { SEVERITY_KEYS } from "@/config/severity";
-import { formatDate, formatDay } from "@/lib/format";
+import { formatDate, formatDay, formatEvery } from "@/lib/format";
 import { reasonCodeDocsUrl } from "@/config";
 
 /**
@@ -125,13 +125,7 @@ const explanation = computed(() => {
   }
 });
 
-/** An interval in its largest whole unit — the four keys spelled out for the catalogue test. */
-function every(secs: number): string {
-  if (secs % 86_400 === 0) return t("verdictPanel.nextRescanEveryDays", { n: secs / 86_400 });
-  if (secs % 3600 === 0) return t("verdictPanel.nextRescanEveryHours", { n: secs / 3600 });
-  if (secs % 60 === 0) return t("verdictPanel.nextRescanEveryMinutes", { n: secs / 60 });
-  return t("verdictPanel.nextRescanEverySeconds", { n: secs });
-}
+const every = formatEvery;
 
 /**
  * The two "Next rescan" lines (RFC 0044 §4.2). `next_rescan` is present only

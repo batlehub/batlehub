@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{
-    FindingRow, FindingsFilter, PackageId, ScanJob, ScanJobFilter, ScanTrigger, Verdict,
-    VerdictState,
+    FindingRow, FindingsFilter, PackageId, ReasonCode, ScanJob, ScanJobFilter, ScanTrigger,
+    Verdict, VerdictState,
 };
 use crate::error::CoreError;
 
@@ -88,6 +88,69 @@ pub trait VerdictRepository: Send + Sync {
             "this verdict store cannot count by state".to_owned(),
         ))
     }
+
+    /// Per registry with a held version, what the console's *Holds* line
+    /// counts (RFC 0050 §4.2), over every held row: never from a page. A
+    /// `SCAN_PENDING` hold evaluated before `pending_before` is over the hour.
+    async fn hold_counts(
+        &self,
+        _pending_before: DateTime<Utc>,
+    ) -> Result<Vec<HoldCounts>, CoreError> {
+        Err(CoreError::NotSupported(
+            "this verdict store cannot count holds".to_owned(),
+        ))
+    }
+
+    /// One page of verdicts and the exact count of every match, so a list of
+    /// thousands can be walked to its end. Findings loaded.
+    async fn page_verdicts(&self, _page: &VerdictPage) -> Result<(Vec<Verdict>, u64), CoreError> {
+        Err(CoreError::NotSupported(
+            "this verdict store cannot page verdicts".to_owned(),
+        ))
+    }
+
+    /// Denied or quarantined verdicts carrying `code`, across registries,
+    /// newest first, at most `limit`; findings **not** loaded.
+    async fn list_held_with_code(
+        &self,
+        _code: ReasonCode,
+        _limit: u64,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        Err(CoreError::NotSupported(
+            "this verdict store cannot list holds by code".to_owned(),
+        ))
+    }
+}
+
+/// One registry's held versions as the *Holds* line counts them
+/// ([`crate::services::security_overview`] holds the per-verdict rules).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HoldCounts {
+    pub registry: String,
+    /// Quarantined for a reason other than `MIN_AGE_NOT_MET`/`SCAN_PENDING`.
+    pub quarantined_blocking: u64,
+    /// Held for a malware code (`KNOWN_MALICIOUS`, `MALWARE_SIGNAL`, `SOC_VERDICT`).
+    pub malware: u64,
+    /// Quarantined only for `MIN_AGE_NOT_MET` or `SCAN_PENDING`.
+    pub waiting: u64,
+    /// Quarantined for `SCAN_PENDING`, evaluated before the cutoff.
+    pub pending_over_hour: u64,
+    /// Held for `SOC_VERDICT`: a SOC's hard block, counted exactly whatever
+    /// their number (a mass compromise holds thousands at once).
+    pub soc_verdict: u64,
+}
+
+/// One page of `GET /admin/verdicts`: the verdicts of `registries` in
+/// `states`, optionally carrying `reason`; denied first, then quarantined,
+/// warned, allowed, each newest evaluation first.
+#[derive(Debug, Clone, Default)]
+pub struct VerdictPage {
+    pub registries: Vec<String>,
+    pub states: Vec<VerdictState>,
+    /// A reason code as stored (`SOC_VERDICT`, `KNOWN_MALICIOUS`, …).
+    pub reason: Option<String>,
+    pub limit: u64,
+    pub offset: u64,
 }
 
 /// The count of open jobs, per registry and trigger — the
@@ -100,6 +163,9 @@ pub struct QueuedCount {
     pub trigger: ScanTrigger,
     pub count: u64,
     pub deferred: u64,
+    /// Open jobs deferred for longer than `DEFERRED_ATTENTION`, counted in
+    /// the store so the figure is exact on any queue size.
+    pub deferred_over_day: u64,
 }
 
 /// `scan_jobs` (RFC 0018 §5.4): jobs are leased, not consumed.
@@ -225,6 +291,15 @@ pub trait ScanQueue: Send + Sync {
     async fn try_lead(&self, key: i64) -> Result<bool, CoreError>;
 }
 
+/// One row of `worker_heartbeats`: a worker, when it last beat, and the
+/// registries it scans (empty = every registry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerHeartbeat {
+    pub worker_id: String,
+    pub last_seen: DateTime<Utc>,
+    pub registries: Vec<String>,
+}
+
 /// `worker_heartbeats`: which workers are alive, so the proxy can say when
 /// none is (RFC 0018 §4.3).
 #[async_trait]
@@ -233,4 +308,37 @@ pub trait WorkerRegistry: Send + Sync {
 
     /// Workers seen within `within_secs`.
     async fn live_count(&self, within_secs: u64) -> Result<u64, CoreError>;
+
+    /// Every recorded worker, newest beat first — the security console's
+    /// *Scanners & worker* page (RFC 0050 §6.1). The default answers none,
+    /// so a test double that never lists stays as it is.
+    async fn workers(&self) -> Result<Vec<WorkerHeartbeat>, CoreError> {
+        Ok(Vec::new())
+    }
+}
+
+/// One scanner's last outcome, as the worker records it (RFC 0050 §6.1,
+/// decision 28): times and an error **class**, never error text, so no
+/// sealed path reaches a reader through it (T5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannerStatus {
+    pub scanner: String,
+    pub last_ok_at: Option<DateTime<Utc>>,
+    pub last_error_at: Option<DateTime<Utc>>,
+    /// `ScannerError::class()`: `timeout`, `upstream`, `rate_limited`, …
+    pub last_error_class: Option<String>,
+    /// While the scanner's breaker is open (the OSV breaker).
+    pub unavailable_until: Option<DateTime<Utc>>,
+}
+
+/// `scanner_status`: one row per scanner, written by the worker.
+#[async_trait]
+pub trait ScannerStatusRepository: Send + Sync {
+    /// Merge `status` into the scanner's row. Each timestamp only moves
+    /// forward (`GREATEST`), so two workers writing out of order never move
+    /// one back; the error class follows the newer error.
+    async fn record(&self, status: &ScannerStatus) -> Result<(), CoreError>;
+
+    /// Every row, by scanner name.
+    async fn list(&self) -> Result<Vec<ScannerStatus>, CoreError>;
 }

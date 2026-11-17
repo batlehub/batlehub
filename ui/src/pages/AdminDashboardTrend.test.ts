@@ -1,16 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
-const { adminStatsMock, adminStatsHistoryMock, registryHealthMock } = vi.hoisted(() => ({
+const {
+  adminStatsMock,
+  adminStatsHistoryMock,
+  registryHealthMock,
+  configWarningsMock,
+  instanceSecurityMock,
+} = vi.hoisted(() => ({
   adminStatsMock: vi.fn(),
   adminStatsHistoryMock: vi.fn(),
   registryHealthMock: vi.fn(),
+  configWarningsMock: vi.fn(),
+  instanceSecurityMock: vi.fn(),
 }));
 
 vi.mock("@/client/sdk.gen", () => ({
   adminStats: adminStatsMock,
   adminStatsHistory: adminStatsHistoryMock,
   registryHealth: registryHealthMock,
+  getConfigWarnings: configWarningsMock,
+  instanceSecurity: instanceSecurityMock,
 }));
 
 import AdminDashboard from "./AdminDashboard.vue";
@@ -238,5 +248,30 @@ describe("AdminDashboard — monitoring link", () => {
     const w = await mountWithLinks();
     expect(w.find('[data-testid="monitoring"]').exists()).toBe(false);
     expect(w.html()).not.toContain("javascript:");
+  });
+});
+
+/** RFC 0050 §4.2: the Config line is owed to config:read, with or without system:read. */
+describe("AdminDashboard config line", () => {
+  beforeEach(() => {
+    adminStatsMock.mockReset().mockResolvedValue({ data: stats });
+    registryHealthMock.mockReset().mockResolvedValue({ data: [] });
+    adminStatsHistoryMock.mockReset().mockResolvedValue({ data: trend() });
+    instanceSecurityMock.mockReset();
+    configWarningsMock.mockReset().mockResolvedValue({
+      data: {
+        warnings: [
+          { code: "cors.any-origin", path: "server.cors", message: "…", dismissible: true },
+          { code: "auth.plain-static-token", path: "auth[0]", message: "…", dismissible: true },
+        ],
+      },
+    });
+  });
+
+  it("reads the config warnings when instance security is out of reach", async () => {
+    useAuth().identity.value = { verbs: ["stats:read", "config:read"], registries: {} } as never;
+    const w = await mountDashboard();
+    expect(instanceSecurityMock).not.toHaveBeenCalled();
+    expect(w.get('[data-testid="status-config"]').text()).toContain("2 configuration warnings");
   });
 });
