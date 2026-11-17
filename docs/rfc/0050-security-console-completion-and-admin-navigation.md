@@ -1574,7 +1574,7 @@ their translated labels.
   Flags, Coverage and the scanners table.
 - One date format: `components/ui/date-time/DateTime.vue` draws `formatDate`
   with the relative time in `title` and the instant in `datetime`; every
-  `{{ formatDate(x) }}` of an admin or security page uses it. This closes the
+  `formatDate(x)` interpolation of an admin or security page uses it. This closes the
   item §17.1 had moved here.
 - The dashboard no longer says "of 0 artifact downloads"
   (`adminDashboard.cacheSummaryNone`), and its date is a `DateTime`.

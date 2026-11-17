@@ -110,12 +110,12 @@ const DOMAIN_LABEL: Record<Domain, string> = {
     <li
       v-for="line in lines"
       :key="line.domain"
-      class="flex flex-col gap-1 py-2 sm:flex-row sm:items-baseline sm:gap-3"
+      class="flex flex-col gap-1 py-2 lg:flex-row lg:items-baseline lg:gap-3"
       :data-testid="`status-${line.domain}`"
     >
       <StateMark :state="line.state" />
       <span class="w-40 shrink-0 font-mono text-sm">{{ t(DOMAIN_LABEL[line.domain]) }}</span>
-      <span class="flex-1 text-sm">
+      <span class="min-w-0 flex-1 text-sm">
         {{ line.text }}
         <Button
           v-if="line.state === 'unknown'"

@@ -113,10 +113,10 @@ const quiet = computed(() => {
           <StateMark state="ok" /> {{ t("instanceSecurity.quiet") }}
         </p>
         <ul class="divide-y divide-dashed divide-rule-soft border-y border-rule-soft text-sm">
-          <li class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3" data-testid="line-sign-ins">
+          <li class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3" data-testid="line-sign-ins">
             <StateMark :state="signInState" />
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.signIns") }}</span>
-            <span class="flex-1">
+            <span class="min-w-0 flex-1">
               <template v-if="data.sign_ins.state === 'unknown'">{{
                 t("securityStatus.couldNotRead")
               }}</template>
@@ -140,13 +140,13 @@ const quiet = computed(() => {
           </li>
           <li
             v-if="data.bans"
-            class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3"
+            class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3"
             data-testid="line-bans"
           >
             <StateMark v-if="data.bans.unknown_reason" state="unknown" />
             <span v-else class="invisible" aria-hidden="true"><StateMark state="ok" /></span>
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.bans") }}</span>
-            <span class="flex-1">{{
+            <span class="min-w-0 flex-1">{{
               data.bans.unknown_reason
                 ? t("securityStatus.couldNotRead")
                 : t("instanceSecurity.bansLine", {
@@ -160,14 +160,14 @@ const quiet = computed(() => {
               >→ {{ t("adminNav.blocks") }}</RouterLink
             >
           </li>
-          <li class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3" data-testid="line-sources">
+          <li class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3" data-testid="line-sources">
             <StateMark v-if="sources?.unknown_reason" state="unknown" />
             <span v-else class="invisible" aria-hidden="true"><StateMark state="ok" /></span>
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.tokenSources") }}</span>
-            <span v-if="sources?.unknown_reason" class="flex-1">{{
+            <span v-if="sources?.unknown_reason" class="min-w-0 flex-1">{{
               t("securityStatus.couldNotRead")
             }}</span>
-            <span v-else class="flex-1">
+            <span v-else class="min-w-0 flex-1">
               <span v-if="sources?.partial" :title="t('instanceSecurity.atLeast')">≥ </span>
               {{ t("instanceSecurity.newSource", { n: data.token_sources.new_source }) }}
               <span
@@ -184,10 +184,10 @@ const quiet = computed(() => {
               >→ {{ t("adminNav.auditLog") }}</RouterLink
             >
           </li>
-          <li class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3" data-testid="line-static">
+          <li class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3" data-testid="line-static">
             <StateMark :state="data.static_tokens.plain ? 'attention' : 'ok'" />
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.staticTokens") }}</span>
-            <span class="flex-1">
+            <span class="min-w-0 flex-1">
               <template v-if="data.static_tokens.plain">
                 {{ t("instanceSecurity.plainTokens", { n: data.static_tokens.plain }) }}
                 <span class="font-mono text-xs" data-testid="static-paths">{{
@@ -211,13 +211,13 @@ const quiet = computed(() => {
           </li>
           <li
             v-if="data.exemptions"
-            class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3"
+            class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3"
             data-testid="line-exemptions"
           >
             <StateMark v-if="data.exemptions.unknown_reason" state="unknown" />
             <span v-else class="invisible" aria-hidden="true"><StateMark state="ok" /></span>
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.exemptions") }}</span>
-            <span class="flex-1">{{
+            <span class="min-w-0 flex-1">{{
               data.exemptions.unknown_reason
                 ? t("securityStatus.couldNotRead")
                 : t("instanceSecurity.exemptionsLine", {
@@ -234,12 +234,12 @@ const quiet = computed(() => {
           </li>
           <li
             v-if="data.warnings"
-            class="flex flex-col gap-1 py-2 sm:flex-row sm:gap-3"
+            class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3"
             data-testid="line-warnings"
           >
             <StateMark :state="data.warnings.length ? 'attention' : 'ok'" />
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.config") }}</span>
-            <span class="flex-1">
+            <span class="min-w-0 flex-1">
               {{ t("instanceSecurity.warnings", { n: data.warnings.length }) }}
               <span class="font-mono text-xs">{{
                 data.warnings.map((w) => w.code).join(", ")
