@@ -24,7 +24,7 @@ const resolvedLabel = computed(() => props.label ?? t("a11y.breadcrumb"));
 </script>
 
 <template>
-  <nav :aria-label="resolvedLabel" :class="cn('font-mono text-xs', props.class)">
+  <nav :aria-label="resolvedLabel" :class="cn('font-sans text-xs', props.class)">
     <ol class="flex flex-wrap items-center gap-2">
       <li
         v-for="(item, index) in items"

@@ -15,7 +15,7 @@ const props = defineProps<
     v-bind="props"
     :class="
       cn(
-        'font-mono text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70',
+        'font-sans text-sm font-medium text-foreground leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70',
         props.class,
       )
     "

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Resolution } from "@/components/ui/resolution";
+import { formatDay } from "@/lib/format";
 import { useI18n } from "vue-i18n";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AsyncState } from "@/components/ui/async-state";
@@ -108,9 +109,8 @@ function visVariant(v: Visibility): "default" | "secondary" | "outline" {
   return v === "internal" ? "secondary" : "outline";
 }
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
-}
+/** The app's locale, not the browser's — see `lib/format.ts`. */
+const formatDate = (iso: string) => formatDay(iso);
 </script>
 
 <template>

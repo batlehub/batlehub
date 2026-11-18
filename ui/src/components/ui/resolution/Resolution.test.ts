@@ -64,7 +64,7 @@ describe("Resolution", () => {
   });
 
   it.each([
-    ["cached", "text-foreground"],
+    ["cached", "text-ok"],
     ["stale", "text-copper"],
     ["held", "text-copper"],
     ["pending", "text-muted-foreground"],

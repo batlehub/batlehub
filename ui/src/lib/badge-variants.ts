@@ -5,7 +5,9 @@ export type BadgeVariant =
   | "outline"
   | "copper"
   /** An affirmative answer: full ink on a rule. See `Badge.vue`. */
-  | "known";
+  | "known"
+  /** Healthy, allowed, serving: the --ok signal. See `Badge.vue`. */
+  | "ok";
 
 /** Looks up a badge variant from a `key -> variant` map, falling back when the key is unmapped. */
 export function variantFromMap<K extends string>(

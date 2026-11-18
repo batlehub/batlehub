@@ -10,14 +10,17 @@ import { useI18n } from "vue-i18n";
  * when you do not know which of them matters, and here we do: if a registry is
  * erroring, nothing else on this page is the story.
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { ExternalLink } from "@lucide/vue";
 import { adminStats, adminStatsHistory, registryHealth } from "@/client/sdk.gen";
 import type { StatsResponse, StatsHistoryResponse, RegistryHealthDto } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
-import { formatBytes as fmtBytes, formatCount } from "@/lib/format";
+import { useAuthFetch } from "@/composables/useAuthFetch";
+import { API_BASE_URL } from "@/config";
+import type { ConfigWarning } from "@/client/types.gen";
+import { formatBytes as fmtBytes, formatCount, formatDay } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -121,6 +124,49 @@ const monitoring = computed(() => {
 const fmtPct = (n: number | null): string => (n == null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 /**
+ * What needs a human, gathered where the operator lands rather than left on
+ * the page that owns it. Config warnings only ever appeared on the
+ * Configuration page, below the editor, so an instance could carry six of them
+ * for weeks and the dashboard still read "all answering". Read with
+ * `config:read`; absent without it, never an error the reader cannot act on.
+ */
+const { authFetch } = useAuthFetch();
+const configWarnings = ref<ConfigWarning[]>([]);
+async function loadConfigWarnings() {
+  if (!can("config:read")) return;
+  try {
+    const res = await authFetch(`${API_BASE_URL}/api/v1/admin/config/warnings`);
+    if (!res.ok) return;
+    const body = (await res.json()) as { warnings?: ConfigWarning[] };
+    configWarnings.value = body.warnings ?? [];
+  } catch {
+    // Non-critical: the block simply stays away.
+  }
+}
+watch(token, () => void loadConfigWarnings(), { immediate: true });
+
+const attention = computed(() => {
+  const items: { key: string; text: string; to: string; tone: "bad" | "warn" }[] = [];
+  if (degraded.value.length > 0) {
+    items.push({
+      key: "degraded",
+      text: t("adminDashboard.attentionDegraded", { count: degraded.value.length }),
+      to: "/admin/system/health",
+      tone: "bad",
+    });
+  }
+  if (configWarnings.value.length > 0) {
+    items.push({
+      key: "config",
+      text: t("adminDashboard.attentionConfigWarnings", { count: configWarnings.value.length }),
+      to: "/admin/system/configuration",
+      tone: "warn",
+    });
+  }
+  return items;
+});
+
+/**
  * The trend, from the persisted rollup rather than the live counters
  * (RFC 0004 §2.3, §4.3).
  *
@@ -194,7 +240,7 @@ const trendText = computed(() => {
       class="border px-4 py-3"
       :class="verdict.tone === 'bad' ? 'border-destructive' : 'border-border'"
     >
-      <p class="font-mono text-sm" :class="verdict.tone === 'bad' ? 'text-destructive' : ''">
+      <p class="text-sm" :class="verdict.tone === 'bad' ? 'text-destructive' : ''">
         {{ verdict.text }}
       </p>
       <p v-if="verdict.tone === 'bad'" class="mt-2">
@@ -228,29 +274,95 @@ const trendText = computed(() => {
       />
       <Skeleton v-else-if="statsLoading" :lines="2" />
 
-      <!-- What the cache saved, stated as a sentence rather than as four tiles. -->
-      <p v-else-if="stats" class="text-sm text-muted-foreground">
-        <i18n-t keypath="adminDashboard.cacheSummary" tag="span">
-          <template #rate
-            ><span class="font-mono text-foreground">{{ fmtPct(hitRate) }}</span></template
+      <!-- The figures, after the verdict and weighted by it: the verdict above
+           says whether anything is wrong, so these four can be read as
+           support rather than as four equal-weight claims (RFC 0003 §6.4).
+           Each is the figure plus the one qualifier it needs to be read. -->
+      <dl
+        v-else-if="stats"
+        class="grid grid-cols-2 gap-3 lg:grid-cols-4"
+        data-testid="dashboard-kpis"
+      >
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiHitRate") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ fmtPct(hitRate) }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{ t("adminDashboard.kpiSince", { date: formatDay(stats.since_startup) }) }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiDownloads") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ formatCount(totalRequests) }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{
+              t("adminDashboard.kpiFromCache", {
+                count: formatCount(stats.aggregate.artifact_hits ?? 0),
+              })
+            }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiCached") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ fmtBytes(stats.aggregate.cached_bytes) }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{ t("adminDashboard.kpiCachedHint") }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiRegistries") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ formatCount(registries.length) }}
+          </dd>
+          <dd
+            class="mt-1 text-xs"
+            :class="degraded.length ? 'text-destructive' : 'text-ok'"
+            data-testid="kpi-registries-state"
           >
-          <template #total
-            ><span class="font-mono text-foreground">{{
-              formatCount(totalRequests)
-            }}</span></template
+            {{
+              degraded.length
+                ? t("adminDashboard.kpiWithErrors", { count: degraded.length })
+                : t("adminDashboard.kpiAllAnswering")
+            }}
+          </dd>
+        </div>
+      </dl>
+
+      <!-- Needs attention: one line per kind of problem, each a way in. -->
+      <section v-if="attention.length" class="space-y-2" data-testid="dashboard-attention">
+        <h2 class="font-sans text-sm font-semibold text-foreground">
+          {{ t("adminDashboard.attentionTitle") }}
+        </h2>
+        <ul class="border border-border">
+          <li
+            v-for="item in attention"
+            :key="item.key"
+            class="flex items-center justify-between gap-3 border-b border-rule-soft px-4 py-3 last:border-b-0"
           >
-          <template #since
-            ><span class="font-mono">{{
-              new Date(stats.since_startup).toLocaleDateString()
-            }}</span></template
-          >
-          <template #size
-            ><span class="font-mono text-foreground">{{
-              fmtBytes(stats.aggregate.cached_bytes)
-            }}</span></template
-          >
-        </i18n-t>
-      </p>
+            <span
+              class="text-sm"
+              :class="item.tone === 'bad' ? 'text-destructive' : 'text-copper'"
+              >{{ item.text }}</span
+            >
+            <Button as-child size="sm" variant="outline">
+              <RouterLink :to="item.to">{{ t("adminDashboard.attentionReview") }}</RouterLink>
+            </Button>
+          </li>
+        </ul>
+      </section>
 
       <!-- What the counters above structurally cannot say: better or worse than
            before. Absent until there is a rollup to read, rather than showing a
@@ -270,7 +382,7 @@ const trendText = computed(() => {
       </p>
 
       <section v-if="stats && stats.per_registry.length > 0" class="space-y-2">
-        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+        <h2 class="font-sans text-sm font-semibold text-foreground">
           {{ t("adminDashboard.perRegistry") }}
         </h2>
         <Table :label="t('adminDashboard.perRegistry')">

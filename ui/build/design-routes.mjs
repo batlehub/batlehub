@@ -70,7 +70,8 @@ const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * declared, and "the admin pages are not redrawn in the specimen grammar" stops
  * being an assertion the moment it is measured.
  */
-const RAMP = new Set([12, 13, 15, 16, 20, 24, 40, 56, 72, 88, 104]);
+// DESIGN.md (The Interface Face Rule) added the interface face's 14 (body) and 28 (page title).
+const RAMP = new Set([12, 13, 14, 15, 16, 20, 24, 28, 40, 56, 72, 88, 104]);
 
 /**
  * Routes that have a checked-in specification of their own appearance, and what
@@ -103,9 +104,10 @@ const PROOF_DISPLAY_STEPS = [
   [480, 56],
   [0, 40],
 ];
-const PROOF_ROUTES = {
-  "/packages": "ui/design-proof/index.html",
-};
+// Empty since DESIGN.md (The Interface Face Rule): page titles, `/packages` included, are set in
+// the interface face, so no route is asked to spend the Display step any more.
+// The machinery stays for a surface that is given a proof of its own again.
+const PROOF_ROUTES = {};
 const proofDisplayFor = (width) => PROOF_DISPLAY_STEPS.find(([min]) => width >= min)[1];
 
 /**
@@ -128,6 +130,8 @@ const proofDisplayFor = (width) => PROOF_DISPLAY_STEPS.find(([min]) => width >= 
  */
 const VIEWPORTS = [1440, 1024, 768, 390];
 const DISPLAY_FACE = "Silkscreen";
+/** The data face: a page title set in it is a fact, not a heading. */
+const DATA_FACE = "JetBrains Mono";
 
 /*
  * Every admin page of `ui/src/config/adminSections.ts`, plus one concrete
@@ -386,7 +390,7 @@ for (const { role, token, routes } of plans) {
       );
       scanned++;
 
-      const type = await page.evaluate((face) => {
+      const type = await page.evaluate(({ face, dataFace }) => {
         const sizes = new Set();
         // The largest thing on the page actually *set* in the display face —
         // the measurement the design proof makes, and the one "is every size
@@ -414,10 +418,10 @@ for (const { role, token, routes } of plans) {
           largestDisplay,
           h1: h1 && {
             size: Math.round(Number.parseFloat(getComputedStyle(h1).fontSize)),
-            display: getComputedStyle(h1).fontFamily.includes(face),
+            data: getComputedStyle(h1).fontFamily.includes(dataFace),
           },
         };
-      }, DISPLAY_FACE);
+      }, { face: DISPLAY_FACE, dataFace: DATA_FACE });
 
       const offRamp = type.sizes.filter((s) => !RAMP.has(s));
       // The document must never scroll sideways. This is the assertion the
@@ -456,7 +460,7 @@ for (const { role, token, routes } of plans) {
       }
       if (offRamp.length) typeProblems.push(`sizes off the ramp: ${offRamp.join(", ")}px`);
       if (!type.h1) typeProblems.push("no h1");
-      else if (!type.h1.display) typeProblems.push(`h1 not in the display face (${type.h1.size}px)`);
+      else if (type.h1.data) typeProblems.push(`h1 set in the data face (${type.h1.size}px)`);
 
       const proof = PROOF_ROUTES[route];
       if (proof) {

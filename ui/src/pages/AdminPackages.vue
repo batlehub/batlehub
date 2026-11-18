@@ -734,7 +734,7 @@ async function runPending(): Promise<void> {
                       {{ t("common.block") }}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="danger"
                       size="sm"
                       @click="pending = { kind: 'delete-one', pkg }"
                     >

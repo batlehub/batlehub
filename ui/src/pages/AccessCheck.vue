@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import { formatDate } from "@/lib/format";
 import { useRoute } from "vue-router";
 import { computed, ref } from "vue";
 import { checkAccess } from "@/client/sdk.gen";
@@ -121,7 +122,8 @@ const STATE_LABEL: Record<string, string> = {
   wait: "accessCheck.state.wait",
   refuse: "accessCheck.state.refuse",
 };
-const formatTime = (iso: string) => new Date(iso).toLocaleString();
+/** The app's locale, not the browser's — see `lib/format.ts`. */
+const formatTime = (iso: string) => formatDate(iso);
 </script>
 
 <template>

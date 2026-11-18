@@ -7,8 +7,8 @@ describe("Label", () => {
     const wrapper = mount(Label, { slots: { default: "Username" } });
     expect(wrapper.text()).toBe("Username");
     expect(wrapper.element.tagName).toBe("LABEL");
-    expect(wrapper.classes()).toContain("font-mono");
-    expect(wrapper.classes()).toContain("uppercase");
+    expect(wrapper.classes()).toContain("font-sans");
+    expect(wrapper.classes()).not.toContain("uppercase");
   });
 
   it("passes through the for attribute", () => {
@@ -25,6 +25,6 @@ describe("Label", () => {
       slots: { default: "x" },
     });
     expect(wrapper.classes()).toContain("my-label");
-    expect(wrapper.classes()).toContain("font-mono");
+    expect(wrapper.classes()).toContain("font-sans");
   });
 });

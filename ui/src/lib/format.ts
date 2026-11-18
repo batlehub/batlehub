@@ -37,13 +37,20 @@ export function formatBytes(
   return `${value.toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
 }
 
-/** Formats an ISO date string in the app's locale, e.g. `1/2/2026, 3:04:05 PM`. */
+/**
+ * Formats an ISO date and time in the app's locale, e.g. `Jan 2, 2026, 3:04 PM`.
+ *
+ * Month spelled, seconds dropped. The numeric default printed `1/2/2026`,
+ * which reads as February in most of the world, beside date inputs that the
+ * browser renders `dd/mm/yyyy`; a console read by distributed teams cannot
+ * leave the day and the month to the reader's guess.
+ */
 export function formatDate(iso: string | null | undefined, opts?: { fallback?: string }): string {
   const fallback = opts?.fallback ?? "—";
   if (!iso) return fallback;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return fallback;
-  return date.toLocaleString(activeLocale());
+  return date.toLocaleString(activeLocale(), { dateStyle: "medium", timeStyle: "short" });
 }
 
 /**

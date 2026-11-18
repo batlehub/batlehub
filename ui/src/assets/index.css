@@ -41,9 +41,9 @@
   /* Tailwind 4 reads the `--font-*` namespace; the `--font-family-*` names
      these replace generated no utility at all, which is why `font-mono` has
      been resolving to the browser default rather than to the design's face.
-     There is no sans in this world — every fact is set in the mono text face,
-     so `font-sans` and `font-mono` deliberately resolve to the same stack. */
-  --font-sans: var(--face-text);
+     `font-sans` is the interface face (labels, controls, prose); `font-mono`
+     is the data face, opted into wherever a reader compares values. */
+  --font-sans: var(--face-ui);
   --font-mono: var(--face-text);
   --font-display: var(--face-display);
 
@@ -51,7 +51,7 @@
      the scale applies without every call site being rewritten. DESIGN.md's
      Row/Body/Meta steps are 15/13/12 — not Tailwind's 16/14/12. */
   --text-xs: var(--t-meta);
-  --text-sm: var(--t-body);
+  --text-sm: var(--t-ui); /* 14 — the interface face; --t-body (13) stays the docs' code step */
   --text-base: var(--t-row);
   --text-lg: var(--t-head);
   --text-xl: var(--t-px-md);
@@ -66,6 +66,7 @@
      utility is a token that was never adopted. */
   --text-sub: var(--t-sub); /* 16 — the Silkscreen small step, --t-px-sm's twin */
   --text-display: var(--t-display); /* 56 → 72, discrete per breakpoint */
+  --text-title: var(--t-title); /* 28 — page titles, interface face */
 
   --radius-lg: var(--radius);
   --radius-md: var(--radius);
@@ -84,6 +85,7 @@
   --color-border: var(--border);
   --color-ring: var(--ring);
   --color-copper: var(--copper);
+  --color-ok: var(--ok);
 
   /* The two surface tokens the bridge above could not name honestly, exposed
      under the design system's own names rather than borrowed ones.
@@ -141,8 +143,11 @@
      hard-edged, both zero-blur, and both belonging to the primary action —
      depth here is inked, never lit. `--cyber-glow` / `--steam-glow` did not
      survive; the rendered detector is what proved they were still painting. */
-  --action-ring: 0 0 0 2px var(--ground), 0 0 0 3px var(--accent);
-  --pixel-step: 3px 0 0 var(--accent-ink), 6px 0 0 var(--accent);
+  /* Inked to the primary fill (DESIGN.md, The Interface Face Rule): the primary button is ink, so
+     its ring and its mis-registered plates are ink too. The destructive fill
+     shares them — on crimson an ink ring still reads as "this control". */
+  --action-ring: 0 0 0 2px var(--ground), 0 0 0 3px var(--ink);
+  --pixel-step: 3px 0 0 var(--ground), 6px 0 0 var(--ink);
 }
 
 @layer base {
@@ -151,10 +156,10 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Every fact on the page is set in the text face; the display face is
-       opted into, never inherited. Body is DESIGN.md's prose step. */
-    font-family: var(--face-text);
-    font-size: var(--t-body);
+    /* The interface face is inherited; the data face (`font-mono`) and the
+       display face (`font-display`) are opted into, never inherited. */
+    font-family: var(--face-ui);
+    font-size: var(--t-ui);
     font-feature-settings:
       "rlig" 1,
       "calt" 1;
@@ -167,6 +172,22 @@
   [data-numeric] {
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* ── Table density ────────────────────────────────────────────────────────────
+   `data-density="compact"` on <html>, set from the display settings
+   (`useDensity`, and `build/theme-init.js` before first paint). It tightens the
+   rows of every table, not their type: 16px block padding becomes 8px and the
+   header 40px becomes 32px — the two steps DESIGN.md's scale already has.
+   Unlayered, so it outranks the `p-4` / `h-10` the table primitives carry.
+   Comfortable is the default and has no rule: it is the primitives as written.
+   ────────────────────────────────────────────────────────────────────────── */
+:root[data-density="compact"] td {
+  padding-top: var(--s2);
+  padding-bottom: var(--s2);
+}
+:root[data-density="compact"] th {
+  height: 32px;
 }
 
 /* ── Reduced motion ───────────────────────────────────────────────────────────

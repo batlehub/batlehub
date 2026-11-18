@@ -22,29 +22,17 @@ function makeRouter(initialPath: string): Router {
 }
 
 describe("SectionTabs", () => {
-  it("renders a link per tab", async () => {
+  it("renders one option per tab and no desktop link row", async () => {
     const router = makeRouter("/admin/security/users");
     await router.isReady();
     const wrapper = mount(SectionTabs, {
       props: { tabs: TABS },
       global: { plugins: [router] },
     });
-    const links = wrapper.findAll("a");
-    expect(links).toHaveLength(2);
-    expect(links[0].text()).toBe("Users");
-    expect(links[1].text()).toBe("IP Blocks");
-  });
-
-  it("marks the tab matching the current route as active", async () => {
-    const router = makeRouter("/admin/security/ip-blocks");
-    await router.isReady();
-    const wrapper = mount(SectionTabs, {
-      props: { tabs: TABS },
-      global: { plugins: [router] },
-    });
-    const links = wrapper.findAll("a");
-    expect(links[1].classes()).toContain("border-primary");
-    expect(links[0].classes()).not.toContain("border-primary");
+    const options = wrapper.findAll("option");
+    expect(options.map((o) => o.text())).toEqual(["Users", "IP Blocks"]);
+    // The sidebar lists these pages from `md` up; a second row would repeat it.
+    expect(wrapper.findAll("a")).toHaveLength(0);
   });
 
   /** On a phone the tabs are one native selector naming the current one. */
@@ -58,7 +46,6 @@ describe("SectionTabs", () => {
     expect((wrapper.get("select").element as HTMLSelectElement).value).toBe(
       "/admin/security/ip-blocks",
     );
-    expect(wrapper.findAll("a")[1].attributes("aria-current")).toBe("page");
   });
 
   it("navigates when another tab is picked in the mobile selector", async () => {

@@ -219,7 +219,7 @@ async function simulate() {
             v-model="userId"
             :options="subjectSuggestions.options.value"
             :loading="subjectSuggestions.loading.value"
-            placeholder="alice"
+            :placeholder="t('common.example', { value: 'alice' })"
           />
         </div>
         <div class="col-span-2 space-y-1">
@@ -246,7 +246,11 @@ async function simulate() {
             >{{ t("adminAccessCheck.clientIp") }}
             <span class="text-muted-foreground">{{ t("adminAccessCheck.optional") }}</span></label
           >
-          <Input id="aac-client-ip" v-model="clientIp" placeholder="10.0.0.7" />
+          <Input
+            id="aac-client-ip"
+            v-model="clientIp"
+            :placeholder="t('common.example', { value: '10.0.0.7' })"
+          />
           <p class="text-xs text-muted-foreground">
             {{ t("adminAccessCheck.clientIpHelp") }}
           </p>

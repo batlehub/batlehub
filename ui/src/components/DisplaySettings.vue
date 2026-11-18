@@ -21,6 +21,7 @@ import { SlidersHorizontal } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Announcer } from "@/components/ui/announcer";
 import { readPreference, setLocalePreference, systemLocale, type LocalePreference } from "@/i18n";
+import { useDensity } from "@/composables/useDensity";
 
 const { t } = useI18n();
 
@@ -37,6 +38,12 @@ const THEMES = [
   { value: "auto", key: "theme.systemShort" },
   { value: "light", key: "theme.lightShort" },
   { value: "dark", key: "theme.darkShort" },
+] as const;
+
+const { density } = useDensity();
+const DENSITIES = [
+  { value: "comfortable", key: "displaySettings.comfortable" },
+  { value: "compact", key: "displaySettings.compact" },
 ] as const;
 
 const locale = ref<LocalePreference>(readPreference());
@@ -65,6 +72,12 @@ watch(mode, (value) => {
     value: labelOf(THEMES, value),
   });
 });
+watch(density, (value) => {
+  announcement.value = t("displaySettings.changed", {
+    setting: t("displaySettings.density"),
+    value: labelOf(DENSITIES, value),
+  });
+});
 watch(locale, (value) => {
   announcement.value = t("displaySettings.changed", {
     setting: t("locale.label"),
@@ -73,7 +86,7 @@ watch(locale, (value) => {
 });
 
 const CELL =
-  "flex-1 cursor-pointer px-1 py-2 text-center font-mono text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground has-[:checked]:bg-foreground has-[:checked]:text-background has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--focus)]";
+  "flex-1 cursor-pointer px-1 py-2 text-center font-sans text-xs font-medium text-muted-foreground hover:text-foreground has-[:checked]:bg-foreground has-[:checked]:text-background has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--focus)]";
 </script>
 
 <template>
@@ -96,7 +109,7 @@ const CELL =
         class="z-50 w-[264px] space-y-4 border border-rule-strong bg-ground-sunk p-4 text-foreground"
       >
         <fieldset>
-          <legend class="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          <legend class="mb-2 font-sans text-xs font-medium text-muted-foreground">
             {{ t("displaySettings.theme") }}
           </legend>
           <div class="flex divide-x divide-border border border-border">
@@ -111,12 +124,29 @@ const CELL =
               {{ t(opt.key) }}
             </label>
           </div>
-          <p v-if="mode === 'auto'" class="mt-2 font-mono text-xs text-muted-foreground">
+          <p v-if="mode === 'auto'" class="mt-2 font-sans text-xs text-muted-foreground">
             {{ t("displaySettings.systemNote", { value: systemTheme }) }}
           </p>
         </fieldset>
         <fieldset>
-          <legend class="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          <legend class="mb-2 font-sans text-xs font-medium text-muted-foreground">
+            {{ t("displaySettings.density") }}
+          </legend>
+          <div class="flex divide-x divide-border border border-border">
+            <label v-for="opt in DENSITIES" :key="opt.value" :class="CELL">
+              <input
+                v-model="density"
+                type="radio"
+                name="display-density"
+                :value="opt.value"
+                class="sr-only"
+              />
+              {{ t(opt.key) }}
+            </label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend class="mb-2 font-sans text-xs font-medium text-muted-foreground">
             {{ t("locale.label") }}
           </legend>
           <div class="flex divide-x divide-border border border-border">
@@ -135,7 +165,7 @@ const CELL =
               >
             </label>
           </div>
-          <p v-if="locale === 'system'" class="mt-2 font-mono text-xs text-muted-foreground">
+          <p v-if="locale === 'system'" class="mt-2 font-sans text-xs text-muted-foreground">
             {{ t("displaySettings.systemNote", { value: systemLanguage }) }}
           </p>
         </fieldset>

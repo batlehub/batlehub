@@ -230,7 +230,7 @@ function onKeydown(event: KeyboardEvent) {
       :aria-describedby="disabled && disabledReason ? `${listId}-reason` : undefined"
       :class="
         cn(
-          'flex h-9 w-full border border-border bg-ground-sunk px-3 py-1 font-mono text-sm transition-colors focus-visible:border-primary placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-9 w-full border border-border bg-ground-sunk px-3 py-1 font-sans text-sm transition-colors focus-visible:border-primary placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
           props.class,
         )
       "

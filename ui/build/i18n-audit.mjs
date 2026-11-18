@@ -96,7 +96,9 @@ const looksHuman = (attr) =>
  * both locales. Scanning them would bury a real finding under 200 that must not
  * be touched — and a gate nobody can get to zero is a gate nobody reads.
  */
-const DATA_FILES = /(registryTypes|registryPathFields)\.ts$/;
+// `registryExamples` holds package coordinates per ecosystem (`serde`,
+// `org.slf4j:slf4j-api@2.0.16`): the same kind of verbatim data.
+const DATA_FILES = /(registryTypes|registryPathFields|registryExamples)\.ts$/;
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {

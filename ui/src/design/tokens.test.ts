@@ -57,6 +57,7 @@ const COLOR_TOKENS = [
   "--accent-ink",
   "--copper",
   "--focus",
+  "--ok",
 ] as const;
 
 function rgb(tokens: Record<string, string>, name: string): Rgb {
@@ -98,6 +99,9 @@ describe.each(RENDITIONS)("%s rendition", (_name, tokens) => {
     ["--ink-dim", "--ground-sunk"],
     ["--accent", "--ground"],
     ["--copper", "--ground"],
+    ["--ok", "--ground"],
+    ["--ok", "--ground-raised"],
+    ["--ok", "--ground-sunk"],
     ["--accent-ink", "--accent"],
   ])("%s on %s clears 4.5:1", (fg, bg) => {
     const ratio = contrastRatio(rgb(tokens, fg), rgb(tokens, bg));

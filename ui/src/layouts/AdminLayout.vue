@@ -89,7 +89,7 @@ watch(
     -->
     <aside class="hidden md:flex flex-col w-52 shrink-0 border-r border-rule-soft pr-4 pt-2">
       <div
-        class="flex items-center gap-2 px-3 py-2 mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+        class="flex items-center gap-2 px-3 py-2 mb-2 font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
         <ShieldCheck class="h-3.5 w-3.5" aria-hidden="true" />
         {{ t("common.admin") }}
@@ -97,7 +97,7 @@ watch(
       <!-- RFC 0046 §4.2: the palette's button, at the top of the sidebar. -->
       <button
         type="button"
-        class="mb-2 flex items-center gap-2 border border-border px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+        class="mb-2 flex items-center gap-2 border border-border px-3 py-2 font-sans text-xs text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         @click="openPalette"
       >
         <Search class="h-3.5 w-3.5" aria-hidden="true" />
@@ -118,7 +118,7 @@ watch(
             :to="section.to"
             :aria-current="isActive(section.to) ? 'page' : undefined"
             :class="[
-              'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
+              'flex items-center gap-2 border-l px-3 py-2 font-sans text-sm',
               isActive(section.to)
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -135,7 +135,7 @@ watch(
           >
             <span
               :id="`admin-section-${section.to.slice(7)}`"
-              class="flex items-center gap-2 px-3 py-1 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+              class="flex items-center gap-2 px-3 py-1 font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               <component :is="section.icon" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {{ t(section.label) }}
@@ -146,7 +146,7 @@ watch(
               :to="page.to"
               :aria-current="activePage === page.to ? 'page' : undefined"
               :class="[
-                'border-l py-1 pl-10 pr-3 font-mono text-sm',
+                'border-l py-1 pl-10 pr-3 font-sans text-sm',
                 activePage === page.to
                   ? 'border-primary text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -174,7 +174,7 @@ watch(
     <div class="md:hidden mb-3 w-full">
       <button
         type="button"
-        class="flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-mono text-sm"
+        class="flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-sans text-sm"
         :aria-expanded="sectionsOpen"
         aria-controls="admin-sections-mobile"
         @click="sectionsOpen = !sectionsOpen"
@@ -202,7 +202,7 @@ watch(
           :to="section.to"
           :aria-current="sectionActive(section) ? 'page' : undefined"
           :class="[
-            'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
+            'flex items-center gap-2 border-l px-3 py-2 font-sans text-sm',
             sectionActive(section)
               ? 'border-primary text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',

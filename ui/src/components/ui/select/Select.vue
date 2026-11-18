@@ -66,7 +66,7 @@ function onUpdate(value: string) {
       :aria-label="ariaLabel"
       :class="
         cn(
-          'flex h-9 w-full items-center justify-between border border-border bg-ground-sunk px-3 py-2 font-mono text-sm placeholder:text-muted-foreground data-[state=open]:border-primary disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between border border-border bg-ground-sunk px-3 py-2 font-sans text-sm placeholder:text-muted-foreground data-[state=open]:border-primary disabled:cursor-not-allowed disabled:opacity-50',
           $props.class,
         )
       "
@@ -85,7 +85,7 @@ function onUpdate(value: string) {
             v-for="opt in items"
             :key="opt.value"
             :value="opt.value"
-            class="relative flex w-full cursor-default select-none items-center py-2 pl-10 pr-2 font-mono text-sm text-muted-foreground outline-none data-[highlighted]:bg-accent data-[highlighted]:text-foreground data-[highlighted]:underline data-[highlighted]:underline-offset-[3px] data-[state=checked]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+            class="relative flex w-full cursor-default select-none items-center py-2 pl-10 pr-2 font-sans text-sm text-muted-foreground outline-none data-[highlighted]:bg-accent data-[highlighted]:text-foreground data-[highlighted]:underline data-[highlighted]:underline-offset-[3px] data-[state=checked]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
           >
             <!-- The highlight fill is 1.06:1, so ink and underline carry it, and
                  the chosen option gets a mark of its own. -->

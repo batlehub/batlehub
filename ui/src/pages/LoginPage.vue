@@ -111,10 +111,10 @@ function providerLabel(name: string): string {
     <Card class="w-full max-w-sm">
       <CardHeader class="space-y-1">
         <!-- The page's only heading, and its one Display element: this card
-             *is* the page. `font-display` because DESIGN.md gives every view
-             one step in the bitmap face, and an `h1` in the data face is what
-             the ramp gate reads as a page with no display element at all. -->
-        <CardTitle as="h1" class="font-display text-2xl font-bold tracking-[0.04em]">{{
+             *is* the page. Titles are set in the interface face
+             (DESIGN.md, The Interface Face Rule); the bitmap face is kept for
+             the wordmark and the home greeting. -->
+        <CardTitle as="h1" class="text-2xl font-semibold tracking-tight">{{
           t("loginPage.signIn")
         }}</CardTitle>
         <CardDescription>{{ t("loginPage.authenticateToAccessProtected") }}</CardDescription>

@@ -187,13 +187,20 @@ describe("the Undependable Fill Rule", () => {
        because every child overrides it — so it was a trap rather than a
        defect: the next plain word added to that paragraph would have rendered
        under the floor with nothing to catch it. */
-    const catalog = SOURCES["src/components/catalog/CatalogSpecimen.vue"];
-    const specimen = catalog.slice(
-      catalog.indexOf('<div class="plate"'),
-      catalog.indexOf("</section>", catalog.indexOf('<div class="plate"')),
-    );
-    expect(specimen, "the plate section must not exist without its own test").not.toBe("");
-    expect(specimen).not.toContain("text-muted-foreground");
+    /* Graded wherever a plate is placed rather than on the one file that used
+       to hold it: the catalog header dropped its plate when the texture went
+       back to the home page alone (DESIGN.md, The Material Layer), and a
+       plate placed anywhere next is held to the same floor. */
+    const offenders: string[] = [];
+    for (const [file, source] of Object.entries(SOURCES)) {
+      let at = source.indexOf('<div class="plate"');
+      while (at !== -1) {
+        const section = source.slice(at, source.indexOf("</section>", at));
+        if (section.includes("text-muted-foreground")) offenders.push(file);
+        at = source.indexOf('<div class="plate"', at + 1);
+      }
+    }
+    expect(offenders, "dim ink measures 3.20/3.35:1 on the plate").toEqual([]);
   });
 });
 

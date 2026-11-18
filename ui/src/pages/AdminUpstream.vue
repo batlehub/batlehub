@@ -9,6 +9,7 @@
  * same ladder and state machine as the sweep.
  */
 import { useI18n } from "vue-i18n";
+import { formatDate } from "@/lib/format";
 import { ref, computed, onMounted, watch } from "vue";
 import { usePreselectRegistry } from "@/composables/usePreselectRegistry";
 import { useAuthFetch } from "@/composables/useAuthFetch";
@@ -183,7 +184,7 @@ watch([registryFilter, stateFilter], () => {
 watch(page, () => void load());
 onMounted(load);
 
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+const fmt = (iso?: string | null) => formatDate(iso);
 </script>
 
 <template>

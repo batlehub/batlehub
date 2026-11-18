@@ -260,7 +260,7 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                   t("adminHealth.betaChannelOn")
                 }}</Badge>
                 <Button
-                  variant="outline"
+                  variant="danger"
                   size="sm"
                   class="text-xs h-6 px-2"
                   @click="clearTarget = reg.registry"

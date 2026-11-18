@@ -24,7 +24,10 @@ describe("formatBytes", () => {
 describe("formatDate", () => {
   it("formats a valid ISO date", () => {
     expect(formatDate("2026-01-02T00:00:00Z")).toBe(
-      new Date("2026-01-02T00:00:00Z").toLocaleString(),
+      new Date("2026-01-02T00:00:00Z").toLocaleString("en", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
     );
   });
 

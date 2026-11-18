@@ -173,16 +173,30 @@ const PAIRINGS: Pairing[] = [
     },
   },
   {
-    what: "--accent-ink on the hovered primary fill",
-    site: "components/ui/button/Button.vue — hover:bg-primary",
+    what: "--ground on the primary ink fill",
+    site: "components/ui/button/Button.vue — bg-foreground",
     floor: TEXT,
-    // The hover state of the one filled action in the system. The label does
-    // not change on hover; the fill it sits on does, and the fill is what
-    // stops carrying it.
+    // The one filled primary action, ink since DESIGN.md (The Interface Face Rule). The label is the
+    // ground colour; any alpha written on the fill composites it toward the
+    // ground and is what would stop carrying it.
     ratio: (t, rendition) => {
       const alpha = alphaOf(
         "components/ui/button/Button.vue",
-        /bg-primary(?:\/(\d+))?/g,
+        /bg-foreground(?:\/(\d+))?/g,
+        rendition,
+      );
+      const fill = composite(token(t, "--ink"), token(t, "--ground"), alpha);
+      return contrastRatio(token(t, "--ground"), fill);
+    },
+  },
+  {
+    what: "--accent-ink on the destructive fill",
+    site: "components/ui/button/Button.vue — bg-destructive",
+    floor: TEXT,
+    ratio: (t, rendition) => {
+      const alpha = alphaOf(
+        "components/ui/button/Button.vue",
+        /bg-destructive(?:\/(\d+))?/g,
         rendition,
       );
       const fill = composite(token(t, "--accent"), token(t, "--ground"), alpha);

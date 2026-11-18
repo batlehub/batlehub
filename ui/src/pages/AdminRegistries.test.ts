@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
-const { adminStatsMock } = vi.hoisted(() => ({ adminStatsMock: vi.fn() }));
-vi.mock("@/client/sdk.gen", () => ({ adminStats: adminStatsMock }));
+const { adminStatsMock, registryHealthMock } = vi.hoisted(() => ({
+  adminStatsMock: vi.fn(),
+  registryHealthMock: vi.fn(),
+}));
+vi.mock("@/client/sdk.gen", () => ({
+  adminStats: adminStatsMock,
+  registryHealth: registryHealthMock,
+}));
 
 import AdminRegistries from "./AdminRegistries.vue";
 import { useAuth } from "@/composables/useAuth";
@@ -39,6 +45,8 @@ async function mountPage() {
 describe("AdminRegistries", () => {
   beforeEach(() => {
     adminStatsMock.mockReset();
+    registryHealthMock.mockReset();
+    registryHealthMock.mockResolvedValue({ data: [] });
     holdVerbs(["stats:read", "system:read"]);
   });
 
@@ -54,13 +62,36 @@ describe("AdminRegistries", () => {
     const links = w.findAll("a[data-to]").map((a) => a.attributes("data-to"));
     expect(links).toEqual(["/admin/registry/npm-q", "/admin/registry/a%2Fb"]);
     expect(w.text()).toContain("90.0%");
-    expect(w.text()).toContain("degraded");
+    expect(w.text()).toContain("Degraded");
     expect(w.text()).toContain("—");
     // Without system:read the name is text, not a link the router would refuse.
     holdVerbs(["stats:read"]);
     await w.vm.$nextTick();
     expect(w.findAll("a[data-to]")).toHaveLength(0);
     expect(w.text()).toContain("npm-q");
+  });
+
+  // What each registry *is*, joined from the health probe by name; a registry
+  // the probe does not return keeps its row, with dashes for what it lacks.
+  it("shows each registry's type and mode beside its stats", async () => {
+    adminStatsMock.mockResolvedValue({
+      data: {
+        since_startup: "2026-11-10T00:00:00Z",
+        aggregate: { artifact_hits: 0, artifact_misses: 0, cached_bytes: 0 },
+        per_registry: [row("npm-q"), row("orphan")],
+      },
+    });
+    registryHealthMock.mockResolvedValue({
+      data: [{ registry: "npm-q", registry_type: "npm", mode: "hybrid", last_pull_at: null }],
+    });
+    const w = await mountPage();
+    const rows = w.findAll('[data-testid="registry-row"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.text()).toContain("npm");
+    expect(rows[0]!.text()).toContain("hybrid");
+    expect(rows[0]!.text()).toContain("Healthy");
+    expect(rows[1]!.text()).toContain("orphan");
+    expect(rows[1]!.text()).toContain("—");
   });
 
   it("says when nothing is configured", async () => {

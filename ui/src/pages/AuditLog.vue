@@ -473,7 +473,7 @@ async function purge() {
           />
         </div>
         <Button
-          variant="destructive"
+          variant="danger"
           size="sm"
           :disabled="!purgeBefore || countingPurge"
           @click="openPurge"

@@ -23,6 +23,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { addressingOf } from "@/config/registryAddressing";
+import { packageExampleFor } from "@/config/registryExamples";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 
 const { t } = useI18n();
@@ -235,7 +236,7 @@ onMounted(() => void loadStatus());
                     :id="`warm-${reg.name}`"
                     v-model="packageInputs[reg.name]"
                     :aria-label="t('common.packages')"
-                    :placeholder="t('adminWarming.lodashReact180')"
+                    :placeholder="packageExampleFor(typeOf(reg.name))"
                     class="font-mono text-xs"
                   />
                   <Input

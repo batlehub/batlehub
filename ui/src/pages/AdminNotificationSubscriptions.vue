@@ -205,7 +205,7 @@ async function testSubscription(id: string) {
                       <Button variant="outline" size="sm" @click="openEdit(sub)">{{
                         t("common.edit")
                       }}</Button>
-                      <Button variant="outline" size="sm" @click="deleteTarget = sub.id">{{
+                      <Button variant="danger" size="sm" @click="deleteTarget = sub.id">{{
                         t("common.delete")
                       }}</Button>
                     </div>

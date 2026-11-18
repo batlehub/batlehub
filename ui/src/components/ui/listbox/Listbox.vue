@@ -66,7 +66,7 @@ const rowClass = (i: number) => [
       <div
         v-if="run.group"
         :id="`${id}-group-${r}`"
-        class="px-3 pt-3 pb-1 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+        class="px-3 pt-3 pb-1 font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
         {{ run.group }}
       </div>
@@ -87,7 +87,7 @@ const rowClass = (i: number) => [
           @mousedown.prevent
           @mousemove="emit('hover', index)"
         >
-          <span class="font-mono">{{ item.label }}</span>
+          <span class="font-sans">{{ item.label }}</span>
           <span v-if="item.hint" class="ml-auto text-xs text-muted-foreground">{{
             item.hint
           }}</span>
@@ -101,7 +101,7 @@ const rowClass = (i: number) => [
           @mousedown.prevent="emit('choose', index, $event)"
           @mousemove="emit('hover', index)"
         >
-          <span class="font-mono">{{ item.label }}</span>
+          <span class="font-sans">{{ item.label }}</span>
           <span v-if="item.hint" class="text-xs text-muted-foreground">{{ item.hint }}</span>
         </div>
       </template>

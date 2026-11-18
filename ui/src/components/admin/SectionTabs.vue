@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { computed } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useAuth } from "@/composables/useAuth";
 import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
 
@@ -66,18 +66,16 @@ function onBlur(event: FocusEvent) {
 </script>
 
 <template>
-  <!-- A 1px crimson edge under the current tab — the same selection edge as
-       the sidebar — not a 2px stripe; and `aria-current`, because the active
-       state was colour and weight only. -->
-  <!-- Mobile: one native selector naming the current tab. Wrapped, seven
-       tabs were three rows of links under the section menu; a select is
-       one row, opens the platform's own picker, and keeps every tab one tap
-       away. -->
+  <!-- Mobile only. From `md` the admin sidebar lists every page of every
+       section, so a desktop tab row under it repeated the same links a
+       second time, one level down (DESIGN.md, Navigation). Below `md` the
+       sidebar collapses into the section menu and this native selector is
+       how the pages of the current section stay one tap away. -->
   <div class="md:hidden mb-4">
     <label for="section-tab-select" class="sr-only">{{ t("a11y.inThisSection") }}</label>
     <select
       id="section-tab-select"
-      class="h-10 w-full border border-border bg-background px-3 font-mono text-sm"
+      class="h-10 w-full border border-border bg-background px-3 font-sans text-sm"
       :value="current"
       @pointerdown="onPointerdown"
       @keydown="onKeydown"
@@ -87,23 +85,4 @@ function onBlur(event: FocusEvent) {
       <option v-for="tab in tabs" :key="tab.to" :value="tab.to">{{ t(tab.label) }}</option>
     </select>
   </div>
-  <nav
-    class="hidden md:flex items-center gap-1 flex-wrap border-b border-rule-soft mb-4"
-    :aria-label="t('a11y.inThisSection')"
-  >
-    <RouterLink
-      v-for="tab in tabs"
-      :key="tab.to"
-      :to="tab.to"
-      :aria-current="current === tab.to ? 'page' : undefined"
-      :class="[
-        'px-3 py-2 font-mono text-sm whitespace-nowrap border-b -mb-px',
-        current === tab.to
-          ? 'border-primary text-foreground'
-          : 'border-transparent text-muted-foreground hover:text-foreground',
-      ]"
-    >
-      {{ t(tab.label) }}
-    </RouterLink>
-  </nav>
 </template>

@@ -76,4 +76,17 @@
   // `dataset.theme` is the `data-theme` attribute `tokens.css` selects on and
   // `useColorMode` writes; the minifier makes it the shorter of the two, too.
   document.documentElement.dataset.theme = resolved;
+
+  // Table density, decided here for the same reason as the rendition: rows
+  // that tighten after mount move every table under the reader's eye. Written
+  // only for `compact`; comfortable is the stylesheet's own default, so an
+  // absent or unknown value needs no attribute — the same rule `useDensity`
+  // follows when it mounts.
+  var density = null;
+  try {
+    density = window.localStorage.getItem("batlehub.density");
+  } catch (e) {
+    // As above: no storage, no preference — comfortable.
+  }
+  if (density === "compact") document.documentElement.dataset.density = "compact";
 })();

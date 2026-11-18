@@ -18,7 +18,7 @@ function fullUrl(path: string): string {
 
 <template>
   <div v-if="paths.length" class="space-y-2">
-    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+    <h2 class="font-sans text-sm font-semibold text-foreground">
       {{ t("registryPathResults.proxyPaths") }}
     </h2>
     <div class="rounded-sm border divide-y">
