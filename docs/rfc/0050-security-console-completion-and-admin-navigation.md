@@ -243,8 +243,10 @@ security_history_retention_days = 90
   - *Holds*: `ATTENTION` when a version is `denied`, or `quarantined` for a
     reason other than `MIN_AGE_NOT_MET`, or `SCAN_PENDING` for more than one
     hour.
-  - *Flags*: `ATTENTION` when a live flag blocks downloads (`gate` or
-    `hard_block`).
+  - *Flags*: `ATTENTION` when a live flag can block downloads (`hard_block`
+    always, `gate` above the registry's threshold); the line says "can block",
+    and the Flags page labels `gate` "blocks above the threshold", so the two
+    counts reconcile.
   - *Scanners & worker*: `ATTENTION` when no live worker covers a registry that
     has `[security]` (a worker covers the registries its heartbeat lists;
     *live* means a heartbeat younger than `job_timeout_secs` + 120 s, 720 s by
@@ -372,7 +374,7 @@ seed. Viewer: *secops*, holding RFC 0042's `quarantine:read`, `findings:read`,
 │   Holds               │
 │   Findings            │  STATUS                                       updated 12 s ago
 │   Flags               │  ▲ ATTENTION  Holds      13 versions held, 4 for malware      → Holds
-│   Exposure            │  ▲ ATTENTION  Flags      3 flags block downloads; 2 were
+│   Exposure            │  ▲ ATTENTION  Flags      3 flags can block downloads; 2 were
 │ FOLLOW-UP           ▾ │                          downloaded after they were flagged    → Flags
 │   Trends              │  ● OK         Scanners   1 worker running · queue empty ·
 │   Coverage            │                          OSV answering                         → Scanners
@@ -551,7 +553,7 @@ names a consequence and the page that acts on it.
 ```text
 $ batlehub-cli security status
 HOLDS      ATTENTION  13 versions held, 4 for malware          /security/holds
-FLAGS      ATTENTION  3 flags block downloads                  /security/flags
+FLAGS      ATTENTION  3 flags can block downloads                  /security/flags
 SCANNERS   OK         1 worker running, queue empty            /security/scanners
 COVERAGE   ATTENTION  1 of 4 registries not protected          /security/coverage
 $ echo $?
@@ -616,7 +618,7 @@ menu reaches every page in two taps.
 ```text
   All 3 registries are answering.  Hit rate 87 % over 30 days, up 2 points.
   ▲ Holds      13 versions held, 4 for malware                     → Security
-  ▲ Flags      3 flags block downloads                             → Security › Flags
+  ▲ Flags      3 flags can block downloads                             → Security › Flags
   ● Scanners   1 worker running, queue empty                       → Security › Scanners
   ▲ Config     3 security warnings                                 → Instance security
 ```
@@ -1760,3 +1762,20 @@ such entries for the flusher instead of dropping them. Tests:
 `a_burst_that_stops_is_counted_in_full_once_flushed` (24 attempts → 24).
 Rate limiting and IP auto-ban are untouched: they act on every request, not on
 the audit rows.
+
+**Design critique before the merge (2026-11-18).** An `/impeccable critique`
+of both consoles on the demo (two isolated assessments: a design review and the
+detector injected into the signed-in pages) scored 25/40 and raised four P1s,
+all fixed in this PR:
+
+| Finding | Fix |
+| --- | --- |
+| `/security/trends` scrolled sideways at 768 and 390 px (a `1fr` track stretched by thirty days of gap markers) and drew the gap marker at 10 px, off the type ramp | `minmax(0,1fr)` / `grid-cols-1`, `min-w-0` on the day columns, the marker at 12 px |
+| *Needs a decision* led every item to the package page, where nothing can be decided, and listed a version once per reason | grouped by version; each reason links to the page that acts on it (a hard block → Holds filtered to SOC holds of that registry; pulled after a flag → Exposure on that version, after the flag, for `audit:read`); `by_kind` gives each kind an "→ all N" link; the server keeps the first ten *versions*, every reason of each |
+| The overview said "5 flags block downloads" while Flags labelled two of them "holds the version" | a `gate` flag blocks only above the registry's threshold: the line says "can block", the label "blocks above the threshold" |
+| Holds listed the held versions twice, in two date formats, and drew a nameless verdict as `crates-io/@1.0.0` | the per-registry counts stay, the one list is `HeldVersions`; a nameless verdict reads "(no name)". The maintainer had typed a crate from memory on the warming page; warming itself writes no verdict, and the route that carried the empty name to the gate is not found (every empty-name URL tried answers 404). `VerdictService::current` now refuses a coordinate `validate_coordinate` rejects, before any hold or scan job is written, and logs it with its coordinate |
+
+Exposure now reads `registry`, `package` and `when` from the URL, and says so
+with a "Show every package" link. The P2s (Exposure's Apply button, the
+Explain / Simulate field names, the weight of *Clear Cache*) are left for a
+follow-up.

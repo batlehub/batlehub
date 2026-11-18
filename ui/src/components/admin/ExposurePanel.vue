@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 
 import { exposureReport } from "@/client/sdk.gen";
 import type { ExposureCoverage, ExposureRow } from "@/client/types.gen";
@@ -36,9 +37,22 @@ import { DateTime } from "@/components/ui/date-time";
 const { t } = useI18n();
 const { authFetch } = useAuthFetch();
 
+const route = useRoute();
+const router = useRouter();
+const one = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const WHENS = ["any", "before_flag", "after_flag"];
+
 const source = ref("");
 const minEffect = ref("");
-const when = ref("any");
+// A link from the overview opens on one version's downloads after its flag.
+const when = ref(WHENS.includes(one(route.query.when) ?? "") ? one(route.query.when)! : "any");
+const scope = ref({ registry: one(route.query.registry), package: one(route.query.package) });
+
+function clearScope() {
+  scope.value = { registry: undefined, package: undefined };
+  void router.replace({ query: { ...route.query, registry: undefined, package: undefined } });
+  void load();
+}
 
 const rows = ref<ExposureRow[]>([]);
 const next = ref<string | null>(null);
@@ -65,6 +79,8 @@ function query(after?: string) {
   return {
     source: source.value.trim() || undefined,
     min_effect: minEffect.value || undefined,
+    registry: scope.value.registry,
+    package_name: scope.value.package,
     when: when.value,
     after,
     limit: 50,
@@ -106,6 +122,8 @@ async function exportCsv() {
   const params = new URLSearchParams({ format: "csv", when: when.value });
   if (source.value.trim()) params.set("source", source.value.trim());
   if (minEffect.value) params.set("min_effect", minEffect.value);
+  if (scope.value.registry) params.set("registry", scope.value.registry);
+  if (scope.value.package) params.set("package_name", scope.value.package);
   const resp = await authFetch(`${API_BASE_URL}/api/v1/admin/exposure/export?${params}`);
   if (!resp.ok) {
     exportError.value = t("exposurePanel.exportFailed");
@@ -153,6 +171,26 @@ onMounted(() => load());
     </CardHeader>
     <CardContent class="space-y-4">
       <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("exposurePanel.intro") }}</p>
+
+      <p
+        v-if="scope.registry || scope.package"
+        class="flex flex-wrap items-baseline gap-x-3 text-sm"
+        data-testid="exposure-scope"
+      >
+        <span
+          >{{ t("exposurePanel.scoped") }}
+          <span class="font-mono">{{
+            [scope.registry, scope.package].filter(Boolean).join("/")
+          }}</span></span
+        >
+        <button
+          type="button"
+          class="text-primary underline underline-offset-[3px]"
+          @click="clearScope"
+        >
+          {{ t("exposurePanel.clearScope") }}
+        </button>
+      </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl">
         <div class="space-y-2">

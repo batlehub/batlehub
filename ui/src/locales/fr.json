@@ -823,6 +823,8 @@
     "typeToConfirm": "Saisissez {name} pour confirmer"
   },
   "exposurePanel": {
+    "scoped": "Seulement",
+    "clearScope": "Afficher tous les paquets",
     "anyEffect": "tout effet",
     "anySource": "toute source",
     "apply": "Appliquer",
@@ -1492,14 +1494,13 @@
   },
   "holdsPanel": {
     "title": "Versions retenues",
-    "intro": "Le nombre de verdicts par registre doté d'un profil de sécurité, puis les dernières versions refusées ou en quarantaine. Les constats d'un registre s'ouvrent depuis sa ligne.",
+    "intro": "Le nombre de verdicts par registre doté d'un profil de sécurité ; les constats d'un registre s'ouvrent depuis sa ligne. Toutes les versions retenues sont listées en dessous.",
     "empty": "Aucun registre n'a de profil de sécurité.",
     "loadFailed": "Impossible de charger la synthèse des verdicts.",
     "denied": "Refusées",
     "quarantined": "En quarantaine",
     "warned": "Averties",
     "allowed": "Autorisées",
-    "recent": "Retenues récemment",
     "state": "État",
     "reasons": "Motifs",
     "evaluated": "Évaluée",
@@ -1594,7 +1595,7 @@
     "yank": "Retrait"
   },
   "flagEffect": {
-    "gate": "retient la version",
+    "gate": "bloque au-dessus du seuil",
     "hard_block": "bloque les téléchargements",
     "inform": "informe seulement",
     "warn": "avertit au téléchargement"
@@ -1652,9 +1653,9 @@
     "holdsNone": "Aucune version retenue.",
     "holds": "{n} version retenue, {waiting} en attente | {n} versions retenues, {waiting} en attente",
     "holdsMalware": "{n} version retenue, dont {malware} pour malware | {n} versions retenues, dont {malware} pour malware",
-    "flagsNone": "Aucun signalement ne bloque.",
-    "flags": "{n} signalement bloque | {n} signalements bloquent",
-    "flagsPulled": "{n} signalement bloque les téléchargements ; {pulled} téléchargé après le signalement | {n} signalements bloquent les téléchargements ; {pulled} téléchargés après le signalement",
+    "flagsNone": "Aucun signalement ne peut bloquer.",
+    "flags": "{n} signalement peut bloquer | {n} signalements peuvent bloquer",
+    "flagsPulled": "{n} signalement peut bloquer les téléchargements ; {pulled} téléchargé après le signalement | {n} signalements peuvent bloquer les téléchargements ; {pulled} téléchargés après le signalement",
     "scanners": "{n} worker actif · {queued} en file · {failed} en échec | {n} workers actifs · {queued} en file · {failed} en échec",
     "scannersUncovered": "Aucun worker actif ne couvre {names} : les nouvelles versions restent retenues.",
     "scannersBreaker": "OSV ne répond pas : les analyses l'attendent.",
@@ -1691,7 +1692,19 @@
       "exemptions": "exemptions",
       "flags": "signalements"
     },
-    "allSocHolds": "Toutes les versions bloquées par un SOC ({n})"
+    "act": {
+      "holdOnHardBlock": "versions retenues",
+      "pulledAfterFlag": "qui l'a téléchargée",
+      "exemptionExpiring": "l'exemption",
+      "failedScan": "analyses en échec",
+      "package": "le paquet"
+    },
+    "all": {
+      "hold_on_hard_block": "Toutes les versions bloquées par un SOC ({n})",
+      "pulled_after_flag": "Toutes les versions téléchargées après leur signalement ({n})",
+      "exemption_expiring": "Toutes les exemptions qui prennent fin sous 7 jours ({n})",
+      "failed_scan": "Toutes les analyses en échec ({n})"
+    }
   },
   "securityTrends": {
     "description": "Comptes quotidiens de ce qui a été retenu, refusé, signalé et analysé. Un jour sans données est un vide, jamais un zéro.",
@@ -1806,6 +1819,7 @@
     "reason": "Motif",
     "empty": "Aucune version retenue avec ces filtres.",
     "loadFailed": "Impossible de charger les versions retenues.",
-    "pageOf": "Page {page} sur {pages}"
+    "pageOf": "Page {page} sur {pages}",
+    "noName": "(sans nom)"
   }
 }

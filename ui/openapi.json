@@ -25275,14 +25275,28 @@
         "description": "*Needs a decision*: at most ten, most urgent first, and how many there are.",
         "required": [
           "total",
+          "by_kind",
           "items"
         ],
         "properties": {
+          "by_kind": {
+            "type": "object",
+            "description": "`total` per kind (`hold_on_hard_block`, `pulled_after_flag`,\n`exemption_expiring`, `failed_scan`): what each \"→ all N\" link says.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "items": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DecisionItem"
-            }
+            },
+            "description": "At most [`DECISIONS_SHOWN`] packages, every reason of each one kept\ntogether: a version is never cut between two of its reasons."
           },
           "total": {
             "type": "integer",
@@ -26928,7 +26942,7 @@
           "blocking": {
             "type": "integer",
             "format": "int64",
-            "description": "Live flags that block downloads (`gate`, `hard_block`).",
+            "description": "Live flags that can block downloads: `hard_block` always, `gate`\nabove the registry's threshold.",
             "minimum": 0
           },
           "live": {

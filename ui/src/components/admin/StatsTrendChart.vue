@@ -82,11 +82,11 @@ const height = (v: number) => (top.value > 0 ? Math.max(4, (v / top.value) * 100
       </template>
     </p>
     <div class="flex h-12 items-end gap-px" role="img" :aria-label="summary">
-      <div v-for="i in length" :key="i" class="flex h-full flex-1 items-end gap-px">
+      <div v-for="i in length" :key="i" class="flex h-full min-w-0 flex-1 items-end gap-px">
         <template v-for="(s, si) in all" :key="si">
           <span
             v-if="s.values[i - 1] == null"
-            class="flex h-full flex-1 items-end justify-center text-[10px] leading-none text-muted-foreground"
+            class="flex h-full min-w-0 flex-1 items-end justify-center overflow-hidden text-xs leading-none text-muted-foreground"
             data-testid="gap"
             aria-hidden="true"
             >·</span

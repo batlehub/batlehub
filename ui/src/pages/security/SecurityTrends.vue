@@ -228,7 +228,7 @@ const cell = (v: number | null | undefined) => (v == null ? t("trendChart.noData
           <div
             v-for="row in rows"
             :key="row.key"
-            class="grid gap-2 md:grid-cols-[1fr_16rem] md:items-end"
+            class="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_16rem] md:items-end"
           >
             <StatsTrendChart :label="row.label" :series="row.series" />
             <p class="font-mono text-sm tabular-nums">{{ row.reading }}</p>

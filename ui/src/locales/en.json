@@ -823,6 +823,8 @@
     "typeToConfirm": "Type {name} to confirm"
   },
   "exposurePanel": {
+    "scoped": "Showing only",
+    "clearScope": "Show every package",
     "anyEffect": "any effect",
     "anySource": "any source",
     "apply": "Apply",
@@ -1492,14 +1494,13 @@
   },
   "holdsPanel": {
     "title": "Held versions",
-    "intro": "Verdict counts per registry with a security profile, then the most recent denied and quarantined versions. The findings of a registry open from its row.",
+    "intro": "Verdict counts per registry with a security profile; the findings of a registry open from its row. Every held version is listed below.",
     "empty": "No registry has a security profile.",
     "loadFailed": "Could not load the verdict summary.",
     "denied": "Denied",
     "quarantined": "Quarantined",
     "warned": "Warned",
     "allowed": "Allowed",
-    "recent": "Recent holds",
     "state": "State",
     "reasons": "Reasons",
     "evaluated": "Evaluated",
@@ -1594,7 +1595,7 @@
     "yank": "Yank"
   },
   "flagEffect": {
-    "gate": "holds the version",
+    "gate": "blocks above the threshold",
     "hard_block": "blocks downloads",
     "inform": "informs only",
     "warn": "warns on download"
@@ -1652,9 +1653,9 @@
     "holdsNone": "Nothing is held.",
     "holds": "{n} version held, {waiting} waiting | {n} versions held, {waiting} waiting",
     "holdsMalware": "{n} version held, {malware} for malware | {n} versions held, {malware} for malware",
-    "flagsNone": "No flag blocks a download.",
-    "flags": "{n} flag blocks downloads | {n} flags block downloads",
-    "flagsPulled": "{n} flag blocks downloads; {pulled} downloaded after the flag | {n} flags block downloads; {pulled} downloaded after the flag",
+    "flagsNone": "No flag can block a download.",
+    "flags": "{n} flag can block downloads | {n} flags can block downloads",
+    "flagsPulled": "{n} flag can block downloads; {pulled} downloaded after the flag | {n} flags can block downloads; {pulled} downloaded after the flag",
     "scanners": "{n} worker running · {queued} queued · {failed} failed | {n} workers running · {queued} queued · {failed} failed",
     "scannersUncovered": "No live worker covers {names}: new versions stay held.",
     "scannersBreaker": "OSV is not answering: scans wait for it.",
@@ -1691,7 +1692,19 @@
       "exemptions": "exemptions",
       "flags": "flags"
     },
-    "allSocHolds": "Every version held on a SOC's hard block ({n})"
+    "act": {
+      "holdOnHardBlock": "held versions",
+      "pulledAfterFlag": "who downloaded it",
+      "exemptionExpiring": "the exemption",
+      "failedScan": "failed scans",
+      "package": "the package"
+    },
+    "all": {
+      "hold_on_hard_block": "Every version held on a SOC's hard block ({n})",
+      "pulled_after_flag": "Every version downloaded after its flag ({n})",
+      "exemption_expiring": "Every exemption ending within 7 days ({n})",
+      "failed_scan": "Every failed scan ({n})"
+    }
   },
   "securityTrends": {
     "description": "Daily counts of what was held, refused, flagged and scanned. A day without data is a gap, never a zero.",
@@ -1806,6 +1819,7 @@
     "reason": "Reason",
     "empty": "No version is held with these filters.",
     "loadFailed": "Could not load the held versions.",
-    "pageOf": "Page {page} of {pages}"
+    "pageOf": "Page {page} of {pages}",
+    "noName": "(no name)"
   }
 }

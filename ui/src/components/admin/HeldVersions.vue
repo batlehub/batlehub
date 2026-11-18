@@ -145,9 +145,17 @@ watch([registry, reason, page], load, { immediate: true });
             >
               <TableCell class="font-mono text-sm">
                 <RouterLink
+                  v-if="v.package.name"
                   :to="packagePath(v.package.registry, v.package.name)"
                   class="underline underline-offset-[3px]"
                   >{{ v.package.registry }}/{{ v.package.name }}@{{ v.package.version }}</RouterLink
+                >
+                <!-- A verdict recorded without a name: said, not drawn as "registry/@1.0.0". -->
+                <span v-else
+                  >{{ v.package.registry }}/<span class="text-muted-foreground">{{
+                    t("heldVersions.noName")
+                  }}</span
+                  >@{{ v.package.version }}</span
                 >
               </TableCell>
               <TableCell :label="t('holdsPanel.state')">

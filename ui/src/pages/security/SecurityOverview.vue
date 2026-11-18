@@ -69,13 +69,80 @@ const GLYPH: Record<string, string> = {
   failed_scan: "✖",
 };
 const { can } = useAuth();
-// An exemption opens the authorization page only for whoever may read it; the
-// delegated security group (quarantine:read alone) gets the package instead.
-function decisionTo(d: DecisionItem) {
-  if (d.kind === "failed_scan") return { path: "/security/scanners", query: { tab: "failures" } };
-  if (d.kind === "exemption_expiring" && can("authz:read")) return "/admin/access/authorization";
-  return packagePath(d.registry, d.name);
+
+type Target = { to: string | { path: string; query: Record<string, string> }; label: string };
+/**
+ * Each reason opens the page that acts on it, when the viewer may read that
+ * page; otherwise the package, which every viewer of the item can open.
+ */
+function decisionTarget(d: DecisionItem): Target {
+  if (d.kind === "failed_scan")
+    return {
+      to: { path: "/security/scanners", query: { tab: "failures" } },
+      label: "securityOverview.act.failedScan",
+    };
+  if (d.kind === "hold_on_hard_block")
+    return {
+      to: { path: "/security/holds", query: { reason: "SOC_VERDICT", registry: d.registry } },
+      label: "securityOverview.act.holdOnHardBlock",
+    };
+  if (d.kind === "pulled_after_flag" && can("audit:read"))
+    return {
+      to: {
+        path: "/security/exposure",
+        query: { registry: d.registry, package: d.name, when: "after_flag" },
+      },
+      label: "securityOverview.act.pulledAfterFlag",
+    };
+  if (d.kind === "exemption_expiring" && can("authz:read"))
+    return { to: "/admin/access/authorization", label: "securityOverview.act.exemptionExpiring" };
+  return { to: packagePath(d.registry, d.name), label: "securityOverview.act.package" };
 }
+
+/** One entry per version, its reasons in urgency order (the server keeps them together). */
+const decisionGroups = computed(() => {
+  const groups = new Map<
+    string,
+    { registry: string; name: string; version: string; items: DecisionItem[] }
+  >();
+  for (const d of overview.value?.decisions.items ?? []) {
+    const key = `${d.registry}|${d.name}@${d.version}`;
+    const g = groups.get(key) ?? {
+      registry: d.registry,
+      name: d.name,
+      version: d.version,
+      items: [],
+    };
+    g.items.push(d);
+    groups.set(key, g);
+  }
+  return [...groups.entries()].map(([key, g]) => ({ key, ...g }));
+});
+
+/** "→ all N" per kind, where the list shows fewer than there are and a page lists them. */
+const KIND_PAGE: Record<string, () => string | null> = {
+  hold_on_hard_block: () => "/security/holds?reason=SOC_VERDICT",
+  pulled_after_flag: () =>
+    can("audit:read") ? "/security/exposure?when=after_flag" : "/security/flags",
+  exemption_expiring: () => (can("authz:read") ? "/admin/access/authorization" : null),
+  failed_scan: () => "/security/scanners?tab=failures",
+};
+const ALL_LABEL: Record<string, string> = {
+  hold_on_hard_block: "securityOverview.all.hold_on_hard_block",
+  pulled_after_flag: "securityOverview.all.pulled_after_flag",
+  exemption_expiring: "securityOverview.all.exemption_expiring",
+  failed_scan: "securityOverview.all.failed_scan",
+};
+const moreByKind = computed(() => {
+  const d = overview.value?.decisions;
+  if (!d) return [];
+  return Object.entries(d.by_kind ?? {}).flatMap(([kind, n]) => {
+    const shown = d.items.filter((i) => i.kind === kind).length;
+    const to = KIND_PAGE[kind]?.() ?? null;
+    const label = ALL_LABEL[kind];
+    return n > shown && to && label ? [{ kind, n, to, label }] : [];
+  });
+});
 /**
  * The decision sources that did not answer (`holds`, `scanners`, `exemptions`,
  * `flags`): the list is then incomplete, and says so rather than reading short.
@@ -168,37 +235,47 @@ const decisionText = (d: DecisionItem) =>
             <StateMark state="unknown" />
             {{ t("securityOverview.decisionsIncomplete", { sources: unreadSources.join(", ") }) }}
           </p>
-          <ul class="space-y-2" data-testid="decisions">
-            <li
-              v-for="d in overview.decisions.items"
-              :key="`${d.kind}|${d.registry}|${d.name}@${d.version}`"
-              class="flex gap-2 text-sm"
-            >
-              <span aria-hidden="true" class="font-mono">{{ GLYPH[d.kind] ?? "•" }}</span>
-              <span class="space-y-1">
-                <span class="flex flex-wrap items-baseline gap-x-2">
-                  <RouterLink :to="decisionTo(d)" class="font-mono underline underline-offset-[3px]"
-                    >{{ d.name }}@{{ d.version }}</RouterLink
-                  >
-                  <span class="font-mono text-xs text-muted-foreground">{{ d.registry }}</span>
-                  <CodeLabel
-                    v-if="d.reason_code"
-                    :code="d.reason_code"
-                    :labels="REASON_LABEL_KEYS"
-                  />
-                </span>
-                <span class="block text-muted-foreground">{{ decisionText(d) }}</span>
+          <ul class="space-y-3" data-testid="decisions">
+            <li v-for="g in decisionGroups" :key="g.key" class="space-y-1 text-sm">
+              <span class="flex flex-wrap items-baseline gap-x-2">
+                <RouterLink
+                  :to="packagePath(g.registry, g.name)"
+                  class="font-mono underline underline-offset-[3px]"
+                  >{{ g.name }}@{{ g.version }}</RouterLink
+                >
+                <span class="font-mono text-xs text-muted-foreground">{{ g.registry }}</span>
               </span>
+              <ul class="space-y-1">
+                <li v-for="d in g.items" :key="d.kind" class="flex gap-2" data-testid="decision">
+                  <span aria-hidden="true" class="font-mono">{{ GLYPH[d.kind] ?? "•" }}</span>
+                  <span class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                    <span class="text-muted-foreground">{{ decisionText(d) }}</span>
+                    <CodeLabel
+                      v-if="d.reason_code"
+                      :code="d.reason_code"
+                      :labels="REASON_LABEL_KEYS"
+                    />
+                    <RouterLink
+                      :to="decisionTarget(d).to"
+                      class="text-primary underline underline-offset-[3px]"
+                      :data-testid="`act-${d.kind}`"
+                      >→ {{ t(decisionTarget(d).label) }}</RouterLink
+                    >
+                  </span>
+                </li>
+              </ul>
             </li>
           </ul>
-          <RouterLink
-            v-if="overview.holds?.soc_verdict"
-            to="/security/holds?reason=SOC_VERDICT"
-            class="text-sm text-primary underline underline-offset-[3px]"
-            data-testid="all-soc-holds"
-            >→
-            {{ t("securityOverview.allSocHolds", { n: overview.holds.soc_verdict }) }}</RouterLink
-          >
+          <ul v-if="moreByKind.length" class="space-y-1">
+            <li v-for="m in moreByKind" :key="m.kind">
+              <RouterLink
+                :to="m.to"
+                class="text-sm text-primary underline underline-offset-[3px]"
+                :data-testid="`all-${m.kind}`"
+                >→ {{ t(m.label, { n: m.n }) }}</RouterLink
+              >
+            </li>
+          </ul>
         </section>
       </template>
     </AsyncState>

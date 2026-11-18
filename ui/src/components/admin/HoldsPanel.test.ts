@@ -18,7 +18,7 @@ const stubs = {
 describe("HoldsPanel", () => {
   beforeEach(() => verdictSummary.mockReset());
 
-  it("shows the counts and links each recent hold to its package", async () => {
+  it("shows the counts per registry, and no second list of the held versions", async () => {
     verdictSummary.mockResolvedValue({
       data: {
         registries: [
@@ -42,11 +42,8 @@ describe("HoldsPanel", () => {
     const w = mount(HoldsPanel, { global: { stubs } });
     await flushPromises();
     expect(w.find('[data-testid="holds-counts"]').text()).toContain("npm1");
-    const recent = w.find('[data-testid="holds-recent"]');
-    expect(recent.text()).toContain("npm1/left-pad@1.1.0");
-    expect(recent.text()).toContain("cve_gate");
-    expect(recent.find("a").attributes("href")).toBe("/packages/npm1/left-pad");
-    expect(recent.find('[data-state="blocked"]').exists()).toBe(true);
+    // HeldVersions lists them, once (critique 2026-11-18: the page drew them twice).
+    expect(w.find('[data-testid="holds-recent"]').exists()).toBe(false);
     expect(w.find('[data-testid="open-findings-npm1"]').exists()).toBe(false);
   });
 

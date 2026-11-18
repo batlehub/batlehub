@@ -458,7 +458,8 @@ pub struct FlagsBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown_reason: Option<String>,
     pub live: u64,
-    /// Live flags that block downloads (`gate`, `hard_block`).
+    /// Live flags that can block downloads: `hard_block` always, `gate`
+    /// above the registry's threshold.
     pub blocking: u64,
     /// Flagged versions downloaded after the flag (last 30 days).
     pub pulled_after_flag: u64,
@@ -518,6 +519,11 @@ pub struct DecisionItem {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DecisionList {
     pub total: u64,
+    /// `total` per kind (`hold_on_hard_block`, `pulled_after_flag`,
+    /// `exemption_expiring`, `failed_scan`): what each "→ all N" link says.
+    pub by_kind: BTreeMap<String, u64>,
+    /// At most [`DECISIONS_SHOWN`] packages, every reason of each one kept
+    /// together: a version is never cut between two of its reasons.
     pub items: Vec<DecisionItem>,
     /// The sources (`holds`, `scanners`, `exemptions`, `flags`) that could
     /// not be read: the list is known to be incomplete.
@@ -1043,7 +1049,14 @@ pub async fn security_overview(
 
     decisions.sort_by(by_urgency);
     let total = decisions.len() as u64 + unlisted_hard_blocks;
-    decisions.truncate(DECISIONS_SHOWN);
+    let mut by_kind: BTreeMap<String, u64> = BTreeMap::new();
+    for d in &decisions {
+        *by_kind.entry(d.kind.clone()).or_default() += 1;
+    }
+    if unlisted_hard_blocks > 0 {
+        *by_kind.entry("hold_on_hard_block".to_owned()).or_default() += unlisted_hard_blocks;
+    }
+    let decisions = first_packages(decisions, DECISIONS_SHOWN);
     Ok(HttpResponse::Ok().json(SecurityOverview {
         computed_at: now,
         holds,
@@ -1052,6 +1065,7 @@ pub async fn security_overview(
         coverage,
         decisions: DecisionList {
             total,
+            by_kind,
             items: decisions,
             unknown,
         },
@@ -1062,6 +1076,25 @@ pub async fn security_overview(
 /// first), then exemptions (soonest ending first, as instance security), then
 /// failed scans (newest first). An exemption's `at` is its future end, so one
 /// newest-first sort would put every exemption on top.
+/// The items of the first `n` distinct versions, in urgency order: a version's
+/// later reasons ride with its first, wherever they ranked.
+fn first_packages(sorted: Vec<DecisionItem>, n: usize) -> Vec<DecisionItem> {
+    let mut kept: Vec<(String, String, String)> = Vec::new();
+    for d in &sorted {
+        let key = (d.registry.clone(), d.name.clone(), d.version.clone());
+        if !kept.contains(&key) {
+            if kept.len() == n {
+                continue;
+            }
+            kept.push(key);
+        }
+    }
+    sorted
+        .into_iter()
+        .filter(|d| kept.contains(&(d.registry.clone(), d.name.clone(), d.version.clone())))
+        .collect()
+}
+
 fn by_urgency(a: &DecisionItem, b: &DecisionItem) -> std::cmp::Ordering {
     let rank = |d: &DecisionItem| match d.kind.as_str() {
         "hold_on_hard_block" | "pulled_after_flag" => 0,
@@ -1631,6 +1664,32 @@ pub async fn security_scanners(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Ten versions shown, each with every reason it has, even one that
+    /// ranked past the tenth version.
+    #[test]
+    fn first_packages_keeps_a_versions_reasons_together() {
+        let item = |kind: &str, name: &str| DecisionItem {
+            kind: kind.into(),
+            registry: "r".into(),
+            name: name.into(),
+            version: "1".into(),
+            at: Utc::now(),
+            reason_code: None,
+            pulls_after: None,
+            expires_at: None,
+        };
+        let mut sorted: Vec<DecisionItem> = (0..12)
+            .map(|i| item("pulled_after_flag", &format!("p{i}")))
+            .collect();
+        sorted.push(item("failed_scan", "p0"));
+        let kept = first_packages(sorted, 10);
+        assert_eq!(kept.len(), 11, "p0..p9, plus p0's second reason");
+        assert!(kept
+            .iter()
+            .any(|d| d.name == "p0" && d.kind == "failed_scan"));
+        assert!(!kept.iter().any(|d| d.name == "p10"));
+    }
 
     /// T7: concurrent misses run one load; a fresh entry serves; a disabled
     /// cache reads again once the first read finished.

@@ -286,7 +286,7 @@ const trendText = computed(() => {
       </p>
       <SecurityStatusStrip
         v-if="security || securityWarnings || configLineUnknown"
-        :overview="security ?? { computed_at: '', decisions: { total: 0, items: [] } }"
+        :overview="security ?? { computed_at: '', decisions: { total: 0, by_kind: {}, items: [] } }"
         :domains="['holds', 'flags', 'scanners']"
         @retry="reloadSecurity"
       >

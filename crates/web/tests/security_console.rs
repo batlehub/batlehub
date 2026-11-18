@@ -821,6 +821,15 @@ async fn a_mass_compromise_is_counted_and_listed_in_full() {
     let (_, body) = call(&app, OVERVIEW, ADMIN_TOKEN).await;
     assert_eq!(body["holds"]["soc_verdict"], 1400, "{}", body["holds"]);
     assert_eq!(body["decisions"]["total"], 1400, "{}", body["decisions"]);
+    // The per-kind figure behind the "→ all N" link, and at most ten versions.
+    assert_eq!(body["decisions"]["by_kind"]["hold_on_hard_block"], 1400);
+    let shown: std::collections::BTreeSet<String> = body["decisions"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| format!("{}/{}@{}", d["registry"], d["name"], d["version"]))
+        .collect();
+    assert_eq!(shown.len(), 10, "{}", body["decisions"]);
 
     // Every protected registry, SOC holds only, 500 a page: three pages.
     let mut seen = std::collections::BTreeSet::new();

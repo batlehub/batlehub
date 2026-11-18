@@ -54,4 +54,12 @@ describe("HeldVersions", () => {
       query: { reason: "SOC_VERDICT", page: "3" },
     });
   });
+
+  it("says a version has no name rather than drawing registry/@version", async () => {
+    listMock.mockResolvedValue({ data: { items: [verdict("")], total: 1, page: 1, per_page: 50 } });
+    const w = mount(HeldVersions);
+    await flushPromises();
+    const rows = w.get('[data-testid="held-rows"]').text();
+    expect(rows).toContain("npm-public/(no name)@1.0.0");
+  });
 });

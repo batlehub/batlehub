@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 
-const { overviewMock } = vi.hoisted(() => ({ overviewMock: vi.fn() }));
+const { overviewMock, verbs } = vi.hoisted(() => ({
+  overviewMock: vi.fn(),
+  verbs: new Set<string>(),
+}));
 vi.mock("@/client/sdk.gen", () => ({ securityOverview: overviewMock }));
 vi.mock("vue-router", () => ({
-  RouterLink: { props: ["to"], template: "<a><slot/></a>" },
+  RouterLink: { props: ["to"], template: "<a :data-to='JSON.stringify(to)'><slot/></a>" },
 }));
+vi.mock("@/composables/useAuth", () => ({ useAuth: () => ({ can: (v: string) => verbs.has(v) }) }));
 
 import SecurityOverview from "./SecurityOverview.vue";
 
@@ -92,12 +96,69 @@ describe("SecurityOverview (RFC 0050 §4.5)", () => {
     const w = await mountWith({
       computed_at: NOW,
       holds: { ...holds, held: 1400, soc_verdict: 1400 },
-      decisions: { total: 1400, items: [] },
+      decisions: { total: 1400, by_kind: { hold_on_hard_block: 1400 }, items: [] },
     });
     expect(w.get('[data-testid="status-holds"]').text()).toContain(
       "1400 versions held, 1400 on a SOC's hard block",
     );
-    expect(w.get('[data-testid="all-soc-holds"]').text()).toContain("(1400)");
+    const all = w.get('[data-testid="all-hold_on_hard_block"]');
+    expect(all.text()).toContain("(1400)");
+    expect(JSON.parse(all.attributes("data-to")!)).toBe("/security/holds?reason=SOC_VERDICT");
+  });
+
+  /** Critique 2026-11-18: by version, each reason opening the page that acts on it. */
+  it("groups a version's reasons and routes each to the page that acts on it", async () => {
+    verbs.clear();
+    verbs.add("audit:read");
+    const item = (kind: string) => ({
+      kind,
+      registry: "npm-public",
+      name: "event-stream",
+      version: "3.3.6",
+      at: NOW,
+      pulls_after: 6,
+    });
+    const w = await mountWith({
+      computed_at: NOW,
+      holds,
+      decisions: {
+        total: 2,
+        by_kind: { hold_on_hard_block: 1, pulled_after_flag: 1 },
+        items: [item("hold_on_hard_block"), item("pulled_after_flag")],
+      },
+    });
+    const list = w.get('[data-testid="decisions"]');
+    expect(list.text().match(/event-stream@3\.3\.6/g)).toHaveLength(1);
+    expect(list.findAll('[data-testid="decision"]')).toHaveLength(2);
+    expect(
+      JSON.parse(w.get('[data-testid="act-hold_on_hard_block"]').attributes("data-to")!),
+    ).toEqual({
+      path: "/security/holds",
+      query: { reason: "SOC_VERDICT", registry: "npm-public" },
+    });
+    expect(
+      JSON.parse(w.get('[data-testid="act-pulled_after_flag"]').attributes("data-to")!),
+    ).toEqual({
+      path: "/security/exposure",
+      query: { registry: "npm-public", package: "event-stream", when: "after_flag" },
+    });
+    // Everything shown: no "→ all N".
+    expect(w.find('[data-testid^="all-"]').exists()).toBe(false);
+
+    // Without audit:read, who downloaded it is not theirs to see: the package.
+    verbs.clear();
+    const w2 = await mountWith({
+      computed_at: NOW,
+      holds,
+      decisions: {
+        total: 1,
+        by_kind: { pulled_after_flag: 1 },
+        items: [item("pulled_after_flag")],
+      },
+    });
+    expect(JSON.parse(w2.get('[data-testid="act-pulled_after_flag"]').attributes("data-to")!)).toBe(
+      "/packages/npm-public/event-stream",
+    );
   });
 
   it("has no line for a block the viewer may not read (T1)", async () => {

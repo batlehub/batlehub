@@ -1881,6 +1881,7 @@
     },
     "decisions": {
       "total": 4,
+      "by_kind": { "exemption_expiring": 1, "failed_scan": 1, "hold_on_hard_block": 1, "pulled_after_flag": 1 },
       "items": [
         {
           "kind": "pulled_after_flag",
