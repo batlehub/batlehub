@@ -818,8 +818,6 @@ fn has_rule(
             .is_some_and(|s| s.iter().any(|s| s.name() == rule))
 }
 
-/// The security console's overview: one line per domain the caller may
-/// read, and *needs a decision* (RFC 0050 §4.2).
 /// Holds on a SOC hard block in `regs`; returns how many such holds the
 /// counts saw past the rows read, so the exact figure still reaches `total`:
 /// in a mass compromise the SOC must not read "1 000" for "1 400".
@@ -912,6 +910,8 @@ fn expiring_exemption_decisions(
     );
 }
 
+/// The security console's overview: one line per domain the caller may
+/// read, and *needs a decision* (RFC 0050 §4.2).
 #[utoipa::path(
     get,
     path = "/api/v1/admin/security/overview",

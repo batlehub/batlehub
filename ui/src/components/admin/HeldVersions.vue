@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
@@ -61,7 +61,7 @@ async function loadRegistries() {
     // Left empty: the picker then offers "all registries" alone.
   }
 }
-void loadRegistries();
+onMounted(loadRegistries);
 const registryOptions = computed(() => [
   { value: "", label: t("heldVersions.allRegistries") },
   ...registries.value.map((r) => ({ value: r, label: r })),
