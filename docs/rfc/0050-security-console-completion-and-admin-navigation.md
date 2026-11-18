@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — every phase built 2026-11-17, validated on the demo instance (§17) |
+| Status      | Implemented — every phase built 2026-11-17, validated on the demo instance, every §6.P observation green in CI on PR #390 (§17) |
 | Short       | Security console and admin nav                                |
 | Settles     | What the security console shows beyond today's four panels — summary, trends, coverage, scanner and worker health — where it lives, how instance security reaches the admin, and how the admin shell navigates |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1524,8 +1524,15 @@ Where the build differs from the text:
    `GET /admin/instance-security`, so it needs `system:read` as well as
    `config:read`; a second list of the security codes in the UI would drift
    from the server's.
-9. **Not done**: the Grafana panels of §10.1, and the §10.3 measurement of the
-   summary on 1 M verdicts — it needs a seeded database.
+9. **Done 2026-11-18**: the §10.1 panels — a *Security console* row in
+   `deploy/grafana/batlehub-production.json` with the scanner breaker
+   (`batlehub_osv_breaker_open` by scanner) and the rollup (runs by outcome,
+   p95 duration). The §10.3 measurement, on 1 M `artifact_verdicts` rows
+   (20 registries, 5 % held, 1 % `SOC_VERDICT`) on the sidecar PostgreSQL 17,
+   warm cache, four runs each: the summary `GROUP BY` **105–170 ms**,
+   `hold_counts` **72–104 ms**, the first page of SOC holds with its
+   `COUNT(*) OVER ()` **~100 ms**. All under the 200 ms threshold, so the
+   *Holds* line keeps reading `artifact_verdicts` and not `security_daily`.
 
 ### 17.4 Phase 4 — trends (built 2026-11-17)
 
@@ -1599,7 +1606,11 @@ their translated labels.
 | `task docs:i18n:check`, `docs:audience`, `docs:structure`, `docs:cli-commands`, `rfc:index:check` | pass |
 | the demo's generated config through `batlehub explain-config` | parses |
 
-**Not run yet**, and to run before the status moves to *Implemented*: every
+**Run since, on PR #390 (2026-11-18)**: `console_fetch.sh` with
+`console_security.mjs` (observations 10–11) in *Heavy integration (real
+browser)*, `authz.sh` §13-bis (observations 1–3, 7–9) in *Heavy authorization
+(matrix)*, and the rendered design gate over the `/security` routes — all
+green. What the paragraph below listed as not run was, as of 2026-11-17: every
 observation of §6.P — the heavy suites (`console_fetch.sh`,
 `console_security.mjs`, `authz.sh` section 13-bis) were written or rewritten
 and parse, but none has run (the browser sidecar was down in this workspace);
