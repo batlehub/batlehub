@@ -93,8 +93,13 @@ const { data: configWarnings, error: configWarningsError } = useApi<ConfigWarnin
       : Promise.resolve({ data: null }),
   [token],
 );
-const securityWarnings = computed(() =>
-  viaInstance.value ? (instance.value?.warnings ?? null) : (configWarnings.value?.warnings ?? null),
+// Accepted in `[console]`: known and kept, not a reason for ATTENTION here.
+const securityWarnings = computed(
+  () =>
+    (viaInstance.value
+      ? (instance.value?.warnings ?? null)
+      : (configWarnings.value?.warnings ?? null)
+    )?.filter((w) => !w.accepted) ?? null,
 );
 /** The config line is owed to whoever may read it: a failed read is UNKNOWN, not absent. */
 const configLineUnknown = computed(

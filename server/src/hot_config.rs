@@ -798,6 +798,7 @@ pub(super) fn build_hot_bundle(
             .unwrap_or_default(),
         miss_recorder: air_gap_stores.miss_recorder.clone(),
         security: reg_security,
+        accepted_unprotected: cfg.console.accepted_coverage().map(str::to_owned).collect(),
         internal_scanners: reg_internal_scanners,
         verdicts: security_stores.verdicts.clone(),
         scan_queue: security_stores.queue.clone(),

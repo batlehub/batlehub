@@ -309,6 +309,34 @@ async fn the_overview_says_what_is_wrong_per_domain() {
     assert_eq!(body["decisions"]["items"][0]["name"], "event-stream");
 }
 
+/// `[console].accepted = ["coverage:npm"]`: the plain proxy is no longer
+/// attention, and is still named — on the line and on its Coverage row.
+#[actix_web::test]
+async fn a_registry_accepted_as_unprotected_is_named_not_attention() {
+    let (app, lab) = app(&[]).await;
+    lab.hot
+        .write()
+        .await
+        .accepted_unprotected
+        .insert(PLAIN.to_owned());
+    let (_, body) = call(&app, OVERVIEW, ADMIN_TOKEN).await;
+    assert_eq!(body["coverage"]["state"], "ok", "{}", body["coverage"]);
+    assert_eq!(body["coverage"]["unprotected"], serde_json::json!([]));
+    assert_eq!(body["coverage"]["accepted"], serde_json::json!([PLAIN]));
+    let (_, cov) = call(&app, "/api/v1/admin/security/coverage", ADMIN_TOKEN).await;
+    let row = |name: &str| {
+        cov["registries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["registry"] == name)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(row(PLAIN)["accepted"], true);
+    assert_eq!(row(SEC)["accepted"], false);
+}
+
 #[actix_web::test]
 async fn a_live_worker_and_a_healthy_scanner_read_ok() {
     let (app, lab) = app(&[]).await;

@@ -13,7 +13,14 @@ const { t } = useI18n();
 
 const phrase = computed(() => {
   const r = props.row;
-  if (!r.protected && !r.cve_gate) return { glyph: "○", text: t("securityCoverage.notProtected") };
+  if (!r.protected && !r.cve_gate)
+    return {
+      glyph: "○",
+      // `[console].accepted`: unprotected on purpose, said so rather than hidden.
+      text: r.accepted
+        ? t("securityCoverage.notProtectedAccepted")
+        : t("securityCoverage.notProtected"),
+    };
   // `security_mode = "warn"` serves with a warning at any severity; only the
   // always-denied codes (known malware, block list, SOC verdict) are refused.
   if (r.security_mode === "warn")

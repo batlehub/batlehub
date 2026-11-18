@@ -185,7 +185,7 @@ async function simulate() {
         />
         <div class="space-y-1">
           <label for="aac-resource-type" class="text-sm font-medium">{{
-            t("adminAccessCheck.resourceType")
+            t("adminAuthorization.verb")
           }}</label>
           <Select
             id="aac-resource-type"

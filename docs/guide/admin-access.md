@@ -218,7 +218,9 @@ what concerns this server itself, over the last 24 hours or 7 days
 - **Exemptions** — gate exemptions ending within 7 days, and those approved by
   their own requester, with `quarantine:read`.
 - **Config** — the security warnings of the configuration in force, with
-  `config:read`.
+  `config:read`. A warning kept on purpose is accepted in
+  [`[console]`](/guide/configuration#console): still listed, no longer
+  `ATTENTION`.
 
 Reading this page is not audited, as reading the audit log is not.
 

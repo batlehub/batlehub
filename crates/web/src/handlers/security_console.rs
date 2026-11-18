@@ -493,8 +493,12 @@ pub struct CoverageBlock {
     /// Visible registries that serve upstream (`mode` other than `local`).
     pub upstream: u64,
     pub protected: u64,
-    /// `proxy`/`hybrid` registries with no `[security]` and no `cve_gate`.
+    /// `proxy`/`hybrid` registries with no `[security]` and no `cve_gate`,
+    /// less those `[console].accepted` names.
     pub unprotected: Vec<String>,
+    /// Unprotected on purpose: `coverage:<registry>` in `[console].accepted`.
+    /// Not attention; still named, so the choice stays visible.
+    pub accepted: Vec<String>,
 }
 
 /// One item of *Needs a decision*.
@@ -786,7 +790,7 @@ async fn coverage_block(
     regs: &BTreeSet<String>,
 ) -> CoverageBlock {
     let hot = hot.read().await;
-    let mut unprotected = Vec::new();
+    let (mut unprotected, mut accepted) = (Vec::new(), Vec::new());
     let (mut protected, mut upstream) = (0, 0);
     for r in regs {
         let is_protected = hot.security.contains_key(r);
@@ -795,7 +799,11 @@ async fn coverage_block(
         let serves_upstream = mode_of(modes, r) != "local";
         upstream += u64::from(serves_upstream);
         if rules::coverage_needs_attention(serves_upstream, is_protected, cve) {
-            unprotected.push(r.clone());
+            if hot.accepted_unprotected.contains(r) {
+                accepted.push(r.clone());
+            } else {
+                unprotected.push(r.clone());
+            }
         }
     }
     CoverageBlock {
@@ -805,6 +813,7 @@ async fn coverage_block(
         upstream,
         protected,
         unprotected,
+        accepted,
     }
 }
 
@@ -1383,6 +1392,8 @@ pub struct CoverageRow {
     pub waiting: Option<u64>,
     /// Failed scan jobs; `null` when the scan queue did not answer.
     pub failed: Option<u64>,
+    /// Left unprotected on purpose (`[console].accepted`).
+    pub accepted: bool,
 }
 
 /// `GET /api/v1/admin/security/coverage`.
@@ -1425,6 +1436,7 @@ async fn coverage_rows(
                     .unwrap_or_default(),
                 mode: mode_of(modes, r),
                 protected: policy.is_some(),
+                accepted: hot.accepted_unprotected.contains(r),
                 security_mode: policy.map(|p| {
                     match p.mode {
                         batlehub_core::entities::SecurityMode::Block => "block",

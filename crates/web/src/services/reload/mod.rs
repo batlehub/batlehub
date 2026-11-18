@@ -215,7 +215,12 @@ impl ConfigWarnings {
     /// every applied reload, so the log and the endpoint never disagree.
     pub fn replace(&self, warnings: Vec<ConfigWarning>) {
         for w in &warnings {
-            tracing::warn!(code = %w.code, path = %w.path, "config: {}", w.message);
+            // Accepted in `[console]`: known and kept, not repeated as a warning.
+            if w.accepted {
+                tracing::info!(code = %w.code, path = %w.path, "config (accepted): {}", w.message);
+            } else {
+                tracing::warn!(code = %w.code, path = %w.path, "config: {}", w.message);
+            }
         }
         *self.0.write().expect("config warnings lock poisoned") = warnings;
     }

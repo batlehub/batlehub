@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
+import { watchDebounced } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
@@ -96,13 +97,17 @@ function fail(append: boolean) {
   coverage.value = null;
 }
 
+// A later filter wins: an answer to an earlier one is dropped.
+let latest = 0;
 async function load(append = false) {
+  const mine = ++latest;
   loading.value = true;
   error.value = null;
   try {
     const { data, error: err } = await exposureReport({
       query: query(append ? (next.value ?? undefined) : undefined),
     });
+    if (mine !== latest) return;
     if (err || !data) {
       fail(append);
       return;
@@ -111,9 +116,9 @@ async function load(append = false) {
     next.value = data.next ?? null;
     coverage.value = data.coverage;
   } catch {
-    fail(append);
+    if (mine === latest) fail(append);
   } finally {
-    loading.value = false;
+    if (mine === latest) loading.value = false;
   }
 }
 
@@ -162,6 +167,10 @@ const lastScanLine = computed(() => {
 });
 
 onMounted(() => load());
+// Filters apply as they change, as on every other console page; the source
+// field waits for typing to pause (Enter applies it at once).
+watch([minEffect, when], () => void load());
+watchDebounced(source, () => void load(), { debounce: 300 });
 </script>
 
 <template>
@@ -213,9 +222,6 @@ onMounted(() => load());
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <Button size="sm" :disabled="loading" data-testid="exposure-apply" @click="load()">
-          {{ t("exposurePanel.apply") }}
-        </Button>
         <Button
           size="sm"
           variant="outline"

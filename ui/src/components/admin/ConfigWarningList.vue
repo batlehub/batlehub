@@ -29,6 +29,10 @@ const { t } = useI18n();
         <div class="flex flex-wrap items-center gap-2">
           <code class="font-mono text-xs break-all">{{ w.path }}</code>
           <Badge variant="outline">{{ w.code }}</Badge>
+          <!-- Named in `[console].accepted`: read and kept by the operator. -->
+          <span v-if="w.accepted" class="text-xs text-muted-foreground" data-testid="accepted">{{
+            t("common.acceptedInConsole")
+          }}</span>
         </div>
         <p>{{ w.message }}</p>
       </div>

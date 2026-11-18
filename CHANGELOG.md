@@ -43,6 +43,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`[console] accepted`**: a registry left unprotected on purpose
+  (`coverage:<registry>`) or a config warning read and kept
+  (`warning:<code>`) is no longer `ATTENTION` on the console; it stays
+  named, marked as accepted, and the warning is logged at `INFO`. In the
+  config so an acknowledgement is reviewed and shared; a typo is refused at
+  load.
+
 - **The security console is a space of its own** (RFC 0050): `/security` has
   its own sidebar — an overview, *Triage* (holds, findings, flags, exposure)
   and *Follow-up* (trends, coverage, scanners & worker) — and opens on a status
@@ -141,6 +148,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (2.14+).
 
 ### Fixed
+
+- **`mise_java`: a vendor URL whose host is `.` (`https://./t7[`) was
+  addressable**, and its index key began with a dot segment. The nightly fuzz
+  run found it; `host_path` now refuses a host with an empty label.
+- **Console:** Exposure filters as you change them, like every other console
+  page (no *Apply*); Simulate names its verb field *Verb*, as Explain does; on
+  Health, *Clear cache* comes last, after the safe action; the `npm` type
+  badge no longer uses the crimson reserved for a view's primary action. A
+  `flags:read`-only viewer reads who can see a version's downloads rather
+  than a link to a page they cannot open.
 
 - **Helm chart: an integer set from a values file rendered as a float, and the
   server refused to start.** Helm reads every YAML number as a float64, so

@@ -30,6 +30,9 @@ pub struct ConfigWarning {
     /// warning that must stay in view while it applies (RFC 0045
     /// `mise.overlay.forced-shadow`).
     pub dismissible: bool,
+    /// Named in `[console].accepted` as `warning:<code>`: the operator has read
+    /// it and keeps the state. Still listed; no longer counted as attention.
+    pub accepted: bool,
 }
 
 impl ConfigWarning {
@@ -43,6 +46,7 @@ impl ConfigWarning {
             message: message.into(),
             path: path.into(),
             dismissible: true,
+            accepted: false,
         }
     }
 

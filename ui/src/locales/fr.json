@@ -58,7 +58,6 @@
     "notCovered": "Non vérifié : {layers}. Renseignez le champ correspondant pour les inclure.",
     "oidc1TeamATeam": "oidc1:team-a, team-b",
     "optional": "(facultatif)",
-    "resourceType": "Type de ressource",
     "ruleMatched": "Règle : {rule}",
     "seeBlocks": "Voir les blocages",
     "simulateWhetherAnIdentityWould": "Fait passer une requête par chaque couche qu'une vraie rencontre — blocages de compte et d'IP, puis règles du registre — sans l'envoyer. Expliquer, plus haut, indique seulement quelles autorisations s'appliquent.",
@@ -716,6 +715,7 @@
     "delete": "Supprimer",
     "dialog": "Dialogue",
     "dismiss": "Ignorer",
+    "acceptedInConsole": "accepté dans [console]",
     "distribution": "Distribution",
     "docs": "Docs",
     "documentation": "Documentation",
@@ -827,7 +827,6 @@
     "clearScope": "Afficher tous les paquets",
     "anyEffect": "tout effet",
     "anySource": "toute source",
-    "apply": "Appliquer",
     "beforeFlag": "Avant le signalement",
     "consumer": "Consommateur",
     "coverageLine": "{total} au total, {sbom} avec un extracteur SBOM, {security} avec un profil de sécurité",
@@ -1664,6 +1663,7 @@
     "scannersDeferred": "{n} tâche reportée depuis plus d'un jour | {n} tâches reportées depuis plus d'un jour",
     "coverageNone": "Aucun registre n'est protégé — rien n'est analysé.",
     "coverageAll": "Les {n} registres sont protégés.",
+    "coverageAccepted": "Tous protégés sauf {names}, laissé sans protection exprès.",
     "coverage": "{n} registre sur {total} non protégé | {n} registres sur {total} non protégés",
     "holdsSoc": "{n} version retenue, dont {soc} bloquée par un SOC | {n} versions retenues, dont {soc} bloquées par un SOC"
   },
@@ -1695,6 +1695,7 @@
     "act": {
       "holdOnHardBlock": "versions retenues",
       "pulledAfterFlag": "qui l'a téléchargée",
+      "pulledAfterFlagNoAudit": "qui l'a téléchargée : visible avec audit:read",
       "exemptionExpiring": "l'exemption",
       "failedScan": "analyses en échec",
       "package": "le paquet"
@@ -1751,6 +1752,7 @@
     "cveGate": "Contrôle CVE",
     "licenseGate": "Contrôle de licence",
     "notProtected": "non protégé",
+    "notProtectedAccepted": "non protégé, exprès (config)",
     "protected": "protégé",
     "refusesAt": "refuse {deny} et au-delà",
     "warnsRefuses": "avertit dès {deny}, refuse toujours un malware connu",
@@ -1810,6 +1812,7 @@
     "exemptionsLine": "{n} prennent fin sous 7 jours · {self} approuvées par leur propre demandeur",
     "config": "Config",
     "warnings": "{n} avertissement de sécurité | {n} avertissements de sécurité",
+    "warningsAccepted": "{n} accepté dans [console] : | {n} acceptés dans [console] :",
     "atLeast": "Au moins autant : la fenêtre contient plus d'événements qu'une lecture n'en prend."
   },
   "heldVersions": {

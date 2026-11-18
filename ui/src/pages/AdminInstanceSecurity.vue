@@ -83,6 +83,10 @@ const quiet = computed(() => {
     !(d.warnings?.length ?? 0)
   );
 });
+
+/** `[console].accepted`: still listed, never counted as attention. */
+const openWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => !w.accepted));
+const acceptedWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => w.accepted));
 </script>
 
 <template>
@@ -238,13 +242,22 @@ const quiet = computed(() => {
             class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3"
             data-testid="line-warnings"
           >
-            <StateMark :state="data.warnings.length ? 'attention' : 'ok'" />
+            <StateMark :state="openWarnings.length ? 'attention' : 'ok'" />
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.config") }}</span>
             <span class="min-w-0 flex-1">
-              {{ t("instanceSecurity.warnings", { n: data.warnings.length }) }}
+              {{ t("instanceSecurity.warnings", { n: openWarnings.length }) }}
               <span class="font-mono text-xs">{{
-                data.warnings.map((w) => w.code).join(", ")
+                openWarnings.map((w) => w.code).join(", ")
               }}</span>
+              <span
+                v-if="acceptedWarnings.length"
+                class="block text-muted-foreground"
+                data-testid="warnings-accepted"
+                >{{ t("instanceSecurity.warningsAccepted", { n: acceptedWarnings.length }) }}
+                <span class="font-mono text-xs">{{
+                  acceptedWarnings.map((w) => w.code).join(", ")
+                }}</span></span
+              >
             </span>
             <RouterLink
               to="/admin/system/configuration"

@@ -167,6 +167,8 @@ pub struct SecurityWarning {
     pub code: String,
     pub path: String,
     pub message: String,
+    /// Named in `[console].accepted`: listed, not attention.
+    pub accepted: bool,
 }
 
 /// `GET /api/v1/admin/instance-security`.
@@ -426,6 +428,7 @@ pub async fn instance_security(
                     code: w.code,
                     path: w.path,
                     message: w.message,
+                    accepted: w.accepted,
                 })
                 .collect(),
         ),

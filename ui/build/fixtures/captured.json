@@ -1877,11 +1877,19 @@
       "protected": 4,
       "unprotected": [
         "go"
+      ],
+      "accepted": [
+        "github2"
       ]
     },
     "decisions": {
       "total": 4,
-      "by_kind": { "exemption_expiring": 1, "failed_scan": 1, "hold_on_hard_block": 1, "pulled_after_flag": 1 },
+      "by_kind": {
+        "exemption_expiring": 1,
+        "failed_scan": 1,
+        "hold_on_hard_block": 1,
+        "pulled_after_flag": 1
+      },
       "items": [
         {
           "kind": "pulled_after_flag",
@@ -2018,7 +2026,8 @@
         ],
         "scanned": 1284,
         "waiting": 7,
-        "failed": 2
+        "failed": 2,
+        "accepted": false
       },
       {
         "registry": "cargo",
@@ -2039,7 +2048,8 @@
         ],
         "scanned": 311,
         "waiting": 0,
-        "failed": 1
+        "failed": 1,
+        "accepted": false
       },
       {
         "registry": "go",
@@ -2047,7 +2057,8 @@
         "mode": "proxy",
         "protected": false,
         "cve_gate": false,
-        "license_gate": false
+        "license_gate": false,
+        "accepted": false
       }
     ]
   },
@@ -2076,7 +2087,8 @@
     ],
     "scanned": 1284,
     "waiting": 7,
-    "failed": 2
+    "failed": 2,
+    "accepted": false
   },
   "/api/v1/admin/security/scanners": {
     "computed_at": "2026-11-10T11:42:51Z",

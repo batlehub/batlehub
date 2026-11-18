@@ -501,6 +501,9 @@ pub struct HotConfig {
     /// registry with no entry has no quarantine: its gates run as rules,
     /// exactly as before the section existed.
     pub security: HashMap<String, crate::entities::SecurityPolicy>,
+    /// `[console].accepted`'s `coverage:` entries: registries left
+    /// unprotected on purpose, which the Coverage line no longer counts.
+    pub accepted_unprotected: std::collections::BTreeSet<String>,
     /// The gates a `[security]` registry runs as scanners instead of rules
     /// (RFC 0018 §6.1): `block_list`, `cve_gate` and the three wrapped
     /// metadata gates, built per registry because each holds that registry's
@@ -693,6 +696,7 @@ impl Default for HotConfig {
             rate_limit_budget: None,
             forge_refs: HashMap::new(),
             security: HashMap::new(),
+            accepted_unprotected: std::collections::BTreeSet::new(),
             forge_raw: HashMap::new(),
             forge_api_reads: HashMap::new(),
             air_gap: crate::entities::AirGapPolicy::default(),

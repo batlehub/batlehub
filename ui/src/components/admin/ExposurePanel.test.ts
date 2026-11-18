@@ -96,7 +96,7 @@ describe("ExposurePanel", () => {
     await flushPromises();
     expect(w.find('[data-testid="empty-state"]').text()).toContain("No pull of a flagged version");
     exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
-    await w.find('[data-testid="exposure-apply"]').trigger("click");
+    await w.find("#exposure-source").trigger("keyup.enter");
     await flushPromises();
     expect(w.text()).toMatch(/could not|impossible/i);
     // A failure is not an empty window: the two used to show side by side.
@@ -108,7 +108,7 @@ describe("ExposurePanel", () => {
     const w = mount(ExposurePanel);
     await flushPromises();
     exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
-    await w.find('[data-testid="exposure-apply"]').trigger("click");
+    await w.find("#exposure-source").trigger("keyup.enter");
     await flushPromises();
     expect(w.find('[data-testid="exposure-rows"]').exists()).toBe(false);
     expect(w.find('[data-testid="exposure-coverage"]').exists()).toBe(false);

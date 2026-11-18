@@ -5606,3 +5606,52 @@ fn a_security_history_over_a_year_or_forever_is_warned() {
     }
     assert_eq!(parse_config("").stats.security_history_retention_days, 90);
 }
+
+// ── [console] ─────────────────────────────────────────────────────────────────
+
+/// A warning named in `[console].accepted` is still reported, marked
+/// accepted; the others are not.
+#[test]
+fn an_accepted_warning_is_still_listed_and_marked_accepted() {
+    let cfg = parse_config(
+        r#"
+        [console]
+        accepted = ["warning:proxy-trust.unconfigured"]
+"#,
+    );
+    cfg.validate().unwrap();
+    let w = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::PROXY_TRUST_UNCONFIGURED)
+        .expect("still listed");
+    assert!(w.accepted);
+    assert!(parse_config("").warnings().iter().all(|w| !w.accepted));
+}
+
+/// A typo would accept nothing in silence: refused at load instead.
+#[test]
+fn a_console_entry_must_name_a_registry_or_a_warning() {
+    let registry = r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "proxy"
+"#;
+    for (accepted, ok) in [
+        (r#"["coverage:npm"]"#, true),
+        (r#"["warning:audit.no-retention"]"#, true),
+        (r#"["coverage:nope"]"#, false),
+        (r#"["warning:"]"#, false),
+        (r#"["npm"]"#, false),
+    ] {
+        let cfg = parse_config(&format!(
+            "{registry}\n        [console]\n        accepted = {accepted}"
+        ));
+        assert_eq!(cfg.validate().is_ok(), ok, "{accepted}");
+    }
+    let cfg = parse_config(&format!(
+        "{registry}\n        [console]\n        accepted = [\"coverage:npm\"]"
+    ));
+    assert_eq!(cfg.console.accepted_coverage().collect::<Vec<_>>(), ["npm"]);
+}

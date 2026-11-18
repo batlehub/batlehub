@@ -18,7 +18,8 @@ export function variantFromMap<K extends string>(
 
 /** Registry-type badge coloring, shared by any page that lists registries by type. */
 export const REGISTRY_TYPE_VARIANTS: Record<string, BadgeVariant> = {
-  npm: "default",
+  // Not `default`: the crimson fill is the view's one primary action (DESIGN).
+  npm: "secondary",
   cargo: "secondary",
   github: "outline",
   forgejo: "outline",
