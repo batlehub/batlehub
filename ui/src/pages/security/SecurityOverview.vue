@@ -70,7 +70,10 @@ const GLYPH: Record<string, string> = {
 };
 const { can } = useAuth();
 
-type Target = { to: string | { path: string; query: Record<string, string> }; label: string };
+type Target = {
+  to: string | { path: string; query: Record<string, string> } | null;
+  label: string;
+};
 /**
  * Each reason opens the page that acts on it, when the viewer may read that
  * page; otherwise the package, which every viewer of the item can open.
@@ -86,14 +89,18 @@ function decisionTarget(d: DecisionItem): Target {
       to: { path: "/security/holds", query: { reason: "SOC_VERDICT", registry: d.registry } },
       label: "securityOverview.act.holdOnHardBlock",
     };
-  if (d.kind === "pulled_after_flag" && can("audit:read"))
-    return {
-      to: {
-        path: "/security/exposure",
-        query: { registry: d.registry, package: d.name, when: "after_flag" },
-      },
-      label: "securityOverview.act.pulledAfterFlag",
-    };
+  if (d.kind === "pulled_after_flag")
+    // Exposure names the consumers (personal data), so it stays behind
+    // audit:read; without it, say who can answer rather than link elsewhere.
+    return can("audit:read")
+      ? {
+          to: {
+            path: "/security/exposure",
+            query: { registry: d.registry, package: d.name, when: "after_flag" },
+          },
+          label: "securityOverview.act.pulledAfterFlag",
+        }
+      : { to: null, label: "securityOverview.act.pulledAfterFlagNoAudit" };
   if (d.kind === "exemption_expiring" && can("authz:read"))
     return { to: "/admin/access/authorization", label: "securityOverview.act.exemptionExpiring" };
   return { to: packagePath(d.registry, d.name), label: "securityOverview.act.package" };
@@ -256,11 +263,15 @@ const decisionText = (d: DecisionItem) =>
                       :labels="REASON_LABEL_KEYS"
                     />
                     <RouterLink
-                      :to="decisionTarget(d).to"
+                      v-if="decisionTarget(d).to"
+                      :to="decisionTarget(d).to!"
                       class="text-primary underline underline-offset-[3px]"
                       :data-testid="`act-${d.kind}`"
                       >→ {{ t(decisionTarget(d).label) }}</RouterLink
                     >
+                    <span v-else class="text-muted-foreground" :data-testid="`act-${d.kind}`">{{
+                      t(decisionTarget(d).label)
+                    }}</span>
                   </span>
                 </li>
               </ul>

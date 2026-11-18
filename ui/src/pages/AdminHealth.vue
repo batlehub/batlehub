@@ -259,15 +259,18 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
                   variant="outline"
                   size="sm"
                   class="text-xs h-6 px-2"
-                  @click="clearTarget = reg.registry"
-                  >{{ t("adminHealth.clearCache") }}</Button
+                  @click="explorePending = reg.registry"
+                  >{{ t("adminHealth.refreshExplore") }}</Button
                 >
+                <!-- Last and set apart: the irreversible action of the row. Its
+                     weight is its confirmation (DESIGN, Button.vue), not a fill. -->
                 <Button
                   variant="outline"
                   size="sm"
-                  class="text-xs h-6 px-2"
-                  @click="explorePending = reg.registry"
-                  >{{ t("adminHealth.refreshExplore") }}</Button
+                  class="ml-2 text-xs h-6 px-2"
+                  data-testid="clear-cache"
+                  @click="clearTarget = reg.registry"
+                  >{{ t("adminHealth.clearCache") }}</Button
                 >
               </div>
             </div>

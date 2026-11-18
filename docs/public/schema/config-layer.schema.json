@@ -454,6 +454,21 @@
       ],
       "type": "string"
     },
+    "ConsoleConfig": {
+      "additionalProperties": false,
+      "description": "`[console]`: the console's acknowledgements, kept in the config so they are\nversioned, reviewed and the same for every admin.\n\n```toml\n[console]\naccepted = [\"coverage:go-public\", \"warning:proxy-trust.unconfigured\"]\n```",
+      "properties": {
+        "accepted": {
+          "default": [],
+          "description": "`coverage:<registry>` — a registry left without `[security]` or a\n`cve_gate` on purpose: the Coverage line no longer counts it. And\n`warning:<code>` — a config warning the operator has read and keeps:\nstill listed, drawn as accepted, no longer `ATTENTION`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "CveGateConfig": {
       "description": "Gate downloads of package versions with known vulnerabilities, as discovered\nby the periodic SBOM re-scan (`[vulnerability_scan]`).\n\n```toml\n[[registries.rules]]\nkind = \"cve_gate\"\nmin_severity = \"high\"        # unknown | low | medium | high | critical\nblock = true                 # false (default) = warn-only, surfaced in UI but never blocked\nbypass_roles = [\"admin\"]\n```",
       "properties": {
@@ -3495,6 +3510,10 @@
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
+    },
+    "console": {
+      "$ref": "#/$defs/ConsoleConfig",
+      "description": "`[console]` — what the security console treats as known and accepted\nrather than as needing attention. Absent accepts nothing."
     },
     "database": {
       "$ref": "#/$defs/DatabaseConfig"

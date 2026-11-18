@@ -58,7 +58,6 @@
     "notCovered": "Not checked: {layers}. Supply the matching field to include them.",
     "oidc1TeamATeam": "oidc1:team-a, team-b",
     "optional": "(optional)",
-    "resourceType": "Resource type",
     "ruleMatched": "Rule: {rule}",
     "seeBlocks": "See blocks",
     "simulateWhetherAnIdentityWould": "Runs one request through every layer a real one meets — account and IP blocks, then the registry's rules — without sending it. Explain, above, shows only which grants apply.",
@@ -284,7 +283,7 @@
     "cachedArtifacts": "cached artifacts",
     "chooseRegistry": "Choose a registry…",
     "clear": "Clear",
-    "clearCache": "Clear Cache",
+    "clearCache": "Clear cache",
     "deleteArtifactHelp": "Remove one cached artifact so the next request re-fetches it from upstream. Locally published versions are not affected.",
     "deleting": "Deleting…",
     "errorsIn24h": "{count} error in 24 h | {count} errors in 24 h",
@@ -716,6 +715,7 @@
     "delete": "Delete",
     "dialog": "Dialog",
     "dismiss": "Dismiss",
+    "acceptedInConsole": "accepted in [console]",
     "distribution": "Distribution",
     "docs": "Docs",
     "documentation": "Documentation",
@@ -827,7 +827,6 @@
     "clearScope": "Show every package",
     "anyEffect": "any effect",
     "anySource": "any source",
-    "apply": "Apply",
     "beforeFlag": "Before flag",
     "consumer": "Consumer",
     "coverageLine": "{total} total, {sbom} with an SBOM extractor, {security} with a security profile",
@@ -1664,6 +1663,7 @@
     "scannersDeferred": "{n} job deferred for more than a day | {n} jobs deferred for more than a day",
     "coverageNone": "No registry is protected — nothing is scanned.",
     "coverageAll": "All {n} registries are protected.",
+    "coverageAccepted": "Every registry protected but {names}, left unprotected on purpose.",
     "coverage": "{n} of {total} registries not protected | {n} of {total} registries not protected",
     "holdsSoc": "{n} version held, {soc} on a SOC's hard block | {n} versions held, {soc} on a SOC's hard block"
   },
@@ -1695,6 +1695,7 @@
     "act": {
       "holdOnHardBlock": "held versions",
       "pulledAfterFlag": "who downloaded it",
+      "pulledAfterFlagNoAudit": "who downloaded it: a holder of audit:read can see",
       "exemptionExpiring": "the exemption",
       "failedScan": "failed scans",
       "package": "the package"
@@ -1751,6 +1752,7 @@
     "cveGate": "CVE gate",
     "licenseGate": "Licence gate",
     "notProtected": "not protected",
+    "notProtectedAccepted": "not protected, on purpose (config)",
     "protected": "protected",
     "refusesAt": "refuses {deny} and above",
     "warnsRefuses": "warns on {deny} and above, still refuses known malware",
@@ -1810,6 +1812,7 @@
     "exemptionsLine": "{n} end within 7 days · {self} approved by their own requester",
     "config": "Config",
     "warnings": "{n} security warning | {n} security warnings",
+    "warningsAccepted": "{n} accepted in [console]: | {n} accepted in [console]:",
     "atLeast": "At least this many: the window holds more events than one read takes."
   },
   "heldVersions": {

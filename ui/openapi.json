@@ -24822,9 +24822,14 @@
           "code",
           "message",
           "path",
-          "dismissible"
+          "dismissible",
+          "accepted"
         ],
         "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Named in `[console].accepted` as `warning:<code>`: the operator has read\nit and keeps the state. Still listed; no longer counted as attention."
+          },
           "code": {
             "type": "string",
             "description": "Stable slug identifying the *kind* of problem, e.g.\n`\"subdomain.invalid-dns-label\"`. Safe to match on; the `message` is not."
@@ -24897,9 +24902,17 @@
           "registries",
           "upstream",
           "protected",
-          "unprotected"
+          "unprotected",
+          "accepted"
         ],
         "properties": {
+          "accepted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Unprotected on purpose: `coverage:<registry>` in `[console].accepted`.\nNot attention; still named, so the choice stays visible."
+          },
           "protected": {
             "type": "integer",
             "format": "int64",
@@ -24924,7 +24937,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`proxy`/`hybrid` registries with no `[security]` and no `cve_gate`."
+            "description": "`proxy`/`hybrid` registries with no `[security]` and no `cve_gate`,\nless those `[console].accepted` names."
           },
           "upstream": {
             "type": "integer",
@@ -24963,9 +24976,14 @@
           "mode",
           "protected",
           "cve_gate",
-          "license_gate"
+          "license_gate",
+          "accepted"
         ],
         "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Left unprotected on purpose (`[console].accepted`)."
+          },
           "cve_gate": {
             "type": "boolean"
           },
@@ -31273,9 +31291,14 @@
         "required": [
           "code",
           "path",
-          "message"
+          "message",
+          "accepted"
         ],
         "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Named in `[console].accepted`: listed, not attention."
+          },
           "code": {
             "type": "string"
           },

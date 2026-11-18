@@ -63,7 +63,11 @@ function coverageText(o: NonNullable<SecurityOverview["coverage"]>): string {
   const upstream = o.upstream;
   // "Nothing protected" only when no `cve_gate` covers anything either.
   if (!o.protected && o.unprotected.length === upstream) return t("securityStatus.coverageNone");
-  if (!o.unprotected.length) return t("securityStatus.coverageAll", { n: upstream });
+  // `[console].accepted`: named, never attention.
+  if (!o.unprotected.length)
+    return o.accepted?.length
+      ? t("securityStatus.coverageAccepted", { names: o.accepted.join(", ") })
+      : t("securityStatus.coverageAll", { n: upstream });
   return t("securityStatus.coverage", { n: o.unprotected.length, total: upstream });
 }
 

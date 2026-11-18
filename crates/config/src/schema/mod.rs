@@ -185,6 +185,44 @@ pub struct AppConfig {
     /// `[worker]` — how the scan worker role is tuned (RFC 0018 §4.1).
     #[serde(default)]
     pub worker: WorkerConfig,
+    /// `[console]` — what the security console treats as known and accepted
+    /// rather than as needing attention. Absent accepts nothing.
+    #[serde(default)]
+    pub console: ConsoleConfig,
+}
+
+/// `[console]`: the console's acknowledgements, kept in the config so they are
+/// versioned, reviewed and the same for every admin.
+///
+/// ```toml
+/// [console]
+/// accepted = ["coverage:go-public", "warning:proxy-trust.unconfigured"]
+/// ```
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleConfig {
+    /// `coverage:<registry>` — a registry left without `[security]` or a
+    /// `cve_gate` on purpose: the Coverage line no longer counts it. And
+    /// `warning:<code>` — a config warning the operator has read and keeps:
+    /// still listed, drawn as accepted, no longer `ATTENTION`.
+    #[serde(default)]
+    pub accepted: Vec<String>,
+}
+
+impl ConsoleConfig {
+    /// The registries accepted as unprotected.
+    pub fn accepted_coverage(&self) -> impl Iterator<Item = &str> {
+        self.accepted
+            .iter()
+            .filter_map(|a| a.strip_prefix("coverage:"))
+    }
+
+    /// Whether a config warning with `code` is accepted.
+    pub fn accepts_warning(&self, code: &str) -> bool {
+        self.accepted
+            .iter()
+            .any(|a| a.strip_prefix("warning:") == Some(code))
+    }
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -790,6 +828,9 @@ impl AppConfig {
         self.stats_url_warnings(&mut out);
         self.static_token_warnings(&mut out);
         self.security_history_warnings(&mut out);
+        for w in &mut out {
+            w.accepted = self.console.accepts_warning(&w.code);
+        }
         out
     }
 
@@ -2496,6 +2537,7 @@ impl AppConfig {
         self.validate_search()?;
         self.validate_registries()?;
         self.validate_security_globals(env)?;
+        self.validate_console()?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
         self.validate_mise_auto_wire()?;
@@ -3642,6 +3684,23 @@ impl AppConfig {
 
     /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
     /// (RFC 0018 §4.3): the rows that are about the whole config.
+    /// `[console].accepted`: every entry is `coverage:<a registry>` or
+    /// `warning:<code>`. A typo would otherwise accept nothing, silently.
+    fn validate_console(&self) -> Result<()> {
+        for a in &self.console.accepted {
+            if let Some(r) = a.strip_prefix("coverage:") {
+                if !self.registries.iter().any(|reg| reg.name == r) {
+                    anyhow::bail!("`console.accepted`: \"{a}\" names no registry");
+                }
+            } else if a.strip_prefix("warning:").is_none_or(str::is_empty) {
+                anyhow::bail!(
+                    "`console.accepted`: \"{a}\" is neither `coverage:<registry>` nor `warning:<code>`"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_security_globals(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
         self.validate_scanners()?;
         if self.server.roles.is_empty() {

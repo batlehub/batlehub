@@ -145,7 +145,7 @@ describe("SecurityOverview (RFC 0050 §4.5)", () => {
     // Everything shown: no "→ all N".
     expect(w.find('[data-testid^="all-"]').exists()).toBe(false);
 
-    // Without audit:read, who downloaded it is not theirs to see: the package.
+    // Without audit:read, who downloaded it is not theirs to see: said, not linked.
     verbs.clear();
     const w2 = await mountWith({
       computed_at: NOW,
@@ -156,9 +156,28 @@ describe("SecurityOverview (RFC 0050 §4.5)", () => {
         items: [item("pulled_after_flag")],
       },
     });
-    expect(JSON.parse(w2.get('[data-testid="act-pulled_after_flag"]').attributes("data-to")!)).toBe(
-      "/packages/npm-public/event-stream",
-    );
+    const act = w2.get('[data-testid="act-pulled_after_flag"]');
+    expect(act.element.tagName).toBe("SPAN");
+    expect(act.text()).toContain("audit:read");
+  });
+
+  it("names a registry left unprotected on purpose, without attention", async () => {
+    const w = await mountWith({
+      computed_at: NOW,
+      holds,
+      coverage: {
+        state: "ok",
+        registries: 3,
+        upstream: 3,
+        protected: 2,
+        unprotected: [],
+        accepted: ["go-public"],
+      },
+      decisions: { total: 0, by_kind: {}, items: [] },
+    });
+    const line = w.get('[data-testid="status-coverage"]');
+    expect(line.text()).toContain("but go-public, left unprotected on purpose");
+    expect(line.find('[data-state="ok"]').exists()).toBe(true);
   });
 
   it("has no line for a block the viewer may not read (T1)", async () => {

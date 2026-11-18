@@ -2727,6 +2727,32 @@ adding one is a config change and a reload, not an API call.
 
 ---
 
+### 3.8e `[console]` (optional) {#console}
+
+What the security console treats as known and kept, rather than as needing
+attention. Absent accepts nothing. The list lives in the config, not behind a
+button, so an acknowledgement is reviewed and versioned like any other change
+and is the same for every admin.
+
+```toml
+[console]
+accepted = [
+  "coverage:go-public",               # a registry left without [security] or a cve_gate on purpose
+  "warning:proxy-trust.unconfigured", # a config warning read and kept
+]
+```
+
+| Entry | Effect |
+| --- | --- |
+| `coverage:<registry>` | The *Coverage* line and page no longer count the registry as unprotected: the line reads *Every registry protected but go-public, left unprotected on purpose*, and its row *not protected, on purpose (config)*. |
+| `warning:<code>` | The warning is still listed on Instance security and on the Configuration page, marked *accepted in [console]*, and no longer turns the *Config* line to `ATTENTION`. It is logged at `INFO` instead of `WARN`. |
+
+An entry that is neither form, or a `coverage:` entry naming no registry, is
+refused at load: a typo would otherwise accept nothing, silently. Who may still
+see a consumer's downloads is unchanged — Exposure stays behind `audit:read`.
+
+---
+
 ### 3.9 `[subdomain_routing]` (optional)
 
 Every registry is always reachable at `/proxy/{name}/…`. This section adds a

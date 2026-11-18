@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-access.md
-sourceHash: 0e6e86de3ff4ebeb
+sourceHash: 171f190498f0270c
 ---
 
 # Accès et audit
@@ -245,7 +245,9 @@ rassemble ce qui concerne ce serveur lui-même, sur les dernières 24 heures ou
 - **Exemptions** — les exemptions de contrôle qui prennent fin sous 7 jours, et
   celles approuvées par leur propre demandeur, avec `quarantine:read`.
 - **Config** — les avertissements de sécurité de la configuration en vigueur,
-  avec `config:read`.
+  avec `config:read`. Un avertissement conservé volontairement s'accepte dans
+  [`[console]`](/fr/guide/configuration#console) : toujours listé, il ne passe
+  plus en `ATTENTION`.
 
 La lecture de cette page n'est pas auditée, pas plus que celle du journal
 d'audit.

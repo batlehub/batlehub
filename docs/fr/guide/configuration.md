@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 576af4e509931e43
+sourceHash: 7777973afcad4522
 ---
 
 # Référence de configuration
@@ -3487,6 +3487,33 @@ Les trois mêmes sont
 [la référence de la CLI](/fr/use/cli#notifications). Les canaux eux-mêmes sont de
 la configuration : en ajouter un est un changement de configuration et un
 rechargement, pas un appel d'API.
+
+---
+
+### 3.8e `[console]` (facultatif) {#console}
+
+Ce que la console de sécurité considère comme connu et assumé, plutôt que comme
+demandant de l'attention. Absent, rien n'est accepté. La liste vit dans la
+configuration et non derrière un bouton : un acquittement est relu et versionné
+comme tout autre changement, et il est le même pour tous les administrateurs.
+
+```toml
+[console]
+accepted = [
+  "coverage:go-public",               # un registre laissé sans [security] ni cve_gate, volontairement
+  "warning:proxy-trust.unconfigured", # un avertissement de configuration lu et conservé
+]
+```
+
+| Entrée | Effet |
+| --- | --- |
+| `coverage:<registre>` | La ligne et la page *Couverture* ne comptent plus le registre comme non protégé : la ligne indique *Tous protégés sauf go-public, laissé sans protection exprès*, et sa ligne de tableau *non protégé, exprès (config)*. |
+| `warning:<code>` | L'avertissement reste listé sur Sécurité de l'instance et sur la page Configuration, marqué *accepté dans [console]*, et ne fait plus passer la ligne *Config* en `ATTENTION`. Il est journalisé en `INFO` au lieu de `WARN`. |
+
+Une entrée qui n'a aucune des deux formes, ou une entrée `coverage:` qui ne nomme
+aucun registre, est refusée au chargement : une faute de frappe n'accepterait
+sinon rien, en silence. Qui peut voir les téléchargements d'un consommateur ne
+change pas : Exposition reste réservée à `audit:read`.
 
 ---
 
