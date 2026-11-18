@@ -1190,6 +1190,25 @@ the flag covers every version. Sending the same `--external-id` again updates
 the flag. `flag delete` revokes it and is [destructive](#confirmation): the
 versions it held are served again.
 
+### Security status {#security-status}
+
+The security console's status strip, for on-call scripts
+([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)): one
+line per domain the token may read — holds, flags, scanners and worker,
+coverage — with its state (`OK`, `ATTENTION`, `UNKNOWN`) and the console page
+that acts on it.
+
+```
+batlehub-cli security status [--json]
+```
+
+It exits `0` when every line is `OK`, `1` on any `ATTENTION`, `7` when no line
+is `ATTENTION` but one is `UNKNOWN` or not readable by this token (the output
+names it), and `4` when the token holds neither `quarantine:read` nor
+`flags:read`. `1` is also a transport failure's code: a script that must tell
+"malware held" from "server down" reads `--json`, which prints the body of
+`GET /api/v1/admin/security/overview` as the one document.
+
 ### Policy and exemptions {#policy}
 
 ```
@@ -1874,7 +1893,7 @@ The administrator's side of a supply-chain verdict
 
 ```
 batlehub-cli verdict pullers  <registry>/<name>@<version> [--since <window>] [--format csv]
-batlehub-cli verdict list     -r <r> [--state <s>] [--limit <n>]
+batlehub-cli verdict list     [-r <r>] [--all-registries] [--state <s>] [--reason <code>] [--page <n>] [--limit <n>]
 batlehub-cli verdict backfill -r <r>
 batlehub-cli verdict rescan   -r <r> [--state <s>]
 ```
@@ -1889,9 +1908,18 @@ handing to someone who does not have the CLI.
 batlehub-cli verdict pullers npm/left-pad@1.3.1 --since 30d --format csv
 ```
 
-`list` shows a registry's verdicts by state — `allowed`, `warned`,
-`quarantined`, `denied`, or every state when `--state` is omitted. `--limit` is
-per state, defaults to 100 and caps at 1000.
+`list` shows verdicts denied first, then quarantined, warned and allowed, each
+newest first, one page at a time, with the total of every
+match. `--state` takes `allowed`, `warned`, `quarantined`, `denied` or `held`
+(denied and quarantined), every state when omitted; `--reason` keeps the
+verdicts carrying one reason code; `--all-registries` covers every protected
+registry you may read instead of the configured one. `--limit` is the page size,
+100 by default and at most 1000, and `--page` walks the pages. In a mass
+compromise, every version a SOC hard-blocked:
+
+```sh
+batlehub-cli verdict list --all-registries --state held --reason SOC_VERDICT --limit 1000 --page 2
+```
 
 `backfill` queues a low-priority scan of every cached version of a registry, for
 the versions that were already there when scanning was turned on. `rescan`

@@ -47,6 +47,8 @@ pub mod scan_worker;
 pub mod scanners;
 pub mod sdkman;
 pub mod search;
+pub mod security_overview;
+pub mod security_rollup;
 pub mod shadow;
 pub mod signature;
 pub mod signed_url;
@@ -119,6 +121,7 @@ pub use scanners::{
     UPSTREAM_PRESENCE_SCANNER, WRAPPED_GATES,
 };
 pub use search::{SearchHit, SearchMode, SearchResults};
+pub use security_rollup::{RollupOutcome, SecurityRollupService, SECURITY_ROLLUP_LEADER_KEY};
 pub use signed_url::{
     Coordinate as SignedUrlCoordinate, SignedUrlError, SignedUrlService,
     DEFAULT_TTL_SECONDS as SIGNED_URL_DEFAULT_TTL_SECONDS,

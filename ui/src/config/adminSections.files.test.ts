@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ADMIN_PAGE_VERBS } from "./adminSections";
+import { SECURITY_PAGE_VERBS } from "./securitySections";
 import { LEGACY_REDIRECTS } from "./navigation";
 
 /*
@@ -26,6 +27,18 @@ describe("the design gate's admin routes (RFC 0046 §6.5)", () => {
     // The one route that is not a table page is a concrete registry's page.
     expect(routes.filter((r) => !pages.includes(r))).toEqual([
       expect.stringMatching(/^\/admin\/registry\/[^/]+$/),
+    ]);
+  });
+
+  /** RFC 0050 §6.6: the `/security` pages are measured too, plus one registry's coverage. */
+  it("measures every security page, plus one registry's coverage", () => {
+    const source = readFileSync(resolve(process.cwd(), "build/design-routes.mjs"), "utf8");
+    const literal = /const SECURITY_ROUTES = \[([\s\S]*?)\];/.exec(source)?.[1] ?? "";
+    const routes = [...literal.matchAll(/"(\/security[^"]*)"/g)].map((m) => m[1] ?? "");
+    const pages = Object.keys(SECURITY_PAGE_VERBS);
+    expect(new Set(routes.filter((r) => pages.includes(r)))).toEqual(new Set(pages));
+    expect(routes.filter((r) => !pages.includes(r))).toEqual([
+      expect.stringMatching(/^\/security\/coverage\/[^/]+$/),
     ]);
   });
 });

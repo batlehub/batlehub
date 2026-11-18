@@ -88,12 +88,16 @@ bothers with, like Pacman, JetBrains plugins, and Conda.
 - **The API client is generated, never hand-edited.** `ui/src/client/` is produced by
   `@hey-api/openapi-ts` from `ui/openapi.json` (`task dump-spec` → `task ui:generate`) and is
   git-ignored. UI work does not get to change the API contract by editing the client.
-- **Current surface size:** 55 router entries (22 of them redirects) over 29 page components
-  (~8 000 lines) and 48 components, of which **17 are admin pages** behind `/admin` with a
-  seven-section sidebar (Dashboard, Packages, Security & Access, Namespaces & Channels, Operations,
-  Observability, Notifications). The public shell has a five-item top nav plus a user menu.
-- **No i18n layer exists.** Every string in `ui/` is hardcoded English; there is no `vue-i18n`
-  dependency and no message catalogue.
+- **Current surface size** (RFC 0050): **21 admin pages** behind `/admin` in seven sidebar
+  sections (Dashboard, Registries, Packages, Access, Instance security, System — groups that
+  collapse and remember their state), and a separate **security space** at `/security`, with
+  its own sidebar (Overview, Triage, Follow-up) and nine routes, so a delegated security group
+  reaches it without entering the admin. Both are one shell, `ConsoleLayout`; there are no tab
+  strips repeating the sidebar. The public shell has a short top nav plus a user menu.
+- **Every string is translated.** `vue-i18n` with `en` and `fr` catalogues
+  (`ui/src/locales/`), kept identical in keys and referenced from the source by
+  `catalogues.test.ts`; server codes (reason codes, flag effects, audit actions) are drawn as a
+  translated label with the raw code beside it.
 - **Registry-type knowledge is data, not markup.** `ui/src/config/registryTypes.ts` holds the
   per-type definitions and setup snippets; new registry types are expected to appear there.
 - **Undecided:** whether `ui/` and `docs/` should share one published token package or keep

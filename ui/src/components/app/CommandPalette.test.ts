@@ -37,9 +37,15 @@ vi.mock("@/composables/useRegistryOptions", () => ({ useRegistryOptions: () => r
 
 import CommandPalette from "./CommandPalette.vue";
 import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
+import { SECURITY_PAGE_VERBS } from "@/config/securitySections";
 import { isPaletteShortcut } from "@/composables/usePalette";
 
-const ALL = [...new Set(Object.values(ADMIN_PAGE_VERBS))];
+const ALL = [
+  ...new Set([
+    ...Object.values(ADMIN_PAGE_VERBS),
+    ...Object.values(SECURITY_PAGE_VERBS).flatMap((v) => (typeof v === "string" ? [v] : v)),
+  ]),
+];
 
 function makeRouter() {
   return createRouter({
@@ -98,10 +104,10 @@ describe("CommandPalette", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const { router, input } = await openPalette("rescan");
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true }));
-    expect(open).toHaveBeenCalledWith("/admin/security/scans?tab=failures", "_blank", "noopener");
+    expect(open).toHaveBeenCalledWith("/security/scanners?tab=failures", "_blank", "noopener");
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await flushPromises();
-    expect(router.currentRoute.value.fullPath).toBe("/admin/security/scans?tab=failures");
+    expect(router.currentRoute.value.fullPath).toBe("/security/scanners?tab=failures");
     open.mockRestore();
   });
 

@@ -325,6 +325,27 @@ fn spawn_stats_rollup_if_enabled(
     );
 }
 
+/// The daily security rollup behind `/security/trends` (RFC 0050 §5.2):
+/// at startup, then hourly. Follows `[stats] history_enabled`.
+fn spawn_security_rollup_if_enabled(
+    config: &batlehub_config::schema::AppConfig,
+    stores: &hot_config::SecurityStores,
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+) {
+    if !config.stats.history_enabled {
+        return;
+    }
+    let (Some(repo), Some(leader)) = (stores.security_daily.clone(), stores.queue.clone()) else {
+        return;
+    };
+    watcher::spawn_security_rollup(Arc::new(batlehub_core::services::SecurityRollupService {
+        repo,
+        leader,
+        hot: Arc::clone(hot),
+        retention_days: config.stats.security_history_retention_days,
+    }));
+}
+
 /// Periodic SBOM re-check against the OSV vulnerability database.
 fn spawn_vuln_scan_if_enabled(
     config: &batlehub_config::schema::AppConfig,
@@ -429,6 +450,7 @@ fn start_scan_worker(p: &StartWorkerParams<'_>) -> Result<()> {
             ))) as Arc<dyn batlehub_core::ports::NotificationSink>
         }),
         events: Some(Arc::clone(p.repo) as Arc<dyn batlehub_core::ports::PackageRepository>),
+        status_writes: Default::default(),
     });
     tokio::spawn(Arc::clone(&worker).run());
     // RFC 0018 phase 4: the rescan timer, one per estate — every worker
@@ -776,6 +798,12 @@ async fn main() -> Result<()> {
         workers: Some(Arc::new(batlehub_adapters::db::PgWorkerRegistry::new(
             repo.pool(),
         ))),
+        scanner_status: Some(Arc::new(
+            batlehub_adapters::db::PgScannerStatusRepository::new(repo.pool()),
+        )),
+        security_daily: Some(Arc::new(
+            batlehub_adapters::db::PgSecurityDailyRepository::new(repo.pool()),
+        )),
         // RFC 0014: only when the audit is on. Absent, the presence scanner is
         // not built and the eviction hold holds nothing — the pre-0014 tree.
         upstream_status: config.upstream_audit.enabled.then(|| {
@@ -783,6 +811,10 @@ async fn main() -> Result<()> {
                 repo.pool(),
             )) as Arc<dyn batlehub_core::ports::UpstreamStatusPort>
         }),
+        // The config `initialize_auth_providers` read above; `[auth]` is
+        // restart-only, so a reload keeps these.
+        plain_static_tokens: Arc::new(config.plain_static_tokens()),
+        scanner_kinds: Arc::new(setup::scanner_kinds(&config)),
     };
 
     // RFC 0041 §6.8: how many versions and artifacts hold an unrated
@@ -1073,6 +1105,10 @@ async fn main() -> Result<()> {
         &registry_names,
     );
 
+    // RFC 0050 §5.2: the daily security rollup, on the proxy and worker
+    // roles alike; the leader lock picks one process per estate.
+    spawn_security_rollup_if_enabled(&config, &security_stores, &hot);
+
     // Periodic SBOM re-check against the OSV vulnerability database.
     spawn_vuln_scan_if_enabled(&config, &sbom_svc, &vuln_repo, &advisory_repo)?;
 
@@ -1234,6 +1270,10 @@ async fn main() -> Result<()> {
         reload_svc,
         banner_svc,
         storage_admin_repo,
+        security_console_cache: actix_web::web::Data::new(
+            batlehub_web::handlers::security_console::SourceCache::new(config.database.read_cache),
+        ),
+        security_history_enabled: config.stats.history_enabled,
     })
     .await;
     repo.flush_access_events().await;

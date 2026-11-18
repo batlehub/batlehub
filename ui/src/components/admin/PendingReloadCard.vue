@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AsyncState } from "@/components/ui/async-state";
-import { formatDate } from "@/lib/format";
+import { DateTime } from "@/components/ui/date-time";
 
 /**
  * The staged reload an operator came to accept or refuse: its source, age,
@@ -82,8 +82,8 @@ const expiresIn = computed(() => {
             >
             <span
               ><strong>{{ t("adminConfigReload.createdLabel") }}</strong>
-              {{ formatDate(pendingReload.created_at) }}</span
-            >
+              <DateTime :iso="pendingReload.created_at"
+            /></span>
             <span><strong>{{ t("adminConfigReload.expiresIn") }}</strong> {{ expiresIn }}</span>
           </div>
 

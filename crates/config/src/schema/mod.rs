@@ -258,6 +258,10 @@ fn default_history_retention_days() -> u32 {
     30
 }
 
+fn default_security_history_retention_days() -> u32 {
+    90
+}
+
 /// Both of the instance's statistical outputs, in one block.
 ///
 /// They live together because an operator deciding "do I want this instance
@@ -291,6 +295,13 @@ pub struct StatsConfig {
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
 
+    /// How many days of the daily security rollup behind `/security/trends`
+    /// to keep (RFC 0050 §4.1). `0` keeps every day; the rollup itself is off
+    /// only with `history_enabled = false`. Over 365, or `0`, is accepted
+    /// with the `stats.security-history-long` warning.
+    #[serde(default = "default_security_history_retention_days")]
+    pub security_history_retention_days: u32,
+
     /// Install the Prometheus recorder and serve `/metrics`.
     ///
     /// **This is a security control, not a preference** (RFC 0004 §7).
@@ -320,6 +331,7 @@ impl Default for StatsConfig {
         Self {
             history_enabled: true,
             history_retention_days: default_history_retention_days(),
+            security_history_retention_days: default_security_history_retention_days(),
             metrics_enabled: true,
             dashboard_url: None,
             registry_dashboard_url: None,
@@ -776,7 +788,52 @@ impl AppConfig {
         self.air_gap_warnings(&mut out);
         self.audit_warnings(&mut out);
         self.stats_url_warnings(&mut out);
+        self.static_token_warnings(&mut out);
+        self.security_history_warnings(&mut out);
         out
+    }
+
+    /// The `[[auth.tokens]]` values stored in clear, as `(config path, user
+    /// id)` — never the value (RFC 0050 §4.3). The path is
+    /// `auth[i].tokens[j]`, `i` counting every `[[auth]]` block.
+    pub fn plain_static_tokens(&self) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        for (i, auth) in self.auth.iter().enumerate() {
+            let AuthConfig::Token(t) = auth else { continue };
+            for (j, token) in t.tokens.iter().enumerate() {
+                // The verifier's own rule: a value it would compare in clear
+                // is a plain token here.
+                if !batlehub_core::entities::is_argon2_hash(&token.value) {
+                    out.push((format!("auth[{i}].tokens[{j}]"), token.user_id.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// RFC 0050 §4.3: a static token accepted in clear is said, by path only.
+    fn static_token_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (path, _) in self.plain_static_tokens() {
+            out.push(ConfigWarning::new(
+                warnings::AUTH_PLAIN_STATIC_TOKEN,
+                path,
+                "this static token is stored in clear in the config: anyone who can read the \
+                 file can use it. Store the output of `batlehub hash-token` instead.",
+            ));
+        }
+    }
+
+    /// RFC 0050 §4.3: a security history kept longer than a year, or forever.
+    fn security_history_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let days = self.stats.security_history_retention_days;
+        if days == 0 || days > 365 {
+            out.push(ConfigWarning::new(
+                warnings::STATS_SECURITY_HISTORY_LONG,
+                "stats.security_history_retention_days",
+                "the daily security rollup is kept longer than a year (or forever): its rows \
+                 are small, but they summarise an audit log whose own retention is shorter.",
+            ));
+        }
     }
 
     /// RFC 0044 §4.3: an `http` monitoring link is accepted, and said.

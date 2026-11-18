@@ -1066,6 +1066,66 @@ if not {"scans:run", "quarantine:read", "findings:read"} <= verbs or "gates:exem
   authz_allowed flags:read "secops lists pushed flags" \
     GET "$T_SECOPS" "/api/v1/admin/flags"
 
+  # Case 6 (RFC 0050 §6.P obs. 1–3): the overview, per verb. secops holds
+  # quarantine:read and flags:read, so every block is there; the developer is
+  # refused before any source is read.
+  authz_allowed quarantine:read "secops reads the security overview" \
+    GET "$T_SECOPS" /api/v1/admin/security/overview
+  authz_body GET "$T_SECOPS" /api/v1/admin/security/overview | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+missing = [k for k in ("holds", "flags", "scanners", "coverage", "decisions") if k not in body]
+if missing:
+    sys.exit(f"the overview for secops lacks {missing}: {body}")
+' || heavy_fail "the security overview does not carry every block secops may read (obs. 1)"
+  authz_denied quarantine:read "$WHO_DENIED reads the security overview" \
+    GET "$T_DENIED" /api/v1/admin/security/overview
+  authz_body GET "$T_DENIED" /api/v1/admin/security/overview | grep -q "quarantine:read" \
+    || heavy_fail "a refused overview does not name quarantine:read (obs. 3)"
+  authz_allowed quarantine:read "secops reads the trends" \
+    GET "$T_SECOPS" "/api/v1/admin/security/trends?window=7d"
+  authz_allowed quarantine:read "secops reads the coverage" \
+    GET "$T_SECOPS" /api/v1/admin/security/coverage
+  authz_allowed quarantine:read "secops reads the scanners" \
+    GET "$T_SECOPS" /api/v1/admin/security/scanners
+
+  # Obs. 7: `security status` exits 1 on an ATTENTION line (the proxies here
+  # have no [security] profile: coverage is ATTENTION), 4 on a refusal.
+  heavy_cli "$T_SECOPS" security status
+  [[ "$HEAVY_CLI_CODE" == 1 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status as secops exited $HEAVY_CLI_CODE, expected 1"; }
+  grep -q "^COVERAGE *ATTENTION" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status printed no COVERAGE ATTENTION line"; }
+  heavy_cli "$T_DENIED" security status
+  [[ "$HEAVY_CLI_CODE" == 4 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status as $WHO_DENIED exited $HEAVY_CLI_CODE, expected 4"; }
+
+  # Obs. 9: instance security. Every static token in this config is in clear,
+  # so each is an `auth.plain-static-token`; the SRE (system:read only) gets
+  # paths, the administrator user ids too, and no body carries a token value.
+  authz_denied system:read "secops reads instance security" \
+    GET "$T_SECOPS" /api/v1/admin/instance-security
+  authz_allowed system:read "the SRE reads instance security" \
+    GET "$T_SRE" /api/v1/admin/instance-security
+  authz_body GET "$T_SRE" /api/v1/admin/instance-security >"$HEAVY_WORK/instance-sre.json"
+  authz_body GET "$T_ADMIN" /api/v1/admin/instance-security >"$HEAVY_WORK/instance-admin.json"
+  python3 - "$HEAVY_WORK/instance-sre.json" "$HEAVY_WORK/instance-admin.json" tests/heavy/config.authz.toml <<'PY' \
+    || heavy_fail "instance security leaks what its verbs withhold (obs. 9)"
+import json, re, sys
+sre, admin = (json.load(open(p)) for p in sys.argv[1:3])
+values = re.findall(r'^value\s*=\s*"([^"]+)"', open(sys.argv[3]).read(), re.M)
+for name, body in (("sre", sre), ("admin", admin)):
+    text = json.dumps(body)
+    leaked = [v for v in values if v in text]
+    assert not leaked, f"{name}: token values in the body: {len(leaked)}"
+assert sre["static_tokens"]["plain"] >= 1 and sre["static_tokens"]["paths"], sre
+assert "user_ids" not in sre["static_tokens"], sre
+assert "addresses" not in sre["sign_ins"], sre
+assert admin["static_tokens"]["user_ids"], admin
+PY
+  grep -q "auth.plain-static-token" "$HEAVY_WORK/server.log" \
+    || heavy_fail "the startup log carries no auth.plain-static-token warning (obs. 9)"
+
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
   # All three shipped **unreachable**: no §10 rule produces a verb no legacy

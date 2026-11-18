@@ -31,7 +31,7 @@ async function mountPage() {
   const wrapper = mount(AdminNotificationSubscriptions, {
     // `attachTo` because the edit form lives in a `Dialog`, which teleports.
     attachTo: document.body,
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   await flushPromises();
   return wrapper;

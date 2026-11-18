@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 011b848b5aba682e
+sourceHash: a9af5090046e0aeb
 ---
 
 # Contrôle d'accès
@@ -486,7 +486,7 @@ mais rien ne fuit — ce pourquoi il n'a pas besoin d'expiration.
 
 ### La surveiller {#watching}
 
-**`/admin/access/authorization`** rassemble les cinq choses qui sont sinon
+**`/admin/access/authorization`** rassemble les six choses qui sont sinon
 éparpillées :
 
 | Panneau | Répond à |
@@ -494,10 +494,11 @@ mais rien ne fuit — ce pourquoi il n'a pas besoin d'expiration.
 | **Fantôme** | ce qui est servi et que les autorisations refuseraient, par nœud, avec chaque expiration |
 | **Exemptions** | les exemptions de garde-fou vivantes, leur expiration et leur motif, filtrables sur les auto-approuvées |
 | **Explain** | résoudre n'importe quel sujet contre n'importe quelle coordonnée, avec la provenance |
+| **Simuler** | exécuter un téléchargement entier pour une identité — blocages, garde-fous et groupes — et dire s'il est servi (`#simulate` ; les anciens favoris de la vérification d'accès y mènent) |
 | **Refus récents** | ce qui a été réellement refusé |
 | **Rétention** | où examiner ce qu'une passe réelle reprendrait |
 
-Trois de ces cinq sont les directions « laisser passer » ou destructives de
+Trois de ces six sont les directions « laisser passer » ou destructives de
 fonctionnalités décidées ailleurs. Elles sont sur une même page à dessein :
 individuellement, chacune est facile à oublier, et collectivement elles forment
 la liste de tout ce qui compte actuellement sur votre mémoire.

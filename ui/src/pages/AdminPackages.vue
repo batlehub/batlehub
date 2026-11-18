@@ -6,9 +6,7 @@ import { RouterLink } from "vue-router";
 import BulkActionBar from "@/components/admin/BulkActionBar.vue";
 import PackageFilterBar from "@/components/admin/PackageFilterBar.vue";
 import { useRowSelection } from "@/composables/useRowSelection";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
 import { PageHeader } from "@/components/ui/page-header";
-import { PACKAGES_TABS } from "@/config/adminSections";
 import {
   listPackages,
   listRegistries,
@@ -484,7 +482,6 @@ async function runPending(): Promise<void> {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="bulkResultMsg ?? ''" />
-    <SectionTabs :tabs="PACKAGES_TABS" />
     <PageHeader variant="display" :title="t('adminNav.allPackages')" :count="packages?.length" />
     <!-- The form that used to sit here is `/admin/packages/bulk`, one tab
          away and better at the job. A link, not a second implementation. -->

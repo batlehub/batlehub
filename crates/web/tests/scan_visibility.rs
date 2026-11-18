@@ -140,6 +140,12 @@ impl VerdictRepository for Verdicts {
     ) -> Result<Vec<Verdict>, CoreError> {
         self.0.list_by_state(r, s, l).await
     }
+    async fn page_verdicts(
+        &self,
+        p: &batlehub_core::ports::VerdictPage,
+    ) -> Result<(Vec<Verdict>, u64), CoreError> {
+        self.0.page_verdicts(p).await
+    }
     async fn list_due_for_rescan(
         &self,
         r: &str,

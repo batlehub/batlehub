@@ -43,6 +43,7 @@ POST /api/v1/admin/gdpr/erase	skip: no arm yet
 GET /api/v1/admin/gdpr/export	skip: no arm yet
 GET /api/v1/admin/health	skip: no arm yet
 GET /api/v1/admin/imports	skip: no arm yet
+GET /api/v1/admin/instance-security	skip: an admin page read on demand; one audit read per window, cached 30 s
 GET /api/v1/admin/ip-blocks	skip: no arm yet
 POST /api/v1/admin/ip-blocks	skip: no arm yet
 DELETE /api/v1/admin/ip-blocks/{ip}	skip: no arm yet
@@ -114,6 +115,11 @@ POST /api/v1/admin/registries/{registry}/undeprecate	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/unlist	skip: no arm yet
 POST /api/v1/admin/registries/{registry}/warm	skip: no arm yet
 GET /api/v1/admin/scans	skip: no arm yet
+GET /api/v1/admin/security/coverage	skip: a config read and the overview's cached sources
+GET /api/v1/admin/security/coverage/{registry}	skip: one row of the coverage list
+GET /api/v1/admin/security/overview	profiled
+GET /api/v1/admin/security/scanners	skip: the overview's cached sources, 5 s
+GET /api/v1/admin/security/trends	profiled
 GET /api/v1/admin/stats	skip: no arm yet
 GET /api/v1/admin/stats/history	skip: no arm yet
 GET /api/v1/admin/subjects	skip: no arm yet

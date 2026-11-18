@@ -106,7 +106,7 @@ const mounted: VueWrapper[] = [];
 
 async function mountPage() {
   const wrapper = mount(AdminConfigReload, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   mounted.push(wrapper);
   await flushPromises();
@@ -446,6 +446,34 @@ describe("AdminConfigReload", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("registries.legacy.upstreams");
+    expect(wrapper.text()).toContain("no upstreams configured");
+  });
+
+  it("shows a new warning that lands on an index the config in force already warns on", async () => {
+    const old = warning({ code: "auth.plain-static-token", path: "auth[0].tokens[0]" });
+    routes(null, {
+      "/config/warnings": { json: { warnings: [old] } },
+      // Same code, same positional path, one more of them: the second is new.
+      "/config/validate": {
+        json: { warnings: [old, warning({ ...old, path: "auth[0].tokens[1]" })] },
+      },
+    });
+    const wrapper = await mountPage();
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("auth[0].tokens[1]");
+    expect(wrapper.text().split("auth[0].tokens[0]").length - 1).toBe(2);
+  });
+
+  it("validates against a dismissed warning too, rather than hiding it twice", async () => {
+    routes(null, {
+      "/config/warnings": { json: { warnings: [warning()] } },
+      "/config/validate": { json: { warnings: [warning()] } },
+    });
+    const wrapper = await mountPage();
+    await button(wrapper, "Dismiss")!.trigger("click");
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
     expect(wrapper.text()).toContain("no upstreams configured");
   });
 

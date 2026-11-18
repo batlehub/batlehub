@@ -35,7 +35,7 @@ const pending = () => new Promise(() => {});
 
 async function mountPage() {
   const wrapper = mount(AdminBetaChannel, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   await flushPromises();
   return wrapper;

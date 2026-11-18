@@ -2,14 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import en from "./en.json";
 import fr from "./fr.json";
-import {
-  ACCESS_TABS,
-  ADMIN_SIDEBAR,
-  PACKAGES_TABS,
-  REGISTRIES_TABS,
-  SECURITY_TABS,
-  SYSTEM_TABS,
-} from "@/config/adminSections";
+import { ADMIN_SECTIONS } from "@/config/adminSections";
 import { TOOLS_TABS, accountTabs, primaryNav } from "@/config/navigation";
 import { VISIBILITY_OPTIONS } from "@/config/visibility";
 
@@ -106,12 +99,8 @@ describe("locale catalogues", () => {
       { isAuthenticated: false, hasAdminPage: false, hasSecurity: false, hasRegistryAccess: true },
     ];
     const labels = [
-      ...ADMIN_SIDEBAR,
-      ...REGISTRIES_TABS,
-      ...PACKAGES_TABS,
-      ...SECURITY_TABS,
-      ...ACCESS_TABS,
-      ...SYSTEM_TABS,
+      ...ADMIN_SECTIONS,
+      ...ADMIN_SECTIONS.flatMap((section) => section.pages),
       ...TOOLS_TABS,
       ...VISIBILITY_OPTIONS,
       ...accountTabs({ isOidc: true }),

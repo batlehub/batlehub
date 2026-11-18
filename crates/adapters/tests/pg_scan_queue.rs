@@ -130,6 +130,46 @@ async fn a_deferred_job_gives_its_attempt_back_and_waits_out_its_not_before() {
     assert!(q.lease("w4", regs, 1, 60, 3).await.unwrap().is_empty());
 }
 
+/// RFC 0050: `queued()` counts a job deferred for over a day in the store,
+/// from the anchor `defer` writes.
+#[tokio::test]
+async fn queued_counts_jobs_deferred_over_a_day() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    let regs = std::slice::from_ref(&reg);
+    for v in ["1.0.0", "2.0.0"] {
+        let p = PackageId::new(&reg, "pkg", v);
+        assert!(q.enqueue(&p, None, ScanTrigger::FirstSeen).await.unwrap());
+    }
+    let jobs = q.lease("w1", regs, 2, 60, 3).await.unwrap();
+    for job in &jobs {
+        q.defer(job.id, "w1", Utc::now() + Duration::minutes(5))
+            .await
+            .unwrap();
+    }
+    let old = format!(
+        "deferred since {}",
+        (Utc::now() - Duration::hours(25)).to_rfc3339()
+    );
+    sqlx::query("UPDATE scan_jobs SET last_error = $1 WHERE id = $2")
+        .bind(old)
+        .bind(jobs[0].id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let counts = q.queued().await.unwrap();
+    let mine = counts.iter().find(|c| c.registry == reg).expect("counted");
+    assert_eq!(
+        (mine.deferred, mine.deferred_over_day),
+        (2, 1),
+        "{counts:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_outranking_enqueue_promotes_a_deferred_job() {
     let Some(url) = db_url() else {

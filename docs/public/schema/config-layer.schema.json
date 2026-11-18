@@ -510,7 +510,7 @@
         },
         "read_cache": {
           "default": true,
-          "description": "The in-process read cache of blocks, flags, visibility, tokens, user\nblocks and dedup mappings. `false` reads every one from the database\non every request, and no listener is started.",
+          "description": "The in-process read cache of blocks, flags, visibility, tokens, user\nblocks and dedup mappings, and the security console's source cache\n(RFC 0050 §4.4). `false` reads every one from the database on every\nrequest, and no listener is started.",
           "type": "boolean"
         },
         "type": {
@@ -2940,6 +2940,13 @@
         "registry_dashboard_url": {
           "description": "The per-registry monitoring link, shown on each registry page.\n`{registry}` is its only placeholder, replaced percent-encoded by\n[`monitoring_url_for`].",
           "type": "string"
+        },
+        "security_history_retention_days": {
+          "default": 90,
+          "description": "How many days of the daily security rollup behind `/security/trends`\nto keep (RFC 0050 §4.1). `0` keeps every day; the rollup itself is off\nonly with `history_enabled = false`. Over 365, or `0`, is accepted\nwith the `stats.security-history-long` warning.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"

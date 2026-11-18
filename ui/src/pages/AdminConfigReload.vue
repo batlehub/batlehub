@@ -13,11 +13,9 @@ import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import ConfigWarningList from "@/components/admin/ConfigWarningList.vue";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
 import PendingReloadCard from "@/components/admin/PendingReloadCard.vue";
 import ConfigEditorCard from "@/components/admin/ConfigEditorCard.vue";
 import ConfigChangeHistory from "@/components/admin/ConfigChangeHistory.vue";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -334,8 +332,7 @@ function settleLeave(leave: boolean) {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="successMsg ?? ''" />
-    <SectionTabs :tabs="SYSTEM_TABS" />
-    <PageHeader variant="display" :title="t('adminConfigReload.configReload')" />
+    <PageHeader variant="display" :title="t('adminNav.configReload')" />
 
     <!--
       The config could not be read: say so, say what it costs, offer a retry.
@@ -409,6 +406,7 @@ function settleLeave(leave: boolean) {
     <ConfigEditorCard
       v-model:content="configContent"
       v-model:candidate-warnings="candidateWarnings"
+      :active-warnings="visibleWarnings"
       :config-loading="configLoading"
       :config-load-error="configLoadError"
       :config-readonly="configReadonly"

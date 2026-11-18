@@ -4702,6 +4702,40 @@ fn verdicts_commands_report_a_registry_with_no_security_profile() {
     }
 }
 
+// ── security status (RFC 0050) ───────────────────────────────────────────────
+
+/// One line per block the token reads, and an exit code that is never `0`
+/// while a line is not `OK` (decision 30); `--json` is the overview's body;
+/// a caller with no security verb is refused with `4`.
+#[test]
+fn security_status_prints_the_strip_and_exits_by_it() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+
+    let (code, stdout, stderr) = cli_exit(&["security", "status"], &base, AUTH_TOKEN);
+    for label in ["HOLDS", "FLAGS", "SCANNERS", "COVERAGE"] {
+        assert!(stdout.contains(label), "{label} missing: {stdout}{stderr}");
+    }
+    let attention = stdout.contains("ATTENTION");
+    let unknown = stdout.contains("UNKNOWN");
+    let want = if attention {
+        1
+    } else if unknown {
+        7
+    } else {
+        0
+    };
+    assert_eq!(code, want, "stdout: {stdout} stderr: {stderr}");
+
+    let (code_json, stdout, _) = cli_exit(&["security", "status", "--json"], &base, AUTH_TOKEN);
+    assert_eq!(code_json, want);
+    let body: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert!(body["decisions"].is_object(), "{body}");
+
+    let (code, _, stderr) = cli_exit(&["security", "status"], &base, "");
+    assert!(code == 4 || code == 3, "anonymous exited {code}: {stderr}");
+}
+
 // ── package pin · unpin ─────────────────────────────────────────────────────────────
 
 #[test]

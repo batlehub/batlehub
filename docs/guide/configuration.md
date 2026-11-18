@@ -2461,6 +2461,7 @@ even though the halves differ: `metrics_enabled` is about **exposure**,
 [stats]
 history_enabled        = true   # default
 history_retention_days = 30     # default; 0 disables pruning, not history
+security_history_retention_days = 90  # default: the console's security trends
 metrics_enabled        = true   # default: pre-RFC-0004 behaviour
 # Monitoring links (both absent by default: no button)
 dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
@@ -2471,6 +2472,7 @@ registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batl
 |---|---|---|---|
 | `history_enabled` | bool | `true` | Record the hourly cache rollup behind the admin dashboard's trend. `false` restores the pre-RFC-0004 dashboard, which shows only counters since the current process started |
 | `history_retention_days` | u32 | `30` | Delete rollup rows older than this. `0` keeps every row — it disables *pruning*, not history |
+| `security_history_retention_days` | u32 | `90` | Days of the daily security rollup behind *Security → Trends* ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)). Follows `history_enabled`. `0` keeps every day; over `365` or `0` raises `stats.security-history-long`, since the rollup then outlives the audit rows it summarises. A release older than RFC 0050 refuses this key: remove it before rolling back |
 | `metrics_enabled` | bool | `true` | Install the Prometheus recorder and serve `/metrics`. `false` makes `/metrics` answer `503 metrics not configured` |
 | `dashboard_url` | string | — | The [Monitoring ↗] link on *Admin → Dashboard*. No placeholder |
 | `registry_dashboard_url` | string | — | The [Monitoring ↗] link on each registry page. `{registry}` is its only placeholder and is required; it is replaced percent-encoded, so the template should put it in the query |

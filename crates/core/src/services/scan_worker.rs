@@ -88,6 +88,8 @@ pub struct ScanWorker {
     /// and who was refused it while it was held. `None` sends the alert
     /// without a pullers list, and says so on it.
     pub events: Option<Arc<dyn PackageRepository>>,
+    /// What this worker last wrote to `scanner_status`, for the throttle.
+    pub status_writes: ScannerWrites,
 }
 
 /// The longest an idle worker waits between polls of the queue. What a worker
@@ -95,10 +97,16 @@ pub struct ScanWorker {
 /// woken by the enqueue itself.
 pub const MAX_IDLE_POLL: Duration = Duration::from_secs(16);
 
-/// How often the heartbeat, the queue-depth gauges and the exhausted-jobs
-/// sweep run on an idle worker. The heartbeat is read with a 120 s window
-/// (`--roles` start-up check), so this leaves it four beats of slack.
+/// How often the heartbeat and the queue-depth gauges are written (from their
+/// own ticker, whatever a pass is doing), and the exhausted-jobs sweep runs
+/// on an idle worker. The heartbeat is read with a 120 s window
+/// (`security_overview::LIVE_WORKER`), so this leaves it four beats of slack.
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The last `(ok, breaker open)` written per scanner by one worker, and when
+/// (RFC 0050 §6.1's throttle).
+pub type ScannerWrites = Arc<std::sync::Mutex<HashMap<String, ((bool, bool), Instant)>>>;
+const STATUS_WRITE_EVERY: Duration = Duration::from_secs(30);
 
 /// The actor the worker's own events carry (RFC 0014 decision 12's form).
 pub const WORKER_ACTOR: &str = "system:security-worker";
@@ -241,18 +249,15 @@ impl ScanWorker {
     /// Lease and run one batch, then close out any job whose attempts are
     /// spent. Returns what happened so an embedded caller can pace itself.
     pub async fn run_once(&self) -> Result<PassReport, CoreError> {
+        self.report_liveness().await;
         self.pass(true).await
     }
 
-    /// One pass. `housekeeping` adds the statements that do not need the
-    /// poll's cadence: the heartbeat (read with a 120 s window), the
-    /// queue-depth gauges, and the exhausted-jobs sweep — which a pass that
-    /// ran jobs does anyway, since a failure is what exhausts one.
+    /// One pass. `housekeeping` adds the exhausted-jobs sweep, which does not
+    /// need the poll's cadence — and which a pass that ran jobs does anyway,
+    /// since a failure is what exhausts one.
     async fn pass(&self, housekeeping: bool) -> Result<PassReport, CoreError> {
         let mut report = PassReport::default();
-        if housekeeping {
-            self.report_liveness().await;
-        }
 
         let jobs = match self.lease_scope().await {
             Some(registries) => {
@@ -299,6 +304,22 @@ impl ScanWorker {
     /// writes, around 216 000 a day per replica with no traffic at all. A job
     /// this process enqueues wakes it at once ([`ScanQueue::wait_for_work`]).
     pub async fn run(self: Arc<Self>) {
+        // Its own ticker: a pass of four slow scans outlasts the liveness
+        // window, and a busy worker must not read as dead. Same task, so it
+        // stops with the loop.
+        let beat = async {
+            let mut tick = tokio::time::interval(HOUSEKEEPING_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                self.report_liveness().await;
+            }
+        };
+        tokio::join!(beat, self.poll());
+    }
+
+    /// The queue loop of [`Self::run`].
+    async fn poll(&self) {
         let mut idle = self.config.idle_poll;
         let mut last_housekeeping: Option<Instant> = None;
         loop {
@@ -502,6 +523,71 @@ impl ScanWorker {
         }
     }
 
+    /// RFC 0050 §6.1: record a scanner's outcome on `scanner_status` — only
+    /// when its state changes, or at most every 30 s per scanner per worker
+    /// — spawned with a 2 s timeout, so it never delays or fails the job. A
+    /// write that fails is forgotten, so the next outcome retries it.
+    /// An error **class**, never the text. Also the breaker gauge.
+    fn note_scanner(
+        &self,
+        name: &str,
+        advisory_db: bool,
+        until: Option<Duration>,
+        error_class: Option<&'static str>,
+    ) {
+        let name = name.to_owned();
+        if advisory_db {
+            metrics::gauge!("batlehub_osv_breaker_open", "scanner" => name.clone())
+                .set(if until.is_some() { 1.0 } else { 0.0 });
+        }
+        let state = (error_class.is_none(), until.is_some());
+        let stamp = Instant::now();
+        {
+            let mut seen = self
+                .status_writes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if seen.get(&name).is_some_and(|(was, at)| {
+                *was == state && stamp.duration_since(*at) < STATUS_WRITE_EVERY
+            }) {
+                return;
+            }
+            seen.insert(name.clone(), (state, stamp));
+        }
+        let hot = Arc::clone(&self.hot);
+        let writes = Arc::clone(&self.status_writes);
+        tokio::spawn(async move {
+            let key = name.clone();
+            let Some(repo) = hot.read().await.scanner_status.clone() else {
+                return;
+            };
+            let now = Utc::now();
+            let status = crate::ports::ScannerStatus {
+                scanner: name,
+                last_ok_at: error_class.is_none().then_some(now),
+                last_error_at: error_class.is_some().then_some(now),
+                last_error_class: error_class.map(str::to_owned),
+                unavailable_until: until
+                    .and_then(|d| chrono::Duration::from_std(d).ok())
+                    .map(|d| now + d),
+            };
+            match tokio::time::timeout(Duration::from_secs(2), repo.record(&status)).await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "security worker: scanner status write failed")
+                }
+                Err(_) => tracing::warn!("security worker: scanner status write timed out"),
+            }
+            // Not written: drop the mark, unless a newer outcome replaced it.
+            let mut seen = writes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if seen.get(&key).is_some_and(|(_, at)| *at == stamp) {
+                seen.remove(&key);
+            }
+        });
+    }
+
     /// One scanner: what it found, or why it did not answer. `Some` asks to
     /// defer the job (with the upstream's `Retry-After`, if it gave one): an
     /// advisory database failed transiently, inside the deferral budget.
@@ -538,6 +624,18 @@ impl ScanWorker {
             "outcome" => if outcome.is_ok() { "ok" } else { "error" },
         )
         .record(started.elapsed().as_secs_f64());
+        // An artifact the scanner cannot read is the verdict's
+        // `SCANNER_UNSUPPORTED`, not a failing scanner: it answered.
+        let failed = outcome
+            .as_ref()
+            .err()
+            .filter(|e| !matches!(e, ScannerError::Unsupported(_)));
+        self.note_scanner(
+            scanner.name(),
+            scanner.is_advisory_db(),
+            scanner.unavailable_for(),
+            failed.map(ScannerError::class),
+        );
         let e = match outcome {
             Ok(found) => {
                 findings.extend(found);
@@ -604,15 +702,27 @@ impl ScanWorker {
             let Some(enricher) = self.enrichers.get(name) else {
                 continue;
             };
-            match tokio::time::timeout(self.config.job_timeout, enricher.enrich(findings)).await {
-                Ok(Ok(())) => done.push(enricher.name().to_owned()),
+            let outcome = match tokio::time::timeout(
+                self.config.job_timeout,
+                enricher.enrich(findings),
+            )
+            .await
+            {
+                Ok(Ok(())) => {
+                    done.push(enricher.name().to_owned());
+                    None
+                }
                 Ok(Err(e)) => {
                     tracing::warn!(package = %job.package, scanner = enricher.name(), error = %e, "security worker: enrichment did not answer");
+                    Some(e.class())
                 }
                 Err(_) => {
                     tracing::warn!(package = %job.package, scanner = enricher.name(), "security worker: enrichment timed out");
+                    Some(ScannerError::Timeout.class())
                 }
-            }
+            };
+            // The console reads an enricher's state like any scanner's.
+            self.note_scanner(enricher.name(), false, None, outcome);
         }
     }
 

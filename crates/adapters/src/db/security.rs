@@ -14,7 +14,11 @@ use batlehub_core::entities::{
     ScanJobFilter, ScanTrigger, Severity, Verdict, VerdictState, EXHAUSTED_PREFIX,
 };
 use batlehub_core::error::CoreError;
-use batlehub_core::ports::{LeaderLock, QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
+use batlehub_core::ports::{
+    HoldCounts, LeaderLock, QueuedCount, ScanQueue, ScannerStatus, ScannerStatusRepository,
+    VerdictPage, VerdictRepository, WorkerHeartbeat, WorkerRegistry,
+};
+use batlehub_core::services::security_overview::{DEFERRED_ATTENTION, MALWARE_CODES};
 
 use super::DbResultExt;
 
@@ -112,27 +116,64 @@ impl PgVerdictRepository {
         .fetch_all(&self.pool)
         .await
         .db_err()?;
-        rows.into_iter()
-            .map(|r| {
-                let kind: String = r.get("kind");
-                let code: String = r.get("code");
-                let severity: String = r.get("severity");
-                Ok(Finding {
-                    scanner: r.get("scanner"),
-                    kind: kind
-                        .parse::<FindingKind>()
-                        .map_err(|e| parse_err("artifact_findings.kind", e))?,
-                    code: ReasonCode::parse_stored(&code),
-                    severity: Severity::parse_stored(&severity),
-                    reference: r.try_get("reference").ok(),
-                    summary: r.get("summary"),
-                    confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
-                    available_at: r.try_get("available_at").ok(),
-                    raw: r.try_get("raw").unwrap_or(serde_json::Value::Null),
-                    judged_as: None,
-                })
-            })
-            .collect()
+        rows.iter().map(Self::row_to_finding).collect()
+    }
+
+    /// The findings of many versions of one registry in one query, keyed by
+    /// `(name, version)`: what a page of verdicts reads, instead of one query
+    /// per row.
+    async fn findings_for_many(
+        &self,
+        registry: &str,
+        coords: &[(String, String)],
+    ) -> Result<HashMap<(String, String), Vec<Finding>>, CoreError> {
+        let mut out: HashMap<(String, String), Vec<Finding>> = HashMap::new();
+        if coords.is_empty() {
+            return Ok(out);
+        }
+        let (names, versions): (Vec<&str>, Vec<&str>) =
+            coords.iter().map(|(n, v)| (n.as_str(), v.as_str())).unzip();
+        let rows = sqlx::query(
+            "SELECT f.package_name, f.version, f.scanner, f.kind, f.code, f.severity,
+                    f.reference, f.summary, f.confidence, f.available_at, f.raw
+             FROM artifact_findings f
+             JOIN UNNEST($2::text[], $3::text[]) AS c(package_name, version)
+               ON f.package_name = c.package_name AND f.version = c.version
+             WHERE f.registry = $1
+             ORDER BY f.created_at, f.scanner",
+        )
+        .bind(registry)
+        .bind(&names)
+        .bind(&versions)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        for r in &rows {
+            out.entry((r.get("package_name"), r.get("version")))
+                .or_default()
+                .push(Self::row_to_finding(r)?);
+        }
+        Ok(out)
+    }
+
+    fn row_to_finding(r: &sqlx::postgres::PgRow) -> Result<Finding, CoreError> {
+        let kind: String = r.get("kind");
+        let code: String = r.get("code");
+        let severity: String = r.get("severity");
+        Ok(Finding {
+            scanner: r.get("scanner"),
+            kind: kind
+                .parse::<FindingKind>()
+                .map_err(|e| parse_err("artifact_findings.kind", e))?,
+            code: ReasonCode::parse_stored(&code),
+            severity: Severity::parse_stored(&severity),
+            reference: r.try_get("reference").ok(),
+            summary: r.get("summary"),
+            confidence: r.try_get::<i16, _>("confidence").ok().map(|c| c as u8),
+            available_at: r.try_get("available_at").ok(),
+            raw: r.try_get("raw").unwrap_or(serde_json::Value::Null),
+            judged_as: None,
+        })
     }
 
     fn row_to_verdict(
@@ -476,17 +517,156 @@ impl VerdictRepository for PgVerdictRepository {
         .fetch_all(&self.pool)
         .await
         .db_err()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let pkg = PackageId::new(
-                r.get::<String, _>("registry"),
-                r.get::<String, _>("package_name"),
-                r.get::<String, _>("version"),
-            );
-            let findings = self.findings_for(&pkg).await?;
-            out.push(Self::row_to_verdict(&r, findings)?);
+        let coords: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| (r.get("package_name"), r.get("version")))
+            .collect();
+        let mut findings = self.findings_for_many(registry, &coords).await?;
+        rows.iter()
+            .zip(coords)
+            .map(|(r, key)| Self::row_to_verdict(r, findings.remove(&key).unwrap_or_default()))
+            .collect()
+    }
+
+    async fn hold_counts(
+        &self,
+        pending_before: DateTime<Utc>,
+    ) -> Result<Vec<HoldCounts>, CoreError> {
+        // The rules of `security_overview` in SQL; `artifact_verdicts_state_idx`
+        // `(registry, state)` narrows the scan to the held rows.
+        let lifts: Vec<&str> = vec![
+            ReasonCode::MinAgeNotMet.as_str(),
+            ReasonCode::ScanPending.as_str(),
+        ];
+        let malware: Vec<&str> = MALWARE_CODES.iter().map(|c| c.as_str()).collect();
+        let rows = sqlx::query(
+            "SELECT registry,
+                    COUNT(*) FILTER (WHERE state = 'quarantined'
+                                       AND NOT (reason_codes <@ $1)) AS blocking,
+                    COUNT(*) FILTER (WHERE reason_codes && $2) AS malware,
+                    COUNT(*) FILTER (WHERE state = 'quarantined'
+                                       AND cardinality(reason_codes) > 0
+                                       AND reason_codes <@ $1) AS waiting,
+                    COUNT(*) FILTER (WHERE state = 'quarantined'
+                                       AND $3 = ANY(reason_codes)
+                                       AND evaluated_at < $4) AS pending_over_hour,
+                    COUNT(*) FILTER (WHERE $5 = ANY(reason_codes)) AS soc_verdict
+             FROM artifact_verdicts
+             WHERE state IN ('denied', 'quarantined')
+             GROUP BY registry",
+        )
+        .bind(&lifts)
+        .bind(&malware)
+        .bind(ReasonCode::ScanPending.as_str())
+        .bind(pending_before)
+        .bind(ReasonCode::SocVerdict.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        let n = |r: &sqlx::postgres::PgRow, c: &str| r.get::<i64, _>(c).max(0) as u64;
+        Ok(rows
+            .iter()
+            .map(|r| HoldCounts {
+                registry: r.get("registry"),
+                quarantined_blocking: n(r, "blocking"),
+                malware: n(r, "malware"),
+                waiting: n(r, "waiting"),
+                pending_over_hour: n(r, "pending_over_hour"),
+                soc_verdict: n(r, "soc_verdict"),
+            })
+            .collect())
+    }
+
+    async fn page_verdicts(&self, page: &VerdictPage) -> Result<(Vec<Verdict>, u64), CoreError> {
+        if page.registries.is_empty() || page.states.is_empty() {
+            return Ok((Vec::new(), 0));
         }
-        Ok(out)
+        let states: Vec<&str> = page.states.iter().map(|s| s.as_str()).collect();
+        let rows = sqlx::query(
+            "SELECT registry, package_name, version, state, reason_codes, policy_ref,
+                    available_at, evaluated_at, last_scanned_at, scanners_done,
+                    COUNT(*) OVER () AS total
+             FROM artifact_verdicts
+             WHERE registry = ANY($1) AND state = ANY($2)
+               AND ($3::text IS NULL OR $3 = ANY(reason_codes))
+             ORDER BY CASE state WHEN 'denied' THEN 0 WHEN 'quarantined' THEN 1
+                                 WHEN 'warned' THEN 2 ELSE 3 END,
+                      evaluated_at DESC, registry, package_name, version
+             LIMIT $4 OFFSET $5",
+        )
+        .bind(&page.registries)
+        .bind(&states)
+        .bind(page.reason.as_deref())
+        .bind(i64::try_from(page.limit).unwrap_or(i64::MAX))
+        .bind(i64::try_from(page.offset).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        let total = match rows.first() {
+            Some(r) => r.get::<i64, _>("total").max(0) as u64,
+            // Past the last page the window function has no row to ride on.
+            None if page.offset > 0 => {
+                let n: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM artifact_verdicts
+                     WHERE registry = ANY($1) AND state = ANY($2)
+                       AND ($3::text IS NULL OR $3 = ANY(reason_codes))",
+                )
+                .bind(&page.registries)
+                .bind(&states)
+                .bind(page.reason.as_deref())
+                .fetch_one(&self.pool)
+                .await
+                .db_err()?;
+                n.max(0) as u64
+            }
+            None => 0,
+        };
+        // Findings per registry, one query each.
+        let mut by_registry: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for r in &rows {
+            by_registry
+                .entry(r.get("registry"))
+                .or_default()
+                .push((r.get("package_name"), r.get("version")));
+        }
+        let mut findings: HashMap<(String, String, String), Vec<Finding>> = HashMap::new();
+        for (registry, coords) in by_registry {
+            for ((n, v), f) in self.findings_for_many(&registry, &coords).await? {
+                findings.insert((registry.clone(), n, v), f);
+            }
+        }
+        let items = rows
+            .iter()
+            .map(|r| {
+                let key: (String, String, String) =
+                    (r.get("registry"), r.get("package_name"), r.get("version"));
+                Self::row_to_verdict(r, findings.remove(&key).unwrap_or_default())
+            })
+            .collect::<Result<_, _>>()?;
+        Ok((items, total))
+    }
+
+    async fn list_held_with_code(
+        &self,
+        code: ReasonCode,
+        limit: u64,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT registry, package_name, version, state, reason_codes, policy_ref,
+                    available_at, evaluated_at, last_scanned_at, scanners_done
+             FROM artifact_verdicts
+             WHERE state IN ('denied', 'quarantined') AND $1 = ANY(reason_codes)
+             ORDER BY evaluated_at DESC
+             LIMIT $2",
+        )
+        .bind(code.as_str())
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        rows.iter()
+            .map(|r| Self::row_to_verdict(r, Vec::new()))
+            .collect()
     }
 }
 
@@ -924,11 +1104,19 @@ impl ScanQueue for PgScanQueue {
         let rows = sqlx::query(
             "SELECT registry, trigger,
                     COUNT(*) FILTER (WHERE leased_until IS NULL OR leased_until < NOW()) AS n,
-                    COUNT(*) FILTER (WHERE leased_by IS NULL AND leased_until >= NOW()) AS deferred
+                    COUNT(*) FILTER (WHERE leased_by IS NULL AND leased_until >= NOW()) AS deferred,
+                    COUNT(*) FILTER (WHERE NOT (leased_by IS NOT NULL AND leased_until > NOW())
+                      AND CASE WHEN last_error ~ $1
+                               THEN substr(last_error, length($2) + 1)::timestamptz
+                                    < NOW() - make_interval(secs => $3)
+                               ELSE FALSE END) AS deferred_over_day
              FROM scan_jobs
              WHERE completed_at IS NULL
              GROUP BY registry, trigger",
         )
+        .bind(format!("^{DEFERRED_SINCE}\\d{{4}}-\\d{{2}}-\\d{{2}}T"))
+        .bind(DEFERRED_SINCE)
+        .bind(DEFERRED_ATTENTION.num_seconds() as f64)
         .fetch_all(&self.pool)
         .await
         .db_err()?;
@@ -942,6 +1130,7 @@ impl ScanQueue for PgScanQueue {
                         .map_err(|e| parse_err("scan_jobs.trigger", e))?,
                     count: r.get::<i64, _>("n") as u64,
                     deferred: r.get::<i64, _>("deferred") as u64,
+                    deferred_over_day: r.get::<i64, _>("deferred_over_day") as u64,
                 })
             })
             .collect()
@@ -984,5 +1173,98 @@ impl WorkerRegistry for PgWorkerRegistry {
         .await
         .db_err()?;
         Ok(n as u64)
+    }
+
+    async fn workers(&self) -> Result<Vec<WorkerHeartbeat>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT worker_id, last_seen, registries FROM worker_heartbeats ORDER BY last_seen DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows
+            .iter()
+            .map(|r| WorkerHeartbeat {
+                worker_id: r.get("worker_id"),
+                last_seen: r.get("last_seen"),
+                registries: r.get("registries"),
+            })
+            .collect())
+    }
+}
+
+/// `scanner_status` (migration 070, RFC 0050 §6.2).
+pub struct PgScannerStatusRepository {
+    pool: PgPool,
+}
+
+impl PgScannerStatusRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ScannerStatusRepository for PgScannerStatusRepository {
+    async fn record(&self, status: &ScannerStatus) -> Result<(), CoreError> {
+        // GREATEST ignores NULLs, so a write that carries no error leaves the
+        // last one; the class follows only a strictly newer error. Several
+        // workers share the row, and one worker's writes can land out of
+        // order: a breaker opens or extends only from an error no older than
+        // the last success, and only a success newer than the last error
+        // closes it (the database answered).
+        sqlx::query(
+            "INSERT INTO scanner_status
+                 (scanner, last_ok_at, last_error_at, last_error_class, unavailable_until)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (scanner) DO UPDATE SET
+                 last_ok_at = GREATEST(scanner_status.last_ok_at, EXCLUDED.last_ok_at),
+                 last_error_class = CASE
+                     WHEN EXCLUDED.last_error_at IS NOT NULL
+                      AND (scanner_status.last_error_at IS NULL
+                           OR EXCLUDED.last_error_at > scanner_status.last_error_at)
+                     THEN EXCLUDED.last_error_class
+                     ELSE scanner_status.last_error_class END,
+                 last_error_at = GREATEST(scanner_status.last_error_at, EXCLUDED.last_error_at),
+                 unavailable_until = CASE
+                     WHEN EXCLUDED.unavailable_until IS NOT NULL
+                      AND (EXCLUDED.last_error_at IS NULL OR scanner_status.last_ok_at IS NULL
+                           OR EXCLUDED.last_error_at >= scanner_status.last_ok_at)
+                     THEN GREATEST(scanner_status.unavailable_until, EXCLUDED.unavailable_until)
+                     WHEN EXCLUDED.unavailable_until IS NULL AND EXCLUDED.last_ok_at IS NOT NULL
+                      AND (scanner_status.last_error_at IS NULL
+                           OR EXCLUDED.last_ok_at > scanner_status.last_error_at)
+                     THEN NULL
+                     ELSE scanner_status.unavailable_until END",
+        )
+        .bind(&status.scanner)
+        .bind(status.last_ok_at)
+        .bind(status.last_error_at)
+        .bind(&status.last_error_class)
+        .bind(status.unavailable_until)
+        .execute(&self.pool)
+        .await
+        .db_err()?;
+        Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<ScannerStatus>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT scanner, last_ok_at, last_error_at, last_error_class, unavailable_until
+             FROM scanner_status ORDER BY scanner",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows
+            .iter()
+            .map(|r| ScannerStatus {
+                scanner: r.get("scanner"),
+                last_ok_at: r.get("last_ok_at"),
+                last_error_at: r.get("last_error_at"),
+                last_error_class: r.get("last_error_class"),
+                unavailable_until: r.get("unavailable_until"),
+            })
+            .collect())
     }
 }

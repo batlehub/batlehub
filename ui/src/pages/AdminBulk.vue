@@ -2,8 +2,6 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { Upload, CheckCircle2, XCircle } from "@lucide/vue";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { PACKAGES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { bulkBlockPackages, bulkUnblockPackages } from "@/client/sdk.gen";
 import { extractMessage } from "@/composables/useApi";
@@ -234,9 +232,8 @@ function reset() {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="resultAnnouncement ?? ''" />
-    <SectionTabs :tabs="PACKAGES_TABS" />
     <PageHeader
-      :title="t('adminBulk.bulkBlock')"
+      :title="t('adminNav.bulkBlock')"
       :description="t('adminBulk.blockOrUnblockMultiplePackages')"
       variant="display"
     />

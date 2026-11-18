@@ -15,7 +15,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { ChevronRight } from "@lucide/vue";
-import { formatDate } from "@/lib/format";
+import { DateTime } from "@/components/ui/date-time";
 
 /** The recorded config changes, each row disclosing its diff. */
 defineProps<{
@@ -73,7 +73,7 @@ const expandedRow = ref<string | null>(null);
                       :class="expandedRow === row.id ? 'rotate-90' : ''"
                       aria-hidden="true"
                     />
-                    {{ formatDate(row.triggered_at) }}
+                    <DateTime :iso="row.triggered_at" />
                     <span class="sr-only">{{
                       expandedRow === row.id
                         ? t("adminConfigReload.hideDiff")

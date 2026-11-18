@@ -162,6 +162,10 @@ export const sidebar = {
       ],
     },
     {
+      text: "Try it",
+      items: [{ text: "Deploying the demo", link: "/guide/install/demo" }],
+    },
+    {
       text: "Migration",
       items: [{ text: "Migrating from Nexus", link: "/guide/install/migrate-from-nexus" }],
     },
@@ -392,15 +396,6 @@ export const sidebar = {
       ],
     },
     {
-      text: "Ready to build",
-      items: [
-        {
-          text: "0050 — Security console and admin nav",
-          link: "/rfc/0050-security-console-completion-and-admin-navigation",
-        },
-      ],
-    },
-    {
       text: "Settled",
       items: [
         {
@@ -590,6 +585,10 @@ export const sidebar = {
         {
           text: "0049 — Config JSON Schema",
           link: "/rfc/0049-config-json-schema",
+        },
+        {
+          text: "0050 — Security console and admin nav",
+          link: "/rfc/0050-security-console-completion-and-admin-navigation",
         },
       ],
     },

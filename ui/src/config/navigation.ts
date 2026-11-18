@@ -111,11 +111,11 @@ export const LEGACY_REDIRECTS: Record<string, string> = {
   // redirect key is a chain, and `navigation.test.ts` refuses those.
   "/admin/bulk": "/admin/packages/bulk",
   // RFC 0004 Phase 5 (*merge*): blocked accounts and addresses on one page.
-  "/admin/users": "/admin/access/blocks",
-  "/admin/ip-blocks": "/admin/access/blocks",
-  "/admin/security/users": "/admin/access/blocks",
-  "/admin/security/ip-blocks": "/admin/access/blocks",
-  "/admin/access-check": "/admin/access/check",
+  "/admin/users": "/admin/instance-security/blocks",
+  "/admin/ip-blocks": "/admin/instance-security/blocks",
+  "/admin/security/users": "/admin/instance-security/blocks",
+  "/admin/security/ip-blocks": "/admin/instance-security/blocks",
+  "/admin/access-check": "/admin/access/authorization#simulate",
   "/admin/team-namespaces": "/admin/access/team-namespaces",
   "/admin/beta-channel": "/admin/access/beta-channel",
   "/admin/config-reload": "/admin/system/configuration",
@@ -138,9 +138,9 @@ export const LEGACY_REDIRECTS: Record<string, string> = {
   "/admin/operations/imports": "/admin/registries/imports",
   "/admin/operations/air-gap": "/admin/registries/air-gap",
   "/admin/operations/sbom": "/admin/packages/sbom",
-  "/admin/security/access-check": "/admin/access/check",
+  "/admin/security/access-check": "/admin/access/authorization#simulate",
   "/admin/security/authorization": "/admin/access/authorization",
-  "/admin/security/blocks": "/admin/access/blocks",
+  "/admin/security/blocks": "/admin/instance-security/blocks",
   "/admin/namespaces/team-namespaces": "/admin/access/team-namespaces",
   "/admin/namespaces/beta-channel": "/admin/access/beta-channel",
   "/admin/operations/config-reload": "/admin/system/configuration",
@@ -153,6 +153,14 @@ export const LEGACY_REDIRECTS: Record<string, string> = {
   "/admin/observability": "/admin/system/health",
   "/admin/namespaces": "/admin/access/team-namespaces",
   "/admin/notifications": "/admin/system/notifications",
+
+  // RFC 0050 §6.6: Scans and Findings leave the admin for the security space;
+  // Blocks moves to Instance security; the access check is Authorization's
+  // *Explain* panel. A hash in a target is split out by `handleLegacyPath`.
+  "/admin/security/scans": "/security/scanners",
+  "/admin/security/findings": "/security/findings",
+  "/admin/access/blocks": "/admin/instance-security/blocks",
+  "/admin/access/check": "/admin/access/authorization#simulate",
 };
 
 /**
@@ -172,9 +180,7 @@ export const REVERSE_REDIRECTS: Record<string, string> = {
   "/admin/registries/air-gap": "/admin/operations/air-gap",
   "/admin/packages/sbom": "/admin/operations/sbom",
   "/admin/access": "/admin/security/access-check",
-  "/admin/access/check": "/admin/security/access-check",
   "/admin/access/authorization": "/admin/security/authorization",
-  "/admin/access/blocks": "/admin/security/blocks",
   "/admin/access/team-namespaces": "/admin/namespaces/team-namespaces",
   "/admin/access/beta-channel": "/admin/namespaces/beta-channel",
   "/admin/system": "/admin/observability/health",
@@ -199,10 +205,9 @@ export const SECTION_INDEXES: Record<string, string> = {
   "/admin": "/admin/dashboard",
   // `/admin/registries` is not here: it is a page, the list of registries.
   "/admin/packages": "/admin/packages/all",
-  // RFC 0046 §15 Q8: Security is the scans and their findings now; an old
-  // `/admin/security` bookmark opens Scans, and Blocks is under Access.
-  "/admin/security": "/admin/security/scans",
-  "/admin/access": "/admin/access/check",
+  // RFC 0050 §6.6: the scans and findings left for the security space.
+  "/admin/security": "/security",
+  "/admin/access": "/admin/access/authorization",
   // The read-only page, not configuration: a section should open on what it
   // knows, not on the control that changes a running instance.
   "/admin/system": "/admin/system/health",

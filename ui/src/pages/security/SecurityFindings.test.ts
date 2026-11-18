@@ -32,7 +32,7 @@ vi.mock("vue-router", async () => {
 });
 
 import { useRoute } from "vue-router";
-import AdminFindings from "./AdminFindings.vue";
+import SecurityFindings from "./SecurityFindings.vue";
 import { Select } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 
@@ -61,9 +61,9 @@ const mounted: { unmount: () => void }[] = [];
 async function mountPage(query: Record<string, string> = {}) {
   const route = useRoute() as unknown as { query: Record<string, string> };
   route.query = query;
-  const w = mount(AdminFindings, {
+  const w = mount(SecurityFindings, {
     attachTo: document.body,
-    global: { stubs: { SectionTabs: true } },
+    global: { stubs: {} },
   });
   mounted.push(w);
   await flushPromises();
@@ -88,7 +88,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("AdminFindings", () => {
+describe("SecurityFindings", () => {
   it("lists findings with severity and verdict badges and a package link", async () => {
     listFindingsMock.mockResolvedValue(
       page([row("evil", { severity: "critical", verdict: "denied" }), row("lodash")]),
@@ -186,6 +186,14 @@ describe("AdminFindings", () => {
       scanner: "osv",
     });
     expect(w.get("#findings-reference").attributes("maxlength")).toBe("128");
+  });
+
+  it("preselects the verdict the holds summary links with, and ignores a bad one", async () => {
+    listFindingsMock.mockResolvedValue(page([]));
+    await mountPage({ verdict: "denied" });
+    expect(lastQuery()).toMatchObject({ verdict: "denied" });
+    await mountPage({ verdict: "nonsense" });
+    expect(lastQuery().verdict).toBeUndefined();
   });
 
   it("pages forward", async () => {

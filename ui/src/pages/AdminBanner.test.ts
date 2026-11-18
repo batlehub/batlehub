@@ -34,7 +34,7 @@ const mounted: VueWrapper[] = [];
 
 async function mountPage() {
   const wrapper = mount(AdminBanner, {
-    global: { stubs: { SectionTabs: true, RouterLink: true, Select: SelectStub } },
+    global: { stubs: { RouterLink: true, Select: SelectStub } },
   });
   mounted.push(wrapper);
   await flushPromises();

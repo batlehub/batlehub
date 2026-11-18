@@ -512,6 +512,21 @@ pub struct HotConfig {
     pub verdicts: Option<Arc<dyn crate::ports::VerdictRepository>>,
     /// The scan queue the proxy enqueues on and the worker leases from.
     pub scan_queue: Option<Arc<dyn crate::ports::ScanQueue>>,
+    /// `worker_heartbeats`, read by the security console (RFC 0050 §6.1).
+    pub worker_registry: Option<Arc<dyn crate::ports::WorkerRegistry>>,
+    /// `scanner_status`: written by the worker, read by the console.
+    pub scanner_status: Option<Arc<dyn crate::ports::ScannerStatusRepository>>,
+    /// `security_daily`: the trends rollup (RFC 0050 §5.2).
+    pub security_daily: Option<Arc<dyn crate::ports::SecurityDailyRepository>>,
+    /// The `[[auth.tokens]]` entries stored in clear, as `(config path,
+    /// user id)` — never the value (RFC 0050 §4.3, T4). Read by
+    /// `/admin/instance-security`.
+    pub plain_static_tokens: Arc<Vec<(String, Option<String>)>>,
+    /// The kinds each `[scanners]` entry can scan (the worker's `supports`).
+    /// A scanner absent here (an enricher) applies to every kind. Read by the
+    /// console, which does not count a scanner against a registry it cannot
+    /// scan.
+    pub scanner_kinds: Arc<HashMap<String, Vec<crate::entities::RegistryKind>>>,
     /// Storage for the package and version *policy* tiers (RFC 0015 §6.3).
     ///
     /// `None` means those two tiers contribute nothing, which is the correct
@@ -685,6 +700,11 @@ impl Default for HotConfig {
             internal_scanners: HashMap::new(),
             verdicts: None,
             scan_queue: None,
+            worker_registry: None,
+            scanner_status: None,
+            security_daily: None,
+            plain_static_tokens: Arc::default(),
+            scanner_kinds: Arc::default(),
             policy_repo: None,
             shadow_log: None,
             document_cache: None,

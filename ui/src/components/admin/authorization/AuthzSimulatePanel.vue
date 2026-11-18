@@ -1,4 +1,11 @@
 <script setup lang="ts">
+/**
+ * The download simulation (RFC 0050 §17.8): a request run through every layer
+ * a real one meets — account and IP blocks, then the registry's rules — via
+ * `POST /api/v1/admin/access-check`. Explain, above it, resolves grants only.
+ * It was the retired Access check page; its query prefill is kept, so a link
+ * from a denial in the audit log still lands with the coordinate filled in.
+ */
 import { useI18n } from "vue-i18n";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, RouterLink } from "vue-router";
@@ -6,9 +13,6 @@ import { adminAccessCheck } from "@/client/sdk.gen";
 import type { AccessSimulationResponse } from "@/client/types.gen";
 import { extractMessage } from "@/composables/useApi";
 import CoordinateFields from "@/components/admin/CoordinateFields.vue";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { ACCESS_TABS } from "@/config/adminSections";
-import { PageHeader } from "@/components/ui/page-header";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
@@ -154,13 +158,13 @@ async function simulate() {
 </script>
 
 <template>
-  <div class="space-y-6">
-    <SectionTabs :tabs="ACCESS_TABS" />
-    <PageHeader
-      variant="display"
-      :title="t('adminAccessCheck.rbacAccessCheck')"
-      :description="t('adminAccessCheck.simulateWhetherAnIdentityWould')"
-    />
+  <section class="space-y-3" data-testid="panel-simulate">
+    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+      {{ t("adminAccessCheck.title") }}
+    </h2>
+    <p class="text-sm text-muted-foreground">
+      {{ t("adminAccessCheck.simulateWhetherAnIdentityWould") }}
+    </p>
 
     <form class="space-y-4 max-w-lg" @submit.prevent="simulate">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -292,7 +296,7 @@ async function simulate() {
       <p v-if="result.blocked_by === 'account'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByAccount") }}
         <RouterLink
-          to="/admin/access/blocks"
+          to="/admin/instance-security/blocks"
           class="text-primary underline underline-offset-[3px]"
           >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
         >
@@ -300,7 +304,7 @@ async function simulate() {
       <p v-else-if="result.blocked_by === 'ip'" class="text-xs text-muted-foreground">
         {{ t("adminAccessCheck.blockedByIp") }}
         <RouterLink
-          to="/admin/access/blocks"
+          to="/admin/instance-security/blocks"
           class="text-primary underline underline-offset-[3px]"
           >{{ t("adminAccessCheck.seeBlocks") }}</RouterLink
         >
@@ -314,5 +318,5 @@ async function simulate() {
         {{ t("adminAccessCheck.notCovered", { layers: uncovered.join(", ") }) }}
       </p>
     </div>
-  </div>
+  </section>
 </template>

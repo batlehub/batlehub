@@ -41,6 +41,17 @@ describe("usePoll (RFC 0044 §4.2)", () => {
     p.scope.stop();
   });
 
+  it("ticks at the interval it is given (RFC 0050 §4.2: the overview's 30 s)", async () => {
+    const fn = vi.fn().mockResolvedValue(undefined);
+    const scope = effectScope();
+    scope.run(() => usePoll(fn, ref(true), { interval: 30_000 }));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fn).toHaveBeenCalledTimes(1);
+    scope.stop();
+  });
+
   it("pauses while hidden and resumes when shown", async () => {
     const fn = vi.fn().mockResolvedValue(undefined);
     const p = poll(fn);

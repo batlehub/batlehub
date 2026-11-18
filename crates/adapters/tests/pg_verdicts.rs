@@ -346,6 +346,8 @@ async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
+    // The page's findings come from one batched query, each on its row.
+    assert_eq!(listed[0].findings, back.findings);
 
     // RFC 0042 §5.2: the summary's one `GROUP BY`, as the state column spells it.
     let mut held = v.clone();
@@ -804,4 +806,127 @@ async fn list_findings_ranks_filters_and_escapes_the_prefix() {
         .await
         .unwrap();
     assert_eq!((rows.len(), total), (0, 0), "no registry, no rows");
+}
+
+/// RFC 0050 *Holds*: the line's figures are counted over every held row, as
+/// the per-verdict rules read them, and the `SOC_VERDICT` holds are selected
+/// by code — never derived from the newest page.
+#[tokio::test]
+async fn hold_counts_and_hard_blocks_come_from_every_held_row() {
+    use batlehub_core::services::security_overview::{
+        is_blocking_quarantine, is_malware, is_waiting, pending_over_hour, PENDING_ATTENTION,
+    };
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let repo = PgVerdictRepository::new(pool);
+    let now = Utc::now();
+    let q = VerdictState::Quarantined;
+    let cases: Vec<(VerdictState, Vec<ReasonCode>, chrono::Duration)> = vec![
+        (
+            VerdictState::Denied,
+            vec![ReasonCode::SocVerdict],
+            chrono::Duration::days(30),
+        ),
+        (q, vec![ReasonCode::ScanPending], chrono::Duration::hours(2)),
+        (
+            q,
+            vec![ReasonCode::ScanPending],
+            chrono::Duration::minutes(5),
+        ),
+        (q, vec![ReasonCode::MinAgeNotMet], chrono::Duration::zero()),
+        (
+            q,
+            vec![ReasonCode::MinAgeNotMet, ReasonCode::MalwareSignal],
+            chrono::Duration::zero(),
+        ),
+        (q, vec![], chrono::Duration::zero()),
+        (
+            VerdictState::Allowed,
+            vec![ReasonCode::SocVerdict],
+            chrono::Duration::zero(),
+        ),
+    ];
+    let mut verdicts = Vec::new();
+    for (i, (state, codes, age)) in cases.into_iter().enumerate() {
+        let v = Verdict {
+            package: PackageId::new(&reg, "p", format!("1.0.{i}")),
+            state,
+            reason_codes: codes,
+            findings: Vec::new(),
+            policy_ref: format!("{reg}/default"),
+            available_at: None,
+            evaluated_at: now - age,
+            last_scanned_at: None,
+            scanners_done: Vec::new(),
+        };
+        repo.upsert(&v).await.unwrap();
+        verdicts.push(v);
+    }
+    let held: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| matches!(v.state, VerdictState::Denied | VerdictState::Quarantined))
+        .collect();
+    let count = |f: &dyn Fn(&Verdict) -> bool| held.iter().filter(|v| f(v)).count() as u64;
+    let counts = repo
+        .hold_counts(now - PENDING_ATTENTION)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.registry == reg)
+        .expect("a row for the registry");
+    assert_eq!(
+        (
+            counts.quarantined_blocking,
+            counts.malware,
+            counts.waiting,
+            counts.pending_over_hour
+        ),
+        (
+            count(&is_blocking_quarantine),
+            count(&is_malware),
+            count(&is_waiting),
+            count(&|v| pending_over_hour(v, now)),
+        )
+    );
+    assert_eq!((counts.malware, counts.pending_over_hour), (2, 1));
+    // Only the held SOC row: the allowed one carries the code but is served.
+    assert_eq!(counts.soc_verdict, 1);
+
+    // The paged listing: exact total, newest first, the reason filter, and
+    // a page past the end still says how many there are.
+    let page = |reason: Option<&str>, limit, offset| batlehub_core::ports::VerdictPage {
+        registries: vec![reg.clone()],
+        states: vec![VerdictState::Denied, VerdictState::Quarantined],
+        reason: reason.map(str::to_owned),
+        limit,
+        offset,
+    };
+    let (first, total) = repo.page_verdicts(&page(None, 2, 0)).await.unwrap();
+    assert_eq!(total, held.len() as u64);
+    assert_eq!(first.len(), 2);
+    // The most severe state first, then the newest.
+    assert_eq!(first[0].state, VerdictState::Denied);
+    assert!(first[1].state == VerdictState::Quarantined);
+    let (soc, n) = repo
+        .page_verdicts(&page(Some("SOC_VERDICT"), 10, 0))
+        .await
+        .unwrap();
+    assert_eq!((soc.len(), n), (1, 1));
+    let (past, n) = repo.page_verdicts(&page(None, 2, 1000)).await.unwrap();
+    assert!(past.is_empty());
+    assert_eq!(n, held.len() as u64);
+
+    // The 30-day-old denied hold is the one hard block; the allowed row is not.
+    let hard: Vec<Verdict> = repo
+        .list_held_with_code(ReasonCode::SocVerdict, 10_000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.package.registry == reg)
+        .collect();
+    assert_eq!(hard.len(), 1);
+    assert_eq!(hard[0].package.version, "1.0.0");
 }

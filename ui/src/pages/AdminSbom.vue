@@ -2,10 +2,8 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
+import { useAuth } from "@/composables/useAuth";
 import { API_BASE_URL } from "@/config";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import FlagsPanel from "@/components/admin/FlagsPanel.vue";
-import { PACKAGES_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,6 +30,7 @@ const registryOptionsWithAll = computed(() => [
 ]);
 
 const { authFetch } = useAuthFetch();
+const { can } = useAuth();
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 
@@ -104,8 +103,7 @@ async function exportSbom() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="PACKAGES_TABS" />
-    <PageHeader :title="t('adminSbom.sbomExport')" variant="display" />
+    <PageHeader :title="t('adminNav.sbomExport')" variant="display" />
 
     <!-- Feedback -->
     <div
@@ -192,10 +190,13 @@ async function exportSbom() {
       </CardContent>
     </Card>
 
-    <!-- RFC 0002: what the configured flag sources have said. Beside the
-         SBOM export because it is the other half of the same question —
-         what this instance knows about a version's safety. -->
-    <FlagsPanel />
+    <!-- RFC 0050 §6.7: the flags have one home, the security space; a link
+         keeps the "other half of the same question" one click away. -->
+    <p v-if="can('flags:read')" class="text-sm" data-testid="sbom-flags-link">
+      <RouterLink to="/security/flags" class="text-primary underline underline-offset-[3px]">{{
+        t("adminSbom.flagsLink")
+      }}</RouterLink>
+    </p>
 
     <!-- About card -->
     <Card>

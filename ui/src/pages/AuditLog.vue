@@ -7,11 +7,7 @@ import { useApi, extractMessage } from "@/composables/useApi";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/composables/useAuth";
-import { formatDate } from "@/lib/format";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import ExposurePanel from "@/components/admin/ExposurePanel.vue";
 import { PageHeader } from "@/components/ui/page-header";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -34,6 +30,9 @@ import { Combobox } from "@/components/ui/combobox";
 import { Select } from "@/components/ui/select";
 import { AsyncState } from "@/components/ui/async-state";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
+import CodeLabel from "@/components/admin/CodeLabel.vue";
+import { AUDIT_ACTION_LABEL_KEYS } from "@/config/codeLabels";
+import { DateTime } from "@/components/ui/date-time";
 const { t } = useI18n();
 
 const { token } = useAuth();
@@ -287,7 +286,6 @@ async function purge() {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SYSTEM_TABS" />
     <Announcer :message="announcement" />
     <!-- `total`, not the loaded page: the endpoint returns 100 rows by
              default and the count must not silently mean "the first 100". -->
@@ -393,7 +391,7 @@ async function purge() {
                  it in words and in hue. -->
               <TableRow v-for="ev in events" :key="ev.id">
                 <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                  {{ formatDate(ev.timestamp) }}
+                  <DateTime :iso="ev.timestamp" />
                 </TableCell>
                 <TableCell class="text-sm font-mono">
                   <span v-if="ev.user_id">{{ ev.user_id }}</span>
@@ -421,8 +419,8 @@ async function purge() {
                   </template>
                   <span v-else class="text-muted-foreground">{{ t("auditLog.accountWide") }}</span>
                 </TableCell>
-                <TableCell class="text-xs font-mono">
-                  {{ ev.action }}
+                <TableCell class="text-xs">
+                  <CodeLabel :code="ev.action" :labels="AUDIT_ACTION_LABEL_KEYS" />
                 </TableCell>
                 <!-- The reason in full, wrapping: it is the answer the row exists
                    to give, and a 220px ellipsis with a hover-only title hid it
@@ -456,32 +454,38 @@ async function purge() {
       :disabled="loading"
     />
 
-    <!-- Retention purge (A7). The endpoint existed; the UI did not. -->
-    <Card>
-      <CardHeader class="pb-3">
-        <p class="text-sm font-medium">{{ t("auditLog.retention") }}</p>
-        <p class="text-xs text-muted-foreground">{{ t("auditLog.retentionHelp") }}</p>
-      </CardHeader>
-      <CardContent class="flex flex-wrap items-end gap-2">
-        <div class="space-y-1">
-          <Label for="al-purge-before" class="text-xs">{{ t("auditLog.purgeBefore") }}</Label>
-          <Input
-            id="al-purge-before"
-            v-model="purgeBefore"
-            type="datetime-local"
-            class="h-8 text-sm"
-          />
-        </div>
-        <Button
-          variant="destructive"
-          size="sm"
-          :disabled="!purgeBefore || countingPurge"
-          @click="openPurge"
-        >
-          {{ t("auditLog.purge") }}
-        </Button>
-      </CardContent>
-    </Card>
+    <!-- Retention purge (A7), behind a disclosure (RFC 0050 §6.7): a rare,
+         destructive control does not sit open between the log and its pages. -->
+    <details class="group" data-testid="audit-retention">
+      <summary class="cursor-pointer font-mono text-sm text-muted-foreground hover:text-foreground">
+        {{ t("auditLog.retention") }}
+      </summary>
+      <Card class="mt-2">
+        <CardHeader class="pb-3">
+          <p class="text-sm font-medium">{{ t("auditLog.retention") }}</p>
+          <p class="text-xs text-muted-foreground">{{ t("auditLog.retentionHelp") }}</p>
+        </CardHeader>
+        <CardContent class="flex flex-wrap items-end gap-2">
+          <div class="space-y-1">
+            <Label for="al-purge-before" class="text-xs">{{ t("auditLog.purgeBefore") }}</Label>
+            <Input
+              id="al-purge-before"
+              v-model="purgeBefore"
+              type="datetime-local"
+              class="h-8 text-sm"
+            />
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            :disabled="!purgeBefore || countingPurge"
+            @click="openPurge"
+          >
+            {{ t("auditLog.purge") }}
+          </Button>
+        </CardContent>
+      </Card>
+    </details>
 
     <DestructiveConfirm
       :open="purgeOpen"
@@ -504,8 +508,11 @@ async function purge() {
       @confirm="purge"
     />
 
-    <!-- RFC 0002: the same trail, asked a different question — who pulled a
-         version a source has since flagged. Under `audit:read`, as the log. -->
-    <ExposurePanel />
+    <!-- RFC 0050 §6.7: exposure has one home, the security space. -->
+    <p class="text-sm" data-testid="audit-exposure-link">
+      <RouterLink to="/security/exposure" class="text-primary underline underline-offset-[3px]">{{
+        t("auditLog.exposureLink")
+      }}</RouterLink>
+    </p>
   </div>
 </template>

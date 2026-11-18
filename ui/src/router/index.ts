@@ -15,9 +15,41 @@ import {
   SECTION_INDEXES,
   SECURITY_VERBS,
 } from "@/config/navigation";
-import { ADMIN_PAGE_VERBS, ADMIN_SECTIONS, firstAdminPage } from "@/config/adminSections";
+import {
+  ADMIN_PAGE_VERBS,
+  ADMIN_SECTIONS,
+  canOpen,
+  firstAdminPage,
+  type PageVerb,
+} from "@/config/adminSections";
+import {
+  firstSecurityPage,
+  SECURITY_PAGE_VERBS,
+  securitySectionOf,
+} from "@/config/securitySections";
 
 const OIDC_STATE_KEY = "oidc_state";
+
+/**
+ * The `/security` pages, each carrying its verb from `SECURITY_SECTIONS` in
+ * `meta.verb` — the one the guard reads, so a page added without a table row
+ * has no verb and is refused (RFC 0050 T9).
+ */
+const SECURITY_PAGES = {
+  "/security": () => import("@/pages/security/SecurityOverview.vue"),
+  "/security/holds": () => import("@/pages/security/SecurityHolds.vue"),
+  "/security/findings": () => import("@/pages/security/SecurityFindings.vue"),
+  "/security/flags": () => import("@/pages/security/SecurityFlags.vue"),
+  "/security/exposure": () => import("@/pages/security/SecurityExposure.vue"),
+  "/security/trends": () => import("@/pages/security/SecurityTrends.vue"),
+  "/security/coverage": () => import("@/pages/security/SecurityCoverage.vue"),
+  "/security/scanners": () => import("@/pages/security/SecurityScanners.vue"),
+};
+const SECURITY_ROUTES = Object.entries(SECURITY_PAGES).map(([path, component]) => ({
+  path: path.slice("/security".length).replace(/^\//, ""),
+  component,
+  meta: { verb: SECURITY_PAGE_VERBS[path] },
+}));
 
 type AuthState = ReturnType<typeof useAuth>;
 
@@ -166,13 +198,30 @@ function checkMetaGuards(
       ? { path: "/" }
       : { path: "/login", query: { redirect: to.fullPath } };
   }
+  // RFC 0050 §4.2: each `/security` page asks its own verb; a route without
+  // one is refused (T9). A refused viewer lands on the first page they may
+  // read in the same group, else in the space — never on an empty page.
+  if (to.meta.securityArea) {
+    const verb = to.meta.verb as PageVerb | undefined;
+    if (!verb || !canOpen(can, verb)) {
+      if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
+      const section = securitySectionOf(to.path);
+      return {
+        path: (section && firstSecurityPage(can, section)) ?? firstSecurityPage(can) ?? "/",
+      };
+    }
+  }
   if (to.meta.adminArea) {
     // A dynamic page (`…/registries/:name`) names its verb in `meta.verb`.
-    const verb = (to.meta.verb as string | undefined) ?? ADMIN_PAGE_VERBS[to.path];
-    if (!verb || !can(verb)) {
+    const verb = (to.meta.verb as PageVerb | undefined) ?? ADMIN_PAGE_VERBS[to.path];
+    if (!verb || !canOpen(can, verb)) {
       if (!isAuthenticated.value) return { path: "/login", query: { redirect: to.fullPath } };
-      // One registry's page (`/admin/registry/…`) belongs to the Registries section.
-      const owner = ADMIN_SECTIONS.find((s) => s.also && to.path.startsWith(s.also));
+      // The section listing the page, so a refused sub-page lands on its
+      // summary (`…/instance-security/blocks` → `…/instance-security`); one
+      // registry's page (`/admin/registry/…`) belongs to the Registries section.
+      const owner =
+        ADMIN_SECTIONS.find((s) => s.pages.some((p) => p.to === to.path)) ??
+        ADMIN_SECTIONS.find((s) => s.also && to.path.startsWith(s.also));
       const section = owner?.to ?? to.path.split("/").slice(0, 3).join("/") + "/";
       return { path: firstAdminPage(can, section) ?? firstAdminPage(can) ?? "/" };
     }
@@ -192,7 +241,14 @@ function handleLegacyPath(to: RouteLocationNormalized): RouteLocationRaw | null 
     legacyRegistryHub(to.path) ??
     reverseRedirect(to);
   if (!target) return null;
-  return { path: target, query: to.query, hash: to.hash };
+  // RFC 0050 decision 34: a target may name an anchor (`…#explain`); the
+  // visitor's own hash, when they carried one, still wins.
+  const [path = target, anchor] = target.split("#");
+  return {
+    path,
+    query: to.query,
+    hash: to.hash || (anchor ? `#${anchor}` : ""),
+  };
 }
 
 /**
@@ -291,6 +347,14 @@ export const router = createRouter({
    */
   scrollBehavior(to, from, savedPosition) {
     if (savedPosition) return savedPosition;
+    // RFC 0050 §6.6: an anchor target (`/admin/access/authorization#simulate`).
+    // A hash naming nothing on the new page opens it at the top, not at the
+    // previous page's offset (vue-router only warns and does not scroll).
+    if (to.hash && to.path !== from.path) {
+      // `to.hash` is already decoded by vue-router; decoding again breaks a `%`.
+      const el = document.getElementById(to.hash.slice(1));
+      return el ? { el, top: 64 } : { top: 0 };
+    }
     if (to.path === from.path) return false;
     return { top: 0 };
   },
@@ -336,10 +400,24 @@ export const router = createRouter({
       ],
     },
 
+    // ── The security space (RFC 0050 §6.6): its own sidebar, outside /admin ──
     {
       path: "/security",
-      component: () => import("@/pages/SecurityDashboard.vue"),
+      component: () => import("@/layouts/SecurityLayout.vue"),
       meta: { securityArea: true },
+      children: [
+        ...SECURITY_ROUTES,
+        // The two groups' keys are paths a link may name: each lands on its
+        // first page, as an admin section root does.
+        { path: "triage", redirect: "/security/holds" },
+        { path: "follow-up", redirect: "/security/trends" },
+        {
+          // One registry's coverage; the list's verb.
+          path: "coverage/:registry",
+          component: () => import("@/pages/security/SecurityCoverageRegistry.vue"),
+          meta: { verb: "quarantine:read" },
+        },
+      ],
     },
     {
       path: "/admin",
@@ -386,22 +464,23 @@ export const router = createRouter({
         { path: "packages/bulk", component: () => import("@/pages/AdminBulk.vue") },
         { path: "packages/sbom", component: () => import("@/pages/AdminSbom.vue") },
 
-        // ── Security: the scan queue and what it found (RFC 0044) ────────────
-        { path: "security/scans", component: () => import("@/pages/AdminScans.vue") },
-        { path: "security/findings", component: () => import("@/pages/AdminFindings.vue") },
-
         // ── Access: who may, and who may not ─────────────────────────────────
-        { path: "access/check", component: () => import("@/pages/AdminAccessCheck.vue") },
         {
           path: "access/authorization",
           component: () => import("@/pages/AdminAuthorization.vue"),
         },
-        { path: "access/blocks", component: () => import("@/pages/AdminBlocks.vue") },
         {
           path: "access/team-namespaces",
           component: () => import("@/pages/AdminTeamNamespaces.vue"),
         },
         { path: "access/beta-channel", component: () => import("@/pages/AdminBetaChannel.vue") },
+
+        // ── Instance security (RFC 0050 §4.2): this server's own exposure ─────
+        {
+          path: "instance-security",
+          component: () => import("@/pages/AdminInstanceSecurity.vue"),
+        },
+        { path: "instance-security/blocks", component: () => import("@/pages/AdminBlocks.vue") },
 
         // ── System: the instance itself ──────────────────────────────────────
         {

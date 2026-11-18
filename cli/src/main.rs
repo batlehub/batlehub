@@ -220,6 +220,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         }
         Command::Audit { cmd } => groups::run(Group::Audit(cmd), &client, json).await?,
         Command::Verdict { cmd } => security::run_verdicts(cmd, &client, json).await?,
+        Command::Security { cmd } => security::run_security(cmd, &client, json).await?,
         Command::Me { cmd } => cli::journeys::run_me(cmd, &client).await?,
         Command::Check(args) => cli::check::run(args, &client).await?,
         Command::Policy { cmd } => cli::journeys::run_policy(cmd, &client).await?,

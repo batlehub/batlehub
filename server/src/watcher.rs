@@ -287,6 +287,22 @@ pub(super) fn spawn_periodic_coherence_sweep(
     });
 }
 
+/// The security rollup's startup run and hourly tick (RFC 0050 §6.5).
+/// `run_once` logs and counts its own outcome.
+pub(super) fn spawn_security_rollup(rollup: Arc<batlehub_core::services::SecurityRollupService>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            if let Err(e) = rollup.run_once(chrono::Utc::now()).await {
+                // Already counted and logged at WARN by `run_once`.
+                tracing::debug!(error = %e, "security rollup: tick failed");
+            }
+        }
+    });
+}
+
 /// Spawn the rescan scheduler (RFC 0018 phase 4): one tick a minute on
 /// every worker process; the tick does nothing unless this process holds
 /// the estate's advisory lock. First tick after one period, so a restart

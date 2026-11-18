@@ -111,7 +111,7 @@ const mounted: { unmount: () => void }[] = [];
 async function mountPage(query: Record<string, string> = {}) {
   const route = useRoute() as unknown as { query: Record<string, string> };
   route.query = query;
-  const w = mount(AdminRegistry, { global: { stubs: { SectionTabs: true } } });
+  const w = mount(AdminRegistry, { global: { stubs: {} } });
   mounted.push(w);
   await flushPromises();
   await flushPromises();

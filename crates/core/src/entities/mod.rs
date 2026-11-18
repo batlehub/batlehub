@@ -52,7 +52,7 @@ pub use grant::{
     DryRun, GrantMap, GrantSet, GroupProvider, Node, Provenance, RegistryGrants, SubjectMatcher,
     SubjectParseError, ADMINISTRATIVE_FLOOR, RESERVED_GRANT_KEYS,
 };
-pub use identity::{Identity, Role};
+pub use identity::{is_argon2_hash, Identity, Role};
 pub use links::{normalize_url, MetadataLinks};
 pub use local_package::{
     CargoDep, CargoIndexEntry, CompactionReport, PublishedPackage, Tombstone, Visibility,

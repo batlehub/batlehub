@@ -17,7 +17,7 @@ use batlehub_core::{
         FlagSourceCoverage, PackageFlag, RegistryScanState, Severity,
     },
     error::CoreError,
-    ports::AdvisoryRepository,
+    ports::{AdvisoryRepository, FlagPulls},
 };
 
 use super::DbResultExt;
@@ -400,6 +400,45 @@ impl AdvisoryRepository for PgAdvisoryRepository {
         let next = (out.len() as i64 > limit).then(|| out[limit as usize - 1].cursor().encode());
         out.truncate(limit as usize);
         Ok(ExposurePage { rows: out, next })
+    }
+
+    async fn pulls_after_live_flags(
+        &self,
+        from: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FlagPulls>, CoreError> {
+        // `EXISTS`, not a join: a pull two live flags cover counts once.
+        let rows = sqlx::query(
+            r#"
+            SELECT e.registry, e.package_name, e.package_version AS version,
+                   COUNT(*)::bigint AS pulls_after, MAX(e.created_at) AS last_pull
+            FROM access_events e
+            WHERE e.action = 'download' AND e.outcome = 'allowed' AND e.created_at >= $1
+              AND EXISTS (
+                SELECT 1 FROM package_flags f
+                WHERE f.registry = e.registry AND f.package_name = e.package_name
+                  AND (f.version = '*' OR f.version = e.package_version)
+                  AND f.revoked_at IS NULL
+                  AND (f.expires_at IS NULL OR f.expires_at > $2)
+                  AND f.first_seen <= e.created_at)
+            GROUP BY e.registry, e.package_name, e.package_version
+            "#,
+        )
+        .bind(from)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows
+            .iter()
+            .map(|r| FlagPulls {
+                registry: r.get("registry"),
+                package_name: r.get("package_name"),
+                version: r.get("version"),
+                pulls_after: r.get::<i64, _>("pulls_after").max(0) as u64,
+                last_pull: r.get("last_pull"),
+            })
+            .collect())
     }
 
     async fn source_coverage(

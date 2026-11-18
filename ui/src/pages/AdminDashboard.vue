@@ -13,8 +13,24 @@ import { useI18n } from "vue-i18n";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ExternalLink } from "@lucide/vue";
-import { adminStats, adminStatsHistory, registryHealth } from "@/client/sdk.gen";
-import type { StatsResponse, StatsHistoryResponse, RegistryHealthDto } from "@/client/types.gen";
+import {
+  adminStats,
+  adminStatsHistory,
+  getConfigWarnings,
+  instanceSecurity,
+  registryHealth,
+  securityOverview,
+} from "@/client/sdk.gen";
+import type {
+  ConfigWarningsResponse,
+  InstanceSecurity,
+  SecurityOverview,
+  StatsResponse,
+  StatsHistoryResponse,
+  RegistryHealthDto,
+} from "@/client/types.gen";
+import SecurityStatusStrip from "@/components/admin/SecurityStatusStrip.vue";
+import StateMark from "@/components/admin/StateMark.vue";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatBytes as fmtBytes, formatCount } from "@/lib/format";
@@ -33,9 +49,58 @@ import {
 
 import { Resolution } from "@/components/ui/resolution";
 import { AsyncState } from "@/components/ui/async-state";
+import { DateTime } from "@/components/ui/date-time";
 const { t } = useI18n();
 
-const { token, can } = useAuth();
+const { token, can, canAny } = useAuth();
+
+/**
+ * RFC 0050 §4.2 (the critique's P0): the dashboard says whether anything
+ * security-wise is wrong, line by line for the verbs the viewer holds —
+ * holds, flags, scanners from the security overview, and the security
+ * warnings of the config from instance security. A line whose verb is not
+ * held is absent (decision 11).
+ */
+const canSecurity = computed(() => canAny(["quarantine:read", "flags:read"]));
+const {
+  data: security,
+  error: securityError,
+  reload: reloadSecurity,
+} = useApi<SecurityOverview>(
+  () =>
+    canSecurity.value
+      ? (securityOverview() as Promise<{ data?: unknown; error?: unknown }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+const canConfigLine = computed(() => can("config:read"));
+/** Instance security needs `system:read` too; without it, the config page's own list. */
+const viaInstance = computed(() => canConfigLine.value && can("system:read"));
+const { data: instance, error: instanceError } = useApi<InstanceSecurity>(
+  () =>
+    viaInstance.value
+      ? (instanceSecurity({ query: { window: "24h" } }) as Promise<{
+          data?: unknown;
+          error?: unknown;
+        }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+const { data: configWarnings, error: configWarningsError } = useApi<ConfigWarningsResponse>(
+  () =>
+    canConfigLine.value && !viaInstance.value
+      ? (getConfigWarnings() as Promise<{ data?: unknown; error?: unknown }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+const securityWarnings = computed(() =>
+  viaInstance.value ? (instance.value?.warnings ?? null) : (configWarnings.value?.warnings ?? null),
+);
+/** The config line is owed to whoever may read it: a failed read is UNKNOWN, not absent. */
+const configLineUnknown = computed(
+  () =>
+    canConfigLine.value && !!(viaInstance.value ? instanceError.value : configWarningsError.value),
+);
 
 const {
   data: stats,
@@ -204,6 +269,59 @@ const trendText = computed(() => {
       </p>
     </div>
 
+    <section
+      v-if="canSecurity || securityWarnings"
+      class="space-y-2"
+      aria-labelledby="dashboard-security"
+      data-testid="dashboard-security"
+    >
+      <h2 id="dashboard-security" class="font-mono text-xs uppercase tracking-wider">
+        {{ t("nav.security") }}
+      </h2>
+      <p v-if="canSecurity && securityError" class="text-sm" data-testid="security-unknown">
+        <StateMark state="unknown" /> {{ t("securityStatus.couldNotRead") }}
+        <Button variant="outline" size="sm" class="ml-2" @click="reloadSecurity">{{
+          t("common.retry")
+        }}</Button>
+      </p>
+      <SecurityStatusStrip
+        v-if="security || securityWarnings || configLineUnknown"
+        :overview="security ?? { computed_at: '', decisions: { total: 0, by_kind: {}, items: [] } }"
+        :domains="['holds', 'flags', 'scanners']"
+        @retry="reloadSecurity"
+      >
+        <li
+          v-if="securityWarnings || configLineUnknown"
+          class="flex flex-col gap-1 py-2 lg:flex-row lg:items-baseline lg:gap-3"
+          data-testid="status-config"
+        >
+          <StateMark
+            :state="!securityWarnings ? 'unknown' : securityWarnings.length ? 'attention' : 'ok'"
+          />
+          <span class="w-40 shrink-0 font-mono text-sm">{{ t("instanceSecurity.config") }}</span>
+          <span class="min-w-0 flex-1 text-sm">{{
+            !securityWarnings
+              ? t("securityStatus.couldNotRead")
+              : viaInstance
+                ? t("instanceSecurity.warnings", { n: securityWarnings.length })
+                : t("adminDashboard.configWarnings", { n: securityWarnings.length })
+          }}</span>
+          <RouterLink
+            v-if="viaInstance"
+            to="/admin/instance-security"
+            class="shrink-0 text-sm text-primary underline underline-offset-[3px]"
+            >→ {{ t("adminNav.instanceSecurity") }}</RouterLink
+          >
+          <RouterLink
+            v-else
+            to="/admin/system/configuration"
+            class="shrink-0 text-sm text-primary underline underline-offset-[3px]"
+            >→ {{ t("adminNav.configReload") }}</RouterLink
+          >
+        </li>
+      </SecurityStatusStrip>
+    </section>
+
     <EmptyState
       v-if="isFresh"
       :title="t('adminDashboard.noRegistriesConfiguredYet')"
@@ -230,7 +348,13 @@ const trendText = computed(() => {
 
       <!-- What the cache saved, stated as a sentence rather than as four tiles. -->
       <p v-else-if="stats" class="text-sm text-muted-foreground">
-        <i18n-t keypath="adminDashboard.cacheSummary" tag="span">
+        <!-- RFC 0050 §6.7: no "of 0 downloads" — a rate of nothing is not a rate. -->
+        <i18n-t
+          :keypath="
+            totalRequests ? 'adminDashboard.cacheSummary' : 'adminDashboard.cacheSummaryNone'
+          "
+          tag="span"
+        >
           <template #rate
             ><span class="font-mono text-foreground">{{ fmtPct(hitRate) }}</span></template
           >
@@ -240,10 +364,8 @@ const trendText = computed(() => {
             }}</span></template
           >
           <template #since
-            ><span class="font-mono">{{
-              new Date(stats.since_startup).toLocaleDateString()
-            }}</span></template
-          >
+            ><span class="font-mono"><DateTime :iso="stats.since_startup" /></span
+          ></template>
           <template #size
             ><span class="font-mono text-foreground">{{
               fmtBytes(stats.aggregate.cached_bytes)

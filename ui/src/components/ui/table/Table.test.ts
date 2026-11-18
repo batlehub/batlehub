@@ -89,3 +89,13 @@ describe("TableCaption", () => {
     expect(wrapper.classes()).toContain("text-muted-foreground");
   });
 });
+
+describe("Table stacked (RFC 0050 §6.7)", () => {
+  it("stacks rows below md only when asked", () => {
+    const flat = mount(Table, { slots: { default: "<tbody />" } }).get("table");
+    expect(flat.classes()).not.toContain("max-md:[&_tr]:block");
+    const stacked = mount(Table, { props: { stacked: true }, slots: { default: "<tbody />" } });
+    expect(stacked.get("table").classes()).toContain("max-md:[&_tr]:block");
+    expect(stacked.get("table").classes()).toContain("max-md:[&_thead]:sr-only");
+  });
+});

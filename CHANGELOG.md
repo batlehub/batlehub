@@ -43,6 +43,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The security console is a space of its own** (RFC 0050): `/security` has
+  its own sidebar — an overview, *Triage* (holds, findings, flags, exposure)
+  and *Follow-up* (trends, coverage, scanners & worker) — and opens on a status
+  strip that says, per domain, whether anything needs attention, then the few
+  items that need a decision. A source that does not answer reads `UNKNOWN`,
+  never `OK`. New: **daily trends** (`security_daily`, kept
+  `[stats] security_history_retention_days`, 90 by default), **coverage** of
+  every registry, protected or not, and **scanner and worker health** (live
+  workers, the remaining queue, each scanner's last success and error class,
+  the OSV breaker). `batlehub-cli security status` prints the same lines, with
+  an exit code for scripts.
+- **Instance security** (`/admin/instance-security`): rejected sign-ins, bans,
+  tokens used from a new address, static tokens stored in clear, expiring
+  exemptions and the security warnings of the configuration, in one admin
+  section; *Blocked accounts & addresses* moved into it. A static token
+  without an `$argon2` prefix now raises `auth.plain-static-token`.
+- **The admin dashboard says whether anything security-wise is wrong**: holds,
+  flags, scanners and the security config warnings, one line each, for the
+  verbs the viewer holds.
+
 - **`registry suggest --mise` knows eight more vendor hosts** (RFC 0047
   phase 2): `hashicorp-releases`, `hashicorp-api`, `k8s-dl`,
   `apache-archive`, `openshift-mirror`, `julia-dist`, `docker-dl` and
@@ -88,6 +108,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gains a `registry` variable; re-importing it overwrites local edits.
 
 ### Changed
+
+- **The admin shell has no tab strips** (RFC 0050): the sidebar was repeated as
+  tabs on twenty pages. Its groups now collapse, and the browser remembers
+  which you opened; on a phone the menu lists every page. *Scans* and
+  *Findings* moved to `/security/scanners` and `/security/findings`, *Access
+  check* is Authorization's *Explain* panel, *Blocks* is under Instance
+  security; every old address redirects, query and anchor kept. Reason codes,
+  flag effects and audit actions read as translated labels with the raw code
+  beside them, and dates read `2026-11-16 17:44` everywhere.
 
 - **`generic` registries: `*` in `path_allow` no longer crosses `/`**
   (RFC 0047 §15 Q7). Only `**` does, so `go*` admits
