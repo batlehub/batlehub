@@ -71,8 +71,7 @@ pub async fn vsx_vspackage(
         &identity,
     )
     .await?;
-    let mut builder = HttpResponse::Ok();
-    builder.content_type("application/octet-stream");
+    let mut builder = package_response();
     Ok(match body {
         VsixBody::Held(bytes) => builder.body(bytes),
         VsixBody::Streamed(stream) => super::super::common::stream_body(builder, stream),
@@ -126,9 +125,7 @@ pub async fn vsx_asset(
 
     // The package itself is the archive, not a file in it.
     if requested == asset_type::VSIX_PACKAGE {
-        return Ok(HttpResponse::Ok()
-            .content_type("application/octet-stream")
-            .body(bytes));
+        return Ok(package_response().body(bytes));
     }
 
     // RFC 0020: the signature archive and its key are not files in the
@@ -351,6 +348,26 @@ pub struct ItemQuery {
 }
 
 // ── shared ───────────────────────────────────────────────────────────────────
+
+/// A `200` for the VSIX itself: publisher bytes this origin must never render.
+///
+/// `nosniff` and the `/proxy` sandbox CSP also come from the middleware, which
+/// leaves a header a handler set alone; they are set here as well so the guard
+/// does not depend on how the app is wired, and `attachment` makes a browser
+/// that follows the link save the file instead of opening it. Editors ignore
+/// all three.
+fn package_response() -> actix_web::HttpResponseBuilder {
+    use actix_web::http::header::{
+        CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, X_CONTENT_TYPE_OPTIONS,
+    };
+    let mut builder = HttpResponse::Ok();
+    builder
+        .content_type("application/octet-stream")
+        .insert_header((CONTENT_DISPOSITION, "attachment"))
+        .insert_header((X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .insert_header((CONTENT_SECURITY_POLICY, crate::PROTOCOL_DOCUMENT_CSP));
+    builder
+}
 
 fn qualified(publisher: &str, name: &str) -> Result<String, AppError> {
     require_single_segment("publisher", publisher)?;
