@@ -679,7 +679,10 @@ async fn unknown_registry(
 fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     use handlers::{
         auth::{
-            oidc::{list_oidc_providers, oidc_callback, oidc_login, oidc_refresh},
+            oidc::{
+                list_oidc_providers, oidc_callback, oidc_cli_confirm, oidc_cli_exchange,
+                oidc_login, oidc_refresh,
+            },
             tokens::{create_token, list_tokens, revoke_token},
         },
         back_office::{
@@ -890,6 +893,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(oidc_login);
     cfg.service(oidc_callback);
     cfg.service(oidc_refresh);
+    cfg.service(oidc_cli_exchange);
+    cfg.service(oidc_cli_confirm);
     cfg.service(create_token);
     cfg.service(list_tokens);
     cfg.service(revoke_token);

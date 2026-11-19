@@ -657,8 +657,18 @@ async fn loopback_login(
         "http://127.0.0.1:{}/callback",
         listener.local_addr()?.port()
     );
+    // The callback brings a one-time code, not the tokens; only this process
+    // holds the verifier that redeems it.
+    let (verifier, code_challenge) = crate::api::auth::pkce_pair()?;
     let login_url = client
-        .oidc_login_url(csrf, provider, Some(&return_to))
+        .oidc_login_url(
+            csrf,
+            provider,
+            Some(crate::api::auth::Loopback {
+                return_to: &return_to,
+                code_challenge: &code_challenge,
+            }),
+        )
         .await?;
 
     if !open_browser(&login_url) {
@@ -670,7 +680,13 @@ async fn loopback_login(
         .await
         .map_err(|_| unreachable("no sign-in reached the CLI within 5 minutes".to_owned()))??;
     drop(listener);
-    let outcome = check_callback(&query, csrf);
+    let outcome = match check_callback(&query, csrf) {
+        Ok(code) => client
+            .oidc_cli_exchange(&code, &verifier)
+            .await
+            .map_err(|e| CliError::new(ExitCode::Failure, format!("sign-in failed: {e:#}"))),
+        Err(e) => Err(e),
+    };
     let page = match &outcome {
         Ok(_) => "Signed in. You can close this tab and return to the terminal.",
         Err(_) => "Sign-in failed. The terminal says why.",
@@ -713,29 +729,28 @@ async fn await_callback(
     }
 }
 
-/// The tokens a callback carries, if it belongs to this login.
-fn check_callback(query: &str, csrf: &str) -> Result<OidcPaste, CliError> {
+/// The one-time code a callback carries, if it belongs to this login.
+fn check_callback(query: &str, csrf: &str) -> Result<String, CliError> {
     if let Some(e) = extract_param(query, "oidc_error") {
         return Err(CliError::new(
             ExitCode::Failure,
             format!("sign-in failed: {e}"),
         ));
     }
-    if !query.contains("oidc_access_token=") {
+    let Some(code) = extract_param(query, "oidc_code") else {
         return Err(CliError::new(
             ExitCode::Failure,
-            "the callback carried no token",
+            "the callback carried no sign-in code",
         ));
-    }
-    let paste = parse_oidc_paste(query);
-    if paste.state.as_deref() != Some(csrf) {
+    };
+    if extract_param(query, "oidc_state").as_deref() != Some(csrf) {
         return Err(CliError::new(
             ExitCode::Failure,
             "the callback does not belong to the sign-in this CLI started; nothing was saved",
         )
         .hint("run `auth login` again"));
     }
-    Ok(paste)
+    Ok(code)
 }
 
 async fn respond(stream: &mut tokio::net::TcpStream, status: &str, text: &str) -> io::Result<()> {

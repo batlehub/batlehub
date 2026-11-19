@@ -38,6 +38,22 @@ pub struct LoginState {
     /// loopback listener, `http://127.0.0.1:<port>/callback` exactly, checked
     /// before this entry is written (RFC 0040 decision 40).
     pub return_to: Option<String>,
+    /// The CLI's PKCE-style challenge, `BASE64URL(SHA256(verifier))`. Required
+    /// with a `return_to`: the loopback gets a one-time code, never the tokens,
+    /// and only the process holding the verifier can redeem it.
+    pub code_challenge: Option<String>,
+    /// Set only on a *handoff* entry: the issued tokens as JSON. Never set on a
+    /// started login. Two kinds carry it:
+    /// - awaiting confirmation (`return_to` set), keyed by the token of the
+    ///   "Authorize batlehub-cli?" page, redeemable once at
+    ///   `POST /api/v1/auth/oidc/cli/confirm`;
+    /// - confirmed (`return_to` empty), keyed by the one-time code sent to the
+    ///   loopback, redeemable once at `POST /api/v1/auth/oidc/cli/exchange`.
+    pub handoff: Option<String>,
+    /// Who started a loopback login — when, from which address and user agent —
+    /// as JSON, shown on the confirmation page so a user who did not run
+    /// `batlehub-cli auth login` can tell. `None` on a console login.
+    pub started: Option<String>,
 }
 
 /// One-time store for in-flight OIDC authorization requests.

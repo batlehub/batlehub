@@ -710,9 +710,23 @@ batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <
 Signs in through the server's OIDC provider and saves the token, with its
 refresh token, to the `-P` profile. The CLI listens on `127.0.0.1` on a free
 port and opens your browser at the server's sign-in. Once the provider has
-signed you in, the server redirects the browser back to that port. The CLI
-checks that the callback belongs to the sign-in it started, and then closes the
-port. It waits up to five minutes.
+signed you in, the server first shows a page, **Authorize batlehub-cli on this
+machine?**, with when the sign-in was started, from which address and client,
+and the local port it will go to. Authorize it only if you just ran
+`batlehub-cli auth login` yourself: a link to the sign-in is all someone else on
+a shared machine needs to have *your* browser finish a login *they* started, and
+this page is where that stops. Cancel drops the sign-in; the page expires after
+five minutes and answers once. After **Authorize**, the server redirects the
+browser back to that port with a one-time code, never the token itself. The CLI checks that the callback belongs
+to the sign-in it started, closes the port, and redeems the code for the token
+with a secret only it holds (a PKCE-style verifier whose hash it sent when the
+sign-in started). Another program listening on that port, or reading the
+browser's history, gets a code it cannot use. The code expires after 60
+seconds and works once. The CLI waits up to five minutes for the browser.
+
+The server refuses a loopback sign-in that does not carry that hash, so a
+`batlehub-cli` older than this change cannot sign in through the browser any
+more: upgrade it, or use `--no-browser`.
 
 The browser is `$BROWSER` when it is set, otherwise `xdg-open`, `open` or the
 Windows URL handler. When none of them starts, the CLI prints the URL for you to

@@ -433,6 +433,9 @@ async fn an_expired_state_redeems_nothing() {
                 nonce: "n".to_owned(),
                 spa_state: "spa".to_owned(),
                 return_to: None,
+                code_challenge: None,
+                handoff: None,
+                started: None,
             },
             0,
         )
@@ -818,23 +821,50 @@ fn urlencoding(s: &str) -> String {
         .replace('=', "%3D")
 }
 
-#[actix_web::test]
-async fn a_loopback_login_returns_the_tokens_to_the_listener_in_the_query() {
-    let mut server = mockito::Server::new_async().await;
-    let (app, states) = make_sso_app(&server.url()).await;
-    let to = "http://127.0.0.1:48123/callback";
+/// A verifier and its `BASE64URL(SHA256(..))` challenge, as the CLI makes them.
+fn pkce(verifier: &str) -> (String, String) {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use sha2::{Digest, Sha256};
+    (
+        verifier.to_owned(),
+        URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
+    )
+}
+
+/// Start a loopback login with `challenge` (as `user_agent`, when given) and
+/// complete it at the provider: the confirmation page the callback serves, and
+/// the token its form carries.
+async fn loopback_callback<S>(
+    app: &S,
+    server: &mut mockito::ServerGuard,
+    states: &RecordingLoginStateStore,
+    to: &str,
+    challenge: &str,
+    user_agent: Option<&str>,
+) -> (String, String)
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
     let uri = format!(
-        "/api/v1/auth/oidc/login?state=cli-nonce&return_to={}",
+        "/api/v1/auth/oidc/login?state=cli-nonce&return_to={}&code_challenge={challenge}",
         urlencoding(to)
     );
-    let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
+    let mut req = TestRequest::get().uri(&uri);
+    if let Some(ua) = user_agent {
+        req = req.insert_header(("User-Agent", ua));
+    }
+    let resp = call_service(app, req.to_request()).await;
     assert_eq!(resp.status(), 302);
     let state = param(&location(&resp), "state").unwrap();
     assert_eq!(states.recorded(&state).return_to.as_deref(), Some(to));
 
-    let _token = mock_token_endpoint(&mut server, &states.recorded(&state).nonce).await;
+    let _token = mock_token_endpoint(server, &states.recorded(&state).nonce).await;
     let resp = call_service(
-        &app,
+        app,
         TestRequest::get()
             .uri(&format!(
                 "/api/v1/auth/oidc/callback?code=abc&state={state}"
@@ -842,16 +872,219 @@ async fn a_loopback_login_returns_the_tokens_to_the_listener_in_the_query() {
             .to_request(),
     )
     .await;
-    assert_eq!(resp.status(), 302);
-    let loc = location(&resp);
+    assert_eq!(resp.status(), 200, "a loopback sign-in asks first");
+    assert!(
+        location(&resp).is_empty(),
+        "nothing goes to the loopback yet"
+    );
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    let page = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    let token = page
+        .split_once("name=\"token\" value=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(t, _)| t.to_owned())
+        .expect("the form carries a token");
+    (page, token)
+}
+
+/// Answer the confirmation page.
+async fn confirm<S>(
+    app: &S,
+    token: &str,
+    decision: &str,
+) -> actix_web::dev::ServiceResponse<actix_web::body::BoxBody>
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    call_service(
+        app,
+        TestRequest::post()
+            .uri("/api/v1/auth/oidc/cli/confirm")
+            .set_form([("token", token), ("decision", decision)])
+            .to_request(),
+    )
+    .await
+}
+
+/// Start a loopback login with `challenge`, complete it at the provider,
+/// authorize it on the confirmation page, and return the redirect to the
+/// listener.
+async fn loopback_round_trip<S>(
+    app: &S,
+    server: &mut mockito::ServerGuard,
+    states: &RecordingLoginStateStore,
+    to: &str,
+    challenge: &str,
+) -> String
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    let (_, token) = loopback_callback(app, server, states, to, challenge, None).await;
+    let resp = confirm(app, &token, "authorize").await;
+    assert_eq!(resp.status(), 303);
+    location(&resp)
+}
+
+async fn exchange<S>(app: &S, code: &str, verifier: &str) -> (u16, serde_json::Value)
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    let resp = call_service(
+        app,
+        TestRequest::post()
+            .uri("/api/v1/auth/oidc/cli/exchange")
+            .set_json(serde_json::json!({ "code": code, "verifier": verifier }))
+            .to_request(),
+    )
+    .await;
+    let status = resp.status().as_u16();
+    let body = actix_web::test::read_body(resp).await;
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+/// The listener gets a one-time code, never a token: whoever else listens on
+/// that port learns nothing it can use without the CLI's verifier.
+#[actix_web::test]
+async fn a_loopback_login_hands_the_listener_a_code_redeemable_with_the_verifier() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let to = "http://127.0.0.1:48123/callback";
+    let (verifier, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    let loc = loopback_round_trip(&app, &mut server, &states, to, &challenge).await;
+
     assert!(loc.starts_with(&format!("{to}?")), "{loc}");
     assert!(
         !loc.contains('#'),
         "a fragment never reaches the listener: {loc}"
     );
     assert_eq!(param(&loc, "oidc_state").as_deref(), Some("cli-nonce"));
-    assert!(param(&loc, "oidc_access_token").is_some());
-    assert_eq!(param(&loc, "oidc_refresh_token").as_deref(), Some("rt-1"));
+    assert!(param(&loc, "oidc_access_token").is_none(), "{loc}");
+    assert!(param(&loc, "oidc_refresh_token").is_none(), "{loc}");
+    let code = param(&loc, "oidc_code").expect("a one-time code");
+
+    // The code is not a login state: presenting it to the callback finds nothing.
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!("/api/v1/auth/oidc/callback?code=abc&state={code}"))
+            .to_request(),
+    )
+    .await;
+    assert!(
+        location(&resp).contains("oidc_error="),
+        "{}",
+        location(&resp)
+    );
+
+    // That attempt consumed the code; a fresh sign-in gives one to redeem.
+    let loc = loopback_round_trip(&app, &mut server, &states, to, &challenge).await;
+    let code2 = param(&loc, "oidc_code").unwrap();
+    let (status, body) = exchange(&app, &code2, &verifier).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["access_token"].as_str().is_some_and(|t| !t.is_empty()));
+    assert_eq!(body["refresh_token"], "rt-1");
+    assert_eq!(body["provider"], "authentik");
+
+    // Single use.
+    let (status, _) = exchange(&app, &code2, &verifier).await;
+    assert_eq!(status, 400, "a code is redeemable once");
+}
+
+/// A code intercepted from the redirect is useless without the verifier, and
+/// the wrong verifier burns it.
+#[actix_web::test]
+async fn an_exchange_with_the_wrong_verifier_is_refused() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let (verifier, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    let loc = loopback_round_trip(
+        &app,
+        &mut server,
+        &states,
+        "http://127.0.0.1:48125/callback",
+        &challenge,
+    )
+    .await;
+    let code = param(&loc, "oidc_code").unwrap();
+    let (status, body) = exchange(&app, &code, "someone-else's-verifier").await;
+    assert_eq!(status, 400, "{body}");
+    assert!(body.get("access_token").is_none());
+    let (status, _) = exchange(&app, &code, &verifier).await;
+    assert_eq!(status, 400, "the failed attempt consumed the code");
+}
+
+/// An expired handoff is refused, and so is a code nobody issued.
+#[actix_web::test]
+async fn an_expired_or_unknown_code_is_refused() {
+    let server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let (verifier, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    states
+        .put(
+            "stale-code",
+            LoginState {
+                provider: "authentik".to_owned(),
+                code_verifier: String::new(),
+                nonce: String::new(),
+                spa_state: String::new(),
+                return_to: None,
+                code_challenge: Some(challenge),
+                handoff: Some(
+                    r#"{"access_token":"at","refresh_token":null,"expires_in":null,"provider":"authentik"}"#
+                        .to_owned(),
+                ),
+                started: None,
+            },
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(exchange(&app, "stale-code", &verifier).await.0, 400);
+    assert_eq!(exchange(&app, "never-issued", &verifier).await.0, 400);
+}
+
+/// A loopback login without a challenge would hand the tokens to whatever
+/// listens on the port: refused, before a state is written.
+#[actix_web::test]
+async fn a_loopback_login_without_a_code_challenge_is_refused() {
+    let server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let to = urlencoding("http://127.0.0.1:48126/callback");
+    for uri in [
+        format!("/api/v1/auth/oidc/login?state=s&return_to={to}"),
+        format!("/api/v1/auth/oidc/login?state=s&return_to={to}&code_challenge=short"),
+    ] {
+        let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
+        assert_eq!(resp.status(), 400, "{uri}");
+        let body = actix_web::test::read_body(resp).await;
+        assert!(
+            String::from_utf8_lossy(&body).contains("upgrade batlehub-cli"),
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    assert!(states.written.lock().unwrap().is_empty(), "nothing stored");
 }
 
 /// A refusal at the provider reaches the CLI that started the login, so it
@@ -862,8 +1095,9 @@ async fn a_provider_error_on_a_loopback_login_goes_back_to_the_listener() {
     let (app, _states) = make_sso_app(&server.url()).await;
     let to = "http://127.0.0.1:48124/callback";
     let uri = format!(
-        "/api/v1/auth/oidc/login?state=s&return_to={}",
-        urlencoding(to)
+        "/api/v1/auth/oidc/login?state=s&return_to={}&code_challenge={}",
+        urlencoding(to),
+        pkce("v").1
     );
     let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
     let state = param(&location(&resp), "state").unwrap();
@@ -879,4 +1113,99 @@ async fn a_provider_error_on_a_loopback_login_goes_back_to_the_listener() {
     .await;
     let loc = location(&resp);
     assert!(loc.starts_with(&format!("{to}?oidc_error=")), "{loc}");
+}
+
+/// The page answers the attack a code alone does not: whoever started the
+/// login holds the verifier, so nothing is redeemable until the signed-in user
+/// says the command line is theirs — and a confirmation answers once.
+#[actix_web::test]
+async fn no_code_is_redeemable_before_the_user_authorizes_the_cli() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let to = "http://127.0.0.1:48127/callback";
+    let (verifier, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    let (page, token) = loopback_callback(&app, &mut server, &states, to, &challenge, None).await;
+    assert!(
+        page.contains("Authorize batlehub-cli on this machine?"),
+        "{page}"
+    );
+    assert!(page.contains("127.0.0.1:48127"), "{page}");
+    assert!(
+        page.contains("batlehub-cli auth login</code> yourself"),
+        "{page}"
+    );
+    assert!(
+        !states
+            .written
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, v)| v.handoff.is_some() && v.return_to.is_none()),
+        "no redeemable code exists before the answer"
+    );
+    // The page's token is not a code: exchanging it is refused, and burns it.
+    assert_eq!(exchange(&app, &token, &verifier).await.0, 400);
+    assert_eq!(confirm(&app, &token, "authorize").await.status(), 400);
+
+    // A fresh sign-in, authorized once: the code exchanges; a second answer finds nothing.
+    let (_, token) = loopback_callback(&app, &mut server, &states, to, &challenge, None).await;
+    let resp = confirm(&app, &token, "authorize").await;
+    assert_eq!(resp.status(), 303);
+    let loc = location(&resp);
+    assert!(loc.starts_with(&format!("{to}?")), "{loc}");
+    assert_eq!(param(&loc, "oidc_state").as_deref(), Some("cli-nonce"));
+    let code = param(&loc, "oidc_code").expect("a one-time code");
+    assert_eq!(
+        confirm(&app, &token, "authorize").await.status(),
+        400,
+        "answered once"
+    );
+    assert_eq!(exchange(&app, &code, &verifier).await.0, 200);
+}
+
+/// Cancelling drops the sign-in: nothing reaches the loopback and nothing is
+/// left to redeem.
+#[actix_web::test]
+async fn a_cancelled_cli_sign_in_issues_nothing() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let to = "http://127.0.0.1:48128/callback";
+    let (verifier, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    let (_, token) = loopback_callback(&app, &mut server, &states, to, &challenge, None).await;
+    let resp = confirm(&app, &token, "cancel").await;
+    assert_eq!(resp.status(), 200);
+    assert!(location(&resp).is_empty());
+    assert_eq!(confirm(&app, &token, "authorize").await.status(), 400);
+    assert_eq!(exchange(&app, &token, &verifier).await.0, 400);
+    assert!(
+        !states
+            .written
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, v)| v.handoff.is_some() && v.return_to.is_none()),
+        "no code was ever issued"
+    );
+}
+
+/// What the page shows about the starter came from that request: escaped.
+#[actix_web::test]
+async fn the_confirmation_page_escapes_what_the_starter_sent() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let (_, challenge) = pkce("v-0123456789-0123456789-0123456789-0123456789");
+    let (page, _) = loopback_callback(
+        &app,
+        &mut server,
+        &states,
+        "http://127.0.0.1:48129/callback",
+        &challenge,
+        Some("<script>alert(1)</script>"),
+    )
+    .await;
+    assert!(!page.contains("<script>"), "{page}");
+    assert!(
+        page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "{page}"
+    );
 }
