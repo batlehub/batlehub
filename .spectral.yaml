@@ -66,8 +66,11 @@ overrides:
       path-params: off
   # Unauthenticated by design: the credential is in the request itself.
   # flags and inbound webhooks are HMAC-signed bodies, refresh carries the
-  # refresh token in its body.
+  # refresh token in its body. The CLI loopback login's exchange carries the
+  # PKCE verifier, its confirm the one-time token the callback page issued.
   - files:
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1cli~1confirm'
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1cli~1exchange'
       - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1refresh'
       - 'ui/openapi.json#/paths/~1api~1v1~1flags~1%7Bsource%7D'
       - 'ui/openapi.json#/paths/~1api~1v1~1flags~1%7Bsource%7D~1%7Bexternal_id%7D'

@@ -144,6 +144,8 @@ pub async fn get_oidc_login_url(
 ) -> Result<String> {
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
+        // The server shows this on the "Authorize batlehub-cli?" page as who started the login.
+        .user_agent("batlehub-cli/0.1")
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
