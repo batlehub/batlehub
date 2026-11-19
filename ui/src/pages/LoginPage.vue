@@ -20,13 +20,15 @@ const route = useRoute();
 const { isAuthenticated } = useAuth();
 
 const inputToken = ref("");
-/* Errors forwarded from the OIDC callback. The router sends a catalogue key
-   (`loginPage.oidcStateMismatch`); the backend may forward its own sentence.
-   `te` tells the two apart, so neither has to know about the other. */
+/* Errors forwarded from the OIDC callback. Only a `loginPage.*` catalogue key
+   is shown as such: anything else in `?error=` is attacker-writable text in
+   this page's own alert box, so it reads as the generic failure instead. */
 function forwardedError(): string | null {
   const forwarded = route.query.error;
   if (typeof forwarded !== "string") return null;
-  return te(forwarded) ? t(forwarded) : forwarded;
+  return forwarded.startsWith("loginPage.") && te(forwarded)
+    ? t(forwarded)
+    : t("loginPage.oidcLoginFailed");
 }
 
 const error = ref<string | null>(forwardedError());

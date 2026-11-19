@@ -334,9 +334,15 @@ async fn show(
             "pullability": answer,
         }));
     }
-    print!("{}", show_text(&row, &detail["links"]));
+    print!(
+        "{}",
+        crate::render::terminal_safe(&show_text(&row, &detail["links"]))
+    );
     println!();
-    print!("{}", super::why::render(registry, name, &answer));
+    print!(
+        "{}",
+        crate::render::terminal_safe(&super::why::render(registry, name, &answer))
+    );
     Ok(())
 }
 
@@ -454,7 +460,13 @@ fn print_readme(resp: &crate::api::package::ReadmeResponse) {
         eprintln!("note: this README is {}, not markdown", resp.format);
     }
     // `source_text` is absent only for `format=html`, which this never asks for.
-    println!("{}", resp.source_text.as_deref().unwrap_or_default());
+    let text = resp.source_text.as_deref().unwrap_or_default();
+    // Raw bytes for `> README.md`; neutralised only when a terminal renders them.
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        println!("{}", crate::render::terminal_safe(text));
+    } else {
+        println!("{text}");
+    }
 }
 
 #[cfg(test)]

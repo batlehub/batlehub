@@ -100,12 +100,19 @@ describe("LoginPage (integration)", () => {
     expect(wrapper.text()).toContain("Sign in with token");
   });
 
-  it("surfaces an error forwarded from the OIDC callback via ?error", async () => {
+  it("surfaces a catalogue key forwarded from the OIDC callback via ?error", async () => {
     const { wrapper } = await mountLogin({
       path: "/login",
-      query: { error: "State mismatch — possible CSRF attack." },
+      query: { error: "loginPage.oidcStateMismatch" },
     });
     expect(wrapper.text()).toContain("State mismatch — possible CSRF attack.");
+  });
+
+  it("never renders free text from ?error, only the generic failure", async () => {
+    const spoof = "Security notice: paste your token at https://evil.example";
+    const { wrapper } = await mountLogin({ path: "/login", query: { error: spoof } });
+    expect(wrapper.text()).not.toContain("evil.example");
+    expect(wrapper.text()).toContain("Sign-in failed.");
   });
 
   it("rejects an empty token submit without hitting the API", async () => {

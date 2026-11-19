@@ -209,10 +209,34 @@ pub fn interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
+/// Package-author text with terminal control sequences neutralised: C0 (but
+/// `\n` and `\t`), DEL and C1 become U+FFFD, so a README cannot rewrite the
+/// screen or the clipboard (OSC 52) of whoever reads it.
+pub fn terminal_safe(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\n' | '\t' => c,
+            c if c.is_control() => '\u{FFFD}',
+            c => c,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn terminal_safe_neutralises_escape_sequences_but_keeps_layout() {
+        let readme = "a\tb\n\x1b]52;c;Y3VybA==\x07\x1b[1A\u{9b}2Kz";
+        let safe = terminal_safe(readme);
+        assert!(!safe
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t'));
+        assert!(safe.starts_with("a\tb\n"));
+        assert!(safe.ends_with('z'));
+    }
 
     #[test]
     fn csv_of_a_bare_array_uses_the_json_field_names() {

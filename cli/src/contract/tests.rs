@@ -194,6 +194,24 @@ fn a_write_is_atomic_and_owner_only() {
     }
 }
 
+/// A parent the CLI did not create (`/tmp`, `$HOME`) keeps its mode.
+#[cfg(unix)]
+#[test]
+fn an_existing_parent_directory_is_not_chmodded() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.path().join("vsx-token.json");
+    let mut doc = ContractFile::default();
+    doc.set_entry(
+        "https://hub.example.dev",
+        Entry::literal("s", Kind::Pat, None),
+    );
+    doc.save(&path).unwrap();
+    let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o755);
+}
+
 /// It must never break an anonymous gallery: unparseable is "no credential",
 /// said once, not an error that stops the editor.
 #[test]
