@@ -26,6 +26,7 @@ function plain(text) {
     .replace(/!\[[^[\]]*\]\([^()]*\)/g, "") // images carry no prose
     .replace(/\[([^[\]]+)\]\([^()]*\)/g, "$1") // links keep their label
     .replace(/<[^<>]+>/g, "") // inline HTML
+    .replace(/[<>]/g, "") // and what one pass leaves of nested tags (`<scr<b>ipt>`)
     .replace(/[`*_~]/g, "")
     .replace(/\\([\\`*_{}[\]()#+\-.!])/g, "$1")
     .replace(/\s+/g, " ")
