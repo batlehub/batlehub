@@ -20,13 +20,27 @@
 /** The longest description worth emitting: Google renders ~155-160 chars. */
 const MAX = 160;
 
+/**
+ * Inline HTML out, until nothing changes: one pass turns `<scr<b>ipt>` into
+ * `<script>`. A fixpoint, not a single pass plus a `[<>]` strip, is what code
+ * scanning recognises as complete (CodeQL #2001).
+ */
+function stripTags(text) {
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<[^<>]+>/g, "");
+  } while (text !== previous);
+  return text;
+}
+
 /** Inline markdown → the text a reader would see. */
 function plain(text) {
-  return text
-    .replace(/!\[[^[\]]*\]\([^()]*\)/g, "") // images carry no prose
-    .replace(/\[([^[\]]+)\]\([^()]*\)/g, "$1") // links keep their label
-    .replace(/<[^<>]+>/g, "") // inline HTML
-    .replace(/[<>]/g, "") // and what one pass leaves of nested tags (`<scr<b>ipt>`)
+  return stripTags(
+    text
+      .replace(/!\[[^[\]]*\]\([^()]*\)/g, "") // images carry no prose
+      .replace(/\[([^[\]]+)\]\([^()]*\)/g, "$1"), // links keep their label
+  )
     .replace(/[`*_~]/g, "")
     .replace(/\\([\\`*_{}[\]()#+\-.!])/g, "$1")
     .replace(/\s+/g, " ")
