@@ -88,16 +88,17 @@ packages = ["$MODULE"]
 EOF
 echo "VALUE = '$DIST'" > "$SRC/$MODULE/__init__.py"
 
-heavy_log "Building the wheel"
-(cd "$SRC" && "$VPY" -m build --wheel --no-isolation) >"$HEAVY_WORK/build.log" 2>&1 \
+heavy_log "Building the wheel and the sdist"
+(cd "$SRC" && "$VPY" -m build --wheel --sdist --no-isolation) >"$HEAVY_WORK/build.log" 2>&1 \
   || { tail -30 "$HEAVY_WORK/build.log" >&2; heavy_fail "python -m build failed"; }
 WHEEL="$(ls "$SRC"/dist/*.whl)"
-heavy_log "Built $(basename "$WHEEL")"
+SDIST="$(ls "$SRC"/dist/*.tar.gz)"
+heavy_log "Built $(basename "$WHEEL") and $(basename "$SDIST")"
 
 heavy_log "twine upload -> $UPLOAD_URL"
 TWINE_USERNAME="__token__" TWINE_PASSWORD="$ADMIN_TOKEN" \
   "$HEAVY_WORK/venv/bin/twine" upload --repository-url "$UPLOAD_URL" \
-  --disable-progress-bar "$WHEEL" \
+  --disable-progress-bar "$WHEEL" "$SDIST" \
   || heavy_fail "twine upload failed — the documented publish flow sends HTTP Basic, not Bearer"
 heavy_wire "POST /proxy/$LOCAL/legacy/ -> 20" "twine did not reach the legacy upload endpoint"
 
@@ -117,7 +118,18 @@ heavy_wire_after "local-install" "GET /proxy/$LOCAL/simple/$DIST/ -> 200" \
 # here is the rewrite pointing at the proxy rather than at files.pythonhosted.org.
 grep -q "GET /proxy/$LOCAL/packages/.*\.whl -> 200" "$HEAVY_LOG" \
   || heavy_fail "the wheel was not fetched through the proxy"
-heavy_log "PYPI-LOCAL-OK (twine upload, pip install, links rewritten)"
+# Two files of one release, as twine sends them: two POSTs to one version. The
+# second used to be a 409, so a release could carry its wheel or its sdist and
+# never both.
+heavy_mark "local-sdist"
+"$VPY" -m pip download --quiet --no-cache-dir --no-deps --no-build-isolation \
+  --no-binary "$DIST" --index-url "$LOCAL_SIMPLE" -d "$HEAVY_WORK/sdist-dl" "$DIST==1.0.0" \
+  || heavy_fail "pip could not fetch the sdist published beside the wheel"
+cmp -s "$SDIST" "$HEAVY_WORK/sdist-dl/$(basename "$SDIST")" \
+  || heavy_fail "the sdist pip fetched is not the one twine uploaded"
+heavy_wire_after "local-sdist" "/$(basename "$SDIST") -> 200" \
+  "the sdist was not fetched through the proxy"
+heavy_log "PYPI-LOCAL-OK (twine upload of wheel + sdist, pip install, links rewritten)"
 
 # ── 3. PEP 658 — the sibling pip is told exists ──────────────────────────────
 

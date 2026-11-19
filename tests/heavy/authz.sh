@@ -4468,20 +4468,24 @@ assert reasons and all(reasons), f"a denied line with no reason: {reasons}"
   heavy_log "waiting out the throttle window"
   sleep $(( 62 - ($(date +%s) - first_at) ))
   curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  # Two rows or three: the held-back twenty ride the next attempt's row, unless
+  # the 10 s flusher (`CredentialRejectionAudit::flush_held`) wrote them first
+  # on a row of their own. Which one wins depends on where its tick falls, so
+  # the invariant is the sum: every attempt is counted once, as 1 + throttled.
   n="$(audit_count credential_rejected)"
-  [[ "$n" == 2 ]] || heavy_fail "after the window the next attempt should write the second row, found $n rows"
+  [[ "$n" == 2 || "$n" == 3 ]] || heavy_fail "after the window the next attempt should write one more row (two with the flusher's), found $n rows"
   audit_lines | python3 -c '
 import json, sys
 rows = [json.loads(l) for l in sys.stdin if "\"event.action\":\"credential_rejected\"" in l]
-held = rows[-1]["batlehub.audit.throttled_count"]
-assert held >= 20, f"the row after the window carries {held}, not the twenty (and more) held back"
-' || heavy_fail "the attempts the throttle held back are not counted on the next row"
+total = sum(1 + (r.get("batlehub.audit.throttled_count") or 0) for r in rows)
+assert total >= 22, f"the rows count {total} attempts, not the twenty-two (and more) made"
+' || heavy_fail "the attempts the throttle held back are not counted"
 
   # The table says the same as the stream.
   local table
   table="$(curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=credential_rejected&per_page=10" \
     -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
-  [[ "$table" == 2 ]] || heavy_fail "the stream has two credential_rejected rows and the table has $table"
+  [[ "$table" == "$n" ]] || heavy_fail "the stream has $n credential_rejected rows and the table has $table"
 
   # ── 4. the sealed trail verifies, and an altered row breaks its window ──
   heavy_mark "audit-verify"
@@ -4540,7 +4544,7 @@ assert hit, f"no failure names the window holding {at}: {fails}"
     return $?
   }
   [[ "$(audit_rows download)" == 0 ]] || heavy_fail "download rows survived a purge past them"
-  [[ "$(audit_rows credential_rejected)" == 2 ]] \
+  [[ "$(audit_rows credential_rejected)" == "$n" ]] \
     || heavy_fail "the purge removed credential_rejected rows — security rows are not the purge's to remove"
   [[ "$(audit_rows audit_purge)" -ge 1 ]] || heavy_fail "the purge left no row of itself"
   local purges
