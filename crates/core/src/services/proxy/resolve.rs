@@ -96,6 +96,19 @@ impl ProxyService {
             ));
         }
 
+        // Concurrent misses on one key send one request upstream: the others
+        // wait (bounded) for it and re-read the cache it fills. A failed or
+        // `no-store` resolve leaves nothing cached, so they then go on their own.
+        let flight = self
+            .discovery
+            .claim(cache_key, super::discovery::SINGLE_FLIGHT_WAIT)
+            .await;
+        if flight.is_none() {
+            if let Some(entry) = self.cache.get(cache_key).await? {
+                return Ok(entry.metadata);
+            }
+        }
+
         let meta = match super::time_upstream_call(
             registry_label,
             "resolve_metadata",
@@ -499,7 +512,11 @@ async fn capture_readme_from_archive(job: ArchiveReadme<'_>) {
     let Some(extractor) = job.extractor else {
         return;
     };
-    let Some(found) = extractor.extract(job.data, job.registry_type).readme else {
+    let Some(found) =
+        crate::services::sbom::extract_off_runtime(extractor, job.data, job.registry_type)
+            .await
+            .readme
+    else {
         return;
     };
     let id = &job.metadata.id;

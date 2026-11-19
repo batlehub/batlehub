@@ -511,6 +511,24 @@ async fn warm_package_lists_versions_and_warms_latest_n() {
 }
 
 #[tokio::test]
+async fn warm_package_warms_the_semver_newest_whatever_the_list_order() {
+    // String-sorted, as npm/maven/nuget return it: 4.9.0 sorts after 4.17.21.
+    let storage = StubStorage::new();
+    let svc = active_svc(
+        StubClient::with_versions(vec!["4.17.21", "4.8.1", "4.8.2", "4.9.0"]),
+        storage.clone(),
+    )
+    .with_latest_n(1);
+    let report = svc.warm_package("lodash").await;
+    assert_eq!(report.warmed, 1);
+    let keys: Vec<String> = storage.data.lock().await.keys().cloned().collect();
+    assert!(
+        keys.iter().all(|k| k.contains("4.17.21")),
+        "warmed {keys:?}, expected 4.17.21"
+    );
+}
+
+#[tokio::test]
 async fn warm_package_returns_error_when_list_versions_fails() {
     let svc = active_svc(StubClient::failing_list(), StubStorage::new());
     let report = svc.warm_package("mylib").await;
@@ -745,4 +763,40 @@ async fn a_failed_version_listing_names_the_package_and_no_version() {
     assert_eq!(report.failures.len(), 1);
     assert_eq!(report.failures[0].package, "mylib");
     assert_eq!(report.failures[0].version, None);
+}
+
+/// `StubClient`'s bytes, advertised under a checksum they do not have.
+struct WrongChecksumClient(Arc<StubClient>);
+
+#[async_trait]
+impl RegistryClient for WrongChecksumClient {
+    fn registry_type(&self) -> &str {
+        self.0.registry_type()
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        let mut m = self.0.resolve_metadata(pkg).await?;
+        m.checksum = Some("0".repeat(64));
+        Ok(m)
+    }
+    async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        self.0.fetch_artifact(pkg).await
+    }
+}
+
+#[tokio::test]
+async fn warm_package_never_caches_bytes_that_fail_the_advertised_checksum() {
+    let storage = StubStorage::new();
+    let svc = active_svc(
+        Arc::new(WrongChecksumClient(StubClient::with_versions(vec![
+            "1.0.0",
+        ]))),
+        storage.clone(),
+    );
+    let report = svc.warm_package("mylib@1.0.0").await;
+    assert_eq!(report.warmed, 0);
+    assert_eq!(report.errors, 1);
+    assert!(!storage
+        .exists("artifact:test-reg/mylib/1.0.0")
+        .await
+        .unwrap());
 }

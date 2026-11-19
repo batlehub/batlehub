@@ -172,6 +172,33 @@ async fn delete_removes_artifact() {
     assert!(!router.exists(&key).await.unwrap());
 }
 
+// Two replicas evicting the same key at once must decrement the shared blob's
+// ref_count once: a double decrement left the other keys' blob unreferenced,
+// so deleting one of them failed on the refs foreign key or lost the bytes.
+#[tokio::test]
+async fn concurrent_deletes_of_one_key_decrement_the_shared_blob_once() {
+    let Some(url) = db_url() else { return };
+    let router = single_backend_router(make_fs("dbl-del").await, pool(&url).await);
+    let data = upayload("double-delete-shared");
+    let (a, b, c) = (ukey("npm", "a"), ukey("npm", "b"), ukey("npm", "c"));
+    for k in [&a, &b, &c] {
+        router
+            .store(k, data.clone(), StorageMeta::default())
+            .await
+            .unwrap();
+    }
+
+    let (r1, r2) = tokio::join!(router.delete(&a), router.delete(&a));
+    r1.unwrap();
+    r2.unwrap();
+    router.delete(&b).await.unwrap();
+
+    let left = router.retrieve(&c).await.unwrap().expect("c still stored");
+    assert_eq!(collect(left).await, data.as_ref());
+    router.delete(&c).await.unwrap();
+    assert!(!router.exists(&c).await.unwrap());
+}
+
 #[tokio::test]
 async fn delete_missing_key_is_ok() {
     let Some(url) = db_url() else { return };

@@ -226,9 +226,64 @@ pub fn verify(expected: &str, data: &[u8]) -> IntegrityOutcome {
     }
 }
 
+/// Wrap `stream` so a digest mismatch against `expected` ends it with an
+/// error instead of a clean end: a storage write aborts on a failed stream, so
+/// the wrong bytes are never committed. An unparseable `expected` passes through.
+pub fn fail_on_mismatch(
+    stream: crate::ports::ByteStream,
+    expected: &str,
+) -> crate::ports::ByteStream {
+    use futures::StreamExt;
+    let Some(verifier) = StreamingVerifier::new(expected) else {
+        return stream;
+    };
+    Box::pin(futures::stream::unfold(
+        (stream, Some(verifier)),
+        |(mut stream, mut verifier)| async move {
+            let v = verifier.as_mut()?;
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    v.update(&chunk);
+                    Some((Ok(chunk), (stream, verifier)))
+                }
+                Some(Err(e)) => Some((Err(e), (stream, None))),
+                None => match verifier.take()?.finish() {
+                    IntegrityOutcome::Mismatch {
+                        expected, actual, ..
+                    } => Some((
+                        Err(crate::error::CoreError::IntegrityFailure(format!(
+                            "checksum mismatch: expected {expected}, got {actual}"
+                        ))),
+                        (stream, None),
+                    )),
+                    _ => None,
+                },
+            }
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fail_on_mismatch_errors_at_the_end_of_a_wrong_stream() {
+        use futures::StreamExt;
+        let body = || -> crate::ports::ByteStream {
+            Box::pin(futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
+                b"abc",
+            ))]))
+        };
+        let good = hex::encode(Sha256::digest(b"abc"));
+        let ok: Vec<_> = fail_on_mismatch(body(), &good).collect().await;
+        assert!(ok.iter().all(Result::is_ok));
+        let bad: Vec<_> = fail_on_mismatch(body(), &"0".repeat(64)).collect().await;
+        assert!(matches!(
+            bad.last(),
+            Some(Err(crate::error::CoreError::IntegrityFailure(_)))
+        ));
+    }
 
     // SHA-256 of b"hello" = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
     const HELLO: &[u8] = b"hello";

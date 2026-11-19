@@ -127,22 +127,17 @@ impl StorageRouter {
         .inspect_err(|e| tracing::warn!(error = %e, key, "failed to update artifact size"));
     }
 
-    /// Execute the dedup-path delete: removes the logical→hash ref, decrements ref_count,
-    /// removes the index row when ref_count reaches zero, and returns whether the physical
-    /// blob should be deleted (`true`) along with its `(content_key, blob_backend_name)`.
+    /// Execute the dedup-path delete: removes the logical→hash ref, decrements
+    /// ref_count, and on the last reference removes the index row and the
+    /// physical blob.
     ///
-    /// Returns `None` if no dedup entry exists for this key (caller falls through to legacy path).
-    pub(super) async fn delete_dedup_entry(
-        &self,
-        key: &str,
-    ) -> Result<Option<(bool, String, String)>, CoreError> {
-        use sqlx::Row;
-        let dedup_row = sqlx::query(
+    /// Returns `false` if no dedup entry exists for this key (caller falls
+    /// through to the legacy path).
+    pub(super) async fn delete_dedup_entry(&self, key: &str) -> Result<bool, CoreError> {
+        let backend_name: Option<String> = sqlx::query_scalar(
             r#"
-            SELECT dr.content_hash, di.content_key,
-                   COALESCE(ast.backend_name, $2) AS backend_name
+            SELECT COALESCE(ast.backend_name, $2)
             FROM artifact_dedup_refs dr
-            JOIN artifact_dedup_index di USING (content_hash)
             LEFT JOIN artifact_storage ast ON ast.storage_key = dr.logical_key
             WHERE dr.logical_key = $1
             "#,
@@ -152,20 +147,9 @@ impl StorageRouter {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-        let Some(row) = dedup_row else {
-            return Ok(None);
+        let Some(backend_name) = backend_name else {
+            return Ok(false);
         };
-
-        let content_hash: String = row
-            .try_get("content_hash")
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
-        let content_key: String = row
-            .try_get("content_key")
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
-        let blob_backend_name: String = row
-            .try_get("backend_name")
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         let mut tx = self
             .pool
@@ -173,15 +157,22 @@ impl StorageRouter {
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-        sqlx::query("DELETE FROM artifact_dedup_refs WHERE logical_key = $1")
-            .bind(key)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        // The ref is claimed inside the transaction: a concurrent delete of the
+        // same key finds nothing here and must not decrement a second time.
+        let content_hash: Option<String> = sqlx::query_scalar(
+            "DELETE FROM artifact_dedup_refs WHERE logical_key = $1 RETURNING content_hash",
+        )
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let Some(content_hash) = content_hash else {
+            return Ok(true);
+        };
 
-        let new_ref_count: i32 = sqlx::query_scalar(
+        let (new_ref_count, content_key): (i32, String) = sqlx::query_as(
             "UPDATE artifact_dedup_index SET ref_count = ref_count - 1 \
-             WHERE content_hash = $1 RETURNING ref_count",
+             WHERE content_hash = $1 RETURNING ref_count, content_key",
         )
         .bind(&content_hash)
         .fetch_one(&mut *tx)
@@ -194,13 +185,19 @@ impl StorageRouter {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| CoreError::Storage(e.to_string()))?;
+            // Before the commit, while the index row stays locked: a concurrent
+            // store of the same bytes waits on it, so its blob write lands after
+            // this delete, never before (the order `commit_new_hash` relies on).
+            let backend = self.resolve_backend(&backend_name);
+            let _ = backend.delete(&content_key).await.inspect_err(
+                |e| tracing::warn!(error = %e, key = %content_key, "failed to delete physical blob"),
+            );
         }
 
         tx.commit()
             .await
             .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-        Ok(Some((new_ref_count <= 0, content_key, blob_backend_name)))
+        Ok(true)
     }
 
     /// Returns all logical keys matching `prefix` from both the dedup refs table and
