@@ -2922,7 +2922,8 @@ phase_cargo_owner_yank() {
   local owners="/api/v1/admin/registries/$CARGO_R/packages/$AUTHZ_CARGO_CRATE/owners"
   authz_body POST "$T_ADMIN" "$owners" -H "$HDR_JSON" \
     --data '{"principal_type":"user","principal_id":"authz-reader"}' >/dev/null
-  grep -q '"authz-reader"' <<<"$(authz_body GET "$T_ADMIN" "$owners")" \
+  # A bare id is scoped to the one provider that yields user ids, and listed so.
+  grep -q '"static-token:authz-reader"' <<<"$(authz_body GET "$T_ADMIN" "$owners")" \
     || heavy_fail "cargo: could not make authz-reader an owner of $AUTHZ_CARGO_CRATE"
 
   # A resolve from scratch in the reader's consumer: what a new user gets.
