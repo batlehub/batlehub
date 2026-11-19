@@ -256,7 +256,12 @@ pub async fn deb_publish(
 
             // 3. Regenerate the suite indexes (Packages per component/arch + Release).
             let signer = signers.get(&registry);
-            regenerate_deb(storage, &registry, &distribution, signer.as_deref()).await
+            regenerate_until_settled(
+                storage,
+                &format!("local:{registry}/_index/deb/{distribution}/"),
+                || regenerate_deb(storage, &registry, &distribution, signer.as_deref()),
+            )
+            .await
         },
     )
     .await?;
@@ -329,6 +334,50 @@ async fn deb_pool_file_in_other_suite(
             .unwrap_or_default();
         matches!(parts.as_slice(), [s, c, a, f] if *s != suite && *c == component && *a == arch && *f == file)
     }))
+}
+
+/// How many times [`regenerate_until_settled`] rebuilds before giving up.
+const MAX_REGENERATE_ROUNDS: usize = 5;
+
+/// Run `regenerate` until the sidecars under `prefix` are the same set after
+/// the rebuild as before it.
+///
+/// Two publishes into one suite each list the sidecars, then write the index.
+/// Without this, the one that listed first and wrote last publishes an index
+/// missing the other's package — across replicas, so no process lock helps.
+/// Re-listing after the write closes it: the last writer always sees a sidecar
+/// stored before its check, and a sidecar stored after it belongs to a publish
+/// whose own rebuild lists after storing it.
+async fn regenerate_until_settled<F, Fut>(
+    storage: &dyn StorageBackend,
+    prefix: &str,
+    mut regenerate: F,
+) -> Result<(), AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), AppError>>,
+{
+    let list = || async {
+        let mut keys = storage.list_keys(prefix).await.map_err(AppError::from)?;
+        keys.sort();
+        Ok::<_, AppError>(keys)
+    };
+    let mut before = list().await?;
+    for _ in 0..MAX_REGENERATE_ROUNDS {
+        regenerate().await?;
+        let after = list().await?;
+        if after == before {
+            return Ok(());
+        }
+        before = after;
+    }
+    tracing::warn!(
+        prefix,
+        rounds = MAX_REGENERATE_ROUNDS,
+        "repo index: sidecars kept changing while the index was rebuilt; the next \
+         publish into this index rebuilds it again"
+    );
+    Ok(())
 }
 
 /// Rebuild every `Packages`/`Packages.gz` under `dists/{suite}/` from the stored
@@ -561,7 +610,10 @@ pub async fn rpm_publish(
             store_bytes(storage, &sidecar, json).await?;
             // 3. Regenerate repodata.
             let signer = signers.get(&registry);
-            regenerate_rpm(storage, &registry, signer.as_deref()).await
+            regenerate_until_settled(storage, &format!("local:{registry}/_index/rpm/"), || {
+                regenerate_rpm(storage, &registry, signer.as_deref())
+            })
+            .await
         },
     )
     .await?;
@@ -751,7 +803,12 @@ pub async fn pacman_publish(
             store_bytes(storage, &sidecar, json).await?;
 
             // 4. Regenerate the per-arch database.
-            regenerate_pacman(storage, &registry, &arch, signer.as_deref()).await
+            regenerate_until_settled(
+                storage,
+                &format!("local:{registry}/_index/pacman/{arch}/"),
+                || regenerate_pacman(storage, &registry, &arch, signer.as_deref()),
+            )
+            .await
         },
     )
     .await?;
@@ -973,12 +1030,19 @@ pub async fn apk_publish(
             .await?;
 
             // 3. The index, filtered and signed.
-            regenerate_apk(
+            let signer = signers.get(&registry);
+            regenerate_until_settled(
                 storage,
-                admin_svc.repo.as_ref(),
-                &registry,
-                &arch,
-                signers.get(&registry).as_deref(),
+                &format!("local:{registry}/_index/apk/{arch}/"),
+                || {
+                    regenerate_apk(
+                        storage,
+                        admin_svc.repo.as_ref(),
+                        &registry,
+                        &arch,
+                        signer.as_deref(),
+                    )
+                },
             )
             .await
         },
@@ -1120,4 +1184,55 @@ pub async fn refresh_apk_indexes(
         regenerate_apk(storage, packages, registry, &arch, signer).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use batlehub_adapters::in_memory::InMemoryStorageBackend;
+    use std::sync::Mutex;
+
+    /// A publish that stores its sidecar after this rebuild listed the
+    /// sidecars, but before it finished: the rebuild runs again and the
+    /// second round sees the newcomer.
+    #[actix_web::test]
+    async fn a_sidecar_stored_mid_rebuild_triggers_another_round() {
+        let storage = InMemoryStorageBackend::new();
+        let prefix = "local:r/_index/deb/stable/";
+        store_bytes(
+            storage.as_ref(),
+            &format!("{prefix}main/amd64/a_1.stanza"),
+            "a",
+        )
+        .await
+        .unwrap();
+
+        let seen: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+        regenerate_until_settled(storage.as_ref(), prefix, || async {
+            let keys = storage.list_keys(prefix).await.unwrap();
+            let round = {
+                let mut seen = seen.lock().unwrap();
+                seen.push(keys.len());
+                seen.len()
+            };
+            if round == 1 {
+                // The concurrent publish lands after this round's listing.
+                store_bytes(
+                    storage.as_ref(),
+                    &format!("{prefix}main/amd64/b_1.stanza"),
+                    "b",
+                )
+                .await?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![1, 2],
+            "the round after the newcomer must rebuild from both sidecars"
+        );
+    }
 }

@@ -145,7 +145,10 @@ impl LocalRegistryService {
 
         for pkg in &versions {
             let mut meta = pkg.index_metadata.clone();
+            let mut not_latest = false;
             if let Some(obj) = meta.as_object_mut() {
+                // Internal marker, never served to a client.
+                not_latest = obj.remove(super::NPM_NOT_LATEST).is_some();
                 let dist = obj.entry("dist").or_insert_with(|| serde_json::json!({}));
                 if let Some(d) = dist.as_object_mut() {
                     d.insert(
@@ -162,7 +165,7 @@ impl LocalRegistryService {
                 serde_json::json!(pkg.published_at.to_rfc3339()),
             );
             versions_map.insert(pkg.version.clone(), meta);
-            if !Self::is_prerelease(&pkg.version) {
+            if !not_latest && !Self::is_prerelease(&pkg.version) {
                 latest = pkg.version.clone();
             }
         }
@@ -212,6 +215,7 @@ impl LocalRegistryService {
         let base = base_url.trim_end_matches('/');
         let mut meta = pkg.index_metadata.clone();
         if let Some(obj) = meta.as_object_mut() {
+            obj.remove(super::NPM_NOT_LATEST);
             let dist = obj.entry("dist").or_insert_with(|| serde_json::json!({}));
             if let Some(d) = dist.as_object_mut() {
                 d.insert(
@@ -720,6 +724,17 @@ impl LocalRegistryService {
         self.authorizer()
             .check_visibility(registry, package, identity)
             .await
+    }
+
+    /// The read set of [`Self::readable_packages`], for a listing outside this
+    /// service (the console's explore and package lists) that must hide what a
+    /// namespace seal withholds exactly as the download does.
+    pub async fn readable_set(
+        &self,
+        registry: &str,
+        identity: &Identity,
+    ) -> Result<crate::services::authz::filter::Readable, CoreError> {
+        Ok(self.readable_packages(registry, identity).await?.0)
     }
 
     /// Which packages in `registry` this caller may read (RFC 0015 §4.4).

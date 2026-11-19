@@ -315,9 +315,9 @@ pub async fn identity_for_artifact(
 /// in-process test apps, a server built without governance) simply has no
 /// block list, which is the same answer the middleware gives there.
 ///
-/// A repository error is a refusal, not a pass. The middleware fails closed on
-/// the same question, and a signed URL is a bearer credential whose only
-/// revocation channel this is.
+/// A repository error is a refusal, not a pass — unlike the middleware, which
+/// fails open on the same question (`user_block.rs`): a signed URL is a bearer
+/// credential whose only revocation channel this is.
 async fn reject_blocked_user(req: &HttpRequest, identity: &Identity) -> Result<(), AppError> {
     let Some(user_id) = identity.user_id.as_deref() else {
         return Ok(());

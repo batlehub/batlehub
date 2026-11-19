@@ -51,6 +51,10 @@ twine upload \
 
 Or configure `~/.pypirc` with a `repository = https://batlehub.example.com/proxy/<registry>/legacy/` entry and run `twine upload --repository batlehub dist/*`.
 
+A version holds every file uploaded for it — the sdist and each wheel are
+listed in the simple index with their own SHA-256. A file is immutable: uploading
+a filename the version already has is refused with `409`.
+
 ## Blocked versions
 
 A blocked version disappears from the simple index in **both** of its

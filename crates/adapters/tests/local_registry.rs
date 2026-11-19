@@ -102,6 +102,63 @@ async fn publish_duplicate_version_returns_conflict() {
     );
 }
 
+/// Two publishes of one version at once: the second must not delete the first
+/// one's pending reservation and take its place (both were answered 201 over a
+/// single row), and a commit without a pending row of its own must fail.
+#[tokio::test]
+async fn concurrent_publish_of_one_version_is_refused_while_in_flight() {
+    let Some(url) = db_url() else { return };
+    let t = make_registry(&url).await;
+    t.reg
+        .publish(pkg(&t.registry, "race", "1.0.0"))
+        .await
+        .unwrap();
+    let err = t
+        .reg
+        .publish(pkg(&t.registry, "race", "1.0.0"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Conflict(_)), "got {err:?}");
+    t.reg
+        .commit_publish(&t.registry, "race", "1.0.0")
+        .await
+        .unwrap();
+    let err = t
+        .reg
+        .commit_publish(&t.registry, "race", "1.0.0")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Conflict(_)), "got {err:?}");
+    // The rollback primitive leaves a published row alone.
+    t.reg
+        .remove_version(&t.registry, "race", "1.0.0")
+        .await
+        .unwrap();
+    assert_eq!(
+        t.reg.get_versions(&t.registry, "race").await.unwrap().len(),
+        1
+    );
+}
+
+/// A pending row older than the in-flight window is a crash leftover: a retry
+/// replaces it.
+#[tokio::test]
+async fn stale_pending_row_is_replaced_on_retry() {
+    let Some(url) = db_url() else { return };
+    let t = make_registry(&url).await;
+    let mut crashed = pkg(&t.registry, "retry", "1.0.0");
+    crashed.published_at = Utc::now() - chrono::Duration::hours(1);
+    t.reg.publish(crashed).await.unwrap();
+    t.reg
+        .publish(pkg(&t.registry, "retry", "1.0.0"))
+        .await
+        .unwrap();
+    t.reg
+        .commit_publish(&t.registry, "retry", "1.0.0")
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn publish_different_versions_are_independent() {
     let Some(url) = db_url() else { return };
@@ -223,6 +280,55 @@ async fn get_versions_preserves_index_metadata() {
     let versions = t.reg.get_versions(&t.registry, "meta-pkg").await.unwrap();
     assert_eq!(versions[0].index_metadata["custom_key"], "custom_value");
     assert_eq!(versions[0].index_metadata["num"], 42);
+}
+
+/// A later file joins the version's `files`; a name it already has — primary
+/// or added — is refused, as is a version that was never published.
+#[tokio::test]
+async fn append_file_adds_once_per_filename_to_a_published_version() {
+    let Some(url) = db_url() else { return };
+    let t = make_registry(&url).await;
+    let mut p = pkg(&t.registry, "multi", "1.0.0");
+    p.index_metadata = serde_json::json!({ "filename": "multi-1.0.0.tar.gz" });
+    t.reg.publish(p).await.unwrap();
+    let wheel = serde_json::json!({ "filename": "multi-1.0.0-py3-none-any.whl", "sha256": "ab" });
+    assert!(
+        !t.reg
+            .append_file(&t.registry, "multi", "1.0.0", wheel.clone())
+            .await
+            .unwrap(),
+        "a pending version takes no file"
+    );
+    t.reg
+        .commit_publish(&t.registry, "multi", "1.0.0")
+        .await
+        .unwrap();
+    assert!(t
+        .reg
+        .append_file(&t.registry, "multi", "1.0.0", wheel.clone())
+        .await
+        .unwrap());
+    assert!(!t
+        .reg
+        .append_file(&t.registry, "multi", "1.0.0", wheel)
+        .await
+        .unwrap());
+    assert!(!t
+        .reg
+        .append_file(
+            &t.registry,
+            "multi",
+            "1.0.0",
+            serde_json::json!({ "filename": "multi-1.0.0.tar.gz", "sha256": "cd" }),
+        )
+        .await
+        .unwrap());
+    let v = t.reg.get_versions(&t.registry, "multi").await.unwrap();
+    assert_eq!(
+        v[0].index_metadata["files"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(v[0].index_metadata["filename"], "multi-1.0.0.tar.gz");
 }
 
 // ── yank / unyank ─────────────────────────────────────────────────────────────

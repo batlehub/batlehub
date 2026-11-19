@@ -6,6 +6,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
+use super::{lost_reservation, STALE_PENDING};
+
 use batlehub_core::{
     entities::{CompactionReport, PublishedPackage, Tombstone},
     error::CoreError,
@@ -126,7 +128,11 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
             if let Some(ts) = existing.as_tombstone() {
                 return Err(CoreError::Conflict(ts.burned_coordinate_message()));
             }
-            if existing.status == RecordStatus::Published {
+            // A recent pending row is a publish in flight, not a crash leftover.
+            let in_flight = existing.status == RecordStatus::Pending
+                && Utc::now() - existing.inserted_at
+                    < chrono::Duration::from_std(STALE_PENDING).unwrap_or_default();
+            if existing.status == RecordStatus::Published || in_flight {
                 return Err(CoreError::Conflict(format!(
                     "{}@{} already published in registry '{}'",
                     pkg.name, pkg.version, pkg.registry
@@ -155,12 +161,16 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         version: &str,
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(versions) = map.get_mut(&pkg_key(registry, name)) {
-            if let Some(record) = versions.get_mut(version) {
+        match map
+            .get_mut(&pkg_key(registry, name))
+            .and_then(|versions| versions.get_mut(version))
+        {
+            Some(record) if record.status == RecordStatus::Pending => {
                 record.status = RecordStatus::Published;
+                Ok(())
             }
+            _ => Err(lost_reservation(registry, name, version)),
         }
-        Ok(())
     }
 
     async fn yank(&self, registry: &str, name: &str, version: &str) -> Result<(), CoreError> {
@@ -270,6 +280,47 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         }
     }
 
+    async fn append_file(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        file: serde_json::Value,
+    ) -> Result<bool, CoreError> {
+        let Some(filename) = file.get("filename").and_then(|v| v.as_str()) else {
+            return Err(CoreError::InvalidInput(
+                "a file entry needs a filename".to_owned(),
+            ));
+        };
+        let mut map = self.inner.write().await;
+        let Some(r) = published_mut(&mut map, registry, name, version) else {
+            return Ok(false);
+        };
+        let Some(obj) = r.pkg.index_metadata.as_object_mut() else {
+            return Ok(false);
+        };
+        let taken = obj.get("filename").and_then(|v| v.as_str()) == Some(filename)
+            || obj
+                .get("files")
+                .and_then(|f| f.as_array())
+                .is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|f| f.get("filename").and_then(|v| v.as_str()) == Some(filename))
+                });
+        if taken {
+            return Ok(false);
+        }
+        let files = obj
+            .entry("files")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        let Some(files) = files.as_array_mut() else {
+            return Ok(false);
+        };
+        files.push(file);
+        Ok(true)
+    }
+
     async fn set_vsix_signature_provided(
         &self,
         registry: &str,
@@ -359,10 +410,11 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
         if let Some(versions) = map.get_mut(&pkg_key(registry, name)) {
-            let is_tombstone = versions
+            // Rollback of a publish: never a published row, never a tombstone.
+            if versions
                 .get(version)
-                .is_some_and(|r| r.status == RecordStatus::Deleted);
-            if !is_tombstone {
+                .is_some_and(|r| r.status == RecordStatus::Pending)
+            {
                 versions.remove(version);
             }
         }
@@ -586,12 +638,20 @@ mod tests {
     }
 
     /// A stale pending row (from a prior crash) is silently overwritten so the
-    /// caller can retry.
+    /// caller can retry. Stale means older than `STALE_PENDING`; a younger one
+    /// is a publish in flight (`concurrent_publish_of_one_version_…`).
     #[tokio::test]
     async fn stale_pending_row_is_overwritten_on_retry() {
         let store = InMemoryLocalRegistry::new();
         // First attempt — crashes before commit.
         store.publish(pkg("reg", "foo", "1.0.0")).await.unwrap();
+        {
+            let mut map = store.inner.write().await;
+            let key = super::pkg_key("reg", "foo");
+            if let Some(r) = map.get_mut(&key).and_then(|vs| vs.get_mut("1.0.0")) {
+                r.inserted_at = Utc::now() - chrono::Duration::hours(1);
+            }
+        }
         // Retry — must succeed, not return Conflict.
         store.publish(pkg("reg", "foo", "1.0.0")).await.unwrap();
         store.commit_publish("reg", "foo", "1.0.0").await.unwrap();
@@ -671,16 +731,33 @@ mod tests {
         assert!(!store.get_versions("reg", "foo").await.unwrap()[0].unlisted);
     }
 
-    /// `remove_version` deletes a record regardless of its status.
+    /// `remove_version` is a publish rollback: a published row is not its to
+    /// remove, or a losing concurrent publish would delete the winner's version.
     #[tokio::test]
-    async fn remove_version_deletes_published_record() {
+    async fn remove_version_leaves_a_published_record() {
         let store = InMemoryLocalRegistry::new();
         store.publish(pkg("reg", "foo", "1.0.0")).await.unwrap();
         store.commit_publish("reg", "foo", "1.0.0").await.unwrap();
         store.remove_version("reg", "foo", "1.0.0").await.unwrap();
 
-        assert!(!store.exists("reg", "foo").await.unwrap());
-        assert!(store.get_versions("reg", "foo").await.unwrap().is_empty());
+        assert!(store.exists("reg", "foo").await.unwrap());
+    }
+
+    /// Two publishes of one version at once: the second must not take over the
+    /// first one's pending reservation, and a commit without one must fail.
+    #[tokio::test]
+    async fn concurrent_publish_of_one_version_is_refused_while_in_flight() {
+        let store = InMemoryLocalRegistry::new();
+        store.publish(pkg("reg", "foo", "1.0.0")).await.unwrap();
+        assert!(matches!(
+            store.publish(pkg("reg", "foo", "1.0.0")).await,
+            Err(CoreError::Conflict(_))
+        ));
+        store.commit_publish("reg", "foo", "1.0.0").await.unwrap();
+        assert!(matches!(
+            store.commit_publish("reg", "foo", "1.0.0").await,
+            Err(CoreError::Conflict(_))
+        ));
     }
 
     /// `remove_version` on a pending row (rollback scenario).

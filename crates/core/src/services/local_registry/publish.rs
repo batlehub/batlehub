@@ -890,9 +890,6 @@ impl LocalRegistryService {
 
         // Step 3: promote the pending row to 'published'. On failure, undo both
         // the storage write and the pending row so the caller gets a clean error.
-        self.invalidate_documents(registry)
-            .instrument(stage("publish_invalidate_documents"))
-            .await;
         if let Err(e) = self
             .backend
             .commit_publish(registry, name, version)
@@ -900,12 +897,22 @@ impl LocalRegistryService {
             .await
         {
             self.remove_pending(registry, name, version).await;
-            if let Err(err) = self.storage.delete(storage_key).await {
-                tracing::error!("storage cleanup after commit failure: {err}");
+            // A Conflict means another publish owns the coordinate now, and the
+            // bytes under the key are its bytes.
+            if !matches!(e, CoreError::Conflict(_)) {
+                if let Err(err) = self.storage.delete(storage_key).await {
+                    tracing::error!("storage cleanup after commit failure: {err}");
+                }
             }
             self.revoke_quota(publisher, registry, bytes).await;
             return Err(e);
         }
+
+        // After the commit, never before: a reader between a bump and the commit
+        // would cache a listing without this version under the new generation.
+        self.invalidate_documents(registry)
+            .instrument(stage("publish_invalidate_documents"))
+            .await;
 
         Ok(())
     }
@@ -922,10 +929,10 @@ impl LocalRegistryService {
         name: &str,
         publisher: &Identity,
     ) -> Result<(), CoreError> {
-        let (Some(ownership), Some(uid)) = (&self.ownership, &publisher.user_id) else {
+        let (Some(ownership), Some(uid)) = (&self.ownership, publisher.user_principal()) else {
             return Ok(());
         };
-        if ownership.claim_if_unowned(registry, name, uid).await?
+        if ownership.claim_if_unowned(registry, name, &uid).await?
             || ownership.can_publish(registry, name, publisher).await?
         {
             return Ok(());
@@ -958,12 +965,12 @@ impl LocalRegistryService {
         if !is_new_package {
             return;
         }
-        let Some(ref uid) = publisher.user_id else {
+        let Some(uid) = publisher.user_principal() else {
             return;
         };
 
         if let Some(ref ownership) = self.ownership {
-            if let Err(err) = ownership.initialize_owner(registry, name, uid).await {
+            if let Err(err) = ownership.initialize_owner(registry, name, &uid).await {
                 tracing::warn!("initialize_owner failed (non-fatal): {err}");
             }
         }

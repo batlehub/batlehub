@@ -251,6 +251,17 @@ pub async fn maven_put(
                     )
                     .await
                     .map_err(AppError::from)?;
+                // A jar can be the first file of a new coordinate: claim it, or
+                // the POM of another user would make them owner of these bytes.
+                if let Err(e) = local_svc
+                    .claim_unowned_package(&registry, &name, &identity.0)
+                    .await
+                {
+                    local_svc
+                        .revoke_publish_quota(&identity.0, &registry, artifact_len)
+                        .await;
+                    return Err(AppError::from(e));
+                }
 
                 if let Err(e) = local_svc
                     .storage

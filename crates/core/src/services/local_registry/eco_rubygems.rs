@@ -18,7 +18,7 @@ impl LocalRegistryService {
         let meta = &latest.index_metadata;
         Ok(serde_json::json!({
             "name": name,
-            "version": latest.version,
+            "version": meta.get("version").and_then(|v| v.as_str()).unwrap_or(&latest.version),
             "platform": meta.get("platform").and_then(|v| v.as_str()).unwrap_or("ruby"),
             "summary": meta.get("summary"),
             "authors": meta.get("authors").and_then(|a| a.as_array())
@@ -45,8 +45,14 @@ impl LocalRegistryService {
             .rev() // newest-first to match rubygems.org API
             .map(|pkg| {
                 let meta = &pkg.index_metadata;
+                // A platform gem is stored as `{version}-{platform}`; the API
+                // reports the two apart, as rubygems.org does.
+                let number = meta
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&pkg.version);
                 serde_json::json!({
-                    "number": pkg.version,
+                    "number": number,
                     "platform": meta.get("platform").and_then(|v| v.as_str()).unwrap_or("ruby"),
                     "authors": meta.get("authors").and_then(|a| a.as_array())
                         .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
@@ -54,7 +60,7 @@ impl LocalRegistryService {
                     "summary": meta.get("summary"),
                     "sha": meta.get("sha"),
                     "created_at": pkg.published_at.to_rfc3339(),
-                    "prerelease": Self::is_prerelease(&pkg.version),
+                    "prerelease": Self::is_prerelease(number),
                     "yanked": pkg.yanked,
                 })
             })

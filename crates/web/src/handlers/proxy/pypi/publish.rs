@@ -59,6 +59,7 @@ pub async fn pypi_publish(
     let mut sha2: Option<String> = None;
     let mut content: Option<bytes::Bytes> = None;
     let mut filename: Option<String> = None;
+    let mut requires_python: Option<String> = None;
 
     // Raw `Multipart` is not covered by `PayloadConfig`, so bound the cumulative
     // accumulation ourselves to prevent an unauthenticated OOM. Same ceiling as
@@ -94,6 +95,10 @@ pub async fn pypi_publish(
             "name" => name = Some(String::from_utf8_lossy(&bytes).into_owned()),
             "version" => version = Some(String::from_utf8_lossy(&bytes).into_owned()),
             "sha2" => sha2 = Some(String::from_utf8_lossy(&bytes).into_owned()),
+            "requires_python" => {
+                requires_python = Some(String::from_utf8_lossy(&bytes).into_owned())
+                    .filter(|r| !r.trim().is_empty())
+            }
             "content" => {
                 filename = file_name;
                 content = Some(bytes);
@@ -110,6 +115,26 @@ pub async fn pypi_publish(
     }
 
     let name = name.ok_or_else(|| AppError::bad_request("missing 'name' field".to_owned()))?;
+    // Stored under the PEP 503 name: the simple index and the file download
+    // both look the project up by it, so `My_Pkg` stored verbatim was a
+    // project no `pip install` could find.
+    let name = batlehub_core::entities::RegistryKind::Pypi
+        .canonical_package_name(&name)
+        .into_owned();
+    // PEP 508's character set, after normalisation: lowercase ASCII, digits and
+    // single dashes. Also what keeps a name from carrying a `/`, which the
+    // version-directory delete of the extra files relies on.
+    if name.is_empty()
+        || name.starts_with('-')
+        || name.ends_with('-')
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(AppError::bad_request(format!(
+            "invalid project name '{name}': PEP 508 allows letters, digits, '-', '_' and '.'"
+        )));
+    }
     let version =
         version.ok_or_else(|| AppError::bad_request("missing 'version' field".to_owned()))?;
     let content =
@@ -132,12 +157,46 @@ pub async fn pypi_publish(
         }
     }
 
-    let index_metadata = serde_json::json!({
+    // A later file of a version already published here (the wheel after the
+    // sdist): added to that version rather than refused as a duplicate publish.
+    if let Some(existing) = local_svc
+        .pypi_version_filenames(&registry, &name, &version)
+        .await
+        .map_err(AppError::from)?
+    {
+        if existing.contains(&filename) {
+            return Err(AppError::from(batlehub_core::error::CoreError::Conflict(
+                format!("{filename} already exists in {name}@{version}"),
+            )));
+        }
+        local_svc
+            .add_pypi_file(
+                batlehub_core::services::PypiFileUpload {
+                    registry: &registry,
+                    name: &name,
+                    version: &version,
+                    filename: &filename,
+                    bytes: content,
+                    sha256: &computed_checksum,
+                    requires_python: requires_python.as_deref(),
+                },
+                &identity.0,
+            )
+            .await
+            .map_err(AppError::from)?;
+        return Ok(actix_web::HttpResponse::Ok()
+            .json(MessageResponse::new(format!("File uploaded: {filename}"))));
+    }
+
+    let mut index_metadata = serde_json::json!({
         "name": name,
         "version": version,
         "filename": filename,
         "sha256": computed_checksum,
     });
+    if let Some(r) = requires_python {
+        index_metadata["requires_python"] = serde_json::Value::String(r);
+    }
 
     let (signature_bytes, signature_type) =
         ArtifactSignature::split(extract_signature_headers(&req)?);
