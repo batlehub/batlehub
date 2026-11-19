@@ -82,7 +82,7 @@ pub async fn list_beta_members(
     request_body = AddBetaMemberRequest,
     responses(
         (status = 204, description = "Member added"),
-        (status = 400, description = "Invalid principal_type"),
+        (status = 400, description = "Invalid principal_type, or a bare user id while several identity providers are configured"),
         (status = 403, description = "`owners:write` required"),
         (status = 409, description = "Already a member"),
     ),
@@ -110,12 +110,18 @@ pub async fn add_beta_member(
             "principal_type must be 'user' or 'group'",
         ));
     }
+    let principal_id = crate::handlers::back_office::governance::ownership::scope_owner_principal(
+        &hot,
+        &body.principal_type,
+        &body.principal_id,
+    )
+    .await?;
     store
         .add_member(
             &registry,
             BetaChannelEntry {
                 principal_type: body.principal_type.clone(),
-                principal_id: body.principal_id.clone(),
+                principal_id,
                 granted_by: body.granted_by.clone(),
             },
         )
@@ -161,6 +167,15 @@ pub async fn remove_beta_member(
         &hot,
     )
     .await?;
+    // A bare id that can no longer be scoped (several providers) is a stale
+    // row matching nobody: still removable as written.
+    let principal_id = crate::handlers::back_office::governance::ownership::scope_owner_principal(
+        &hot,
+        &principal_type,
+        &principal_id,
+    )
+    .await
+    .unwrap_or(principal_id);
     store
         .remove_member(&registry, &principal_type, &principal_id)
         .await

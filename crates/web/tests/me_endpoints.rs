@@ -645,12 +645,12 @@ async fn my_advisories_labels_owned_packages_and_excludes_other_owners() {
     // Alice owns npm/alice-lib; bob owns npm/bob-lib. Both have findings.
     parts
         .ownership
-        .initialize_owner("npm", "alice-lib", "alice")
+        .initialize_owner("npm", "alice-lib", "static-token:alice")
         .await
         .unwrap();
     parts
         .ownership
-        .initialize_owner("npm", "bob-lib", "bob")
+        .initialize_owner("npm", "bob-lib", "static-token:bob")
         .await
         .unwrap();
     publish_version(&parts.local, "npm", "alice-lib", "1.2.3").await;
@@ -699,7 +699,7 @@ async fn my_advisories_prefers_the_owned_label_over_pulled() {
     let parts = me_app_parts();
     parts
         .ownership
-        .initialize_owner("npm", "mine", "alice")
+        .initialize_owner("npm", "mine", "static-token:alice")
         .await
         .unwrap();
     publish_version(&parts.local, "npm", "mine", "1.0.0").await;
@@ -739,7 +739,7 @@ async fn my_advisories_keeps_a_pulled_version_separate_from_the_owned_one() {
     // one she owns, and she is running the one she pulled (RFC 0004 R15).
     parts
         .ownership
-        .initialize_owner("npm", "lib", "alice")
+        .initialize_owner("npm", "lib", "static-token:alice")
         .await
         .unwrap();
     publish_version(&parts.local, "npm", "lib", "1.0.0").await;

@@ -761,8 +761,9 @@ async fn a_pat_carries_the_groups_it_was_minted_with() {
         "the snapshot is what the token resolves to"
     );
     assert_eq!(
-        me["auth_provider"], "user-token",
-        "still a PAT session, so it cannot mint or revoke tokens of its own"
+        me["auth_provider"], "user-token:authentik",
+        "still a PAT session, so it cannot mint or revoke tokens of its own; the \
+         minting provider rides behind the prefix for `user:` grants"
     );
 }
 
@@ -1190,6 +1191,6 @@ async fn a_pat_sent_in_a_basic_header_is_its_owner() {
             .to_request();
         let me: Value = read_body_json(call_service(&app, req).await).await;
         assert_eq!(me["user_id"], "oidc-user", "Basic user name {user:?}");
-        assert_eq!(me["auth_provider"], "user-token");
+        assert_eq!(me["auth_provider"], "user-token:authentik");
     }
 }

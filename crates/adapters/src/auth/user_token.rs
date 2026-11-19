@@ -188,11 +188,14 @@ impl AuthProvider for UserTokenAuthProvider {
     }
 }
 
-/// `auth_provider` is `"user-token"`, not the provider that minted the token.
+/// `auth_provider` is `"user-token:<minting provider>"`, never the bare minting
+/// provider.
 ///
-/// That is what the token endpoints key on to refuse a PAT session: reporting
-/// the minting provider here would let a PAT mint another PAT and revoke its
-/// siblings.
+/// The prefix is what the token endpoints key on to refuse a PAT session:
+/// reporting the minting provider alone would let a PAT mint another PAT and
+/// revoke its siblings. The suffix is what `user:` grants and owner rows are
+/// scoped by ([`Identity::user_principal`]): a PAT acts as its owner, and its
+/// owner is a user *of that provider*.
 ///
 /// `groups` is the snapshot taken at creation (RFC 0011-bis §4.4), never a live
 /// lookup: a PAT has no session to re-resolve from. The subset invariant was
@@ -202,7 +205,7 @@ fn to_identity(tok: UserToken) -> Identity {
     Identity {
         user_id: Some(tok.user_id),
         role: tok.role,
-        auth_provider: Some("user-token".to_owned()),
+        auth_provider: Some(format!("{}{}", Identity::PAT_PROVIDER_PREFIX, tok.provider)),
         groups: tok.groups,
     }
 }

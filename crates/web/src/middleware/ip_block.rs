@@ -143,7 +143,15 @@ where
             let res = service.call(req).await?.map_into_left_body();
 
             let status = res.status().as_u16();
-            if config.trigger_on_status.contains(&status) {
+            // A `401` with no credential behind it is the challenge clients
+            // need before they authenticate, not a failed attempt.
+            let bare_challenge = status == 401
+                && res
+                    .response()
+                    .extensions()
+                    .get::<super::auth::CredentialRejected>()
+                    .is_none();
+            if config.trigger_on_status.contains(&status) && !bare_challenge {
                 match store
                     .record_violation(&ip, config.violation_window_secs)
                     .await
@@ -531,6 +539,46 @@ mod tests {
         test::call_service(&app, req).await;
 
         assert!(store.blocked_until("10.0.0.2").await.unwrap().is_none());
+    }
+
+    /// The anonymous `401` challenge is the handshake git/NuGet/Maven need;
+    /// only a `401` for a credential that was presented and refused counts.
+    #[actix_web::test]
+    async fn a_bare_401_challenge_is_not_a_violation() {
+        let store: Arc<dyn IpBlockStore> = Arc::new(InMemoryIpBlockStore::new());
+        let config = IpBlockingConfig {
+            violation_threshold: 1,
+            trigger_on_status: vec![401],
+            ..default_config()
+        };
+        let app = test::init_service(
+            App::new()
+                .wrap(IpBlockMiddlewareFactory::new(Arc::clone(&store), config))
+                .route(
+                    "/challenge",
+                    web::get().to(|| async { HttpResponse::Unauthorized().finish() }),
+                )
+                .route(
+                    "/rejected",
+                    web::get().to(|| async {
+                        let mut res = HttpResponse::Unauthorized().finish();
+                        res.extensions_mut()
+                            .insert(super::super::auth::CredentialRejected);
+                        res
+                    }),
+                ),
+        )
+        .await;
+        let call = |ip: &'static str, uri: &'static str| {
+            TestRequest::get()
+                .peer_addr(format!("{ip}:1234").parse().unwrap())
+                .uri(uri)
+                .to_request()
+        };
+        test::call_service(&app, call("10.0.0.7", "/challenge")).await;
+        assert!(store.blocked_until("10.0.0.7").await.unwrap().is_none());
+        test::call_service(&app, call("10.0.0.8", "/rejected")).await;
+        assert!(store.blocked_until("10.0.0.8").await.unwrap().is_some());
     }
 
     #[actix_web::test]

@@ -398,7 +398,8 @@ async fn a_package_tier_grant_alone_makes_the_package_visible() {
         registry: REG.to_owned(),
         node_kind: NodeKind::Package,
         node_key: "pkgonly".to_owned(),
-        subject: SubjectMatcher::User("user-1".to_owned()),
+        // `<provider>:<id>`: the test token is a static token.
+        subject: SubjectMatcher::User("static-token:user-1".to_owned()),
         actions: vec![
             Action::ReleasesRead,
             Action::ReleasesList,

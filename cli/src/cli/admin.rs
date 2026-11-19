@@ -427,7 +427,8 @@ pub enum GrantsCommand {
         /// `name` or `name@version` — the same spelling the node is stored
         /// under, so what you type and what is stored read the same.
         target: String,
-        /// `user:alice`, `group:oidc1:eng`, `role:user`, or `*`
+        /// `user:oidc1:alice`, `group:oidc1:eng`, `role:user`, or `*` (a bare `user:alice` is
+        /// accepted only when one identity provider yields user ids)
         #[arg(long)]
         subject: String,
         /// Comma-separated verbs or patterns, e.g. `releases:read,releases:list`

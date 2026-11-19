@@ -778,6 +778,7 @@ pub(super) fn build_hot_bundle(
             })
             .collect(),
         grant_repo: grant_repo.clone(),
+        user_providers: cfg.user_id_providers(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
         ref_resolutions: forge_stores.ref_resolutions.clone(),

@@ -178,10 +178,26 @@ pub async fn admin_access_check(
         }
     }
 
+    // A `user:` grant names `<provider>:<id>`: take the provider from the id
+    // when it carries one, or from the single user-id provider. With several and
+    // a bare id, none — and user grants then match nobody, as they would.
+    let (user_id, auth_provider) = match body.user_id.as_deref() {
+        None => (None, None),
+        Some(id) => {
+            let providers = hot.read().await.user_providers.clone();
+            match batlehub_core::entities::scope_user_principal(id, &providers) {
+                Ok(principal) => match principal.split_once(':') {
+                    Some((p, id)) => (Some(id.to_owned()), Some(p.to_owned())),
+                    None => (Some(principal), None),
+                },
+                Err(_) => (Some(id.to_owned()), None),
+            }
+        }
+    };
     let sim_identity = Identity {
-        user_id: body.user_id.clone(),
+        user_id,
         role: parse_role(body.role.as_deref())?,
-        auth_provider: None,
+        auth_provider,
         groups: body.groups.clone(),
     };
 

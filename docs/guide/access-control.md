@@ -136,7 +136,7 @@ Five subject forms:
 | `group:<provider>:<name>` | members of that group from that auth provider |
 | `group:*:<name>` | that group name from **any** provider |
 | `group::<name>` | that group name with no provider prefix |
-| `user:<id>` | one principal |
+| `user:<provider>:<id>` | one principal of that auth provider |
 
 Repeating a subject is a **union**, not a second opinion: two blocks granting
 `role:user` different verbs give `role:user` both.
@@ -156,8 +156,29 @@ Two things follow for a grant you write:
   ends that, not the change at the IDP — so offboarding revokes tokens, and a
   token's expiry (mandatory, 90 days at most) is the outer bound.
 
-`user:<id>` matches a token the same as a session: a token resolves to its
-creator's id.
+`user:<provider>:<id>` matches a token or a signed URL the same as a session:
+both resolve to their creator's id **on their creator's provider**.
+
+**A user subject names its provider.** A user id is a string each provider picks
+for itself, so `alice` on the corporate IdP and `alice` on a second IdP are two
+people, and a grant to one must not reach the other. `<provider>` is the
+`[[auth]] name` (`static-token` for a static `[[auth.tokens]]` entry with a
+`user_id`); the id may itself contain `:` — the subject splits on the first one.
+For the same reason an `[[auth]] name` may not contain `:`.
+
+The bare `user:<id>` written before this is still read, under one condition:
+
+- **One provider yields user ids** — the bare form always meant that provider.
+  The config loader rewrites it to `user:<provider>:<id>`, and at startup the
+  stored grants and package owners are rewritten the same way.
+- **Several do** — a bare `user:` in the config file is refused at load, naming
+  the fix. Stored grants and owners that are still bare match nobody (the
+  fail-closed reading of an ambiguous id) and the server logs how many at
+  startup: re-grant them as `user:<provider>:<id>`, and owners as
+  `<provider>:<id>`.
+
+A user owner (`batlehub-cli owner add`, `cargo owner --add`) is stored the same
+way, as `<provider>:<id>`; a bare id is scoped by the same rule.
 
 ### Where you write them {#tiers}
 
@@ -438,6 +459,10 @@ A node in shadow-mode resolves its grants, records what it **would** have
 refused, and refuses nothing. That is what makes adopting the model survivable:
 enable it, watch a week of real traffic, then enforce.
 
+A shadow covers the nodes beneath it **down to an enforced seal, not past it**:
+a registry-wide shadow does not reopen a namespace sealed with `grants = {}`. To
+put a sealed namespace on trial, give that namespace its own `grants_shadow`.
+
 ::: danger Shadow-mode on grants fails open
 A request that would be refused is **served**. Forgotten, this is an
 authorization bypass configured on purpose.
@@ -608,7 +633,7 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 ```json
 [
-  { "principal_type": "user",  "principal_id": "alice",   "granted_by": "admin" },
+  { "principal_type": "user",  "principal_id": "oidc1:alice", "granted_by": "admin" },
   { "principal_type": "group", "principal_id": "qa-team", "granted_by": null }
 ]
 ```
@@ -617,12 +642,19 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 `principal_type` is `"user"` or `"group"`. A `"group"` entry grants access to every user carrying that group claim (from OIDC or Kubernetes auth).
 
+A `"user"` entry is `<provider>:<id>`, the same form as a `user:` grant
+([Subjects](#subjects)): `oidc1:alice` is not the `alice` another identity
+provider vouches for. A bare id is scoped to the provider when exactly one
+provider yields user ids, and refused with `400` when several do. Members added
+before this was enforced are rewritten at startup on a one-provider deployment;
+with several providers they match nobody until re-added with their provider.
+
 ```sh
 # Add a specific user
 curl -s -X POST \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
-  -d '{"principal_type":"user","principal_id":"alice","granted_by":"admin"}' \
+  -d '{"principal_type":"user","principal_id":"oidc1:alice","granted_by":"admin"}' \
   https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel
 
 # Add an entire group
@@ -640,7 +672,7 @@ Returns `204 No Content` on success, `409 Conflict` if the principal is already 
 ```sh
 curl -s -X DELETE \
   -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel/user/alice
+  https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel/user/oidc1:alice
 
 curl -s -X DELETE \
   -H "Authorization: Bearer <admin-token>" \
@@ -709,6 +741,8 @@ A **violation** is any response whose status code appears in `trigger_on_status`
 
 - Repeated rate-limit hits → violations accumulate → auto-block.
 - Auth brute-force attempts → violations accumulate → auto-block.
+
+A `401` counts only when the request carried a credential no provider accepted. The bare challenge an anonymous request gets on `/proxy/` — the `401` git, NuGet and Maven need before they send the credential they hold — is not a violation, so a CI runner's ordinary fetches never ban its IP.
 
 Blocked IPs receive `403 Forbidden` with an `X-Block-Expires` header containing the Unix timestamp when the block lifts. The check runs **before authentication**, so blocked IPs consume no auth resources.
 

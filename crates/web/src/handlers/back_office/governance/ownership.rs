@@ -95,6 +95,22 @@ pub async fn list_package_owners(
     Ok(HttpResponse::Ok().json(owners))
 }
 
+/// A user owner is stored as `<provider>:<id>` (what `explicit_owner` compares
+/// against); a bare id is scoped to the one provider that yields user ids, and
+/// refused when there are several. Group owners pass through unchanged.
+pub(crate) async fn scope_owner_principal(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    principal_type: &str,
+    principal_id: &str,
+) -> Result<String, AppError> {
+    if principal_type != "user" {
+        return Ok(principal_id.to_owned());
+    }
+    let providers = hot.read().await.user_providers.clone();
+    batlehub_core::entities::scope_user_principal(principal_id, &providers)
+        .map_err(AppError::bad_request)
+}
+
 /// Add an owner to a package.
 #[utoipa::path(
     post,
@@ -131,13 +147,15 @@ pub async fn add_package_owner(
     )
     .await?;
     let ownership = require_ownership(&local_svc)?;
+    let principal_id =
+        scope_owner_principal(&hot, &body.principal_type, &body.principal_id).await?;
     ownership
         .add_owner(
             &registry,
             &name,
             OwnerEntry {
                 principal_type: body.principal_type.clone(),
-                principal_id: body.principal_id.clone(),
+                principal_id,
                 role: body.role.clone(),
                 granted_by: body.granted_by.clone(),
             },
@@ -170,7 +188,7 @@ pub async fn add_package_owner(
         ("registry" = String, Path, description = "Registry name"),
         ("name" = String, Path, description = "Package name"),
         ("principal_type" = String, Path, description = "\"user\" or \"group\""),
-        ("principal_id" = String, Path, description = "User ID or group name"),
+        ("principal_id" = String, Path, description = "`<provider>:<user id>` or group name"),
     ),
     responses(
         (status = 204, description = "Owner removed"),
@@ -198,6 +216,7 @@ pub async fn remove_package_owner(
     )
     .await?;
     let ownership = require_ownership(&local_svc)?;
+    let principal_id = scope_owner_principal(&hot, &principal_type, &principal_id).await?;
     ownership
         .remove_owner(&registry, &name, &principal_type, &principal_id)
         .await

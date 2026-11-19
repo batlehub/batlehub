@@ -100,7 +100,7 @@ impl OwnershipPort for PgOwnershipStore {
         )
         .bind(registry)
         .bind(package)
-        .bind(identity.user_id.as_deref())
+        .bind(identity.user_principal())
         .bind(&groups)
         .fetch_one(&self.pool)
         .await
@@ -124,7 +124,7 @@ impl OwnershipPort for PgOwnershipStore {
         )
         .bind(registry)
         .bind(packages)
-        .bind(identity.user_id.as_deref())
+        .bind(identity.user_principal())
         .bind(&groups)
         .fetch_all(&self.pool)
         .await
@@ -236,7 +236,7 @@ impl OwnershipPort for PgOwnershipStore {
     async fn list_owned_by(&self, identity: &Identity) -> Result<Vec<(String, String)>, CoreError> {
         // An anonymous caller with no groups owns nothing, and the query below
         // would otherwise compare `principal_id` against NULL for every row.
-        if identity.user_id.is_none() && identity.groups.is_empty() {
+        if identity.user_principal().is_none() && identity.groups.is_empty() {
             return Ok(vec![]);
         }
 
@@ -247,7 +247,7 @@ impl OwnershipPort for PgOwnershipStore {
                 OR (principal_type = 'group' AND principal_id = ANY($2::text[])) \
              ORDER BY registry, package_name",
         )
-        .bind(&identity.user_id)
+        .bind(identity.user_principal())
         .bind(&identity.groups)
         .fetch_all(&self.pool)
         .await

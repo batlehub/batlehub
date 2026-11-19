@@ -31,7 +31,7 @@ impl BetaChannelPort for InMemoryBetaChannelStore {
         let Some(members) = map.get(registry) else {
             return Ok(false);
         };
-        if let Some(uid) = &identity.user_id {
+        if let Some(uid) = &identity.user_principal() {
             if members
                 .iter()
                 .any(|e| e.principal_type == "user" && e.principal_id == *uid)
@@ -146,6 +146,23 @@ mod tests {
             .await
             .unwrap());
         assert!(!store.is_member("reg", &user_identity("bob")).await.unwrap());
+    }
+
+    /// A member is `<provider>:<id>`: the same id from another provider is
+    /// another person and is not a beta member.
+    #[tokio::test]
+    async fn a_user_member_is_scoped_to_its_provider() {
+        let store = InMemoryBetaChannelStore::new();
+        store
+            .add_member("reg", user_entry("corp:alice"))
+            .await
+            .unwrap();
+        let from = |p: &str| Identity {
+            auth_provider: Some(p.to_owned()),
+            ..user_identity("alice")
+        };
+        assert!(store.is_member("reg", &from("corp")).await.unwrap());
+        assert!(!store.is_member("reg", &from("signup")).await.unwrap());
     }
 
     #[tokio::test]

@@ -60,7 +60,11 @@ pub enum SubjectMatcher {
         provider: GroupProvider,
         name: String,
     },
-    /// `user:<id>`.
+    /// `user:<provider>:<id>`, holding `<provider>:<id>` — what
+    /// [`Identity::user_principal`] answers. A legacy bare `user:<id>` still
+    /// parses but matches nobody: the config loader and the startup migration
+    /// scope it when exactly one provider yields user ids, and refuse or leave it
+    /// inert otherwise ([`scope_user_principal`]).
     User(String),
     /// `token:<name>` — a machine credential with no user behind it.
     ///
@@ -181,7 +185,9 @@ impl SubjectMatcher {
                 .groups
                 .iter()
                 .any(|g| group_matches(g, provider, name)),
-            SubjectMatcher::User(id) => identity.user_id.as_deref() == Some(id.as_str()),
+            SubjectMatcher::User(principal) => {
+                identity.user_principal().as_deref() == Some(principal.as_str())
+            }
             // No principal is a machine token yet — `Subject` has one variant
             // (phase 2). Answering `false` is the correct reading of "this
             // subject is not that token", and it is also the fail-closed one.
@@ -217,6 +223,37 @@ impl fmt::Display for SubjectMatcher {
 /// Does the identity's group string `g` match this `group:` subject?
 ///
 /// Split on the **first** colon, so a name containing one stays one name.
+/// Whether `principal` (the part after `user:`) already names one of
+/// `providers`.
+pub fn user_principal_is_scoped(principal: &str, providers: &[String]) -> bool {
+    principal
+        .split_once(':')
+        .is_some_and(|(p, id)| !id.is_empty() && providers.iter().any(|q| q == p))
+}
+
+/// Scope a user principal written without its provider.
+///
+/// Already scoped: unchanged. Bare, with exactly one provider that yields user
+/// ids: prefixed with it, which is what the bare form always meant on such a
+/// deployment. Bare with several: refused, because an id alone would match the
+/// same string from every provider. Bare with none: unchanged — no identity
+/// carries a user principal, so it matches nobody either way.
+pub fn scope_user_principal(principal: &str, providers: &[String]) -> Result<String, String> {
+    if user_principal_is_scoped(principal, providers) {
+        return Ok(principal.to_owned());
+    }
+    match providers {
+        [] => Ok(principal.to_owned()),
+        [only] => Ok(format!("{only}:{principal}")),
+        _ => Err(format!(
+            "user '{principal}' names no identity provider; write it as \
+             '<provider>:{principal}' (one of: {}) — a bare id would match the same \
+             string from every provider",
+            providers.join(", ")
+        )),
+    }
+}
+
 fn group_matches(g: &str, provider: &GroupProvider, name: &str) -> bool {
     match (g.split_once(':'), provider) {
         (Some((g_provider, g_name)), GroupProvider::Any) => {
@@ -529,7 +566,13 @@ pub fn resolve(path: &[Node], subject: &Subject) -> GrantSet {
     // The floor, when a seal cut the path: only what the subject already held at
     // registry tier, and only the administrative verbs.
     if seal.is_some() {
-        add_administrative_floor(path.first(), subject, &mut set);
+        // The registry node, not `path.first()`: the instance node is prepended
+        // above it in production, and the floor restores registry-tier verbs.
+        add_administrative_floor(
+            path.iter().find(|n| n.tier == Tier::Registry),
+            subject,
+            &mut set,
+        );
     }
 
     set
@@ -1108,6 +1151,26 @@ mod tests {
         }
     }
 
+    /// Production prepends the instance node; the floor must still read the
+    /// registry node beneath it, not whatever sits first on the path.
+    #[test]
+    fn the_floor_reads_the_registry_node_under_an_instance_node() {
+        let path = [
+            Node::new(
+                Tier::Instance,
+                "instance",
+                Some(GrantMap::new().grant(SubjectMatcher::Role(Role::Admin), [Action::AuditRead])),
+            ),
+            reg(Some(GrantMap::new().grant(
+                SubjectMatcher::User("lea".to_owned()),
+                [Action::OwnersWrite],
+            ))),
+            Node::new(Tier::Namespace, "namespace:ns", Some(GrantMap::sealed())),
+        ];
+        let set = resolve(&path, &subject(Role::User, Some("lea"), &[]));
+        assert!(set.holds(Action::OwnersWrite));
+    }
+
     /// The floor is what the subject *already held*, not a blanket grant.
     ///
     /// An anonymous caller gets nothing out of a seal, however administrative the
@@ -1373,5 +1436,50 @@ mod tests {
             snapshot_pat_groups(&["oidc1:eng".to_owned()], &owner),
             Err(vec!["oidc1:eng".to_owned()])
         );
+    }
+
+    fn on(provider: &str, user: &str) -> Subject {
+        Subject::Identity(Identity {
+            user_id: Some(user.to_owned()),
+            role: Role::User,
+            auth_provider: Some(provider.to_owned()),
+            groups: vec![],
+        })
+    }
+
+    #[test]
+    fn a_user_grant_is_scoped_to_its_provider() {
+        let m = SubjectMatcher::parse("user:corp:alice").unwrap();
+        assert!(m.matches(&on("corp", "alice")));
+        // The same id from a second provider is a different person.
+        assert!(!m.matches(&on("self-signup", "alice")));
+        // A PAT and a signed URL act as their owner, on the owner's provider.
+        assert!(m.matches(&on("user-token:corp", "alice")));
+        assert!(m.matches(&on("signed-url:corp", "alice")));
+        assert!(!m.matches(&on("user-token:self-signup", "alice")));
+        // An id with a ':' of its own splits on the first one only.
+        let actions = SubjectMatcher::parse("user:ci:repo:org/x:ref:main").unwrap();
+        assert!(actions.matches(&on("ci", "repo:org/x:ref:main")));
+    }
+
+    #[test]
+    fn a_bare_user_grant_matches_no_provider_vouched_identity() {
+        let bare = SubjectMatcher::parse("user:alice").unwrap();
+        assert!(!bare.matches(&on("corp", "alice")));
+    }
+
+    #[test]
+    fn a_bare_user_principal_is_scoped_only_when_one_provider_yields_ids() {
+        let one = vec!["corp".to_owned()];
+        let two = vec!["corp".to_owned(), "self-signup".to_owned()];
+        assert_eq!(scope_user_principal("alice", &one).unwrap(), "corp:alice");
+        assert_eq!(
+            scope_user_principal("corp:alice", &two).unwrap(),
+            "corp:alice"
+        );
+        assert!(scope_user_principal("alice", &two).is_err());
+        assert_eq!(scope_user_principal("alice", &[]).unwrap(), "alice");
+        // A legacy id that merely contains ':' is still scoped, not mistaken.
+        assert_eq!(scope_user_principal("repo:x", &one).unwrap(), "corp:repo:x");
     }
 }

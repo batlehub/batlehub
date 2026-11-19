@@ -331,7 +331,7 @@ async fn malformed_token_returns_auth_error() {
 }
 
 #[tokio::test]
-async fn valid_jwt_no_rules_returns_anonymous_empty_groups() {
+async fn valid_jwt_no_rules_returns_anonymous_without_principal() {
     let p = no_rules_provider();
     let token = signed_token(
         Some("test-kid"),
@@ -340,7 +340,9 @@ async fn valid_jwt_no_rules_returns_anonymous_empty_groups() {
     let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
     assert_eq!(id.role, Role::Anonymous);
     assert!(id.groups.is_empty());
-    assert_eq!(id.user_id.as_deref(), Some("ci-bot"));
+    // No rule matched: any workflow on the forge could present this token, so
+    // it must not carry a `user_id` a `user:` grant or rate-limit key reads.
+    assert!(id.user_id.is_none());
     assert_eq!(id.auth_provider.as_deref(), Some("actions"));
 }
 
@@ -368,6 +370,11 @@ async fn matching_rule_grants_group_and_role() {
     let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
     assert_eq!(id.role, Role::User);
     assert_eq!(id.groups, vec!["ci-group"]);
+    assert_eq!(
+        id.user_id.as_deref(),
+        Some("bot"),
+        "a matched rule keeps the principal"
+    );
 }
 
 #[tokio::test]
@@ -571,7 +578,7 @@ async fn bearer_lowercase_prefix_accepted() {
         source_ip: None,
     };
     let id = p.authenticate(&req).await.unwrap().unwrap();
-    assert_eq!(id.user_id.as_deref(), Some("bot"));
+    assert_eq!(id.auth_provider.as_deref(), Some("actions"));
 }
 
 #[tokio::test]
@@ -587,7 +594,7 @@ async fn authorization_capitalized_header_accepted() {
         source_ip: None,
     };
     let id = p.authenticate(&req).await.unwrap().unwrap();
-    assert_eq!(id.user_id.as_deref(), Some("bot"));
+    assert_eq!(id.auth_provider.as_deref(), Some("actions"));
 }
 
 // ── JWKS key lookup ───────────────────────────────────────────────────────
@@ -601,7 +608,7 @@ async fn no_kid_in_token_uses_first_jwk() {
         json!({ "sub": "bot", "exp": future_exp(), "aud": TEST_AUDIENCE }),
     );
     let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
-    assert_eq!(id.user_id.as_deref(), Some("bot"));
+    assert_eq!(id.auth_provider.as_deref(), Some("actions"));
 }
 
 // ── detect_is_regex remaining triggers ───────────────────────────────────
@@ -729,7 +736,7 @@ async fn jwks_stale_cache_triggers_refresh() {
         json!({ "sub": "bot", "exp": future_exp(), "aud": TEST_AUDIENCE }),
     );
     let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
-    assert_eq!(id.user_id.as_deref(), Some("bot"));
+    assert_eq!(id.auth_provider.as_deref(), Some("actions"));
     jwks_mock.assert_async().await;
 }
 

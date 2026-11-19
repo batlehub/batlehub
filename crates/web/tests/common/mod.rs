@@ -3277,3 +3277,66 @@ pub fn canonical(pattern: &str) -> String {
     }
     out.replace("}/@", "}@")
 }
+
+/// A local registry app with an ownership store and two distinct `User`
+/// identities (`NS_PLAIN_USER_TOKEN`, `NS_MEMBER_TOKEN`).
+///
+/// The ownership port is the fixture: with it absent the gate is a no-op and
+/// an overwrite test would pass without checking anything.
+pub async fn local_ownership_app(
+    registry: &str,
+    kind: &str,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
+    let parts = local_registry_app_parts(
+        registry,
+        kind,
+        batlehub_config::schema::RegistryMode::Local,
+        None,
+    );
+    let LocalRegistryAppParts {
+        proxy_svc,
+        admin_svc,
+        token_repo,
+        access_config,
+        registry_map,
+        local_svc: cur,
+        mode_map,
+    } = parts;
+    let ownership = batlehub_adapters::in_memory::InMemoryOwnershipStore::new();
+    let grant_repo = batlehub_adapters::in_memory::InMemoryGrantRepository::new();
+    let owner_port = batlehub_core::services::ownership_grants::OwnershipGrants::wrap(
+        ownership as Arc<dyn batlehub_core::ports::OwnershipPort>,
+        grant_repo as Arc<dyn batlehub_core::ports::GrantRepository>,
+    );
+    let local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+        backend: cur.backend.clone(),
+        storage: cur.storage.clone(),
+        hot: cur.hot.clone(),
+        quota: cur.quota.clone(),
+        ownership: Some(owner_port),
+        team_namespace: cur.team_namespace.clone(),
+        sbom: cur.sbom.clone(),
+        explore_cache: cur.explore_cache.clone(),
+        package_repo: cur.package_repo.clone(),
+        readme: cur.readme.clone(),
+    });
+
+    finish_test_app_with_extra(
+        proxy_svc,
+        admin_svc,
+        token_repo,
+        access_config,
+        registry_map,
+        local_svc,
+        mode_map,
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults::default(),
+        batlehub_web::ApkSignerMap::default(),
+        team_ns_auth_providers(),
+    )
+    .await
+}

@@ -89,7 +89,7 @@ impl OwnershipPort for InMemoryOwnershipStore {
             Some(owners) if owners.is_empty() => return Ok(true),
             Some(owners) => owners,
         };
-        if let Some(uid) = &identity.user_id {
+        if let Some(uid) = &identity.user_principal() {
             if owners
                 .iter()
                 .any(|e| e.principal_type == "user" && e.principal_id == *uid)
@@ -159,7 +159,7 @@ impl OwnershipPort for InMemoryOwnershipStore {
             .iter()
             .filter(|(_, owners)| {
                 owners.iter().any(|e| match e.principal_type.as_str() {
-                    "user" => identity.user_id.as_deref() == Some(e.principal_id.as_str()),
+                    "user" => identity.user_principal().as_deref() == Some(e.principal_id.as_str()),
                     "group" => identity.groups.contains(&e.principal_id),
                     _ => false,
                 })

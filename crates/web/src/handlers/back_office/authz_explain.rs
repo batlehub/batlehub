@@ -216,8 +216,15 @@ fn identity_for(matcher: &SubjectMatcher) -> Identity {
                 GroupProvider::Unprefixed => name.clone(),
             }];
         }
-        SubjectMatcher::User(id) => {
-            identity.user_id = Some(id.clone());
+        SubjectMatcher::User(principal) => {
+            // `<provider>:<id>`, as `Identity::user_principal` spells it.
+            match principal.split_once(':') {
+                Some((p, id)) => {
+                    identity.auth_provider = Some(p.to_owned());
+                    identity.user_id = Some(id.to_owned());
+                }
+                None => identity.user_id = Some(principal.clone()),
+            }
             // A `user:` grant is written for someone who has logged in; an
             // anonymous identity with a user id is not a state the auth
             // providers produce.
@@ -260,8 +267,15 @@ pub async fn admin_authz_explain(
     )
     .await?;
 
-    let matcher = SubjectMatcher::parse(&query.subject)
+    let mut matcher = SubjectMatcher::parse(&query.subject)
         .map_err(|e| AppError::bad_request(format!("subject: {e}")))?;
+    if let SubjectMatcher::User(principal) = &matcher {
+        let providers = hot.read().await.user_providers.clone();
+        matcher = SubjectMatcher::User(
+            batlehub_core::entities::scope_user_principal(principal, &providers)
+                .map_err(|e| AppError::bad_request(format!("subject: {e}")))?,
+        );
+    }
     if matches!(matcher, SubjectMatcher::Token(_)) {
         return Err(AppError::bad_request(
             "no principal is a machine token yet (RFC 0015 §4.3), so a 'token:' subject \

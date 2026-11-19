@@ -468,6 +468,11 @@ pub struct HotConfig {
     /// wired none, and is *not* the same as "they deny": a tier with no rows
     /// inherits.
     pub grant_repo: Option<Arc<dyn crate::ports::GrantRepository>>,
+    /// The `[[auth]]` names whose identities carry a user id (plus
+    /// `static-token` when a static token sets one): what a `user:` grant or a
+    /// user owner written as a bare id is scoped against
+    /// ([`crate::entities::scope_user_principal`]).
+    pub user_providers: Vec<String>,
     /// Where forge ref resolutions are remembered (RFC 0019 §5.2).
     ///
     /// `None` means refs still resolve — resolution is what builds the cache
@@ -692,6 +697,7 @@ impl Default for HotConfig {
             signing_keys: None,
             policy_tiers: HashMap::new(),
             grant_repo: None,
+            user_providers: Vec::new(),
             ref_resolutions: None,
             rate_limit_budget: None,
             forge_refs: HashMap::new(),
