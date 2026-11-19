@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: a07c085e6d7d8661
+sourceHash: 0e8b14d806c800e0
 ---
 
 # Rechargement à chaud et configuration dynamique
@@ -154,6 +154,35 @@ curl -s -X POST \
 Tous les rechargements, appliqués ou rejetés, sont écrits dans la table
 `config_changes` avec le diff, la source du déclenchement et l'identité de
 l'opérateur.
+
+### L'éditeur de configuration et plusieurs réplicas
+
+Le fichier reste la source de vérité, et une application depuis l'éditeur de
+configuration de la console est refusée plutôt que faite à moitié :
+
+- **Le fichier est écrit avant que quoi que ce soit ne soit appliqué.** S'il ne
+  peut pas l'être — un montage en lecture seule comme le Secret du chart —
+  l'application répond `500` et le réplica garde la configuration qu'il avait.
+  Modifiez alors le fichier à sa source, ou donnez au serveur un fichier
+  inscriptible (le `writableConfig` du chart).
+- **Une application nomme le changement qu'elle applique.** `from-content`
+  renvoie le `pending_id` du changement préparé et `POST …/pending/apply` le
+  reprend (`{"pending_id": "…"}`) ; si un autre administrateur a préparé un
+  changement entre-temps, l'application répond `409` et laisse le sien en
+  attente. Le corps est facultatif : sans lui, l'application prend ce qui est
+  préparé, comme avant.
+- **Un enregistrement n'écrase jamais un fichier plus récent.** `GET
+  …/config/content` renvoie un `content_hash` ; renvoyé comme `base_hash` de
+  `from-content`, un fichier modifié depuis reçoit `409`, à la préparation puis
+  de nouveau à l'application.
+- **Les autres réplicas suivent.** Une application annonce le hash du fichier
+  qu'elle a mis en vigueur, par la base de données que chaque réplica interroge
+  déjà (toutes les 15 s). Un réplica qui le lit applique son propre fichier dès
+  que celui-ci a le même hash — par un volume partagé, ou quand la mise à jour
+  d'un Secret atteint le pod — et abandonne au bout de deux minutes ;
+  l'avertissement `config.replica-drift` indique alors quels réplicas diffèrent.
+  Un changement préparé mais non appliqué sur un suiveur est remplacé par celui
+  qui est suivi.
 
 ### Les avertissements de configuration
 

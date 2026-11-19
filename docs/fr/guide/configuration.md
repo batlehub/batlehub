@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 7777973afcad4522
+sourceHash: bf002dfb20860d40
 ---
 
 # Référence de configuration
@@ -2912,7 +2912,7 @@ dry_run             = false
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
-| `keep_versions` | entier | *(non défini)* | Garder les N versions les plus récentes de chaque paquet, par date de publication |
+| `keep_versions` | entier | *(non défini)* | Garder les N versions non retirées les plus récentes de chaque paquet, par date de publication — plus la version stable la plus haute, quelle que soit sa date de publication |
 | `keep_for_days` | entier | *(non défini)* | Garder tout ce qui a été **publié** dans cette fenêtre |
 | `keep_if_pulled_days` | entier | *(non défini)* | Garder tout ce qui a été **téléchargé** dans cette fenêtre |
 | `keep_yanked` | booléen | `true` | Garder les versions retirées |

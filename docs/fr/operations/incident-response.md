@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/incident-response.md
-sourceHash: baf9981d1cbe35dc
+sourceHash: b5ae81894a5b9653
 ---
 
 # Procédure de réponse à incident — BatleHub

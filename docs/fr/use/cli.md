@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: f4a0148f9935452d
+sourceHash: 5c9dfd99ecfc029f
 ---
 
 # batlehub-cli
@@ -743,9 +743,26 @@ batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <
 Connecte par le fournisseur OIDC du serveur et enregistre le token, avec son
 token de rafraîchissement, dans le profil `-P`. La CLI écoute sur `127.0.0.1`,
 sur un port libre, et ouvre votre navigateur sur la connexion du serveur. Une
-fois que le fournisseur vous a connecté, le serveur renvoie le navigateur vers
-ce port. La CLI vérifie que le retour appartient bien à la connexion qu'elle a
-lancée, puis ferme le port. Elle attend jusqu'à cinq minutes.
+fois que le fournisseur vous a connecté, le serveur affiche d'abord une page,
+**Authorize batlehub-cli on this machine?**, qui indique quand la connexion a été
+lancée, depuis quelle adresse et quel client, et le port local auquel elle sera
+remise. N'autorisez que si vous venez de lancer `batlehub-cli auth login`
+vous-même : sur une machine partagée, un lien vers la connexion suffit à
+quelqu'un d'autre pour faire terminer par *votre* navigateur une connexion
+qu'*il* a lancée, et c'est sur cette page que cela s'arrête. Cancel abandonne la
+connexion ; la page expire au bout de cinq minutes et ne répond qu'une fois.
+Après **Authorize**, le serveur renvoie le navigateur vers ce port avec un code
+à usage unique, jamais le token lui-même. La CLI vérifie que le retour
+appartient à la connexion qu'elle a lancée, ferme le port, et échange le code
+contre le token avec un secret qu'elle seule détient (un vérificateur de type
+PKCE dont elle a envoyé le hash au lancement de la connexion). Un autre
+programme à l'écoute sur ce port, ou qui lit l'historique du navigateur, obtient
+un code dont il ne peut rien faire. Le code expire au bout de 60 secondes et ne
+sert qu'une fois. La CLI attend le navigateur jusqu'à cinq minutes.
+
+Le serveur refuse une connexion par boucle locale qui ne porte pas ce hash : une
+`batlehub-cli` antérieure à ce changement ne peut donc plus se connecter par le
+navigateur. Mettez-la à jour, ou utilisez `--no-browser`.
 
 Le navigateur est `$BROWSER` quand la variable est définie, sinon `xdg-open`,
 `open` ou le gestionnaire d'URL de Windows. Si aucun ne démarre, la CLI imprime
