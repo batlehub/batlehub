@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::{ImportReport, ReleaseImportService, ReleaseSelector};
 use crate::entities::PackageId;
 use crate::error::CoreError;
-use crate::ports::{collect_byte_stream, ForgeRelease};
+use crate::ports::ForgeRelease;
 use crate::services::local_registry::PublishRequest;
 
 /// Whether `name` matches a shell-style glob over a file name.
@@ -229,8 +229,24 @@ impl ReleaseImportService {
     ) -> Result<Bytes, CoreError> {
         let pkg = PackageId::new(&self.from, &self.repo, &release.tag)
             .with_artifact(asset.artifact.clone());
-        let fetched = self.client.fetch_artifact(&pkg).await?;
-        collect_byte_stream(fetched.stream).await
+        // The publish this feeds refuses past the same limit; checking while
+        // reading keeps a hostile multi-GiB asset from being held whole first.
+        let limit = (self.local.hot.read().await)
+            .max_artifact_size_bytes
+            .unwrap_or(500 * 1024 * 1024);
+        let mut stream = self.client.fetch_artifact(&pkg).await?.stream;
+        let mut buf = bytes::BytesMut::new();
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            let chunk = chunk?;
+            if buf.len() as u64 + chunk.len() as u64 > limit {
+                return Err(CoreError::PayloadTooLarge(format!(
+                    "release asset {} exceeds the {limit}-byte artifact limit",
+                    asset.name
+                )));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        Ok(buf.freeze())
     }
 
     /// The report for an asset the held check finishes with, or `None` to carry

@@ -160,6 +160,29 @@ pub trait LocalRegistryBackend: Send + Sync {
         Ok(false)
     }
 
+    /// Add one more file to a published version: `file` (an object carrying a
+    /// `filename`) is appended to `index_metadata.files`.
+    ///
+    /// For an ecosystem whose version is several files uploaded one at a time
+    /// — PyPI's sdist and wheels. Atomic: `Ok(false)` when the version is not
+    /// published (absent, pending, tombstoned) or already carries a file of that
+    /// name, either as its primary `index_metadata.filename` or in `files`, so
+    /// two racing uploads of one filename cannot both be recorded.
+    ///
+    /// Default: not supported, for the test backends that model none of this;
+    /// both real backends override it.
+    async fn append_file(
+        &self,
+        _registry: &str,
+        _name: &str,
+        _version: &str,
+        _file: serde_json::Value,
+    ) -> Result<bool, CoreError> {
+        Err(CoreError::NotSupported(
+            "this backend cannot add a file to a published version".to_owned(),
+        ))
+    }
+
     /// Return all versions of `name` in `registry`, sorted by `published_at` ASC.
     /// Returns an empty vec (not an error) when the crate has never been published.
     /// Must only return rows in the *published* state.

@@ -723,6 +723,23 @@ async fn vspackage_serves_the_package() {
     let resp = call_service(&app, req).await;
 
     assert_eq!(resp.status(), 200);
+    // The package is publisher bytes, served as is: what keeps a browser from
+    // rendering them as a page of this origin is these headers, set by the
+    // handler itself (this app has no security middleware), not the body.
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(header("content-type"), "application/octet-stream");
+    assert_eq!(header("content-disposition"), "attachment");
+    assert_eq!(header("x-content-type-options"), "nosniff");
+    assert_eq!(
+        header("content-security-policy"),
+        batlehub_web::PROTOCOL_DOCUMENT_CSP
+    );
     assert_eq!(&read_body(resp).await[..2], b"PK");
 }
 

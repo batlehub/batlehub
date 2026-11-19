@@ -158,7 +158,9 @@ async fn an_ended_row_tells_a_late_follower_and_is_taken_over_at_once() {
 async fn reap_claims_only_a_still_expired_lease() {
     let Some(repo) = repo().await else { return };
     let _shared = SWEEP.read().await;
-    let ttl = Duration::from_millis(300);
+    // A second, not less: "alive" is read one round trip after the heartbeat or
+    // take, and a loaded CI runner under coverage has spent 300 ms on that.
+    let ttl = Duration::from_secs(1);
     let leases = PgFillLeases::with_ttl(repo.pool(), ttl);
     let k = key();
     let (fill, _) = started(leases.take(&k, "a").await.unwrap());
@@ -284,7 +286,9 @@ async fn a_follower_hears_progress_by_polling_then_by_notify() {
 async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
     let Some(repo) = repo().await else { return };
     let _alone = SWEEP.write().await;
-    let ttl = Duration::from_millis(300);
+    // A second, not less: "alive" is read one round trip after the heartbeat or
+    // take, and a loaded CI runner under coverage has spent 300 ms on that.
+    let ttl = Duration::from_secs(1);
     let leases = PgFillLeases::with_ttl(repo.pool(), ttl);
     let storage = InMemoryStorageBackend::new();
     let (dead_key, live_key) = (key(), key());

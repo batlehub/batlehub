@@ -118,9 +118,9 @@ async fn inbound_webhook_missing_hmac_header_returns_403() {
     assert_eq!(resp.status(), 403);
 }
 
-#[actix_web::test]
-async fn inbound_webhook_valid_hmac_returns_200() {
-    let secret = "s3cret";
+/// POST `body` to the `ci` inbound webhook, signed over `"{ts}.{body}"` with
+/// `ts` sent as `X-BatleHub-Timestamp` (or no timestamp header when `None`).
+async fn post_signed_inbound(secret: &str, ts: Option<i64>, body: &[u8]) -> u16 {
     let notifications_config = NotificationsConfig {
         enabled: true,
         channels: vec![],
@@ -132,17 +132,48 @@ async fn inbound_webhook_valid_hmac_returns_200() {
     let store: Arc<dyn NotificationPort> = Arc::new(InMemoryNotificationStore::new());
     let app = make_app_with_notifications(None, store, Some(notifications_config)).await;
 
-    let body_bytes = serde_json::to_vec(&serde_json::json!({"foo": "bar"})).unwrap();
-    let signature = format!("sha256={}", compute_hmac_sha256_hex(secret, &body_bytes));
+    let ts_text = ts.map(|t| t.to_string()).unwrap_or_default();
+    let mut signed = format!("{ts_text}.").into_bytes();
+    signed.extend_from_slice(body);
+    let signature = format!("sha256={}", compute_hmac_sha256_hex(secret, &signed));
 
-    let req = TestRequest::post()
+    let mut req = TestRequest::post()
         .uri("/api/v1/webhooks/inbound/ci")
         .insert_header(("X-Hub-Signature-256", signature))
-        .insert_header(("content-type", "application/json"))
-        .set_payload(body_bytes)
-        .to_request();
-    let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 200);
+        .insert_header(("content-type", "application/json"));
+    if ts.is_some() {
+        req = req.insert_header(("X-BatleHub-Timestamp", ts_text));
+    }
+    call_service(&app, req.set_payload(body.to_vec()).to_request())
+        .await
+        .status()
+        .as_u16()
+}
+
+#[actix_web::test]
+async fn inbound_webhook_valid_hmac_returns_200() {
+    let body = serde_json::to_vec(&serde_json::json!({"foo": "bar"})).unwrap();
+    let now = chrono::Utc::now().timestamp();
+    assert_eq!(post_signed_inbound("s3cret", Some(now), &body).await, 200);
+}
+
+#[actix_web::test]
+async fn inbound_webhook_replayed_with_an_old_timestamp_is_refused() {
+    // A correctly signed request captured an hour ago: the signature still
+    // matches its own timestamp, but the timestamp is stale.
+    let body = serde_json::to_vec(&serde_json::json!({"foo": "bar"})).unwrap();
+    let an_hour_ago = chrono::Utc::now().timestamp() - 3600;
+    assert_eq!(
+        post_signed_inbound("s3cret", Some(an_hour_ago), &body).await,
+        403
+    );
+}
+
+#[actix_web::test]
+async fn inbound_webhook_without_a_timestamp_is_refused() {
+    // The old scheme: HMAC over `".{body}"` with no timestamp header.
+    let body = serde_json::to_vec(&serde_json::json!({"foo": "bar"})).unwrap();
+    assert_eq!(post_signed_inbound("s3cret", None, &body).await, 403);
 }
 
 #[actix_web::test]

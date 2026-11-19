@@ -362,6 +362,13 @@ pub async fn explore_packages(
             .into_iter()
             .map(|e| to_dto(e, &resolution, &identity, now, "name", None))
             .collect();
+        // shortcut: filtered after SQL paginates, so a page may hold fewer than
+        // `per_page` rows and `total` still counts sealed ones; push the
+        // namespace filter into the query if that ever matters.
+        super::retain_readable(&local_svc, &identity.0, &mut items, |e| {
+            (e.registry.as_str(), e.name.as_str())
+        })
+        .await;
         let scan_status_unavailable = attach_scan_status(&hot, &identity, &mut items).await;
 
         return Ok(web::Json(ExplorePackageListResponse {
@@ -378,7 +385,7 @@ pub async fn explore_packages(
     }
 
     let MergedSearchResult {
-        merged,
+        mut merged,
         upstream_unavailable,
         names_truncated,
     } = merged_search(MergedSearch {
@@ -397,6 +404,10 @@ pub async fn explore_packages(
     .await?;
     let truncated = truncated || names_truncated;
 
+    super::retain_readable(&local_svc, &identity.0, &mut merged, |e| {
+        (e.registry.as_str(), e.name.as_str())
+    })
+    .await;
     let total = merged.len();
     let start = (page * per_page).min(total as u64) as usize;
     let end = (start + per_page as usize).min(total);

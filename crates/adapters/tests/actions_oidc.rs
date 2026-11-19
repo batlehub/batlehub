@@ -120,7 +120,9 @@ async fn full_bootstrap_and_authenticate() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(id.user_id.as_deref(), Some("ci-bot"));
+    // No rule configured, so no rule matched: the token stays anonymous and
+    // carries no principal a `user:` grant could match.
+    assert_eq!(id.user_id, None);
     assert_eq!(id.auth_provider.as_deref(), Some("forgejo-action"));
 }
 

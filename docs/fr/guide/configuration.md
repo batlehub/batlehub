@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 7777973afcad4522
+sourceHash: bf002dfb20860d40
 ---
 
 # Référence de configuration
@@ -2912,7 +2912,7 @@ dry_run             = false
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
-| `keep_versions` | entier | *(non défini)* | Garder les N versions les plus récentes de chaque paquet, par date de publication |
+| `keep_versions` | entier | *(non défini)* | Garder les N versions non retirées les plus récentes de chaque paquet, par date de publication — plus la version stable la plus haute, quelle que soit sa date de publication |
 | `keep_for_days` | entier | *(non défini)* | Garder tout ce qui a été **publié** dans cette fenêtre |
 | `keep_if_pulled_days` | entier | *(non défini)* | Garder tout ce qui a été **téléchargé** dans cette fenêtre |
 | `keep_yanked` | booléen | `true` | Garder les versions retirées |
@@ -3459,8 +3459,12 @@ comme des identifiants et injectez-les par `env` plutôt que de les écrire dans
 fichier.
 
 **Les webhooks entrants.** Chaque bloc `[[notifications.inbound]]` accepte des
-événements venus d'ailleurs, vérifiés contre `X-Hub-Signature-256` quand un
-`secret` est défini. Sans secret, **toute charge est acceptée**, ce qui ne
+événements venus d'ailleurs, vérifiés quand un `secret` est défini : la requête
+porte `X-BatleHub-Timestamp: <secondes Unix>` et `X-Hub-Signature-256: sha256=<hex>`,
+un HMAC-SHA256 sur `"{timestamp}.{corps}"`. Un horodatage à plus de 300 secondes
+de l'horloge du serveur est refusé comme une mauvaise signature, de sorte qu'une
+requête capturée ne peut pas être rejouée plus tard — par exemple pour rétablir un
+`hard_block` que sa source a depuis révoqué. Sans secret, **toute charge est acceptée**, ce qui ne
 convient qu'à un réseau où rien de non fiable n'atteint le port. Un registre doté
 de [`[registries.security]`](#registries-security) rend le secret obligatoire :
 un événement `security.*` sur un webhook non signé permettrait à quiconque sur le
@@ -3770,7 +3774,7 @@ max_flags_per_minute = 600          # 0 désactive la limite
 | Clé | Défaut | Signification |
 | --- | --- | --- |
 | `name` | — | `[a-z0-9][a-z0-9_-]*`, 64 caractères au plus, unique — et distinct de tout nom de `[[notifications.inbound]]`, parce qu'un événement `security.verdict` stocke son `hard_block` sous le nom du webhook et que c'est le secret de cette source qui révoque un signalement sous ce nom. La source pousse sur `POST /api/v1/flags/{name}` et révoque par `DELETE /api/v1/flags/{name}/{external_id}`. |
-| `secret` | — | La clé HMAC-SHA256. La poussée porte `X-Hub-Signature-256: sha256=<hex>` sur le corps brut (sur un `DELETE`, qui n'en a pas, sur la chaîne canonique `DELETE\n/api/v1/flags/{source}/{external_id}`, de sorte qu'une signature de révocation capturée ne lève que le signalement qu'elle nomme), le même schéma que vérifie `[[notifications.inbound]]`. Un nom inconnu et une mauvaise signature répondent le même `404`. |
+| `secret` | — | La clé HMAC-SHA256. La poussée porte `X-BatleHub-Timestamp: <secondes Unix>` et `X-Hub-Signature-256: sha256=<hex>` sur `"{timestamp}.{corps}"` (sur un `DELETE`, qui n'a pas de corps, la chaîne canonique `DELETE\n/api/v1/flags/{source}/{external_id}` en tient lieu, de sorte qu'une signature de révocation capturée ne lève que le signalement qu'elle nomme), le même schéma que vérifie `[[notifications.inbound]]`. Un horodatage à plus de 300 s de l'horloge du serveur est refusé, de sorte qu'une poussée ou une révocation capturée ne peut pas être rejouée. Un nom inconnu et une mauvaise signature répondent le même `404`. |
 | `max_effect` | `gate` | L'effet le plus fort que cette source peut poser. Une poussée qui en demande plus est stockée au plafond et en est informée (`effect_capped: true`). |
 | `registries` | `[]` | Les registres que la source peut signaler. Un élément qui en nomme un autre est rejeté, élément par élément. |
 | `max_flags_per_minute` | `600` | Éléments par minute, toutes poussées confondues ; au-delà, la poussée entière vaut `429`, avec un `Retry-After`. |

@@ -41,12 +41,15 @@ pub async fn run(args: WhyArgs, client: &BatleHubClient) -> Result<()> {
     if ctx().structured() {
         data(&answer)?;
     } else if let Some(version) = c.version.as_deref() {
-        print!("{}", render(&c.registry, &c.name, &answer));
+        print!(
+            "{}",
+            crate::render::terminal_safe(&render(&c.registry, &c.name, &answer))
+        );
         // The scanners' own detail (RFC 0018): which advisory, which rule,
         // which file — shown to a token with `findings:read`, as before.
         if verdict_holds(&answer) {
             if let Ok(Some(v)) = client.get_verdict(&c.registry, &c.name, version).await {
-                print!("{}", findings(&v));
+                print!("{}", crate::render::terminal_safe(&findings(&v)));
             }
         }
     } else {

@@ -168,6 +168,45 @@ async fn cargo_publish_user_can_publish() {
     );
 }
 
+/// cargo resolves a dependency through the lowercased index path and
+/// downloads it under the declared spelling; both must reach a crate published
+/// as `MyCrate`.
+#[actix_web::test]
+async fn cargo_publish_of_a_mixed_case_name_resolves_and_downloads() {
+    let app = make_local_registry_app(RegistryMode::Local).await;
+    let req = TestRequest::put()
+        .uri("/proxy/local-cargo/api/v1/crates/new")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(make_publish_payload("MyCrate", "0.1.0"))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+
+    for uri in [
+        "/proxy/local-cargo/registry/my/cr/mycrate",
+        "/proxy/local-cargo/MyCrate/0.1.0/download",
+    ] {
+        let req = TestRequest::get()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 200, "{uri}");
+    }
+}
+
+/// crates.io's rule: `foo_bar` beside `foo-bar` is refused.
+#[actix_web::test]
+async fn cargo_publish_of_a_colliding_name_returns_409() {
+    let app = make_local_registry_app(RegistryMode::Local).await;
+    for (name, status) in [("foo-bar", 200), ("Foo_Bar", 409)] {
+        let req = TestRequest::put()
+            .uri("/proxy/local-cargo/api/v1/crates/new")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_payload(make_publish_payload(name, "0.1.0"))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), status, "{name}");
+    }
+}
+
 /// cargo sends `Authorization: <token>` with no scheme (registry web API);
 /// measured against cargo 1.98 in tests/heavy/cargo.sh, where a publish that
 /// carried the admin token was refused as anonymous.
@@ -659,7 +698,9 @@ async fn cargo_first_publish_registers_the_publisher_as_owner() {
         1,
         "first publish is the one path that creates ownership"
     );
-    assert_eq!(owners[0].principal_id, "user-1");
+    // `<provider>:<id>`: the test token's provider, so another provider's
+    // `user-1` is not this owner.
+    assert_eq!(owners[0].principal_id, "static-token:user-1");
 }
 
 #[actix_web::test]
@@ -795,9 +836,11 @@ async fn cargo_add_owners_writes_the_package_tier_grant() {
 
     // The control: the publisher's own grant is there, so a missing one below is
     // the delegation and not the fixture.
-    assert!(owner_grant(&grants, "delegating", "user:user-1")
-        .await
-        .is_some());
+    assert!(
+        owner_grant(&grants, "delegating", "user:static-token:user-1")
+            .await
+            .is_some()
+    );
     assert!(
         owner_grant(&grants, "delegating", "user:colleague")
             .await
@@ -875,7 +918,7 @@ async fn cargo_remove_owners_takes_the_package_tier_grant_back() {
         "…and the two stores must agree about it"
     );
     // The remaining owner is untouched: removal is per subject, not per node.
-    assert!(owner_grant(&grants, "revoking", "user:user-1")
+    assert!(owner_grant(&grants, "revoking", "user:static-token:user-1")
         .await
         .is_some());
 }

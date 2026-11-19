@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use batlehub_web::handlers::flags::revoke_canonical;
-use batlehub_web::services::verify_inbound_hmac;
+use batlehub_web::services::{signed_and_fresh, TIMESTAMP_HEADER};
 
 /// A source name and an id with no regex meaning and no shell meaning, so a
 /// failure is about the format and never about the sample.
@@ -95,11 +95,18 @@ fn heavy_suite_signs_the_canonical_the_handler_verifies() {
 
     // And the whole credential, end to end: what the suite would put in the
     // header is what `authenticate` accepts.
+    let now = chrono::Utc::now().timestamp();
     let header = heavy_lib(&format!(
-        "heavy_flag_sign_revoke {SECRET} {SOURCE} {EXTERNAL_ID}"
+        "heavy_flag_sign_revoke {SECRET} {now} {SOURCE} {EXTERNAL_ID}"
     ));
     assert!(
-        verify_inbound_hmac(SECRET, expected.as_bytes(), header.trim()),
+        signed_and_fresh(
+            SECRET,
+            &now.to_string(),
+            expected.as_bytes(),
+            header.trim(),
+            now
+        ),
         "the heavy suite's revoke signature is not one the server accepts"
     );
 }
@@ -122,6 +129,11 @@ fn the_documented_canonical_is_the_current_one() {
     ] {
         let text = std::fs::read_to_string(root.join(page))
             .unwrap_or_else(|e| panic!("{page} is readable: {e}"));
+        assert!(
+            text.contains(TIMESTAMP_HEADER),
+            "{page} does not say a flag push or revoke is signed with \
+             `{TIMESTAMP_HEADER}`, so an operator integrating from it is refused"
+        );
         assert!(
             text.contains(&quoted),
             "{page} does not quote `{quoted}`, so an operator integrating from \

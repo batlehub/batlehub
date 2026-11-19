@@ -263,3 +263,99 @@ impl GrantRepository for PgGrantRepository {
         Ok(())
     }
 }
+
+/// What [`scope_bare_user_principals`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BareUserPrincipals {
+    /// Rows rewritten to `<provider>:<id>`.
+    pub scoped: u64,
+    /// Rows still bare: several providers yield user ids, so nothing can say
+    /// whose `alice` a bare `alice` was, and those rows match nobody.
+    pub left: u64,
+}
+
+/// Scope the `user:` grants, user owner rows and user beta-channel members
+/// written before user principals
+/// carried their provider (`user:<id>` → `user:<provider>:<id>`).
+///
+/// With exactly one user-id provider the bare form always meant that one, so it
+/// is rewritten. With none or several it is counted and left: a bare principal
+/// matches nobody, which is the fail-closed reading of an ambiguous one. A bare
+/// row whose scoped twin already exists is left too (the unique key would
+/// refuse the rewrite) and is counted.
+pub async fn scope_bare_user_principals(
+    pool: &PgPool,
+    providers: &[String],
+) -> Result<BareUserPrincipals, CoreError> {
+    // "Scoped" = the part before the first ':' names a provider, and there is
+    // an id after it. `substr(subject, 6)` drops the `user:` prefix. The
+    // predicate is spelled out in each statement: sqlx refuses a formatted one.
+    let mut out = BareUserPrincipals::default();
+    let mut tx = pool.begin().await.db_err()?;
+    if let [only] = providers {
+        out.scoped += sqlx::query(
+            "UPDATE grants g SET subject = 'user:' || $2 || ':' || substr(g.subject, 6) \
+             WHERE g.subject LIKE 'user:%' AND NOT ( \
+                   position(':' IN substr(g.subject, 6)) > 0 \
+                   AND split_part(substr(g.subject, 6), ':', 1) = ANY($1)) \
+               AND NOT EXISTS (SELECT 1 FROM grants t \
+                 WHERE t.registry = g.registry AND t.node_kind = g.node_kind \
+                   AND t.node_key = g.node_key \
+                   AND t.subject = 'user:' || $2 || ':' || substr(g.subject, 6))",
+        )
+        .bind(providers)
+        .bind(only)
+        .execute(&mut *tx)
+        .await
+        .db_err()?
+        .rows_affected();
+        out.scoped += sqlx::query(
+            "UPDATE package_owners o SET principal_id = $2 || ':' || o.principal_id \
+             WHERE o.principal_type = 'user' AND NOT ( \
+                   position(':' IN o.principal_id) > 0 \
+                   AND split_part(o.principal_id, ':', 1) = ANY($1)) \
+               AND NOT EXISTS (SELECT 1 FROM package_owners t \
+                 WHERE t.registry = o.registry AND t.package_name = o.package_name \
+                   AND t.principal_type = 'user' AND t.principal_id = $2 || ':' || o.principal_id)",
+        )
+        .bind(providers)
+        .bind(only)
+        .execute(&mut *tx)
+        .await
+        .db_err()?
+        .rows_affected();
+        out.scoped += sqlx::query(
+            "UPDATE beta_channel_members b SET principal_id = $2 || ':' || b.principal_id \
+             WHERE b.principal_type = 'user' AND NOT ( \
+                   position(':' IN b.principal_id) > 0 \
+                   AND split_part(b.principal_id, ':', 1) = ANY($1)) \
+               AND NOT EXISTS (SELECT 1 FROM beta_channel_members t \
+                 WHERE t.registry = b.registry AND t.principal_type = 'user' \
+                   AND t.principal_id = $2 || ':' || b.principal_id)",
+        )
+        .bind(providers)
+        .bind(only)
+        .execute(&mut *tx)
+        .await
+        .db_err()?
+        .rows_affected();
+    }
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM grants WHERE subject LIKE 'user:%' AND NOT ( \
+                   position(':' IN substr(subject, 6)) > 0 \
+                   AND split_part(substr(subject, 6), ':', 1) = ANY($1))) \
+              + (SELECT COUNT(*) FROM package_owners WHERE principal_type = 'user' AND NOT ( \
+                   position(':' IN principal_id) > 0 \
+                   AND split_part(principal_id, ':', 1) = ANY($1))) \
+              + (SELECT COUNT(*) FROM beta_channel_members WHERE principal_type = 'user' AND NOT ( \
+                   position(':' IN principal_id) > 0 \
+                   AND split_part(principal_id, ':', 1) = ANY($1)))",
+    )
+    .bind(providers)
+    .fetch_one(&mut *tx)
+    .await
+    .db_err()?;
+    out.left = left.max(0) as u64;
+    tx.commit().await.db_err()?;
+    Ok(out)
+}

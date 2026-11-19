@@ -323,6 +323,11 @@ impl SignedUrlService {
         let exp = now.timestamp() + self.ttl_seconds as i64;
         let role = identity.role.to_string();
         let groups = identity.groups.clone();
+        // `<provider>:<id>`, so the bearer keeps the `user:` grants of the
+        // signer and no other provider's user of the same id.
+        let sub = identity
+            .user_principal()
+            .or_else(|| identity.user_id.clone());
 
         let payload = Payload {
             v: TOKEN_VERSION,
@@ -330,21 +335,14 @@ impl SignedUrlService {
             pkg: coord.package.to_owned(),
             ver: coord.version.to_owned(),
             art: coord.artifact.to_owned(),
-            sub: identity.user_id.clone(),
+            sub: sub.clone(),
             role: role.clone(),
             grp: groups.clone(),
             exp,
         };
         // `Payload` is a plain struct of owned scalars; serialisation cannot fail.
         let json = serde_json::to_vec(&payload).expect("Payload always serialises");
-        let mac = Self::mac(
-            &self.secret,
-            coord,
-            identity.user_id.as_deref(),
-            &role,
-            &groups,
-            exp,
-        );
+        let mac = Self::mac(&self.secret, coord, sub.as_deref(), &role, &groups, exp);
 
         format!(
             "{TOKEN_VERSION}.{}.{}",
@@ -445,10 +443,23 @@ impl SignedUrlService {
             SignedUrlError::Malformed(format!("payload carries unknown role '{}'", payload.role))
         })?;
 
+        // A `sub` minted as `<provider>:<id>` keeps its provider behind the
+        // `signed-url:` prefix (what `Identity::principal_provider` strips), so
+        // the bearer is never mistaken for an interactive session.
+        let (user_id, auth_provider) = match payload.sub {
+            Some(sub) => match sub.split_once(':') {
+                Some((p, id)) => (
+                    Some(id.to_owned()),
+                    format!("{}{p}", Identity::SIGNED_URL_PROVIDER_PREFIX),
+                ),
+                None => (Some(sub), "signed-url".to_owned()),
+            },
+            None => (None, "signed-url".to_owned()),
+        };
         Ok(Identity {
-            user_id: payload.sub,
+            user_id,
             role,
-            auth_provider: Some("signed-url".to_owned()),
+            auth_provider: Some(auth_provider),
             groups: payload.grp,
         })
     }
@@ -503,12 +514,14 @@ mod tests {
 
     #[test]
     fn recovered_identity_is_labelled_as_signed_url() {
-        // The auth provider is overwritten rather than carried: what the
-        // original credential was is not what authenticated *this* request.
+        // The auth provider is labelled rather than carried: what the original
+        // credential was is not what authenticated *this* request. The signer's
+        // provider rides behind the prefix, so `user:` grants still scope to it.
         let s = svc();
         let token = s.mint_at(&coord(), &alice(), now());
         let got = s.verify_at(&token, &coord(), now()).unwrap();
-        assert_eq!(got.auth_provider.as_deref(), Some("signed-url"));
+        assert_eq!(got.auth_provider.as_deref(), Some("signed-url:oidc"));
+        assert_eq!(got.user_principal().as_deref(), Some("oidc:alice"));
     }
 
     #[test]

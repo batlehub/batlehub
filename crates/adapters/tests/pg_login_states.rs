@@ -33,6 +33,9 @@ async fn return_to_round_trips_and_is_taken_once() {
         nonce: "n".to_owned(),
         spa_state: "s".to_owned(),
         return_to: return_to.map(str::to_owned),
+        code_challenge: return_to.map(|_| "challenge".to_owned()),
+        handoff: None,
+        started: return_to.map(|_| r#"{"at":1}"#.to_owned()),
     };
     let (cli, console) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
     let to = "http://127.0.0.1:48123/callback";

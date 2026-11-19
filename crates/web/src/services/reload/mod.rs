@@ -18,11 +18,13 @@ pub(super) const PENDING_TTL_SECS: i64 = 600; // 10 minutes
 pub mod applier;
 mod config_file;
 mod drift;
+mod sync;
 pub mod validator;
 
 use config_file::ConfigFile;
 
 pub use applier::{ConfigChangeRow, ReloadApplyError};
+pub use sync::content_hash;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct ChangedRegistry {
@@ -195,6 +197,10 @@ pub struct ReloadOutcome {
     /// "nothing to stage", since both return `200` with an empty diff, and would
     /// only find out at apply time via [`ReloadApplyError::NoPendingReload`].
     pub pending_created: bool,
+    /// The staged reload's id when this call staged one: what
+    /// `pending/apply` is asked to apply, so an admin never applies a change
+    /// someone else staged since.
+    pub pending_id: Option<Uuid>,
 }
 
 /// The [`ConfigWarning`]s of the config currently in force, shared between the
@@ -255,6 +261,9 @@ pub struct PendingReload {
     /// reloads (the file is already on disk). `apply()` writes this back to disk so
     /// editor changes survive a server restart.
     pub content: Option<String>,
+    /// [`content_hash`] of the file the editor started from, when it said: the
+    /// apply refuses to overwrite a file that changed since.
+    pub base_hash: Option<String>,
     /// The raw layers of the candidate, which become
     /// [`ConfigReloadService::applied_layers`] when it is applied.
     pub layers: Vec<String>,
@@ -422,6 +431,10 @@ pub struct ConfigReloadService {
     /// What the eager mise overlay build fetches through (RFC 0045 §4.3); unset
     /// until [`Self::build_mise_overlay_eagerly`], so no reload builds one.
     pub(super) mise_overlay: std::sync::OnceLock<Arc<batlehub_core::services::ProxyService>>,
+    /// The announced applies last read from the cluster, and the ones this
+    /// replica still waits to see on its own disk. See `sync.rs`.
+    pub(super) applied_seen: Mutex<Option<std::collections::HashMap<String, i64>>>,
+    pub(super) follow: Mutex<Option<sync::Follow>>,
 }
 
 /// Everything [`ConfigReloadService::new`] needs, as named fields.
@@ -546,6 +559,8 @@ impl ConfigReloadService {
                 .map_err(|e| format!("{e:#}")),
             cluster: std::sync::OnceLock::new(),
             mise_overlay: std::sync::OnceLock::new(),
+            applied_seen: Mutex::new(None),
+            follow: Mutex::new(None),
         }
     }
 

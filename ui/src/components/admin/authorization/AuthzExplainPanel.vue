@@ -147,7 +147,7 @@ onMounted(() => {
           }}</label>
           <!-- Free text with the closed forms offered: the five *shapes* are
              closed and the names inside them are not, so a picker alone
-             could not express `group:oidc1:eng` or `user:alice`. -->
+             could not express `group:oidc1:eng` or `user:oidc1:alice`. -->
           <Combobox
             id="az-subject"
             v-model="subject"

@@ -1699,9 +1699,9 @@ oidc_expires_at = 0
 
 // ── Tests: the loopback login (RFC 0040 §4.9) ────────────────────────────────
 
-/// What the stand-in server's login endpoint was asked: the CLI's `state` and
-/// the listener it named as `return_to`.
-type Started = Arc<std::sync::Mutex<Option<(String, String)>>>;
+/// What the stand-in server's login endpoint was asked: the CLI's `state`, the
+/// listener it named as `return_to`, and its `code_challenge`.
+type Started = Arc<std::sync::Mutex<Option<(String, String, String)>>>;
 
 /// Run `auth login` against a stand-in server, play the browser by calling the
 /// listener with `callback(state)` as its query, and return the exit code,
@@ -1720,13 +1720,33 @@ fn loopback_login(callback: impl Fn(&str) -> String) -> (i32, String, String) {
         .match_request(move |req| {
             let url = reqwest::Url::parse(&format!("http://x{}", req.path_and_query())).unwrap();
             let q: HashMap<_, _> = url.query_pairs().into_owned().collect();
-            if let (Some(s), Some(to)) = (q.get("state"), q.get("return_to")) {
-                *seen.lock().unwrap() = Some((s.clone(), to.clone()));
+            if let (Some(s), Some(to), Some(c)) =
+                (q.get("state"), q.get("return_to"), q.get("code_challenge"))
+            {
+                *seen.lock().unwrap() = Some((s.clone(), to.clone(), c.clone()));
             }
             true
         })
         .with_status(302)
         .with_header("Location", "https://idp.example.test/authorize?state=srv")
+        .create();
+    // The exchange answers only the verifier behind the challenge the login sent.
+    let challenge_seen = Arc::clone(&started);
+    server
+        .mock("POST", "/api/v1/auth/oidc/cli/exchange")
+        .match_request(move |req| {
+            use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            use sha2::{Digest, Sha256};
+            let body: serde_json::Value =
+                serde_json::from_slice(req.body().unwrap()).unwrap_or_default();
+            let verifier = body["verifier"].as_str().unwrap_or_default();
+            let expected = challenge_seen.lock().unwrap().clone().map(|(_, _, c)| c);
+            body["code"] == "one-time"
+                && expected == Some(URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())))
+        })
+        .with_body(
+            r#"{"access_token":"a.b.c","refresh_token":"rt","expires_in":60,"provider":"oidc"}"#,
+        )
         .create();
 
     let config = tempfile::tempdir().unwrap();
@@ -1745,7 +1765,7 @@ fn loopback_login(callback: impl Fn(&str) -> String) -> (i32, String, String) {
         .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(30);
-    let (state, to) = loop {
+    let (state, to, _challenge) = loop {
         if let Some(found) = started.lock().unwrap().clone() {
             break found;
         }
@@ -1782,11 +1802,8 @@ fn loopback_login(callback: impl Fn(&str) -> String) -> (i32, String, String) {
 
 #[test]
 fn login_through_the_loopback_saves_the_token() {
-    let (code, stderr, saved) = loopback_login(|state| {
-        format!(
-            "oidc_access_token=a.b.c&oidc_state={state}&oidc_provider=oidc&oidc_refresh_token=rt&oidc_expires_in=60"
-        )
-    });
+    let (code, stderr, saved) =
+        loopback_login(|state| format!("oidc_code=one-time&oidc_state={state}"));
     assert_eq!(code, 0, "{stderr}");
     assert!(saved.contains("a.b.c") && saved.contains("rt"), "{saved}");
     assert!(saved.contains(r#"oidc_provider = "oidc""#), "{saved}");
@@ -1797,13 +1814,13 @@ fn login_through_the_loopback_saves_the_token() {
 #[test]
 fn login_rejects_wrong_state() {
     let (code, stderr, saved) =
-        loopback_login(|_| "oidc_access_token=forged&oidc_state=not-mine".to_owned());
+        loopback_login(|_| "oidc_code=one-time&oidc_state=not-mine".to_owned());
     assert_eq!(code, 1, "{stderr}");
     assert!(
         stderr.contains("does not belong to the sign-in"),
         "{stderr}"
     );
-    assert!(!saved.contains("forged"), "{saved}");
+    assert!(!saved.contains("a.b.c"), "{saved}");
 }
 
 #[test]

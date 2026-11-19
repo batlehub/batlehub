@@ -294,10 +294,21 @@ where
             if challenge {
                 challenge_anonymous(res.response_mut());
             }
+            if presented && !accepted {
+                res.response_mut()
+                    .extensions_mut()
+                    .insert(CredentialRejected);
+            }
             Ok(res)
         })
     }
 }
+
+/// Marks a response to a request whose credential no provider accepted. The
+/// IP-ban counts a `401` only with it: the bare challenge git, NuGet and Maven
+/// need before they send their credential is not a failed login.
+#[derive(Clone, Copy, Debug)]
+pub struct CredentialRejected;
 
 /// Turn a refusal a credential could answer into `401` + `WWW-Authenticate:
 /// Basic`, for a caller known to have presented none a provider accepted.

@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-access.md
-sourceHash: 171f190498f0270c
+sourceHash: fcbca48bc6617838
 ---
 
 # Accès et audit
@@ -163,7 +163,7 @@ La gestion des membres se fait à l'exécution :
 curl -s -X POST \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
-  -d '{"principal_type":"user","principal_id":"alice"}' \
+  -d '{"principal_type":"user","principal_id":"oidc1:alice"}' \
   http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel
 
 # Lister les membres
@@ -172,7 +172,7 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 # Retirer un membre
 curl -X DELETE -H "Authorization: Bearer <admin-token>" \
-  http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel/user/alice
+  http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel/user/oidc1:alice
 ```
 
 Voir le [guide du contrôle d'accès](/fr/guide/access-control#beta-channel) pour

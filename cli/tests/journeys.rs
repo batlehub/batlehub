@@ -280,19 +280,39 @@ fn hub_signature(secret: &str, data: &[u8]) -> String {
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
+/// The signature a request carries is over `"{X-BatleHub-Timestamp}.{data}"`,
+/// and the timestamp is the current one (within the server's 300 s window).
+fn signed_now(req: &mockito::Request, data: &[u8]) -> bool {
+    let header = |name: &str| {
+        let v = req.header(name);
+        (v.len() == 1).then(|| v[0].to_str().unwrap().to_owned())
+    };
+    let (Some(ts), Some(sent)) = (
+        header("X-BatleHub-Timestamp"),
+        header("X-Hub-Signature-256"),
+    ) else {
+        return false;
+    };
+    let fresh = ts
+        .parse::<i64>()
+        .is_ok_and(|t| (chrono::Utc::now().timestamp() - t).abs() <= 300);
+    let mut signed = format!("{ts}.").into_bytes();
+    signed.extend_from_slice(data);
+    fresh && sent == hub_signature("s3cret", &signed)
+}
+
 #[test]
 fn flag_create_signs_the_body_and_flags_every_version_without_one() {
     let mut s = server();
-    // The signature must be over the exact bytes sent: the mock recomputes it.
+    // The signature must be over the timestamp and the exact bytes sent: the
+    // mock recomputes it.
     let push = s
         .mock("POST", "/api/v1/flags/soc")
         .match_request(|req| {
             let body = req.body().unwrap();
-            let sent = req.header("X-Hub-Signature-256");
             let v: Value = serde_json::from_slice(body).unwrap();
             let flag = &v["flags"][0];
-            sent.len() == 1
-                && sent[0].to_str().unwrap() == hub_signature("s3cret", body)
+            signed_now(req, body)
                 && flag["version_range"] == "*"
                 && flag.get("version").is_none()
                 && flag["package_name"] == "evil"
@@ -365,10 +385,7 @@ fn flag_delete_confirms_and_signs_the_canonical_request() {
     let canonical = "DELETE\n/api/v1/flags/soc/X-1";
     let revoke = s
         .mock("DELETE", "/api/v1/flags/soc/X-1")
-        .match_header(
-            "X-Hub-Signature-256",
-            hub_signature("s3cret", canonical.as_bytes()).as_str(),
-        )
+        .match_request(move |req| signed_now(req, canonical.as_bytes()))
         .with_body(r#"{"revoked":true}"#)
         .expect(1)
         .create();

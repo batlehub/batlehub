@@ -106,9 +106,22 @@ pub async fn npm_publish(
 
     // Strip the tarball URL — it will be rewritten dynamically when serving.
     let mut meta = version_meta.clone();
+    // `npm publish --tag legacy` sends `dist-tags: {legacy: <v>}`: that version
+    // must not become `latest`. No `dist-tags` at all keeps the old reading.
+    let not_latest = body
+        .get("dist-tags")
+        .and_then(|t| t.as_object())
+        .is_some_and(|tags| tags.get("latest").and_then(|v| v.as_str()) != Some(version_str));
     if let Some(obj) = meta.as_object_mut() {
         if let Some(dist) = obj.get_mut("dist").and_then(|d| d.as_object_mut()) {
             dist.remove("tarball");
+        }
+        obj.remove(batlehub_core::services::local_registry::NPM_NOT_LATEST);
+        if not_latest {
+            obj.insert(
+                batlehub_core::services::local_registry::NPM_NOT_LATEST.to_owned(),
+                serde_json::Value::Bool(true),
+            );
         }
     }
 

@@ -639,16 +639,7 @@ impl StorageBackend for StorageRouter {
         }
         // ── Dedup path ────────────────────────────────────────────────────────
         // Delegates the heavy DB work to `delete_dedup_entry` in tracking.rs.
-        let existed = if let Some((should_delete_blob, content_key, blob_backend_name)) =
-            self.delete_dedup_entry(key).await?
-        {
-            // Delete physical blob when no more references.
-            if should_delete_blob {
-                let backend = self.resolve_backend(&blob_backend_name);
-                let _ = backend.delete(&content_key).await.inspect_err(
-                    |e| tracing::warn!(error = %e, key = %content_key, "failed to delete physical blob"),
-                );
-            }
+        let existed = if self.delete_dedup_entry(key).await? {
             true
         } else {
             // ── Legacy path ───────────────────────────────────────────────────

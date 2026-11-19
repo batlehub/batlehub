@@ -9,6 +9,12 @@ use crate::ports::ClusterStatePort;
 
 const TTL: Duration = Duration::from_secs(600);
 
+/// The key carries the free-text search term and the page, so a crawler (or a
+/// search-as-you-type box) mints keys with no end, and only a publish ever
+/// removes one.
+// shortcut: cleared wholesale past this size, losing the stale fallbacks too; an LRU if that ever shows.
+const PACKAGES_CAP: usize = 10_000;
+
 /// The [`ClusterStatePort`] topics an invalidation advances: `explore:{registry}`,
 /// and `explore:*` for the whole cache.
 pub const TOPIC_PREFIX: &str = "explore:";
@@ -94,6 +100,9 @@ impl ExploreCache {
         registries: Vec<String>,
     ) {
         let mut map = self.packages.write().await;
+        if map.len() >= PACKAGES_CAP && !map.contains_key(key) {
+            map.clear();
+        }
         map.insert(
             key.to_owned(),
             PackageEntry {
@@ -459,6 +468,17 @@ mod tests {
             cache.get_stale_stats("cargo-s").await.is_some(),
             "cargo stats should remain"
         );
+    }
+
+    #[tokio::test]
+    async fn the_package_map_never_outgrows_its_cap() {
+        let cache = ExploreCache::new();
+        for i in 0..=PACKAGES_CAP {
+            cache
+                .set_packages(&format!("exp:pkg:q{i}"), Vec::new(), 0, Vec::new())
+                .await;
+        }
+        assert!(cache.packages.read().await.len() <= PACKAGES_CAP);
     }
 
     #[tokio::test]

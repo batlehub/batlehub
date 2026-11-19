@@ -146,8 +146,11 @@ def wait_for_scans(limit_secs=240):
     say("the queue did not drain in time; the overview will show what is left")
 
 
-def sign(body: bytes) -> str:
-    return "sha256=" + hmac.new(SOC_SECRET.encode(), body, hashlib.sha256).hexdigest()
+def sign(body: bytes) -> dict:
+    """The two headers of a flag push: the HMAC covers "{timestamp}.{body}"."""
+    ts = str(int(time.time()))
+    mac = hmac.new(SOC_SECRET.encode(), ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return {"X-BatleHub-Timestamp": ts, "X-Hub-Signature-256": "sha256=" + mac}
 
 
 def push_flags():
@@ -177,7 +180,7 @@ def push_flags():
     ]
     body = json.dumps({"flags": flags}, separators=(",", ":")).encode()
     status, answer = req(
-        "POST", "/api/v1/flags/soc", body=body, headers={"X-Hub-Signature-256": sign(body)}
+        "POST", "/api/v1/flags/soc", body=body, headers=sign(body)
     )
     say(f"SOC push (hard_block left-pad@1.3.0, warn minimist@1.2.8) → {status}")
     if status != 200:

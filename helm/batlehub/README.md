@@ -53,6 +53,13 @@ default `filesystem` backend is backed by the `persistence` PVC, and
 replica, or switch to `s3`, which is the only backend every replica can write to
 concurrently.
 
+The Service and the PodDisruptionBudget select the server pods by
+`app.kubernetes.io/component: server`, so that `worker` pods — which carry the
+same name and instance labels — receive no proxy traffic and do not count
+towards the budget. Server pods created by an older chart lack that label: on
+the upgrade that introduces it, the Service has no endpoint until the first new
+server pod is ready.
+
 ## Requirements
 
 | Repository | Name | Version |
@@ -94,7 +101,7 @@ concurrently.
 | writableConfig.seed | string | `"IfNotPresent"` | `IfNotPresent` seeds the file only when the volume holds none: what the server or an operator wrote survives restarts. `Always` overwrites it with the chart's config at every pod start. |
 | writableConfig.persistence.existingClaim | string | `""` | An existing claim to hold the file. Empty renders `<fullname>-writable-config`. |
 | writableConfig.persistence.storageClass | string | `""` | Storage class of the rendered claim. Empty uses the cluster default. |
-| writableConfig.persistence.accessMode | string | `"ReadWriteOnce"` | Access mode of the rendered claim. With `ReadWriteOnce` and more than one replica, every replica must land on the same node. |
+| writableConfig.persistence.accessMode | string | `"ReadWriteOnce"` | Access mode of the rendered claim. With `ReadWriteOnce` and more than one replica, every replica must land on the same node. Replicas sharing the file follow an editor apply made on any one of them. |
 | writableConfig.persistence.size | string | `"16Mi"` | Size of the rendered claim: it holds one TOML file. |
 | writableConfig.initImage | object | `{"pullPolicy":"IfNotPresent","repository":"docker.io/library/busybox","tag":"1.37.0"}` | The seed init container's image. It needs `sh` and `cp`, which the distroless server image does not ship. |
 | podDisruptionBudget | object | `{"enabled":true,"minAvailable":1}` | Disruption budget. Rendered only when `replicaCount` is above 1. |

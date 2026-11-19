@@ -89,9 +89,15 @@ impl BatleHubClient {
         &self,
         csrf: &str,
         provider: Option<&str>,
-        return_to: Option<&str>,
+        loopback: Option<Loopback<'_>>,
     ) -> Result<String> {
-        get_oidc_login_url(&self.base_url, csrf, provider, return_to).await
+        get_oidc_login_url(&self.base_url, csrf, provider, loopback).await
+    }
+
+    /// Redeem the one-time code a loopback sign-in sent to the listener, with
+    /// the verifier only this process holds. Unauthenticated — see `oidc_login_url`.
+    pub async fn oidc_cli_exchange(&self, code: &str, verifier: &str) -> Result<OidcPaste> {
+        oidc_cli_exchange(&self.base_url, code, verifier).await
     }
 
     /// Exchange a refresh token for a new access token via the server's OIDC
@@ -108,16 +114,38 @@ impl BatleHubClient {
 
 // ── OIDC helpers ───────────────────────────────────────────────────────────────
 
+/// The CLI's loopback listener and the PKCE-style challenge that binds the
+/// one-time code sent there to this process.
+#[derive(Clone, Copy)]
+pub struct Loopback<'a> {
+    pub return_to: &'a str,
+    pub code_challenge: &'a str,
+}
+
+/// A fresh verifier (32 CSPRNG bytes, base64url) and its `BASE64URL(SHA256(..))`
+/// challenge (RFC 7636 §4.1–4.2).
+pub fn pkce_pair() -> Result<(String, String)> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use sha2::{Digest, Sha256};
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no randomness available: {e}"))?;
+    let verifier = URL_SAFE_NO_PAD.encode(bytes);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    Ok((verifier, challenge))
+}
+
 /// Fetch the IdP authorization URL by issuing a non-redirecting request to the
 /// server's OIDC login endpoint and extracting the `Location` header.
 pub async fn get_oidc_login_url(
     base_url: &str,
     csrf: &str,
     provider: Option<&str>,
-    return_to: Option<&str>,
+    loopback: Option<Loopback<'_>>,
 ) -> Result<String> {
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
+        // The server shows this on the "Authorize batlehub-cli?" page as who started the login.
+        .user_agent("batlehub-cli/0.1")
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
@@ -129,8 +157,12 @@ pub async fn get_oidc_login_url(
     if let Some(p) = provider {
         url.push_str(&format!("&provider={}", percent_encode(p)));
     }
-    if let Some(to) = return_to {
-        url.push_str(&format!("&return_to={}", percent_encode(to)));
+    if let Some(lb) = loopback {
+        url.push_str(&format!(
+            "&return_to={}&code_challenge={}",
+            percent_encode(lb.return_to),
+            percent_encode(lb.code_challenge)
+        ));
     }
 
     let resp = client.get(&url).send().await?;
@@ -152,7 +184,48 @@ pub async fn get_oidc_login_url(
         .to_str()?
         .to_string();
 
+    // The URL goes to the OS opener, which runs `file:` / UNC paths: http(s) only.
+    let scheme = reqwest::Url::parse(&location)
+        .map(|u| u.scheme().to_owned())
+        .unwrap_or_default();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("the server's login redirect is not an http(s) URL: {location}");
+    }
+
     Ok(location)
+}
+
+/// Redeem a loopback sign-in's one-time code for its tokens.
+pub async fn oidc_cli_exchange(base_url: &str, code: &str, verifier: &str) -> Result<OidcPaste> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        code: &'a str,
+        verifier: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in: Option<i64>,
+        provider: String,
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+    let resp = client
+        .post(format!("{base_url}/api/v1/auth/oidc/cli/exchange"))
+        .json(&Req { code, verifier })
+        .send()
+        .await?;
+    let r: Resp = super::expect_ok(resp).await?;
+    Ok(OidcPaste {
+        access_token: r.access_token,
+        refresh_token: r.refresh_token,
+        expires_at: r.expires_in.map(|secs| Utc::now().timestamp() + secs),
+        state: None,
+        provider: Some(r.provider),
+    })
 }
 
 /// Exchange a refresh token for a new access token via the server's OIDC refresh proxy.
@@ -504,6 +577,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("did not return a redirect"));
+    }
+
+    #[tokio::test]
+    async fn get_oidc_login_url_refuses_a_non_http_redirect() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/v1/auth/oidc/login")
+            .match_query(mockito::Matcher::Any)
+            .with_status(302)
+            .with_header("Location", "file:///tmp/x.desktop")
+            .create_async()
+            .await;
+
+        let err = get_oidc_login_url(&server.url(), "abc", None, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not an http(s) URL"));
     }
 
     // ── oidc_refresh ───────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 pub mod sso;
 
 pub use sso::{
-    list_oidc_providers, oidc_callback, oidc_login, oidc_refresh, OidcProviderInfo,
+    list_oidc_providers, oidc_callback, oidc_cli_confirm, oidc_cli_exchange, oidc_login,
+    oidc_refresh, CliConfirmForm, CliExchangeRequest, CliExchangeResponse, OidcProviderInfo,
     RefreshRateLimiter, RefreshRequest, RefreshResponse,
 };
 
@@ -17,8 +18,12 @@ pub struct LoginQuery {
     /// Provider name to log in with. Defaults to the first configured provider.
     pub provider: Option<String>,
     /// The CLI's loopback listener, `http://127.0.0.1:<port>/callback`
-    /// exactly; the callback sends the tokens there instead of to the console.
+    /// exactly; the callback sends a one-time code there instead of going to
+    /// the console.
     pub return_to: Option<String>,
+    /// Required with `return_to`: `BASE64URL(SHA256(verifier))` for a verifier
+    /// only the CLI holds, presented again at `POST /api/v1/auth/oidc/cli/exchange`.
+    pub code_challenge: Option<String>,
 }
 
 #[derive(Deserialize)]

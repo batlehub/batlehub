@@ -32,7 +32,7 @@ pub enum AuthzCommand {
         /// Registry name
         registry: String,
         /// Subject, in grant spelling: `*`, `role:user`, `group:oidc1:eng`,
-        /// `group:*:eng`, `user:alice`
+        /// `group:*:eng`, `user:oidc1:alice`
         #[arg(long)]
         subject: String,
         /// The verb being asked about, e.g. `releases:read`

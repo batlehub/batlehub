@@ -21,7 +21,9 @@ impl PgBetaChannelStore {
 #[async_trait]
 impl BetaChannelPort for PgBetaChannelStore {
     async fn is_member(&self, registry: &str, identity: &Identity) -> Result<bool, CoreError> {
-        if let Some(ref uid) = identity.user_id {
+        // `<provider>:<id>`, as written by the admin API: the same id from
+        // another provider is another person.
+        if let Some(ref uid) = identity.user_principal() {
             let exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM beta_channel_members \
                   WHERE registry = $1 AND principal_type = 'user' AND principal_id = $2)",

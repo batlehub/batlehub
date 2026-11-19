@@ -141,12 +141,12 @@ async fn pypi_publish_accepts_a_wheel_filename() {
     assert_eq!(call_service(&app, req).await.status(), 200);
 }
 
-/// End to end for the other half of the primitive: the package *name* reaches
-/// `<title>` and `<h1>`, and is only normalised on the way — lowercase and a
-/// `-_.` collapse, which removes no markup. The rendered page must carry it as
-/// text.
+/// The other half of the primitive: the package *name* reaches `<title>` and
+/// `<h1>`, and PEP 503 normalisation removes no markup. A name outside PEP 508's
+/// character set is now refused at publish, so it is never stored to be
+/// rendered (the page also escapes it — `get_pypi_simple_page`).
 #[actix_web::test]
-async fn pypi_simple_page_serves_a_markup_package_name_as_text() {
+async fn pypi_publish_of_a_markup_package_name_is_refused() {
     let app = make_local_pypi_app(RegistryMode::Local).await;
 
     let hostile = "evil<script>alert(1)<script>";
@@ -157,17 +157,120 @@ async fn pypi_simple_page_serves_a_markup_package_name_as_text() {
         .insert_header(("Content-Type", content_type))
         .set_payload(body)
         .to_request();
+    assert_eq!(call_service(&app, publish).await.status(), 400);
+}
+
+/// twine sends the project name as declared (`My_Pkg`), but pip asks for the
+/// PEP 503 form (`my-pkg`): the publish must store it under the latter.
+#[actix_web::test]
+async fn pypi_publish_of_a_non_canonical_name_is_installable() {
+    let app = make_local_pypi_app(RegistryMode::Local).await;
+    let (body, content_type) =
+        make_pypi_publish_body_named("My_Pkg", "1.0.0", "my_pkg-1.0.0.tar.gz");
+    let publish = TestRequest::post()
+        .uri("/proxy/local-pypi/legacy/")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", content_type))
+        .set_payload(body)
+        .to_request();
     assert_eq!(call_service(&app, publish).await.status(), 200);
 
-    let read = TestRequest::get()
-        .uri("/proxy/local-pypi/simple/evil%3Cscript%3Ealert(1)%3Cscript%3E/")
+    let simple = TestRequest::get()
+        .uri("/proxy/local-pypi/simple/my-pkg/")
         .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
-    let resp = call_service(&app, read).await;
+    let resp = call_service(&app, simple).await;
     assert_eq!(resp.status(), 200);
     let html = String::from_utf8_lossy(&actix_web::test::read_body(resp).await).into_owned();
-    assert!(!html.contains("<script>"), "{html}");
-    assert!(html.contains("&lt;script&gt;"), "{html}");
+    assert!(html.contains("my_pkg-1.0.0.tar.gz"), "{html}");
+
+    let file = TestRequest::get()
+        .uri("/proxy/local-pypi/packages/my_pkg-1.0.0.tar.gz")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, file).await.status(), 200);
+}
+
+fn pypi_upload(name: &str, version: &str, filename: &str, content: &[u8]) -> TestRequest {
+    let (mut body, content_type) = make_pypi_publish_body_named(name, version, filename);
+    let fake: &[u8] = b"fake-pypi-sdist-content";
+    let at = body
+        .windows(fake.len())
+        .position(|w| w == fake)
+        .expect("helper body carries the fake content");
+    body.splice(at..at + fake.len(), content.iter().copied());
+    TestRequest::post()
+        .uri("/proxy/local-pypi/legacy/")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", content_type))
+        .set_payload(body)
+}
+
+async fn pypi_get(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+    uri: &str,
+) -> (u16, Vec<u8>) {
+    let req = TestRequest::get()
+        .uri(uri)
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(app, req).await;
+    let status = resp.status().as_u16();
+    (status, actix_web::test::read_body(resp).await.to_vec())
+}
+
+/// `twine upload dist/*` sends the sdist then the wheel of one version: both
+/// are files of that version, both listed, each downloadable as itself.
+#[actix_web::test]
+async fn pypi_sdist_then_wheel_are_both_published_and_served() {
+    let app = make_local_pypi_app(RegistryMode::Local).await;
+    let sdist = "two_files-1.0.0.tar.gz";
+    let wheel = "two_files-1.0.0-py3-none-any.whl";
+    let up = |f: &str, c: &[u8]| pypi_upload("two_files", "1.0.0", f, c).to_request();
+    assert_eq!(call_service(&app, up(sdist, b"SDIST")).await.status(), 200);
+    assert_eq!(call_service(&app, up(wheel, b"WHEEL")).await.status(), 200);
+
+    let (status, html) = pypi_get(&app, "/proxy/local-pypi/simple/two-files/").await;
+    assert_eq!(status, 200);
+    let html = String::from_utf8_lossy(&html);
+    assert!(html.contains(sdist) && html.contains(wheel), "{html}");
+    use sha2::Digest as _;
+    let wheel_sha = hex::encode(sha2::Sha256::digest(b"WHEEL"));
+    assert!(html.contains(&wheel_sha), "the wheel's own digest: {html}");
+
+    assert_eq!(
+        pypi_get(&app, &format!("/proxy/local-pypi/packages/{sdist}")).await,
+        (200, b"SDIST".to_vec())
+    );
+    assert_eq!(
+        pypi_get(&app, &format!("/proxy/local-pypi/packages/{wheel}")).await,
+        (200, b"WHEEL".to_vec())
+    );
+    // A file the version does not have is not answered with another file's bytes.
+    let (status, _) = pypi_get(
+        &app,
+        "/proxy/local-pypi/packages/two_files-1.0.0-cp311-cp311-linux_x86_64.whl",
+    )
+    .await;
+    assert_eq!(status, 404);
+}
+
+/// PyPI files are immutable: the same filename twice is a conflict, whether it
+/// is the version's first file or a later one.
+#[actix_web::test]
+async fn pypi_same_filename_twice_is_409() {
+    let app = make_local_pypi_app(RegistryMode::Local).await;
+    let sdist = "dup_file-1.0.0.tar.gz";
+    let wheel = "dup_file-1.0.0-py3-none-any.whl";
+    let up = |f: &str| pypi_upload("dup_file", "1.0.0", f, b"x").to_request();
+    assert_eq!(call_service(&app, up(sdist)).await.status(), 200);
+    assert_eq!(call_service(&app, up(wheel)).await.status(), 200);
+    assert_eq!(call_service(&app, up(sdist)).await.status(), 409);
+    assert_eq!(call_service(&app, up(wheel)).await.status(), 409);
 }
 
 // ── conda publish traversal ─────────────────────────────────────────────────────

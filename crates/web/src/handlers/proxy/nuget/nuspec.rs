@@ -133,6 +133,9 @@ pub(crate) fn parse_nuspec(bytes: &[u8]) -> Result<NuspecMetadata, AppError> {
     state.into_metadata()
 }
 
+/// Decompressed ceiling for the `.nuspec` manifest; real ones are a few KiB.
+const MAX_NUSPEC_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Extract the `.nuspec` from a `.nupkg` ZIP archive.
 pub(crate) fn extract_nuspec_from_nupkg(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
     let cursor = std::io::Cursor::new(bytes);
@@ -150,8 +153,17 @@ pub(crate) fn extract_nuspec_from_nupkg(bytes: &[u8]) -> Result<Vec<u8>, AppErro
         if is_nuspec {
             let mut buf = Vec::new();
             use std::io::Read;
-            file.read_to_end(&mut buf)
+            // The upload cap bounds the compressed bytes only; a deflate bomb
+            // would otherwise inflate to gigabytes here.
+            file.by_ref()
+                .take(MAX_NUSPEC_BYTES + 1)
+                .read_to_end(&mut buf)
                 .map_err(|e| AppError::unprocessable(format!("reading nuspec: {e}")))?;
+            if buf.len() as u64 > MAX_NUSPEC_BYTES {
+                return Err(AppError::unprocessable(format!(
+                    ".nuspec exceeds the {MAX_NUSPEC_BYTES}-byte limit"
+                )));
+            }
             return Ok(buf);
         }
     }
@@ -233,5 +245,21 @@ mod tests {
         assert!(m.description.is_none());
         assert!(m.authors.is_none());
         assert!(m.tags.is_none());
+    }
+
+    #[test]
+    fn a_nuspec_decompression_bomb_is_refused() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("x.nuspec", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        let chunk = vec![b' '; 1024 * 1024];
+        for _ in 0..=MAX_NUSPEC_BYTES / (1024 * 1024) {
+            zip.write_all(&chunk).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        assert!(bytes.len() < 1024 * 1024, "the fixture must be a bomb");
+        let err = extract_nuspec_from_nupkg(&bytes).expect_err("refused");
+        assert!(format!("{err:?}").contains("byte limit"), "{err:?}");
     }
 }

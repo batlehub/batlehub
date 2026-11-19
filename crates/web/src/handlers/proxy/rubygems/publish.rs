@@ -11,6 +11,26 @@ use batlehub_core::error::CoreError;
 pub struct GemYankQuery {
     pub gem_name: String,
     pub version: String,
+    /// `gem yank --platform x86_64-linux` names the platform variant.
+    #[serde(default)]
+    pub platform: Option<String>,
+}
+
+impl GemYankQuery {
+    /// The stored version of the variant this request names.
+    fn coordinate(&self) -> String {
+        full_version(&self.version, self.platform.as_deref())
+    }
+}
+
+/// RubyGems' full-name rule: a platform gem is `{version}-{platform}`, the
+/// spelling Bundler lists in the compact index and downloads by. The `ruby`
+/// platform is the plain version.
+fn full_version(version: &str, platform: Option<&str>) -> String {
+    match platform {
+        Some(p) if !p.is_empty() && p != "ruby" => format!("{version}-{p}"),
+        _ => version.to_owned(),
+    }
 }
 
 /// Publish a gem (local/hybrid registries only).
@@ -77,7 +97,7 @@ pub async fn gem_publish(
     });
 
     let name = gem_meta.name.clone();
-    let version = gem_meta.version.clone();
+    let version = full_version(&gem_meta.version, Some(&gem_meta.platform));
 
     let (signature_bytes, signature_type) =
         ArtifactSignature::split(extract_signature_headers(&req)?);
@@ -135,8 +155,9 @@ pub async fn gem_yank(
     require_local_mode(&registry, &mode_map)?;
 
     let actor = identity.0.user_id.clone().unwrap_or_default();
+    let version = query.coordinate();
     local_svc
-        .yank(&registry, &query.gem_name, &query.version, &identity.0)
+        .yank(&registry, &query.gem_name, &version, &identity.0)
         .await
         .map_err(AppError::from)?;
 
@@ -145,13 +166,13 @@ pub async fn gem_yank(
         NotificationEventType::PackageYanked,
         &registry,
         &query.gem_name,
-        Some(query.version.clone()),
+        Some(version.clone()),
         &actor,
     );
 
     Ok(HttpResponse::Ok().json(MessageResponse::new(format!(
         "Successfully yanked gem: {} ({})",
-        query.gem_name, query.version
+        query.gem_name, version
     ))))
 }
 
@@ -187,8 +208,9 @@ pub async fn gem_unyank(
     require_local_mode(&registry, &mode_map)?;
 
     let actor = identity.0.user_id.clone().unwrap_or_default();
+    let version = query.coordinate();
     local_svc
-        .unyank(&registry, &query.gem_name, &query.version, &identity.0)
+        .unyank(&registry, &query.gem_name, &version, &identity.0)
         .await
         .map_err(AppError::from)?;
 
@@ -197,12 +219,12 @@ pub async fn gem_unyank(
         NotificationEventType::PackageUnyanked,
         &registry,
         &query.gem_name,
-        Some(query.version.clone()),
+        Some(version.clone()),
         &actor,
     );
 
     Ok(HttpResponse::Ok().json(MessageResponse::new(format!(
         "Successfully unyanked gem: {} ({})",
-        query.gem_name, query.version
+        query.gem_name, version
     ))))
 }

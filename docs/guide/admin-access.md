@@ -146,7 +146,7 @@ Manage members at runtime:
 curl -s -X POST \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
-  -d '{"principal_type":"user","principal_id":"alice"}' \
+  -d '{"principal_type":"user","principal_id":"oidc1:alice"}' \
   http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel
 
 # List members
@@ -155,7 +155,7 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 # Remove a member
 curl -X DELETE -H "Authorization: Bearer <admin-token>" \
-  http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel/user/alice
+  http://localhost:8080/api/v1/admin/registries/my-npm/beta-channel/user/oidc1:alice
 ```
 
 See the [Access Control guide](/guide/access-control#beta-channel) for the full reference, including group membership, per-registry support table, and user-facing behaviour.

@@ -97,6 +97,43 @@ impl Identity {
         }
     }
 
+    /// `auth_provider` of a personal access token: `user-token:<minting provider>`.
+    ///
+    /// The prefix keeps a PAT from passing for an interactive session (the token
+    /// endpoints refuse anything that is not a configured OIDC name), and the
+    /// suffix keeps the owner's provider, which `user:` grants are scoped by.
+    pub const PAT_PROVIDER_PREFIX: &str = "user-token:";
+
+    /// `auth_provider` of a signed-URL bearer: `signed-url:<signer's provider>`.
+    pub const SIGNED_URL_PROVIDER_PREFIX: &str = "signed-url:";
+
+    /// The provider that vouches for `user_id`: the minting provider of a PAT
+    /// or a signed URL, `auth_provider` otherwise.
+    pub fn principal_provider(&self) -> Option<&str> {
+        let p = self.auth_provider.as_deref()?;
+        Some(
+            p.strip_prefix(Self::PAT_PROVIDER_PREFIX)
+                .or_else(|| p.strip_prefix(Self::SIGNED_URL_PROVIDER_PREFIX))
+                .unwrap_or(p),
+        )
+    }
+
+    /// `<provider>:<user_id>` — the key a `user:` grant and a user owner row
+    /// name. A user id is a string each provider picks for itself, so the id
+    /// alone would let `alice` on one provider act as `alice` on another.
+    ///
+    /// An identity no provider vouches for keeps its bare id. Every
+    /// `AuthProvider` sets `auth_provider`, so that is only ever the process's
+    /// own [`Self::system`] identity or a test fixture — never a caller — and a
+    /// bare grant (the legacy, ambiguous form) therefore matches no request.
+    pub fn user_principal(&self) -> Option<String> {
+        let id = self.user_id.as_deref()?;
+        Some(match self.principal_provider() {
+            Some(p) => format!("{p}:{id}"),
+            None => id.to_owned(),
+        })
+    }
+
     pub fn is_admin(&self) -> bool {
         self.role == Role::Admin
     }

@@ -2210,7 +2210,7 @@ dry_run             = false
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `keep_versions` | int | *(unset)* | Keep the newest N versions of every package, by publish date |
+| `keep_versions` | int | *(unset)* | Keep the newest N non-yanked versions of every package, by publish date — plus the highest stable version, whenever it was published |
 | `keep_for_days` | int | *(unset)* | Keep anything **published** within this window |
 | `keep_if_pulled_days` | int | *(unset)* | Keep anything **downloaded** within this window |
 | `keep_yanked` | bool | `true` | Keep yanked versions |
@@ -2698,8 +2698,12 @@ of the URL is the whole of their authentication, so treat those URLs as
 credentials and inject them through `env` rather than writing them into the file.
 
 **Inbound webhooks.** Each `[[notifications.inbound]]` block accepts events from
-something else, verified against `X-Hub-Signature-256` when `secret` is set.
-Without a secret **any payload is accepted**, which is suitable only on a network
+something else, verified when `secret` is set: the request carries
+`X-BatleHub-Timestamp: <unix seconds>` and `X-Hub-Signature-256: sha256=<hex>`,
+an HMAC-SHA256 over `"{timestamp}.{body}"`. A timestamp more than 300 seconds
+from the server's clock is refused like a bad signature, so a captured request
+cannot be replayed later — for instance to re-impose a `hard_block` its source
+has since revoked. Without a secret **any payload is accepted**, which is suitable only on a network
 where nothing untrusted can reach the port. A registry with
 [`[registries.security]`](#registries-security) makes the secret mandatory: a
 `security.*` event on an unsigned webhook would let anyone on the network deny
@@ -3000,7 +3004,7 @@ max_flags_per_minute = 600          # 0 disables the limit
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `name` | — | `[a-z0-9][a-z0-9_-]*`, at most 64 characters, unique — and distinct from every `[[notifications.inbound]]` name, because a `security.verdict` event stores its `hard_block` under the webhook's name and this source's secret is what revokes a flag under that name. The source pushes to `POST /api/v1/flags/{name}` and revokes with `DELETE /api/v1/flags/{name}/{external_id}`. |
-| `secret` | — | HMAC-SHA256 key. The push carries `X-Hub-Signature-256: sha256=<hex>` over the raw body (on a `DELETE`, which has none, over the canonical string `DELETE\n/api/v1/flags/{source}/{external_id}`, so a captured revoke signature lifts only the flag it names), the same scheme `[[notifications.inbound]]` verifies. An unknown name and a bad signature answer the same `404`. |
+| `secret` | — | HMAC-SHA256 key. The push carries `X-BatleHub-Timestamp: <unix seconds>` and `X-Hub-Signature-256: sha256=<hex>` over `"{timestamp}.{body}"` (on a `DELETE`, which has no body, the canonical string `DELETE\n/api/v1/flags/{source}/{external_id}` stands for it, so a captured revoke signature lifts only the flag it names), the scheme `[[notifications.inbound]]` verifies. A timestamp more than 300 s from the server's clock is refused, so a captured push or revoke cannot be replayed. An unknown name and a bad signature answer the same `404`. |
 | `max_effect` | `gate` | The strongest effect this source may set. A push asking for more is stored at the ceiling and told so (`effect_capped: true`). |
 | `registries` | `[]` | The registries the source may flag. An item naming another one is rejected, per item. |
 | `max_flags_per_minute` | `600` | Items per minute across pushes; over it the whole push is `429` with `Retry-After`. |

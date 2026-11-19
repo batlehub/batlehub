@@ -73,6 +73,20 @@ async fn warm_one_version_inner(
         }
     }
 
+    // The advertised checksum, so warming caches only what a proxy read would
+    // (a cold miss refuses a mismatch; warming used to cache it as "verified").
+    let expected = match svc.client.resolve_metadata(&pkg).await {
+        Ok(m) => m.checksum,
+        Err(e) => {
+            tracing::warn!(
+                registry = %registry_name, package = %name,
+                version = %version, error = %e,
+                "warming: metadata resolve failed"
+            );
+            return WarmingReport::failed(name, Some(version.to_owned()), e);
+        }
+    };
+
     let registry_label: Arc<str> = Arc::from(registry_name);
     let upstream_start = std::time::Instant::now();
     let mut fetched = match svc.client.fetch_artifact(&pkg).await {
@@ -106,6 +120,10 @@ async fn warm_one_version_inner(
         Arc::clone(&svc.metrics),
         fetched.stream,
     );
+
+    if let Some(expected) = expected.as_deref() {
+        fetched.stream = crate::services::integrity::fail_on_mismatch(fetched.stream, expected);
+    }
 
     // Stream directly to storage without buffering the full artifact in memory.
     // `store_streaming` implementations (filesystem, S3) write incrementally so
@@ -197,7 +215,11 @@ impl WarmingService {
         let versions: Vec<String> = match pinned_version {
             Some(v) => vec![v],
             None => match self.client.list_versions(name).await {
-                Ok(v) => v.into_iter().rev().take(self.latest_n).collect(),
+                // Adapters disagree on order (string sort, newest-first), so sort here.
+                Ok(mut v) => {
+                    v.sort_by(|a, b| crate::services::version_order::newest_first(a, b));
+                    v.into_iter().take(self.latest_n).collect()
+                }
                 Err(e) => {
                     tracing::warn!(
                         registry = %self.registry_name,

@@ -76,6 +76,20 @@ pub fn hub_signature(secret: &str, data: &[u8]) -> String {
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
+/// Unix seconds the signature was made at; the server refuses one more than
+/// 300 s from its clock, so a captured flag push or revoke cannot be replayed.
+pub const TIMESTAMP_HEADER: &str = "X-BatleHub-Timestamp";
+
+/// `(timestamp, X-Hub-Signature-256)` over `"{timestamp}.{data}"`, as the
+/// server's `signed_and_fresh` reads them.
+pub fn timestamped_signature(secret: &str, data: &[u8]) -> (String, String) {
+    let timestamp = chrono::Utc::now().timestamp().to_string();
+    let mut signed = format!("{timestamp}.").into_bytes();
+    signed.extend_from_slice(data);
+    let signature = hub_signature(secret, &signed);
+    (timestamp, signature)
+}
+
 impl BatleHubClient {
     // ── check (RFC 0040 §6.1): cached metadata only, at most 50 ─────────────
 
@@ -173,10 +187,11 @@ impl BatleHubClient {
     // ── flags (RFC 0002): signed by the source's secret, not the caller ──────
 
     pub async fn flag_push(&self, source: &str, secret: &str, body: Vec<u8>) -> Result<Value> {
-        let signature = hub_signature(secret, &body);
+        let (timestamp, signature) = timestamped_signature(secret, &body);
         let req = self
             .request(Method::POST, &format!("/api/v1/flags/{}", enc(source)))
             .header("Content-Type", "application/json")
+            .header(TIMESTAMP_HEADER, timestamp)
             .header("X-Hub-Signature-256", signature)
             .body(body);
         expect_ok(req.send().await?).await
@@ -192,10 +207,11 @@ impl BatleHubClient {
         // The server signs the canonical `DELETE\n<path>` as it routes it,
         // decoded (`handlers/flags.rs::revoke_canonical`).
         let canonical = format!("DELETE\n/api/v1/flags/{source}/{external_id}");
-        let req = self.request(Method::DELETE, &path).header(
-            "X-Hub-Signature-256",
-            hub_signature(secret, canonical.as_bytes()),
-        );
+        let (timestamp, signature) = timestamped_signature(secret, canonical.as_bytes());
+        let req = self
+            .request(Method::DELETE, &path)
+            .header(TIMESTAMP_HEADER, timestamp)
+            .header("X-Hub-Signature-256", signature);
         expect_ok(req.send().await?).await
     }
 

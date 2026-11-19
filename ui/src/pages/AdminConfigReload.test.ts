@@ -339,7 +339,10 @@ describe("AdminConfigReload", () => {
 
     await confirmDialog(wrapper, "Apply");
 
-    expect(sdk.applyPendingReloadMock).toHaveBeenCalled();
+    // The change on screen, by id: another admin's staged since is a 409.
+    expect(sdk.applyPendingReloadMock).toHaveBeenCalledWith({
+      body: { pending_id: "11111111-1111-1111-1111-111111111111" },
+    });
     expect(wrapper.text()).toContain("Applied: +1 -0 registries");
     // The pending is gone, so the page must not still offer to apply it.
     expect(applyButton(wrapper)).toBeUndefined();
@@ -530,6 +533,23 @@ describe("AdminConfigReload", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("disk full");
+  });
+
+  it("stages against the file it loaded, so a newer file is never overwritten", async () => {
+    routes(null, {
+      "/config/content": {
+        json: { content: "[server]\nport = 8080\n", is_readonly: false, content_hash: "abc123" },
+      },
+    });
+    const wrapper = await mountPage();
+
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
+    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await flushPromises();
+
+    const call = authFetchMock.mock.calls.find(([url]) => String(url).includes("/from-content"));
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ base_hash: "abc123" });
   });
 
   it("says why the config could not be read instead of showing an empty editor", async () => {

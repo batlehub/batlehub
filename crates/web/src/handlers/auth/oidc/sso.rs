@@ -14,7 +14,7 @@ use batlehub_core::services::AdminService;
 use super::{spa_error_redirect, url_encode, CallbackQuery, LoginQuery};
 use crate::error::AppError;
 use crate::extractors::caller_net;
-use crate::handlers::schemas::OkResponse;
+use crate::handlers::schemas::{OkResponse, ProtocolDocument};
 
 /// How long a started login stays redeemable.
 ///
@@ -42,6 +42,25 @@ const LOGIN_STATE_TTL_SECS: u32 = 600;
 /// different `state` than the caller kept would fail its own round-trip check
 /// with no explanation.
 const MAX_SPA_STATE_LEN: usize = 512;
+
+/// How long the one-time code a loopback callback hands the CLI stays
+/// redeemable. The CLI exchanges it the moment its listener receives it.
+const CLI_HANDOFF_TTL_SECS: u32 = 60;
+
+/// How long the "Authorize batlehub-cli?" page stays answerable: long enough
+/// to read it, short enough that an unanswered one is gone before anyone else
+/// could stumble on it.
+const CLI_CONFIRM_TTL_SECS: u32 = 300;
+
+/// Who started a loopback login, recorded at `oidc_login` and shown on the
+/// confirmation page.
+#[derive(Serialize, Deserialize)]
+struct StartedBy {
+    /// Unix seconds.
+    at: i64,
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
 
 /// Refresh attempts allowed per client IP per window, and the window.
 ///
@@ -146,11 +165,12 @@ pub async fn list_oidc_providers(flows: web::Data<Vec<OidcSsoFlow>>) -> impl Res
     params(
         ("state" = Option<String>, Query, description = "CSRF state (frontend-generated); omit to probe availability"),
         ("provider" = Option<String>, Query, description = "Provider name to log in with; defaults to the first configured provider"),
-        ("return_to" = Option<String>, Query, description = "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with the tokens in the query string"),
+        ("return_to" = Option<String>, Query, description = "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with a one-time `oidc_code`, never the tokens"),
+        ("code_challenge" = Option<String>, Query, description = "Required with `return_to`: `BASE64URL(SHA256(verifier))`; the CLI presents the verifier to `/api/v1/auth/oidc/cli/exchange`"),
     ),
     responses(
         (status = 200, description = "OIDC is configured (probe response when state is absent)", body = OkResponse),
-        (status = 400, description = "`state` too long, or a `return_to` other than the loopback callback"),
+        (status = 400, description = "`state` too long, a `return_to` other than the loopback callback, or a `return_to` without a `code_challenge`"),
         (status = 302, description = "Redirect to OIDC authorization endpoint"),
         (status = 404, description = "Named provider not found"),
         (status = 503, description = "OIDC not configured"),
@@ -158,6 +178,7 @@ pub async fn list_oidc_providers(flows: web::Data<Vec<OidcSsoFlow>>) -> impl Res
 )]
 #[get("/api/v1/auth/oidc/login")]
 pub async fn oidc_login(
+    req: HttpRequest,
     flows: web::Data<Vec<OidcSsoFlow>>,
     login_states: web::Data<Arc<dyn LoginStateStore>>,
     query: web::Query<LoginQuery>,
@@ -174,6 +195,18 @@ pub async fn oidc_login(
         if !is_loopback_return_to(to) {
             return Err(AppError::bad_request(
                 "`return_to` must be exactly http://127.0.0.1:<port>/callback",
+            ));
+        }
+        // Without a challenge the loopback would receive the tokens themselves,
+        // and whoever listens on that port gets them: the CLI that started the
+        // login must be the only one able to redeem what comes back.
+        if !query
+            .code_challenge
+            .as_deref()
+            .is_some_and(is_code_challenge)
+        {
+            return Err(AppError::bad_request(
+                "a loopback sign-in needs a `code_challenge`; upgrade batlehub-cli",
             ));
         }
     }
@@ -217,6 +250,18 @@ pub async fn oidc_login(
                 nonce: pkce.nonce.clone(),
                 spa_state: spa_state.clone(),
                 return_to: query.return_to.clone(),
+                // Only meaningful with a loopback; a console login stores none.
+                code_challenge: query.return_to.as_ref().and(query.code_challenge.clone()),
+                handoff: None,
+                started: query.return_to.as_ref().and_then(|_| {
+                    let net = caller_net(&req);
+                    serde_json::to_string(&StartedBy {
+                        at: chrono::Utc::now().timestamp(),
+                        ip: net.ip,
+                        user_agent: net.user_agent,
+                    })
+                    .ok()
+                }),
             },
             LOGIN_STATE_TTL_SECS,
         )
@@ -242,6 +287,14 @@ fn is_loopback_return_to(url: &str) -> bool {
                 && port.bytes().all(|b| b.is_ascii_digit())
                 && port.parse::<u16>().is_ok()
         })
+}
+
+/// `BASE64URL(SHA256(..))` without padding: 43 characters of the URL-safe
+/// alphabet, the only shape a SHA-256 challenge takes (RFC 7636 §4.2).
+fn is_code_challenge(c: &str) -> bool {
+    c.len() == 43
+        && c.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// A callback that failed before its code was redeemed: the login is over
@@ -281,6 +334,7 @@ fn error_redirect(login: Option<&LoginState>, base: &str, msg: &str) -> HttpResp
     path = "/api/v1/auth/oidc/callback",
     tag = "front-office",
     responses(
+        (status = 200, description = "A CLI sign-in: the page asking the signed-in user to authorize the command line", body = ProtocolDocument, content_type = "text/html"),
         (status = 302, description = "Redirect to SPA with tokens or error"),
         (status = 503, description = "OIDC not configured"),
     ),
@@ -424,8 +478,10 @@ async fn callback_response(
         );
     };
     let login = match login_states.take(raw_state).await {
-        Ok(Some(login)) => login,
-        Ok(None) => {
+        // A handoff code shares the store with started logins; it is redeemed at
+        // the exchange endpoint, never here.
+        Ok(Some(login)) if login.handoff.is_none() => login,
+        Ok(_) => {
             tracing::warn!("OIDC callback with an unknown, expired or already-redeemed state");
             return (
                 spa_error_redirect(
@@ -563,13 +619,69 @@ async fn callback_response(
     if let Some(exp) = tokens.expires_in {
         params.push_str(&format!("&oidc_expires_in={exp}"));
     }
-    // The CLI's loopback listener reads the query: a fragment never reaches an
-    // HTTP server, and on 127.0.0.1 there is no access log or proxy to keep
-    // it out of.
-    let location = match login.return_to {
-        Some(ref to) => format!("{to}?{params}"),
-        None => format!("{base}/#{params}"),
-    };
+    // A loopback sign-in is not sent to the loopback yet. Whoever started it
+    // holds the CLI's verifier, and on a shared host that need not be the person
+    // who just signed in: a link to the provider is all it takes to have someone
+    // else's browser finish a login the sender started. So the signed-in user is
+    // asked first, on a page that says who started it, and only an explicit
+    // "Authorize" issues the one-time code (`oidc_cli_confirm`).
+    if let Some(ref to) = login.return_to {
+        let user = sso.session_subject(&tokens.session_token);
+        let handoff = CliExchangeResponse {
+            access_token: tokens.session_token.clone(),
+            refresh_token: tokens.refresh_token.clone(),
+            expires_in: tokens.expires_in,
+            provider: sso.name.clone(),
+        };
+        let confirm = random_urlsafe();
+        let stored = match serde_json::to_string(&handoff) {
+            Ok(json) => {
+                login_states
+                    .put(
+                        &confirm,
+                        LoginState {
+                            provider: sso.name.clone(),
+                            code_verifier: String::new(),
+                            nonce: String::new(),
+                            spa_state: login.spa_state.clone(),
+                            return_to: Some(to.clone()),
+                            code_challenge: login.code_challenge.clone(),
+                            handoff: Some(json),
+                            started: login.started.clone(),
+                        },
+                        CLI_CONFIRM_TTL_SECS,
+                    )
+                    .await
+            }
+            Err(e) => Err(batlehub_core::error::CoreError::Other(e.into())),
+        };
+        if let Err(e) = stored {
+            tracing::warn!(error = %e, "storing the CLI sign-in confirmation failed");
+            return (
+                error_redirect(
+                    Some(&login),
+                    &base,
+                    "Failed to complete sign-in. Please try again.",
+                ),
+                SignInOutcome::failed("handoff", Some(&sso.name)),
+            );
+        }
+        let page = confirm_page(
+            &confirm,
+            to,
+            login.started.as_deref(),
+            user.as_deref(),
+            &sso.name,
+        );
+        return (
+            cli_page(actix_web::http::StatusCode::OK, &page),
+            SignInOutcome::Succeeded {
+                provider: sso.name.clone(),
+                user_id: user,
+            },
+        );
+    }
+    let location = format!("{base}/#{params}");
     let outcome = SignInOutcome::Succeeded {
         provider: sso.name.clone(),
         user_id: sso.session_subject(&tokens.session_token),
@@ -582,6 +694,228 @@ async fn callback_response(
             .finish(),
         outcome,
     )
+}
+
+// ── CLI exchange ───────────────────────────────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct CliExchangeRequest {
+    /// The one-time `oidc_code` the callback sent to the CLI's loopback.
+    pub code: String,
+    /// The verifier whose `BASE64URL(SHA256(..))` the CLI sent as `code_challenge`.
+    pub verifier: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct CliExchangeResponse {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<u64>,
+    /// The provider that signed the user in; sent back with every refresh.
+    pub provider: String,
+}
+
+/// Redeem the one-time code a loopback sign-in handed the CLI.
+///
+/// The code is consumed by the first attempt whatever its outcome, and every
+/// refusal — unknown, expired, already used, wrong verifier — is the same 400,
+/// so the endpoint says nothing about which part was wrong.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/oidc/cli/exchange",
+    tag = "front-office",
+    request_body = CliExchangeRequest,
+    responses(
+        (status = 200, description = "The tokens of the sign-in this CLI started", body = CliExchangeResponse),
+        (status = 400, description = "Unknown, expired or already-used code, or a verifier that does not match"),
+    ),
+)]
+#[post("/api/v1/auth/oidc/cli/exchange")]
+pub async fn oidc_cli_exchange(
+    login_states: web::Data<Arc<dyn LoginStateStore>>,
+    body: web::Json<CliExchangeRequest>,
+) -> Result<impl Responder, AppError> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use sha2::{Digest, Sha256};
+
+    let refused = || AppError::bad_request("invalid or expired sign-in code");
+    let entry = login_states.take(&body.code).await?.ok_or_else(refused)?;
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(body.verifier.as_bytes()));
+    // A handoff still awaiting confirmation carries its `return_to`; only the
+    // code `oidc_cli_confirm` issued is redeemable.
+    let (Some(handoff), Some(expected), None) =
+        (entry.handoff, entry.code_challenge, entry.return_to)
+    else {
+        return Err(refused());
+    };
+    if challenge != expected {
+        return Err(refused());
+    }
+    let tokens: CliExchangeResponse = serde_json::from_str(&handoff).map_err(|e| {
+        tracing::warn!(error = %e, "unreadable CLI sign-in handoff");
+        refused()
+    })?;
+    Ok(HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .json(tokens))
+}
+
+// ── CLI confirmation ───────────────────────────────────────────────────────────
+
+/// The "Authorize batlehub-cli?" form, posted by the page the callback serves.
+#[derive(Deserialize, ToSchema)]
+pub struct CliConfirmForm {
+    /// The page's one-time token; not the code, which does not exist yet.
+    pub token: String,
+    /// `authorize`, or anything else to cancel.
+    pub decision: String,
+}
+
+/// Answer the confirmation page of a loopback sign-in.
+///
+/// `authorize` issues the one-time code and sends the browser to the CLI's
+/// loopback with it; anything else drops the sign-in. Either way the page's
+/// token is consumed, so a second answer finds nothing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/oidc/cli/confirm",
+    tag = "front-office",
+    request_body(content = CliConfirmForm, content_type = "application/x-www-form-urlencoded"),
+    responses(
+        (status = 200, description = "The sign-in was cancelled", body = ProtocolDocument, content_type = "text/html"),
+        (status = 303, description = "Authorized: to the CLI's loopback with a one-time `oidc_code`"),
+        (status = 400, description = "Unknown, expired or already-answered confirmation", body = ProtocolDocument, content_type = "text/html"),
+    ),
+)]
+#[post("/api/v1/auth/oidc/cli/confirm")]
+pub async fn oidc_cli_confirm(
+    login_states: web::Data<Arc<dyn LoginStateStore>>,
+    form: web::Form<CliConfirmForm>,
+) -> HttpResponse {
+    use actix_web::http::StatusCode;
+    let gone = || {
+        cli_page(
+            StatusCode::BAD_REQUEST,
+            "<h1>This sign-in can no longer be confirmed</h1>\
+             <p>It expired or was already answered. Run <code>batlehub-cli auth login</code> again.</p>",
+        )
+    };
+    // Only an entry awaiting confirmation: a handoff that still knows its loopback.
+    let entry = match login_states.take(&form.token).await {
+        Ok(Some(e)) if e.handoff.is_some() && e.return_to.is_some() => e,
+        _ => return gone(),
+    };
+    if form.decision != "authorize" {
+        return cli_page(
+            StatusCode::OK,
+            "<h1>Sign-in cancelled</h1><p>Nothing was sent to the command line. You can close this tab.</p>",
+        );
+    }
+    let Some(to) = entry.return_to.clone() else {
+        return gone();
+    };
+    let code = random_urlsafe();
+    let stored = login_states
+        .put(
+            &code,
+            LoginState {
+                return_to: None,
+                started: None,
+                spa_state: String::new(),
+                ..entry.clone()
+            },
+            CLI_HANDOFF_TTL_SECS,
+        )
+        .await;
+    if let Err(e) = stored {
+        tracing::warn!(error = %e, "storing the CLI sign-in handoff failed");
+        return gone();
+    }
+    // The listener reads the query, since a fragment never reaches an HTTP server.
+    HttpResponse::SeeOther()
+        .insert_header((
+            "Location",
+            format!(
+                "{to}?oidc_code={}&oidc_state={}",
+                url_encode(&code),
+                url_encode(&entry.spa_state)
+            ),
+        ))
+        .insert_header(("Referrer-Policy", "no-referrer"))
+        .insert_header(("Cache-Control", "no-store"))
+        .finish()
+}
+
+/// The body of the confirmation page; every interpolated value is escaped.
+fn confirm_page(
+    token: &str,
+    return_to: &str,
+    started: Option<&str>,
+    user: Option<&str>,
+    provider: &str,
+) -> String {
+    use batlehub_core::services::escaping::escape_html as e;
+    let port = return_to
+        .strip_prefix("http://127.0.0.1:")
+        .and_then(|r| r.strip_suffix("/callback"))
+        .unwrap_or("?");
+    let started: Option<StartedBy> = started.and_then(|s| serde_json::from_str(s).ok());
+    let when = started
+        .as_ref()
+        .and_then(|s| chrono::DateTime::from_timestamp(s.at, 0))
+        .map_or_else(|| "unknown".to_owned(), |t| t.to_rfc3339());
+    let from = started
+        .as_ref()
+        .and_then(|s| s.ip.as_deref())
+        .unwrap_or("unknown");
+    let agent = started
+        .as_ref()
+        .and_then(|s| s.user_agent.as_deref())
+        .unwrap_or("unknown");
+    format!(
+        "<h1>Authorize batlehub-cli on this machine?</h1>\
+         <p>You are signed in as <strong>{user}</strong> ({provider}). A command line asked for \
+         this sign-in; authorizing gives it your session.</p>\
+         <p><strong>Only continue if you just ran <code>batlehub-cli auth login</code> yourself.</strong> \
+         If someone sent you this link, cancel.</p>\
+         <dl><dt>Started at</dt><dd>{when}</dd>\
+         <dt>Started from</dt><dd>{from}</dd>\
+         <dt>Client</dt><dd>{agent}</dd>\
+         <dt>Local port</dt><dd>127.0.0.1:{port}</dd></dl>\
+         <form method=\"post\" action=\"cli/confirm\">\
+         <input type=\"hidden\" name=\"token\" value=\"{token}\">\
+         <button type=\"submit\" name=\"decision\" value=\"authorize\">Authorize</button> \
+         <button type=\"submit\" name=\"decision\" value=\"cancel\">Cancel</button>\
+         </form>",
+        user = e(user.unwrap_or("unknown user")),
+        provider = e(provider),
+        when = e(&when),
+        from = e(from),
+        agent = e(agent),
+        port = e(port),
+        token = e(token),
+    )
+}
+
+/// A small server-rendered page: no script at all, framing refused, never
+/// cached. `form-action` admits the loopback because the authorize answer is a
+/// redirect there, and browsers check a form's redirects against it too.
+fn cli_page(status: actix_web::http::StatusCode, body: &str) -> HttpResponse {
+    HttpResponse::build(status)
+        .content_type("text/html; charset=utf-8")
+        .insert_header((
+            "Content-Security-Policy",
+            "default-src 'none'; form-action 'self' http://127.0.0.1:*; \
+             frame-ancestors 'none'; base-uri 'none'",
+        ))
+        .insert_header(("X-Frame-Options", "DENY"))
+        .insert_header(("Cache-Control", "no-store"))
+        .insert_header(("Referrer-Policy", "no-referrer"))
+        .body(format!(
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+             <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+             <title>BatleHub sign-in</title></head><body>{body}</body></html>"
+        ))
 }
 
 // ── Refresh ────────────────────────────────────────────────────────────────────

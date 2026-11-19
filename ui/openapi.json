@@ -964,6 +964,9 @@
           "403": {
             "description": "`config:write` required"
           },
+          "409": {
+            "description": "The config file changed since `base_hash` was read"
+          },
           "503": {
             "description": "Hot reload disabled"
           }
@@ -1043,6 +1046,23 @@
         ],
         "summary": "Apply the current pending reload.",
         "operationId": "apply_pending_reload",
+        "requestBody": {
+          "description": "Optional: the id of the pending change being applied",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ApplyPendingRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Pending reload applied",
@@ -1061,7 +1081,10 @@
             "description": "No pending reload"
           },
           "409": {
-            "description": "Pending reload expired"
+            "description": "Pending reload expired, replaced by another one, or the config file changed since the editor loaded it"
+          },
+          "500": {
+            "description": "The config file could not be written; nothing was applied"
           },
           "503": {
             "description": "Hot reload disabled"
@@ -1142,7 +1165,7 @@
             "description": "Validation failure"
           },
           "403": {
-            "description": "`config:read` required"
+            "description": "`config:write` required"
           },
           "503": {
             "description": "Hot reload disabled"
@@ -3030,7 +3053,7 @@
             "description": "Member added"
           },
           "400": {
-            "description": "Invalid principal_type"
+            "description": "Invalid principal_type, or a bare user id while several identity providers are configured"
           },
           "403": {
             "description": "`owners:write` required"
@@ -4099,7 +4122,7 @@
           {
             "name": "principal_id",
             "in": "path",
-            "description": "User ID or group name",
+            "description": "`<provider>:<user id>` or group name",
             "required": true,
             "schema": {
               "type": "string"
@@ -6392,11 +6415,101 @@
         "description": "The returned `state` must match an entry this server created and has not yet\nconsumed, or nothing is exchanged. The caller then compares the echoed\n`oidc_state` against the value it kept locally — see `oidc_login` for why\nboth checks exist.",
         "operationId": "oidc_callback",
         "responses": {
+          "200": {
+            "description": "A CLI sign-in: the page asking the signed-in user to authorize the command line",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
           "302": {
             "description": "Redirect to SPA with tokens or error"
           },
           "503": {
             "description": "OIDC not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/cli/confirm": {
+      "post": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "Answer the confirmation page of a loopback sign-in.",
+        "description": "`authorize` issues the one-time code and sends the browser to the CLI's\nloopback with it; anything else drops the sign-in. Either way the page's\ntoken is consumed, so a second answer finds nothing.",
+        "operationId": "oidc_cli_confirm",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/CliConfirmForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sign-in was cancelled",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Authorized: to the CLI's loopback with a one-time `oidc_code`"
+          },
+          "400": {
+            "description": "Unknown, expired or already-answered confirmation",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/cli/exchange": {
+      "post": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "Redeem the one-time code a loopback sign-in handed the CLI.",
+        "description": "The code is consumed by the first attempt whatever its outcome, and every\nrefusal — unknown, expired, already used, wrong verifier — is the same 400,\nso the endpoint says nothing about which part was wrong.",
+        "operationId": "oidc_cli_exchange",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The tokens of the sign-in this CLI started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliExchangeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, expired or already-used code, or a verifier that does not match"
           }
         }
       }
@@ -6431,7 +6544,16 @@
           {
             "name": "return_to",
             "in": "query",
-            "description": "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with the tokens in the query string",
+            "description": "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with a one-time `oidc_code`, never the tokens",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "description": "Required with `return_to`: `BASE64URL(SHA256(verifier))`; the CLI presents the verifier to `/api/v1/auth/oidc/cli/exchange`",
             "required": false,
             "schema": {
               "type": "string"
@@ -6453,7 +6575,7 @@
             "description": "Redirect to OIDC authorization endpoint"
           },
           "400": {
-            "description": "`state` too long, or a `return_to` other than the loopback callback"
+            "description": "`state` too long, a `return_to` other than the loopback callback, or a `return_to` without a `code_challenge`"
           },
           "404": {
             "description": "Named provider not found"
@@ -8280,7 +8402,7 @@
           "notifications"
         ],
         "summary": "Receive an event from an external system.",
-        "description": "If a `secret` is configured for this webhook, the request must include a\n`X-Hub-Signature-256: sha256=<hmac-hex>` header computed over the raw body.",
+        "description": "If a `secret` is configured for this webhook, the request must include\n`X-BatleHub-Timestamp: <unix seconds>` and\n`X-Hub-Signature-256: sha256=<hmac-hex>` computed over `\"{timestamp}.{body}\"`.\nA timestamp more than 300 s from the server's clock is refused like a bad\nsignature, so a captured request cannot be replayed later.",
         "operationId": "receive_inbound_webhook",
         "parameters": [
           {
@@ -23683,6 +23805,20 @@
           }
         }
       },
+      "ApplyPendingRequest": {
+        "type": "object",
+        "description": "Which staged change `pending/apply` is meant to apply.",
+        "properties": {
+          "pending_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The `id` of the pending change the caller reviewed (from `from-content`\nor `GET pending`). When given and no longer the staged one, `409`."
+          }
+        }
+      },
       "ArtifactBytes": {
         "type": "string",
         "format": "binary",
@@ -24601,6 +24737,71 @@
           }
         }
       },
+      "CliConfirmForm": {
+        "type": "object",
+        "description": "The \"Authorize batlehub-cli?\" form, posted by the page the callback serves.",
+        "required": [
+          "token",
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "`authorize`, or anything else to cancel."
+          },
+          "token": {
+            "type": "string",
+            "description": "The page's one-time token; not the code, which does not exist yet."
+          }
+        }
+      },
+      "CliExchangeRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "verifier"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The one-time `oidc_code` the callback sent to the CLI's loopback."
+          },
+          "verifier": {
+            "type": "string",
+            "description": "The verifier whose `BASE64URL(SHA256(..))` the CLI sent as `code_challenge`."
+          }
+        }
+      },
+      "CliExchangeResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "provider"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "provider": {
+            "type": "string",
+            "description": "The provider that signed the user in; sent back with every refresh."
+          },
+          "refresh_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CoherenceResponse": {
         "type": "object",
         "required": [
@@ -24792,11 +24993,16 @@
         "type": "object",
         "required": [
           "content",
-          "is_readonly"
+          "is_readonly",
+          "content_hash"
         ],
         "properties": {
           "content": {
             "type": "string"
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "SHA-256 of `content`, hex: send it back as `from-content`'s `base_hash`\nso a save never overwrites a file that changed since it was loaded."
           },
           "is_readonly": {
             "type": "boolean",
@@ -24810,6 +25016,13 @@
           "content"
         ],
         "properties": {
+          "base_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`content_hash` of the file the editor loaded. Given, `from-content`\n(and the apply after it) answers `409` if the file changed since."
+          },
           "content": {
             "type": "string"
           }
@@ -30494,6 +30707,14 @@
           "pending_created": {
             "type": "boolean",
             "description": "Whether this call left a pending reload staged for approval.\n\nOnly `from-content` can set it: `reload` and `apply` consume the pending\nrather than leave one, and `validate` is a dry run. It exists because\n`from-content` returns `200` with an empty diff in two very different\nsituations — a pending was staged, or the submitted content was identical\nto the last load attempt so there was nothing to stage. Without this flag\nthe caller only discovers the difference when the subsequent apply fails\nwith `404 No pending reload`."
+          },
+          "pending_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The staged change's id, when `from-content` staged one: send it back to\n`pending/apply` so it applies this change and not one staged since."
           },
           "warnings": {
             "type": "array",

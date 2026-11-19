@@ -227,6 +227,8 @@ impl LocalRegistryService {
                 .await?;
         }
 
+        // Read before the tombstone: afterwards the row and the bytes are gone.
+        let refund = self.quota_refund(registry, name, version).await;
         let tombstoned = self
             .backend
             .tombstone_version(registry, name, version, identity.user_id.as_deref())
@@ -235,6 +237,10 @@ impl LocalRegistryService {
             return Ok(false);
         }
 
+        // Only after *this* call tombstoned the row, so a version is refunded once.
+        if let Some((publisher, bytes)) = refund {
+            self.revoke_quota(&publisher, registry, bytes).await;
+        }
         self.drop_version_bytes(registry, name, version).await;
         self.delete_readme_for_version(registry, name, version)
             .await;
@@ -684,6 +690,40 @@ impl LocalRegistryService {
         }
     }
 
+    /// Whom a deleted version's quota goes back to, and how many bytes: its
+    /// original publisher (not the deleter) and the stored artifact's size.
+    /// `None` when no quota is configured or nobody is recorded as publisher.
+    async fn quota_refund(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+    ) -> Option<(Identity, u64)> {
+        self.quota.as_ref()?;
+        let row = self
+            .backend
+            .get_versions(registry, name)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|p| p.version == version)?;
+        let publisher = Identity {
+            user_id: Some(row.published_by?),
+            ..Identity::anonymous()
+        };
+        // shortcut: a multi-file version (Maven) refunds the main key's size only;
+        // the version still counts as one package back, which is what the cap limits.
+        let bytes = match self
+            .storage
+            .retrieve(&artifact_storage_key(registry, name, version))
+            .await
+        {
+            Ok(Some(stored)) => stored.meta.size.unwrap_or(0),
+            _ => 0,
+        };
+        Some((publisher, bytes))
+    }
+
     pub(super) async fn revoke_quota(&self, identity: &Identity, registry: &str, bytes: u64) {
         if let Some(svc) = &self.quota {
             if let Err(err) = svc.revoke_publish(identity, registry, bytes).await {
@@ -835,7 +875,11 @@ impl LocalRegistryService {
 pub fn stores_files_under_version(kind: RegistryKind) -> bool {
     match kind {
         // `{ver}/{filename}`, `{ver}/{os}-{arch}`, `{ver}/{hash}/{file}`.
-        RegistryKind::Maven | RegistryKind::Terraform | RegistryKind::Nix => true,
+        // PyPI: `{ver}/{sha256}/{file}` for every file after the first; its PEP 503
+        // names carry no `/` (refused at publish), so the prefix cannot nest.
+        RegistryKind::Maven | RegistryKind::Terraform | RegistryKind::Nix | RegistryKind::Pypi => {
+            true
+        }
         RegistryKind::Github
         | RegistryKind::Forgejo
         | RegistryKind::Gitlab
@@ -843,7 +887,6 @@ pub fn stores_files_under_version(kind: RegistryKind) -> bool {
         | RegistryKind::Npm
         | RegistryKind::Openvsx
         | RegistryKind::Goproxy
-        | RegistryKind::Pypi
         | RegistryKind::Conda
         | RegistryKind::Composer
         | RegistryKind::VscodeMarketplace

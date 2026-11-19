@@ -9,6 +9,8 @@ use batlehub_core::{
     ports::LocalRegistryBackend,
 };
 
+use super::{lost_reservation, STALE_PENDING};
+
 /// `SELECT`-and-`FROM` for a [`Tombstone`], with the caller's `WHERE` clause
 /// appended. Shared by the point lookup and the listing so the two column lists
 /// cannot drift out of step with [`tombstone_from_row`].
@@ -102,14 +104,19 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
             return Err(CoreError::Conflict(ts.burned_coordinate_message()));
         }
 
-        // Remove a stale pending row if one exists (crash recovery for the caller).
+        // Remove a *stale* pending row (crash recovery for the caller). A recent one
+        // is a publish still in flight: deleting it let a concurrent publish of the
+        // same version take its place, and both were answered 201 over one row.
+        // That one stays, and `uq_local_package` refuses this insert below.
         sqlx::query(
             "DELETE FROM local_packages \
-             WHERE registry = $1 AND name = $2 AND version = $3 AND status = 'pending'",
+             WHERE registry = $1 AND name = $2 AND version = $3 AND status = 'pending' \
+               AND published_at < NOW() - ($4 || ' seconds')::INTERVAL",
         )
         .bind(&pkg.registry)
         .bind(&pkg.name)
         .bind(&pkg.version)
+        .bind(STALE_PENDING.as_secs() as i64)
         .execute(&self.pool)
         .await
         .map_err(|e| CoreError::Database(e.to_string()))?;
@@ -155,9 +162,9 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         name: &str,
         version: &str,
     ) -> Result<(), CoreError> {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE local_packages SET status = 'published' \
-             WHERE registry = $1 AND name = $2 AND version = $3",
+             WHERE registry = $1 AND name = $2 AND version = $3 AND status = 'pending'",
         )
         .bind(registry)
         .bind(name)
@@ -165,6 +172,9 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         .execute(&self.pool)
         .await
         .map_err(|e| CoreError::Database(e.to_string()))?;
+        if result.rows_affected() != 1 {
+            return Err(lost_reservation(registry, name, version));
+        }
         Ok(())
     }
 
@@ -308,6 +318,42 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn append_file(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        file: serde_json::Value,
+    ) -> Result<bool, CoreError> {
+        let filename = file
+            .get("filename")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CoreError::InvalidInput("a file entry needs a filename".to_owned()))?
+            .to_owned();
+        // One statement, so the duplicate-name guard and the append see the same
+        // row: a second upload racing the same filename re-evaluates the WHERE
+        // after the first one's row lock and updates nothing.
+        let result = sqlx::query(
+            "UPDATE local_packages \
+             SET index_metadata = jsonb_set(COALESCE(index_metadata, '{}'::jsonb), '{files}', \
+                 COALESCE(index_metadata->'files', '[]'::jsonb) || jsonb_build_array($4::jsonb), true) \
+             WHERE registry = $1 AND name = $2 AND version = $3 \
+               AND status = 'published' AND deleted_at IS NULL \
+               AND COALESCE(index_metadata->>'filename', '') <> $5 \
+               AND NOT COALESCE(index_metadata->'files', '[]'::jsonb) \
+                   @> jsonb_build_array(jsonb_build_object('filename', $5::text))",
+        )
+        .bind(registry)
+        .bind(name)
+        .bind(version)
+        .bind(&file)
+        .bind(&filename)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| CoreError::Database(e.to_string()))?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn set_vsix_signature_provided(
         &self,
         registry: &str,
@@ -426,6 +472,8 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         Ok(row.is_some())
     }
 
+    /// Only a *pending* row is removed: this is the rollback of a publish, and a
+    /// published row it matched would be another caller's version.
     /// `deleted_at IS NULL` is on the rollback primitive too: this is the one
     /// path in the tree that still issues a `DELETE` against `local_packages`,
     /// and a coordinate RFC 0016 §4.4 calls permanently spent must not be freed
@@ -439,7 +487,7 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         sqlx::query(
             "DELETE FROM local_packages \
              WHERE registry = $1 AND name = $2 AND version = $3 \
-               AND deleted_at IS NULL",
+               AND status = 'pending' AND deleted_at IS NULL",
         )
         .bind(registry)
         .bind(name)

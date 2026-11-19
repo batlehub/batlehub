@@ -310,6 +310,21 @@ async fn an_imported_asset_is_a_published_version() {
     assert_eq!(held[0].version, "1.0.0");
 }
 
+/// An asset past the artifact limit is refused while it streams, not after
+/// the whole of it has been held.
+#[tokio::test]
+async fn an_asset_past_the_artifact_limit_is_refused_while_reading() {
+    let h = harness(
+        vec![release("v1", vec![asset("ext-1.0.0.vsix")])],
+        &[("ext-1.0.0.vsix", "acme.ext@1.0.0")],
+        false,
+    );
+    h.svc.local.hot.write().await.max_artifact_size_bytes = Some(4);
+    let report = h.svc.import().await;
+    assert_eq!((report.imported, report.errors), (0, 1));
+    assert!(h.backend.versions.lock().unwrap().is_empty());
+}
+
 /// Re-running is free, which is what makes an interval safe to set.
 #[tokio::test]
 async fn a_version_already_held_is_skipped_not_republished() {

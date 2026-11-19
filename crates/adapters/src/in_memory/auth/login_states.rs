@@ -72,6 +72,9 @@ mod tests {
             nonce: "nonce".to_owned(),
             spa_state: "spa".to_owned(),
             return_to: None,
+            code_challenge: None,
+            handoff: None,
+            started: None,
         }
     }
 

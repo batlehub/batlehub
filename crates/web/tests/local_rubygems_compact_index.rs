@@ -458,3 +458,48 @@ async fn a_dependency_name_that_would_recut_the_info_line_is_refused() {
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
 }
+
+/// A `.gem` built for one platform (`nokogiri-1.16.0-x86_64-linux.gem`).
+fn make_platform_gem(name: &str, version: &str, platform: &str) -> Vec<u8> {
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write as _;
+
+    let yaml = format!(
+        "name: {name}\nversion:\n  version: '{version}'\nplatform: {platform}\nsummary: s\n"
+    );
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    gz.write_all(yaml.as_bytes()).unwrap();
+    let metadata_gz = gz.finish().unwrap();
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(metadata_gz.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "metadata.gz", metadata_gz.as_slice())
+        .unwrap();
+    builder.into_inner().unwrap()
+}
+
+/// A platform gem is its own variant: listed as `{version}-{platform}` (what
+/// Bundler matches against the host), downloadable under that full name, and
+/// not in the way of the `ruby` variant of the same version.
+#[actix_web::test]
+async fn a_platform_gem_is_listed_and_served_under_its_full_name() {
+    let app = local_gems_app().await;
+    publish(&app, make_platform_gem("natgem", "1.0.0", "x86_64-linux")).await;
+    publish(&app, make_gem_with_deps("natgem", "1.0.0", "")).await;
+
+    let info = text(&app, "/proxy/local-gems/info/natgem").await;
+    assert!(
+        info.lines().any(|l| l.starts_with("1.0.0-x86_64-linux ")),
+        "{info}"
+    );
+    assert!(info.lines().any(|l| l.starts_with("1.0.0 ")), "{info}");
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-gems/gems/natgem-1.0.0-x86_64-linux.gem")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+}

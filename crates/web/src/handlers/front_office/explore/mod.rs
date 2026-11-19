@@ -34,6 +34,35 @@ pub use stats::{
     UpstreamPackageDto, UpstreamSearchQuery, UpstreamSearchResponse, MAX_UPSTREAM_SEARCH_LIMIT,
 };
 
+/// Drop the rows whose package this caller may not read, per registry.
+///
+/// The SQL viewer filters on package `visibility` only; a namespace seal or a
+/// grant hierarchy lives in config, so it is applied here with the same read set
+/// the download funnel uses. A registry whose read set cannot be resolved drops
+/// its rows: an unknown answer must not list what it could not check.
+pub(crate) async fn retain_readable<T>(
+    local_svc: &LocalRegistryService,
+    identity: &batlehub_core::entities::Identity,
+    items: &mut Vec<T>,
+    key: impl Fn(&T) -> (&str, &str),
+) {
+    use batlehub_core::services::authz::filter::Readable;
+    let mut sets: std::collections::HashMap<String, Option<Readable>> = Default::default();
+    for item in items.iter() {
+        let (registry, _) = key(item);
+        if !sets.contains_key(registry) {
+            let set = local_svc.readable_set(registry, identity).await.ok();
+            sets.insert(registry.to_owned(), set);
+        }
+    }
+    items.retain(|item| {
+        let (registry, name) = key(item);
+        sets.get(registry)
+            .and_then(Option::as_ref)
+            .is_some_and(|set| set.contains(name))
+    });
+}
+
 pub fn format_dt(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339()
 }

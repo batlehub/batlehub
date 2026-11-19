@@ -15,16 +15,21 @@ use uuid::Uuid;
 
 use crate::{
     error::AppError, extractors::AuthIdentity, handlers::schemas::OkResponse,
-    services::verify_inbound_hmac,
+    services::signed_and_fresh,
 };
 use batlehub_core::ports::NotificationPort;
 
 // ── Inbound webhook receiver ──────────────────────────────────────────────────
 
+pub use crate::services::TIMESTAMP_HEADER;
+
 /// Receive an event from an external system.
 ///
-/// If a `secret` is configured for this webhook, the request must include a
-/// `X-Hub-Signature-256: sha256=<hmac-hex>` header computed over the raw body.
+/// If a `secret` is configured for this webhook, the request must include
+/// `X-BatleHub-Timestamp: <unix seconds>` and
+/// `X-Hub-Signature-256: sha256=<hmac-hex>` computed over `"{timestamp}.{body}"`.
+/// A timestamp more than 300 s from the server's clock is refused like a bad
+/// signature, so a captured request cannot be replayed later.
 #[utoipa::path(
     post,
     path = "/api/v1/webhooks/inbound/{name}",
@@ -88,12 +93,19 @@ pub async fn receive_inbound_webhook(
     // so treat them the same as no secret configured.
     let signature_valid = match inbound_cfg.secret.as_deref().filter(|s| !s.is_empty()) {
         Some(secret) => {
-            let header_val = req
-                .headers()
-                .get("X-Hub-Signature-256")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !verify_inbound_hmac(secret, &body, header_val) {
+            let header = |name: &str| {
+                req.headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+            };
+            if !signed_and_fresh(
+                secret,
+                header(TIMESTAMP_HEADER),
+                &body,
+                header("X-Hub-Signature-256"),
+                Utc::now().timestamp(),
+            ) {
                 return Err(AppError::forbidden("HMAC signature mismatch"));
             }
             Some(true)

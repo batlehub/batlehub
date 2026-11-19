@@ -331,3 +331,30 @@ mod tests {
         assert_eq!(dep.explicit_name_in_toml.as_deref(), Some("serde_renamed"));
     }
 }
+
+/// The spelling a local crate is stored and looked up under.
+///
+/// cargo requests the sparse index by the lowercased name, so a crate stored
+/// as `MyCrate` was one no dependent could resolve. The index entry keeps the
+/// declared spelling; only the key is folded.
+pub(super) fn local_crate_name(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+/// crates.io's uniqueness rule: case-insensitive, with `-` and `_` equal.
+pub(super) fn crate_names_collide(a: &str, b: &str) -> bool {
+    let fold = |n: &str| n.to_ascii_lowercase().replace('_', "-");
+    fold(a) == fold(b)
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn crate_names_fold_case_and_separators() {
+        assert_eq!(local_crate_name("MyCrate"), "mycrate");
+        assert!(crate_names_collide("foo-bar", "Foo_Bar"));
+        assert!(!crate_names_collide("foo-bar", "foobar"));
+    }
+}

@@ -91,8 +91,9 @@ pub use local_registry::{
     terraform_provider_shasums_storage_key, validate_coordinate, validate_package_name,
     validate_path_safe, validate_path_segment, validate_publish_coordinate,
     validate_terraform_platform, JetbrainsPluginVersion, LocalRegistryService, NixPublishRequest,
-    OpenVsxExtensionVersion, PublishPolicyRequest, PublishRequest, TerraformPlatform,
-    TerraformShasumsFile, COMPOSER_DIST_SHA1, SIGNATURE_SUFFIX, VERSION_SIBLING_SUFFIXES,
+    OpenVsxExtensionVersion, PublishPolicyRequest, PublishRequest, PypiFileUpload, PypiLocalFile,
+    TerraformPlatform, TerraformShasumsFile, COMPOSER_DIST_SHA1, SIGNATURE_SUFFIX,
+    VERSION_SIBLING_SUFFIXES,
 };
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};

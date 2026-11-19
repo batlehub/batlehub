@@ -123,11 +123,62 @@ pub fn new_http_client(
     redirect_limit: Option<usize>,
     opts: &UpstreamHttpOptions,
 ) -> anyhow::Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder().user_agent("batlehub/0.1");
-    if let Some(limit) = redirect_limit {
-        builder = builder.redirect(reqwest::redirect::Policy::limited(limit));
-    }
+    let builder = reqwest::Client::builder()
+        .user_agent("batlehub/0.1")
+        // 10 is reqwest's own default, which `None` used to mean.
+        .redirect(guarded_redirect_policy(
+            redirect_limit.unwrap_or(10),
+            opts.custom_header.is_some(),
+        ));
     apply_upstream_options(builder, opts)
+}
+
+/// reqwest's redirect following, minus its two leaks on a hop that leaves the
+/// origin of the first URL:
+///
+/// - reqwest strips `Authorization`/`Cookie` across hosts but not a configured
+///   `custom_header` (or NuGet's `X-NuGet-ApiKey`), so when the client carries
+///   one (`forwards_credential`) such a hop is refused rather than handed the
+///   operator's key;
+/// - an IP-literal target in a blocked range (`169.254.169.254`, `[::1]`, …) is
+///   refused before it is dialled.
+///
+/// shortcut: a cross-origin hop to a *hostname* that resolves privately is not
+/// checked here (a sync policy cannot resolve); the full guard is
+/// [`super::ssrf::fetch_following_redirects`], move a client to it when its
+/// artifact URLs come from upstream data.
+pub fn guarded_redirect_policy(
+    limit: usize,
+    forwards_credential: bool,
+) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() > limit {
+            return attempt.error("too many redirects");
+        }
+        let Some(first) = attempt.previous().first() else {
+            return attempt.follow();
+        };
+        if same_origin(attempt.url(), first) {
+            return attempt.follow();
+        }
+        if forwards_credential {
+            return attempt.error(
+                "refusing a cross-origin redirect: the configured credential header would be \
+                 forwarded to another host",
+            );
+        }
+        let blocked = attempt
+            .url()
+            .host_str()
+            .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
+            .and_then(|h| h.parse::<std::net::IpAddr>().ok())
+            .is_some_and(super::ssrf::is_blocked_ip);
+        if blocked {
+            return attempt
+                .error("refusing a redirect to a private or reserved address (SSRF guard)");
+        }
+        attempt.follow()
+    })
 }
 
 /// The client pair a manually-followed redirect chain needs.
@@ -1612,5 +1663,69 @@ mod tests {
         let result = apply_upstream_tls(reqwest::Client::builder(), &opts);
         assert!(result.is_ok());
         assert!(result.unwrap().build().is_ok());
+    }
+
+    /// An upstream `302` to another host must not receive the configured
+    /// `custom_header` (reqwest strips only `Authorization`), and an
+    /// IP-literal private target must not be dialled at all.
+    #[tokio::test]
+    async fn guarded_redirects_keep_credentials_and_private_targets_out() {
+        let mut other = mockito::Server::new_async().await;
+        let stolen = other
+            .mock("GET", "/x")
+            .expect(0)
+            .with_status(200)
+            .create_async()
+            .await;
+        let mut upstream = mockito::Server::new_async().await;
+        let _hop = upstream
+            .mock("GET", "/a.tgz")
+            .with_status(302)
+            .with_header("location", &format!("{}/x", other.url()))
+            .create_async()
+            .await;
+        let _same = upstream
+            .mock("GET", "/same")
+            .with_status(302)
+            .with_header("location", "/final")
+            .create_async()
+            .await;
+        let _final = upstream
+            .mock("GET", "/final")
+            .with_status(200)
+            .with_body("ok")
+            .create_async()
+            .await;
+
+        let keyed = new_http_client(
+            None,
+            &UpstreamHttpOptions {
+                custom_header: Some(("X-Api-Key".to_owned(), "secret".to_owned())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(keyed
+            .get(format!("{}/a.tgz", upstream.url()))
+            .send()
+            .await
+            .is_err());
+        // Same-origin hops are still followed with the credential.
+        let ok = keyed
+            .get(format!("{}/same", upstream.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.text().await.unwrap(), "ok");
+
+        // No credential: the hop is cross-origin to 127.0.0.1, a blocked literal.
+        let plain = new_http_client(None, &UpstreamHttpOptions::default()).unwrap();
+        assert!(plain
+            .get(format!("{}/a.tgz", upstream.url()))
+            .send()
+            .await
+            .is_err());
+
+        stolen.assert_async().await;
     }
 }

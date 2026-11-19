@@ -920,6 +920,13 @@ impl ProxyService {
         registry_label: Arc<str>,
         start: Instant,
     ) -> Result<ProxyResponse, CoreError> {
+        let mut req = req;
+        // A floating request (`latest`, an npm dist-tag) is cached and fetched
+        // as the version the rules just judged: keyed on the spelling asked
+        // for, a blocked version's bytes would answer it once `latest` moved.
+        if !metadata.id.version.is_empty() && metadata.id.version != req.package_id.version {
+            req.package_id.version = metadata.id.version.clone();
+        }
         let registry_name: &str = req.package_id.registry.as_str();
 
         // ── 3. Firewall-only: stream directly from upstream, skip all caching ──

@@ -77,6 +77,9 @@ pub async fn list_packages(
     identity: AuthIdentity,
     admin_svc: web::Data<Arc<AdminService>>,
     access: web::Data<crate::AccessConfigLock>,
+    // Optional: an app without a local registry service has no read set to
+    // apply, and the extractor would otherwise refuse the request outright.
+    local_svc: Option<web::Data<Arc<LocalRegistryService>>>,
 ) -> Result<impl Responder, AppError> {
     let accessible = access.read().await.accessible_registries_for(&identity);
 
@@ -146,11 +149,19 @@ pub async fn list_packages(
         viewer,
     };
 
-    let (packages, total) = tokio::try_join!(
+    let (mut packages, total) = tokio::try_join!(
         admin_svc.list_packages(filter),
         admin_svc.count_packages(count_filter),
     )
     .map_err(AppError::from)?;
+    // shortcut: filtered after SQL paginates (see `retain_readable`); a page
+    // may be short and `total` still counts sealed rows.
+    if let Some(local_svc) = &local_svc {
+        super::explore::retain_readable(local_svc, &identity.0, &mut packages, |p| {
+            (p.package_id.registry.as_str(), p.package_id.name.as_str())
+        })
+        .await;
+    }
 
     let items: Vec<PackageSummaryDto> = packages
         .into_iter()
@@ -604,7 +615,7 @@ fn build_proxy_url(
 /// honours such a grant, so `why` must see the package too, or it answers 404
 /// for something that installs. Only reached when the registry has a grants
 /// hierarchy: without one, `holds_anywhere_in_registry` already said yes.
-async fn coordinate_grant(
+pub(crate) async fn coordinate_grant(
     hot: &batlehub_core::services::hot_config::HotConfigLock,
     registry: &str,
     name: &str,

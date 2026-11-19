@@ -294,6 +294,26 @@ pub async fn pypi_file_download(
         AppError::unprocessable(format!("cannot parse PyPI filename: {filename}"))
     })?;
 
+    // A file added after a version's first lives under its own key; the read
+    // still goes through `get_artifact_at_key`'s gate.
+    if mode_map.get(&registry) != Mode::Proxy {
+        if let batlehub_core::services::PypiLocalFile::Extra(key) = local_svc
+            .pypi_local_file(&registry, &name, &version, &filename)
+            .await
+            .map_err(AppError::from)?
+        {
+            let pkg = PackageId::new(&registry, &name, &version).with_artifact(&filename);
+            let bytes = local_svc
+                .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity.0, &identity.1)
+                .await
+                .map_err(AppError::from)?
+                .ok_or_else(|| AppError::not_found(format!("{filename} not found")))?;
+            return Ok(HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .body(bytes));
+        }
+    }
+
     serve_local_or_proxy_artifact(
         svc,
         local_svc,

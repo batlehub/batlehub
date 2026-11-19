@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/pypi.md
-sourceHash: ba4e1d51e95aa620
+sourceHash: ba01c3ef63b53309
 ---
 
 # PyPI
@@ -75,6 +75,11 @@ twine upload \
 Ou bien configurez `~/.pypirc` avec une entrée
 `repository = https://batlehub.example.com/proxy/<registry>/legacy/` et lancez
 `twine upload --repository batlehub dist/*`.
+
+Une version contient chaque fichier téléversé pour elle — le sdist et chaque
+wheel figurent dans l'index simple avec leur propre SHA-256. Un fichier est
+immuable : téléverser un nom de fichier que la version a déjà est refusé en
+`409`.
 
 ## Versions bloquées
 

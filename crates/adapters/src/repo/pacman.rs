@@ -86,9 +86,9 @@ const MAX_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
 /// `io::Write` sink that buffers into a `Vec` but errors once more than `limit`
 /// bytes have been written, so a decompressor can't be driven into unbounded
 /// allocation regardless of codec.
-struct CappedWriter {
-    buf: Vec<u8>,
-    limit: u64,
+pub(super) struct CappedWriter {
+    pub(super) buf: Vec<u8>,
+    pub(super) limit: u64,
 }
 
 impl std::io::Write for CappedWriter {

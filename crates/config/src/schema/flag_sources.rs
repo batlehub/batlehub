@@ -11,8 +11,9 @@
 //! ```
 //!
 //! A source pushes to `POST /api/v1/flags/{name}` with the batch signed by
-//! `secret` (`X-Hub-Signature-256: sha256=<hex>` over the raw body), the same
-//! scheme `[[notifications.inbound]]` verifies. `max_effect` is the ceiling:
+//! `secret` (`X-Hub-Signature-256: sha256=<hex>` over `"{timestamp}.{body}"`,
+//! the timestamp sent as `X-BatleHub-Timestamp` and refused beyond 300 s), the
+//! same scheme `[[notifications.inbound]]` verifies. `max_effect` is the ceiling:
 //! a push asking for more is stored at the ceiling and told so
 //! (`effect_capped`), because a feed that can deny every download of an
 //! estate is a decision the operator takes in the config, not one the feed
