@@ -1,0 +1,12 @@
+[package]
+name = "memmap2"
+version = "0.5.99"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Local shim — replaces the crates.io `memmap2` 0.5 line (RUSTSEC-2026-0186, unchecked pointer offset, fixed only in 0.9.11) with a re-export of memmap2 0.9. The only holder of the 0.5 line is pprof 0.15.0, its latest release, which maps shared libraries with `Mmap::map` alone."
+
+# The 0.9 line under another name: a package cannot depend on itself by name,
+# and `^0.9.11` does not match this shim's 0.5.99, so the patch never applies
+# to it and it resolves from crates.io.
+[dependencies]
+memmap2-09 = { package = "memmap2", version = "0.9.11" }
