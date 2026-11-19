@@ -295,6 +295,15 @@ fn cjson(name: &str, version: &str) -> Vec<u8> {
 }
 
 #[test]
+fn parse_composer_zip_refuses_a_decompression_bomb() {
+    // 11 MiB of spaces deflates to a few KiB: over the 10 MiB composer.json cap.
+    let data = make_zip_with_file("composer.json", &vec![b' '; 11 * 1024 * 1024]);
+    assert!(data.len() < 1024 * 1024, "the fixture must be a bomb");
+    let err = parse_composer_zip(&data, None).err().expect("refused");
+    assert!(err.to_string().contains("byte limit"), "{err}");
+}
+
+#[test]
 fn parse_composer_zip_root_level() {
     let data = make_zip_with_file("composer.json", &cjson("vendor/mypkg", "v1.0.0"));
     let meta = parse_composer_zip(&data, None).unwrap();

@@ -70,13 +70,9 @@ pub(super) fn is_valid_composer_name_segment(s: &str) -> bool {
 pub(super) fn find_composer_json(
     archive: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
 ) -> anyhow::Result<String> {
-    use std::io::Read;
-
     // Try root-level composer.json first.
-    if let Ok(mut f) = archive.by_name("composer.json") {
-        let mut s = String::new();
-        f.read_to_string(&mut s)?;
-        return Ok(s);
+    if let Ok(f) = archive.by_name("composer.json") {
+        return read_composer_json(f);
     }
 
     // Fall back to a single top-level directory (GitHub zipball: vendor-pkg-abc123/composer.json).
@@ -102,8 +98,20 @@ pub(super) fn find_composer_json(
         ),
     };
 
-    let mut f = archive.by_name(&nested)?;
+    read_composer_json(archive.by_name(&nested)?)
+}
+
+/// Decompressed ceiling for `composer.json`; real ones are a few KiB.
+const MAX_COMPOSER_JSON_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The upload cap bounds the compressed bytes only; a deflate bomb would
+/// otherwise inflate to gigabytes here.
+fn read_composer_json(f: impl std::io::Read) -> anyhow::Result<String> {
+    use std::io::Read;
     let mut s = String::new();
-    f.read_to_string(&mut s)?;
+    f.take(MAX_COMPOSER_JSON_BYTES + 1).read_to_string(&mut s)?;
+    if s.len() as u64 > MAX_COMPOSER_JSON_BYTES {
+        anyhow::bail!("composer.json exceeds the {MAX_COMPOSER_JSON_BYTES}-byte limit");
+    }
     Ok(s)
 }

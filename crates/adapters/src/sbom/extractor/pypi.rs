@@ -12,7 +12,7 @@ pub(super) fn extract_pypi_manifest(data: &Bytes) -> ExtractedManifest {
 }
 
 fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
-    use std::io::{Cursor, Read};
+    use std::io::Cursor;
     use zip::ZipArchive;
 
     let cursor = Cursor::new(data.as_ref());
@@ -42,7 +42,7 @@ fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
         }
     };
     let mut content = String::new();
-    if file.read_to_string(&mut content).is_err() {
+    if super::read_manifest(&mut file, &mut content).is_err() {
         tracing::warn!("sbom: failed to parse pypi wheel manifest, treating as no dependencies");
         return None;
     }
@@ -50,8 +50,6 @@ fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
 }
 
 fn extract_pypi_sdist(data: &Bytes) -> Option<ExtractedManifest> {
-    use std::io::Read;
-
     let mut archive = readme::open_targz(data);
 
     let Ok(entries) = archive.entries() else {
@@ -77,7 +75,7 @@ fn extract_pypi_sdist(data: &Bytes) -> Option<ExtractedManifest> {
         };
         let mut reader = entry;
         let mut content = String::new();
-        if reader.read_to_string(&mut content).is_ok() {
+        if super::read_manifest(&mut reader, &mut content).is_ok() {
             target.push(content);
         }
     }

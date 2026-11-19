@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use crate::entities::{ArtifactSbom, PackageMetadata, SbomFormat, SbomSource};
 use crate::error::CoreError;
-use crate::ports::{SbomDependency, SbomExtractor, SbomRepository, UpstreamSbomFetcher};
+use crate::ports::{
+    ExtractedManifest, SbomDependency, SbomExtractor, SbomRepository, UpstreamSbomFetcher,
+};
 
 mod fetch;
 mod generate;
@@ -30,6 +32,38 @@ pub struct SbomProxiedOptions<'a> {
     pub registry_type: &'a str,
     pub formats: &'a [SbomFormat],
     pub fetch_upstream: bool,
+}
+
+/// Extraction decompresses a whole package: CPU-bound for seconds on a large
+/// archive. Run it on the blocking pool, at most half the cores at once, so a
+/// burst of cold misses cannot stall every request on the async runtime.
+static EXTRACT_PERMITS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        tokio::sync::Semaphore::new((cores / 2).max(1))
+    });
+
+/// [`SbomExtractor::extract`], off the async runtime and bounded. Best-effort
+/// like every caller: a panicking extractor reads as "no manifest".
+pub async fn extract_off_runtime(
+    extractor: &Arc<dyn SbomExtractor>,
+    data: &Bytes,
+    registry_type: &str,
+) -> ExtractedManifest {
+    let Ok(_permit) = EXTRACT_PERMITS.acquire().await else {
+        return ExtractedManifest::default();
+    };
+    let (extractor, data, registry_type) = (
+        Arc::clone(extractor),
+        data.clone(),
+        registry_type.to_owned(),
+    );
+    tokio::task::spawn_blocking(move || extractor.extract(&data, &registry_type))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "sbom: archive extraction task failed");
+            ExtractedManifest::default()
+        })
 }
 
 // ── SbomService implementation ────────────────────────────────────────────────
@@ -83,11 +117,10 @@ impl SbomService {
 
         // Extract deps and the declared licence from the archive in one pass
         // (fallback to empty if no extractor).
-        let manifest = self
-            .extractor
-            .as_ref()
-            .map(|e| e.extract(data, registry_type))
-            .unwrap_or_default();
+        let manifest = match &self.extractor {
+            Some(e) => extract_off_runtime(e, data, registry_type).await,
+            None => ExtractedManifest::default(),
+        };
         let deps: Vec<SbomDependency> = manifest.dependencies;
 
         let source = if upstream_spdx.is_some() {
@@ -150,11 +183,10 @@ impl SbomService {
             formats,
             required,
         } = opts;
-        let manifest = self
-            .extractor
-            .as_ref()
-            .map(|e| e.extract(data, registry_type))
-            .unwrap_or_default();
+        let manifest = match &self.extractor {
+            Some(e) => extract_off_runtime(e, data, registry_type).await,
+            None => ExtractedManifest::default(),
+        };
         let deps: Vec<SbomDependency> = manifest.dependencies;
 
         if required && deps.is_empty() {
@@ -288,6 +320,23 @@ mod tests {
     use super::*;
     use crate::entities::PackageId;
     use crate::ports::ExtractedManifest;
+
+    struct PanickingExtractor;
+    impl SbomExtractor for PanickingExtractor {
+        fn extract(&self, _: &Bytes, _: &str) -> ExtractedManifest {
+            panic!("hostile archive")
+        }
+    }
+
+    #[tokio::test]
+    async fn extraction_runs_off_the_runtime_and_a_panic_reads_as_no_manifest() {
+        let e: Arc<dyn SbomExtractor> = Arc::new(PanickingExtractor);
+        let got = extract_off_runtime(&e, &Bytes::from_static(b"x"), "npm").await;
+        assert_eq!(got, ExtractedManifest::default());
+        // The permit came back: a second call does not hang.
+        let again = extract_off_runtime(&e, &Bytes::from_static(b"x"), "npm").await;
+        assert_eq!(again, ExtractedManifest::default());
+    }
 
     struct InMemorySbomRepo {
         items: Mutex<Vec<ArtifactSbom>>,

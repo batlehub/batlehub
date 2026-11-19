@@ -4,8 +4,6 @@ use bytes::Bytes;
 use super::{anchor, readme};
 
 pub(super) fn extract_npm_manifest(data: &Bytes) -> ExtractedManifest {
-    use std::io::Read;
-
     let mut archive = readme::open_targz(data);
 
     let Ok(entries) = archive.entries() else {
@@ -25,7 +23,7 @@ pub(super) fn extract_npm_manifest(data: &Bytes) -> ExtractedManifest {
         }
         let mut reader = entry;
         let mut content = String::new();
-        if reader.read_to_string(&mut content).is_err() {
+        if super::read_manifest(&mut reader, &mut content).is_err() {
             tracing::warn!("sbom: failed to parse npm manifest, treating as no dependencies");
             return ExtractedManifest::default();
         }

@@ -61,7 +61,7 @@ pub async fn vsx_vspackage(
     require_vsx(&registry, &map)?;
     let extension_id = qualified(&publisher, &name)?;
 
-    let bytes = vsix_bytes(
+    let (body, _) = vsix_body(
         &svc,
         &local_svc,
         &mode_map,
@@ -71,9 +71,12 @@ pub async fn vsx_vspackage(
         &identity,
     )
     .await?;
-    Ok(HttpResponse::Ok()
-        .content_type("application/octet-stream")
-        .body(bytes))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type("application/octet-stream");
+    Ok(match body {
+        VsixBody::Held(bytes) => builder.body(bytes),
+        VsixBody::Streamed(stream) => super::super::common::stream_body(builder, stream),
+    })
 }
 
 /// `GET …/vscode/asset/{publisher}/{name}/{version}/{asset_type}`
@@ -535,6 +538,40 @@ pub(super) async fn vsix_bytes_with_source(
     version: &str,
     identity: &AuthIdentity,
 ) -> Result<(Bytes, Served), AppError> {
+    let (body, served) = vsix_body(
+        svc,
+        local_svc,
+        mode_map,
+        registry,
+        extension_id,
+        version,
+        identity,
+    )
+    .await?;
+    let bytes = match body {
+        VsixBody::Held(bytes) => bytes,
+        VsixBody::Streamed(stream) => super::super::common::collect_storage_stream(stream).await?,
+    };
+    Ok((bytes, served))
+}
+
+/// The VSIX as the branch that answered has it: the local read is already
+/// held, the proxied one is still a stream, so a plain download need not hold
+/// a whole extension per request.
+enum VsixBody {
+    Held(Bytes),
+    Streamed(batlehub_core::ports::ByteStream),
+}
+
+async fn vsix_body(
+    svc: &web::Data<Arc<ProxyService>>,
+    local_svc: &web::Data<Arc<LocalRegistryService>>,
+    mode_map: &RegistryModeMap,
+    registry: &str,
+    extension_id: &str,
+    version: &str,
+    identity: &AuthIdentity,
+) -> Result<(VsixBody, Served), AppError> {
     let mode = mode_map.get(registry);
     let pkg = PackageId::new(registry, extension_id, version);
 
@@ -554,7 +591,7 @@ pub(super) async fn vsix_bytes_with_source(
             )
             .await
         {
-            Ok(bytes) => return Ok((bytes, Served::Local)),
+            Ok(bytes) => return Ok((VsixBody::Held(bytes), Served::Local)),
             Err(CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {}
             Err(e) => return Err(AppError::from(e)),
         }
@@ -578,10 +615,7 @@ pub(super) async fn vsix_bytes_with_source(
         .map_err(AppError::from)?
         .into_stream()
         .map_err(|(reason, _)| AppError::forbidden(reason))?;
-    Ok((
-        super::super::common::collect_storage_stream(stream).await?,
-        Served::Proxied,
-    ))
+    Ok((VsixBody::Streamed(stream), Served::Proxied))
 }
 
 #[cfg(test)]
