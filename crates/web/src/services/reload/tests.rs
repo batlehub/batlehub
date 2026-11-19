@@ -108,6 +108,7 @@ fn empty_pending() -> PendingReload {
         source: ReloadSource::AdminRequest,
         diff: ReloadDiff::default(),
         content: None,
+        base_hash: None,
         layers: Vec::new(),
         new_hot: batlehub_core::services::HotConfig::default(),
         new_access: empty_access_config(),
@@ -281,6 +282,7 @@ async fn apply_success_swaps_hot_config() {
             ..Default::default()
         },
         content: None,
+        base_hash: None,
         layers: Vec::new(),
         new_hot,
         new_access,
@@ -727,11 +729,12 @@ async fn apply_leaves_no_temp_file_beside_the_config() {
     );
 }
 
-/// A write-back to a path whose directory does not exist must fail *without*
-/// taking down the reload: the new config is already live in memory, and the
-/// documented contract of this branch is a warning, not an error.
+/// A write-back that fails fails the apply, and nothing is swapped: a change
+/// that cannot be persisted would live on this replica only and vanish at its
+/// next restart, while the editor said it was applied. (This replaces
+/// `apply_survives_an_unwritable_config_path`, which pinned the opposite.)
 #[tokio::test]
-async fn apply_survives_an_unwritable_config_path() {
+async fn apply_refuses_when_the_config_file_cannot_be_written() {
     let builder: HotConfigBuilder = Arc::new(|_| anyhow::bail!("builder not used in this test"));
     let svc = Arc::new(ConfigReloadService::new(reload_params(
         "/nonexistent-dir-for-test/config.toml".to_owned(),
@@ -741,12 +744,81 @@ async fn apply_survives_an_unwritable_config_path() {
 
     *svc.pending.lock().unwrap() = Some(PendingReload {
         content: Some("# unwritable\n".to_owned()),
+        new_hot: batlehub_core::services::HotConfig {
+            max_artifact_size_bytes: Some(1),
+            ..Default::default()
+        },
         ..empty_pending()
     });
 
-    svc.apply("test-user")
+    let err = svc.apply("test-user").await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<ReloadApplyError>(),
+            Some(ReloadApplyError::PersistFailed(_))
+        ),
+        "{err:#}"
+    );
+    assert_eq!(svc.hot.read().await.max_artifact_size_bytes, None);
+}
+
+/// Two admins: the one who reviewed the first staged change cannot apply the
+/// second one staged over it, and the second stays staged.
+#[tokio::test]
+async fn apply_with_a_superseded_pending_id_is_refused() {
+    let (svc, _f) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let first = svc
+        .load_pending_from_content(OTHER_PORT_CONFIG, "alice")
         .await
-        .expect("a failed disk write must not fail the reload");
+        .unwrap()
+        .pending_id
+        .expect("staged");
+    let second = svc
+        .load_pending_from_content(&format!("{OTHER_PORT_CONFIG}\n# bob\n"), "bob")
+        .await
+        .unwrap()
+        .pending_id
+        .expect("staged");
+
+    let err = svc.apply_checked("alice", Some(first)).await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<ReloadApplyError>(),
+            Some(ReloadApplyError::Stale(_))
+        ),
+        "{err:#}"
+    );
+    assert_eq!(svc.pending_snapshot().map(|p| p.id), Some(second));
+    svc.apply_checked("bob", Some(second)).await.unwrap();
+}
+
+/// The editor started from one version of the file; the file changed since
+/// (another admin applied). The apply refuses and the newer file survives.
+#[tokio::test]
+async fn an_editor_save_never_overwrites_a_file_that_changed_since() {
+    let (svc, file) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let base = content_hash(MINIMAL_CONFIG);
+    svc.load_pending_from_editor(OTHER_PORT_CONFIG, "alice", Some(&base))
+        .await
+        .unwrap();
+
+    let newer = format!("{MINIMAL_CONFIG}\n# applied by bob\n");
+    std::fs::write(file.path(), &newer).unwrap();
+
+    let err = svc.apply("alice").await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<ReloadApplyError>(),
+            Some(ReloadApplyError::Stale(_))
+        ),
+        "{err:#}"
+    );
+    assert_eq!(std::fs::read_to_string(file.path()).unwrap(), newer);
+    // And staging against the old version is refused up front.
+    assert!(svc
+        .load_pending_from_editor(OTHER_PORT_CONFIG, "alice", Some(&base))
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -1282,7 +1354,10 @@ async fn a_single_server_has_no_replicas_to_disagree_with() {
 
 /// A `config_changes` table in a `Vec`.
 #[derive(Default)]
-struct RecordingChanges(std::sync::Mutex<Vec<(String, String)>>);
+struct RecordingChanges(
+    std::sync::Mutex<Vec<(String, String)>>,
+    std::sync::Mutex<Vec<Option<String>>>,
+);
 
 #[async_trait::async_trait]
 impl ConfigChangeRepository for RecordingChanges {
@@ -1290,6 +1365,7 @@ impl ConfigChangeRepository for RecordingChanges {
         &self,
         r: batlehub_core::ports::ConfigChangeRecord,
     ) -> Result<(), batlehub_core::error::CoreError> {
+        self.1.lock().unwrap().push(r.error_msg);
         self.0.lock().unwrap().push((r.triggered_by, r.status));
         Ok(())
     }
@@ -1331,6 +1407,29 @@ async fn a_rejected_candidate_names_the_admin_who_sent_it() {
     assert_eq!(rows, [rejected("alice"), rejected("bob")]);
 }
 
+/// A rejected candidate's row is readable with `config:read`, and a TOML parse
+/// error quotes the offending line — after `${VAR}` expansion. Only the
+/// headline (with its line and column) is kept.
+#[tokio::test]
+async fn a_rejected_candidate_does_not_persist_the_quoted_source_line() {
+    let changes = Arc::new(RecordingChanges::default());
+    let builder: HotConfigBuilder = Arc::new(|_| anyhow::bail!("builder not used"));
+    let svc = ConfigReloadService::new(ConfigReloadParams {
+        startup_layers: vec![MINIMAL_CONFIG.to_owned()],
+        config_change_repo: Some(changes.clone()),
+        ..reload_params("config.toml".to_owned(), true, builder)
+    });
+    let candidate = "[database]\nurl = \"postgres://u:hunter2\\q@h/db\"\n";
+    assert!(svc
+        .load_pending_from_content(candidate, "alice")
+        .await
+        .is_err());
+    let msgs = changes.1.lock().unwrap().clone();
+    let msg = msgs[0].as_deref().expect("a rejection carries its error");
+    assert!(!msg.contains("hunter2"), "{msg}");
+    assert!(msg.contains("line 2"), "the location is kept: {msg}");
+}
+
 /// RFC 0044 §6.P observation 9: the watcher sees an edit before the admin
 /// presses reload. The reload must still answer the file's own error, not
 /// "no pending reload" because the bytes were already seen.
@@ -1348,4 +1447,38 @@ async fn reload_after_the_watcher_rejected_the_file_names_the_error() {
     assert!(svc.load_pending(ReloadSource::FileWatcher).await.is_err());
     let err = svc.reload_immediate("bob").await.unwrap_err().to_string();
     assert!(!err.contains("no pending reload"), "{err}");
+}
+
+// ── Following an apply made on another replica ────────────────────────────────
+
+/// Replica A applies from the editor; replica B applies the same file once it
+/// reaches B's own disk, and not before.
+#[tokio::test]
+async fn a_replica_applies_what_another_applied_once_its_file_has_it() {
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", MINIMAL_CONFIG, &cluster).await;
+    let (b, fb) = replica_named("pod-b", MINIMAL_CONFIG, &cluster).await;
+    // B's first read only records what was announced before it.
+    b.follow_applied(&b.heartbeat("").await.unwrap()).await;
+
+    a.load_pending_from_content(OTHER_PORT_CONFIG, "alice")
+        .await
+        .unwrap();
+    a.apply("alice").await.unwrap();
+    assert_ne!(a.config_fingerprint(), b.config_fingerprint());
+
+    // Announced, but B's file has not changed yet: B waits.
+    b.follow_applied(&b.heartbeat("").await.unwrap()).await;
+    assert_ne!(a.config_fingerprint(), b.config_fingerprint());
+
+    // The file reaches B (a shared volume, a Secret update): B follows.
+    std::fs::write(fb.path(), OTHER_PORT_CONFIG).unwrap();
+    b.follow_applied(&b.heartbeat("").await.unwrap()).await;
+    assert_eq!(a.config_fingerprint(), b.config_fingerprint());
+
+    // A's own announcement is a no-op for A.
+    let before = a.config_fingerprint();
+    a.follow_applied(&a.heartbeat("").await.unwrap()).await;
+    assert_eq!(a.config_fingerprint(), before);
 }

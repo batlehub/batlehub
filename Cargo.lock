@@ -1228,6 +1228,7 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "anyhow",
+ "async-trait",
  "batlehub-adapters",
  "batlehub-config",
  "batlehub-core",

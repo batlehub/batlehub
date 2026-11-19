@@ -2119,3 +2119,56 @@ async fn a_scanner_that_cannot_scan_the_kind_is_not_listed() {
     )]));
     assert!(names(&read().await).is_empty());
 }
+
+/// Counts how many scans run at the same moment.
+struct Overlap {
+    running: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+#[async_trait]
+impl ArtifactScanner for Overlap {
+    fn name(&self) -> &str {
+        "overlap"
+    }
+    fn supports(&self, _: RegistryKind) -> bool {
+        true
+    }
+    async fn scan(&self, _: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+/// Every job of a batch is leased for `job_timeout` at once, so the batch
+/// runs concurrently: run one after another, the last leases expired before
+/// their job started and another worker re-leased them.
+#[actix_web::test]
+async fn a_leased_batch_runs_concurrently() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let overlap = Arc::new(Overlap {
+        running: AtomicUsize::new(0),
+        peak: AtomicUsize::new(0),
+    });
+    lab.hot
+        .write()
+        .await
+        .internal_scanners
+        .get_mut(REG)
+        .unwrap()
+        .push(Arc::clone(&overlap) as Arc<dyn ArtifactScanner>);
+    status(&app, &tarball("1.0.0")).await;
+    status(&app, &tarball("1.1.0")).await;
+    assert_eq!(lab.queue.open_jobs().await.len(), 2);
+
+    let report = lab.worker.run_once().await.unwrap();
+    assert_eq!((report.leased, report.completed), (2, 2));
+    assert_eq!(
+        overlap.peak.load(Ordering::SeqCst),
+        2,
+        "both jobs ran at once"
+    );
+}

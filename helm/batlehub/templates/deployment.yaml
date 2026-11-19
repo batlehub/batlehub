@@ -64,6 +64,9 @@ spec:
         {{- end }}
       labels:
         {{- include "batlehub.selectorLabels" . | nindent 8 }}
+        # The worker pods carry the selector labels too (their Deployment's
+        # selector is immutable); this one keeps them out of the Service and PDB.
+        app.kubernetes.io/component: server
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

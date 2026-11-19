@@ -32,6 +32,7 @@ spec:
   selector:
     matchLabels:
       {{- include "batlehub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
   {{- if $maxSet }}
   maxUnavailable: {{ $maxRaw }}
   {{- else }}

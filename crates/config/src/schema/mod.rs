@@ -2173,6 +2173,17 @@ impl AppConfig {
                 // has no identity to collide with.
                 AuthConfig::Token(_) => continue,
             };
+            // `user:<provider>:<id>` and `group:<provider>:<name>` split on the
+            // first `:`, and `static-token` / `user-token:` are the names the
+            // static-token provider and PATs report.
+            if name.contains(':') || name == STATIC_TOKEN_PROVIDER || name.starts_with("user-token")
+            {
+                bail!(
+                    "[[auth]] name = \"{name}\" is reserved or contains ':' — a grant subject \
+                     splits on the first ':', and 'static-token' / 'user-token' are what static \
+                     tokens and personal access tokens report"
+                );
+            }
             if let Some(first) = seen.insert(name, kind) {
                 bail!(
                     "[[auth]] name = \"{name}\" is used by both type = \"{first}\" and type = \
@@ -2181,6 +2192,122 @@ impl AppConfig {
                      provider as far as everything downstream is concerned — give them distinct \
                      names."
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// The `[[auth]]` providers whose identities carry a user id — every named
+    /// one, plus `static-token` when a static token sets `user_id` — which is
+    /// what a `user:` grant is scoped by (`user:<provider>:<id>`).
+    pub fn user_id_providers(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for auth in &self.auth {
+            match auth {
+                AuthConfig::Oidc(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::ActionsOidc(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::Kubernetes(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::Token(t) if t.tokens.iter().any(|e| e.user_id.is_some()) => {
+                    out.push(STATIC_TOKEN_PROVIDER.to_owned());
+                }
+                AuthConfig::Token(_) => {}
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Every `user:` grant key of the file, mutably: instance, registry and
+    /// namespace tiers.
+    fn grant_maps_mut(&mut self) -> Vec<&mut std::collections::HashMap<String, Vec<String>>> {
+        let mut maps: Vec<_> = self.grants.iter_mut().collect();
+        for reg in &mut self.registries {
+            maps.extend(reg.grants.iter_mut());
+            for ns in &mut reg.namespaces {
+                maps.extend(ns.grants.iter_mut());
+            }
+        }
+        maps
+    }
+
+    /// Rewrite a bare `user:<id>` to `user:<provider>:<id>` when exactly one
+    /// provider yields user ids — what the bare form always meant there. With
+    /// several, the bare key is left for [`Self::validate`] to refuse.
+    pub fn scope_user_subjects(&mut self) {
+        let providers = self.user_id_providers();
+        let [only] = providers.as_slice() else {
+            return;
+        };
+        let only = only.clone();
+        for map in self.grant_maps_mut() {
+            let bare: Vec<String> = map
+                .keys()
+                .filter(|k| {
+                    k.strip_prefix("user:").is_some_and(|p| {
+                        !batlehub_core::entities::user_principal_is_scoped(
+                            p,
+                            std::slice::from_ref(&only),
+                        )
+                    })
+                })
+                .cloned()
+                .collect();
+            for key in bare {
+                if let Some(actions) = map.remove(&key) {
+                    let scoped = format!("user:{only}:{}", &key["user:".len()..]);
+                    map.entry(scoped).or_default().extend(actions);
+                }
+            }
+        }
+    }
+
+    /// A bare `user:<id>` with several user-id providers names nobody in
+    /// particular: the same id from each provider is a different person.
+    fn validate_user_subjects(&self) -> Result<()> {
+        let providers = self.user_id_providers();
+        if providers.len() < 2 {
+            return Ok(());
+        }
+        let mut grant_maps: Vec<&std::collections::HashMap<String, Vec<String>>> =
+            self.grants.iter().collect();
+        for reg in &self.registries {
+            grant_maps.extend(reg.grants.iter());
+            for ns in &reg.namespaces {
+                grant_maps.extend(ns.grants.iter());
+            }
+        }
+        for map in grant_maps {
+            for key in map.keys() {
+                if let Some(principal) = key.strip_prefix("user:") {
+                    if !batlehub_core::entities::user_principal_is_scoped(principal, &providers) {
+                        bail!(
+                            "grant subject '{key}' names no identity provider, and {} \
+                             providers yield user ids ({}): the same id from each is a \
+                             different person. Write it as 'user:<provider>:{principal}'.",
+                            providers.len(),
+                            providers.join(", ")
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// An empty `[[auth.tokens]].value` — typically `${VAR}` with the variable
+    /// unset — would match the empty secret of any `Basic user:` header.
+    fn validate_static_token_values(&self) -> Result<()> {
+        for (i, auth) in self.auth.iter().enumerate() {
+            let AuthConfig::Token(t) = auth else { continue };
+            for (j, token) in t.tokens.iter().enumerate() {
+                if token.value.trim().is_empty() {
+                    bail!(
+                        "auth[{i}].tokens[{j}].value is empty — an unset ${{VAR}} expands to \
+                         \"\", and an empty token would authenticate any request whose \
+                         credential has no secret. Set the variable or remove the token."
+                    );
+                }
             }
         }
         Ok(())
@@ -2530,6 +2657,8 @@ impl AppConfig {
         // `PROXY_TRUST_INVALID_DEPRECATED_ENTRY` instead.
         self.validate_auth_issuers()?;
         self.validate_auth_names()?;
+        self.validate_static_token_values()?;
+        self.validate_user_subjects()?;
         self.validate_actions_oidc_audience()?;
         self.validate_host_routing()?;
         self.validate_signed_urls()?;
@@ -5262,3 +5391,6 @@ fn apply_proxy_env_overrides(
 
 #[cfg(test)]
 mod tests;
+
+/// What `Identity::auth_provider` reads for a static `[[auth.tokens]]` entry.
+pub const STATIC_TOKEN_PROVIDER: &str = "static-token";

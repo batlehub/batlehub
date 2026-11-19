@@ -849,11 +849,12 @@ CURL_CODE='%{http_code}'
 SOC_SECRET="heavy-soc-secret"
 # The two credentials this step computes, as `soc` would. Both defined in
 # lib.sh and gated against the server's own formatter by
-# `crates/web/tests/flag_revoke_canonical.rs`: a `POST` signs the raw body, a
-# `DELETE` signs `DELETE\n/api/v1/flags/{source}/{external_id}`, and the
+# `crates/web/tests/flag_revoke_canonical.rs`: both sign `"{timestamp}.{X}"`
+# where X is the raw body of a `POST` and
+# `DELETE\n/api/v1/flags/{source}/{external_id}` for a `DELETE`, and the
 # endpoint answers a stale signature as an unknown source rather than saying so.
-sign() { local body="$1"; heavy_flag_sign "$SOC_SECRET" "$body"; }
-sign_revoke() { local external_id="$1"; heavy_flag_sign_revoke "$SOC_SECRET" soc "$external_id"; }
+sign() { local ts="$1" body="$2"; heavy_flag_sign "$SOC_SECRET" "$ts" "$body"; }
+sign_revoke() { local ts="$1" external_id="$2"; heavy_flag_sign_revoke "$SOC_SECRET" "$ts" soc "$external_id"; }
 
 FLAG_CONSUMER="$HEAVY_WORK/consumer-flags"
 new_consumer "$FLAG_CONSUMER"
@@ -891,8 +892,10 @@ print(json.dumps({"flags": [{
 }]}, separators=(",", ":")))
 PY
 )"
+PUSH_TS="$(date +%s)"
 PUSH_CODE="$(curl -sS -o "$HEAVY_WORK/push.json" -w "$CURL_CODE" -X POST "$HEAVY_BASE/api/v1/flags/soc" \
-  -H "Content-Type: application/json" -H "X-Hub-Signature-256: $(sign "$PUSH_BODY")" \
+  -H "Content-Type: application/json" -H "X-BatleHub-Timestamp: $PUSH_TS" \
+  -H "X-Hub-Signature-256: $(sign "$PUSH_TS" "$PUSH_BODY")" \
   --data-raw "$PUSH_BODY")"
 [[ "$PUSH_CODE" == "200" ]] || { cat "$HEAVY_WORK/push.json" >&2; heavy_fail "the flag push answered $PUSH_CODE"; }
 python3 - "$HEAVY_WORK/push.json" <<'PY' || { cat "$HEAVY_WORK/push.json" >&2; heavy_fail "the push was not accepted uncapped"; }
@@ -906,7 +909,8 @@ PY
 
 # An unsigned push must not be a way in, and must not confirm the name.
 BAD_CODE="$(curl -sS -o /dev/null -w "$CURL_CODE" -X POST "$HEAVY_BASE/api/v1/flags/soc" \
-  -H "Content-Type: application/json" -H "X-Hub-Signature-256: sha256=$(printf 'f%.0s' {1..64})" \
+  -H "Content-Type: application/json" -H "X-BatleHub-Timestamp: $(date +%s)" \
+  -H "X-Hub-Signature-256: sha256=$(printf 'f%.0s' {1..64})" \
   --data-raw "$PUSH_BODY")"
 [[ "$BAD_CODE" == "404" ]] || heavy_fail "a bad signature answered $BAD_CODE, expected 404"
 
@@ -993,8 +997,10 @@ grep -q "ci-admin" "$HEAVY_WORK/exposure.out" \
   || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub-cli exposure list does not name ci-admin"; }
 
 heavy_log "DELETE /api/v1/flags/soc/$FLAG_ID — the revoke, and the scheduler re-deriving"
+REVOKE_TS="$(date +%s)"
 REVOKE_CODE="$(curl -sS -o "$HEAVY_WORK/revoke.json" -w "$CURL_CODE" -X DELETE \
-  "$HEAVY_BASE/api/v1/flags/soc/$FLAG_ID" -H "X-Hub-Signature-256: $(sign_revoke "$FLAG_ID")")"
+  "$HEAVY_BASE/api/v1/flags/soc/$FLAG_ID" -H "X-BatleHub-Timestamp: $REVOKE_TS" \
+  -H "X-Hub-Signature-256: $(sign_revoke "$REVOKE_TS" "$FLAG_ID")")"
 [[ "$REVOKE_CODE" == "200" ]] || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke answered $REVOKE_CODE"; }
 grep -q '"revoked":true' "$HEAVY_WORK/revoke.json" \
   || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke did not report the flag gone"; }

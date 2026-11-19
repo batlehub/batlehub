@@ -25,6 +25,8 @@ const props = defineProps<{
   hotReloadEnabled: boolean | null;
   /** Whether a reload is staged; the editor then folds behind one control. */
   hasPending: boolean;
+  /** `content_hash` of the file the editor was loaded from; the server refuses the save (409) if the file changed since. */
+  baseHash?: string | null;
   /** Re-reads the pending reload once one is staged; awaited, so the button waits for it. */
   refreshPending: () => Promise<void>;
   /**
@@ -161,7 +163,10 @@ async function createPendingFromContent() {
     const res = await authFetch(`${API_BASE_URL}/api/v1/admin/config/from-content`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: validatedContent.value ?? configContent.value }),
+      body: JSON.stringify({
+        content: validatedContent.value ?? configContent.value,
+        base_hash: props.baseHash ?? null,
+      }),
     });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };

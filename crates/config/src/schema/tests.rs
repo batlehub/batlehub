@@ -1825,6 +1825,75 @@ fn two_oidc_providers_may_not_share_a_name_either() {
     assert!(cfg.validate().is_err());
 }
 
+const TWO_PROVIDERS: &str = r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub"
+
+        [[auth]]
+        type = "oidc"
+        name = "signup"
+        issuer_url = "https://other.example.com"
+        client_id = "batlehub"
+"#;
+
+/// With two providers a bare `user:alice` names nobody in particular: the
+/// same id from each is a different person. (`scope_user_subjects` +
+/// `validate` is what `load_from_str` runs.)
+#[test]
+fn a_bare_user_grant_with_two_providers_is_refused() {
+    let mut cfg = parse_config(&format!(
+        "{TWO_PROVIDERS}\n[grants]\n\"user:alice\" = [\"config:read\"]"
+    ));
+    cfg.scope_user_subjects();
+    let msg = cfg.validate().unwrap_err().to_string();
+    assert!(msg.contains("user:<provider>:alice"), "{msg}");
+
+    let mut cfg = parse_config(&format!(
+        "{TWO_PROVIDERS}\n[grants]\n\"user:corp:alice\" = [\"config:read\"]"
+    ));
+    cfg.scope_user_subjects();
+    cfg.validate().expect("a scoped user grant loads");
+}
+
+/// With one provider the bare form always meant that provider, and loading
+/// says so in the key.
+#[test]
+fn a_bare_user_grant_with_one_provider_is_scoped_at_load() {
+    let mut cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub"
+
+        [grants]
+        "user:alice" = ["config:read"]
+"#,
+    );
+    cfg.scope_user_subjects();
+    cfg.validate().expect("validates");
+    let grants = cfg.grants.expect("grants");
+    assert!(grants.contains_key("user:corp:alice"), "{grants:?}");
+    assert!(!grants.contains_key("user:alice"));
+}
+
+#[test]
+fn an_auth_name_with_a_colon_is_refused() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp:eu"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub""#,
+    );
+    assert!(cfg.validate().is_err());
+}
+
 /// Distinct names are the normal case and must still start, static tokens
 /// included — that provider has no name of its own to collide with.
 #[test]
@@ -1846,6 +1915,23 @@ fn distinct_auth_names_start() {
     )
     .validate()
     .expect("distinct names are fine");
+}
+
+/// An unset `${ADMIN_TOKEN}` expands to "" — that token would accept the empty
+/// secret of any `Basic user:` header, so it must not load.
+#[test]
+fn an_empty_static_token_is_refused_at_load() {
+    let err = validation_error(
+        r#"
+        [[auth]]
+        type = "token"
+
+        [[auth.tokens]]
+        value = "  "
+        role = "admin""#,
+        "an empty token value must not load",
+    );
+    assert!(err.contains("auth[0].tokens[0].value is empty"), "{err}");
 }
 
 // ── Signed download URLs (RFC 0012 §4.1) ──────────────────────────────────────

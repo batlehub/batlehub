@@ -192,7 +192,8 @@ impl ScanWorker {
     }
 
     /// Run one leased job and close its row, whichever way it went.
-    async fn run_and_close(&self, job: &ScanJob, report: &mut PassReport) {
+    async fn run_and_close(&self, job: &ScanJob) -> PassReport {
+        let mut report = PassReport::default();
         let worker = self.config.worker_id.as_str();
         match self.run_job(job).await {
             Ok(JobOutcome::Done) => {
@@ -217,6 +218,7 @@ impl ScanWorker {
                 }
             }
         }
+        report
     }
 
     /// Which registries this pass may lease from: all of the configured ones,
@@ -277,8 +279,14 @@ impl ScanWorker {
         metrics::gauge!("batlehub_scan_jobs_leased", "worker" => self.config.worker_id.clone())
             .set(jobs.len() as f64);
 
-        for job in jobs {
-            self.run_and_close(&job, &mut report).await;
+        // Concurrently, not one after another: every job of the batch was
+        // leased for `job_timeout` at once, so a sequential run let the last
+        // leases expire before their job started, and another worker re-leased
+        // (and re-scanned, or wrongly exhausted) them.
+        for r in futures::future::join_all(jobs.iter().map(|job| self.run_and_close(job))).await {
+            report.completed += r.completed;
+            report.deferred += r.deferred;
+            report.failed += r.failed;
         }
 
         if !housekeeping && report.leased == 0 {

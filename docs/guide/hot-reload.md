@@ -136,6 +136,31 @@ curl -s -X POST \
 
 All reloads (applied or rejected) are written to the `config_changes` table with the diff, trigger source, and operator identity.
 
+### The config editor and several replicas
+
+The file stays the source of truth, and an apply from the console's config
+editor is refused rather than half done:
+
+- **The file is written before anything is applied.** If it cannot be written —
+  a read-only mount such as the chart's Secret — the apply answers `500` and the
+  replica keeps the configuration it had. Edit the file at its source instead,
+  or give the server a writable file (the chart's `writableConfig`).
+- **An apply names the change it applies.** `from-content` returns the staged
+  change's `pending_id` and `POST …/pending/apply` takes it back
+  (`{"pending_id": "…"}`); when another admin staged a change since, the apply
+  answers `409` and leaves theirs staged. The body is optional: without it the
+  apply takes whatever is staged, as before.
+- **A save never overwrites a newer file.** `GET …/config/content` returns a
+  `content_hash`; sent back as `from-content`'s `base_hash`, a file that changed
+  since is answered with `409`, at staging and again at apply.
+- **The other replicas follow.** An apply announces the hash of the file it put
+  in force through the database every replica already polls (every 15 s). A
+  replica that reads it applies its own file once that file has the same hash —
+  through a shared volume, or once a Secret update reaches the pod — and gives
+  up after two minutes; the `config.replica-drift` warning then says which
+  replicas differ. A change staged but not applied on a follower is replaced by
+  the followed one.
+
 ### Config warnings
 
 Some config states are wrong enough to tell an operator about but not wrong

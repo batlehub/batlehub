@@ -149,6 +149,8 @@ const pendingSettled = ref(false);
  * storage — the TOML can hold secrets.
  */
 const savedContent = ref("");
+/** `content_hash` of the file as loaded: the editor's `base_hash`, so a save never overwrites a newer file. */
+const contentHash = ref<string | null>(null);
 const dirty = computed(() => !configReadonly.value && configContent.value !== savedContent.value);
 
 async function loadConfigContent() {
@@ -161,8 +163,13 @@ async function loadConfigContent() {
       configLoadError.value = body?.error ?? `HTTP ${res.status}`;
       return;
     }
-    const body = (await res.json()) as { content: string; is_readonly: boolean };
+    const body = (await res.json()) as {
+      content: string;
+      is_readonly: boolean;
+      content_hash?: string;
+    };
     configContent.value = body.content;
+    contentHash.value = body.content_hash ?? null;
     savedContent.value = body.content;
     configReadonly.value = body.is_readonly;
     hotReloadEnabled.value = !body.is_readonly;
@@ -242,8 +249,14 @@ async function applyPending() {
   errorMsg.value = null;
   successMsg.value = null;
   try {
-    const { data, error: apiErr } = await applyPendingReload();
-    if (apiErr) throw new Error(extractMessage(apiErr));
+    // The id of the change on screen: a 409 if another admin staged over it.
+    const { data, error: apiErr } = await applyPendingReload({
+      body: { pending_id: pendingReload.value?.id ?? null },
+    });
+    if (apiErr) {
+      await fetchPending();
+      throw new Error(extractMessage(apiErr));
+    }
     const diff = (data as { diff?: { added_registries: string[]; removed_registries: string[] } })
       ?.diff;
     successMsg.value = t("adminConfigReload.appliedDiff", {
@@ -252,7 +265,8 @@ async function applyPending() {
     });
     pendingReload.value = null;
     candidateWarnings.value = [];
-    await Promise.all([fetchHistory(), fetchWarnings()]);
+    // The file changed: re-read it, so the next save's `base_hash` is this one.
+    await Promise.all([fetchHistory(), fetchWarnings(), loadConfigContent()]);
   } catch (e: unknown) {
     errorMsg.value = extractMessage(e);
   } finally {
@@ -412,6 +426,7 @@ function settleLeave(leave: boolean) {
       :config-readonly="configReadonly"
       :hot-reload-enabled="hotReloadEnabled"
       :has-pending="!!pendingReload"
+      :base-hash="contentHash"
       :refresh-pending="fetchPending"
       :jump-to="pendingSettled ? jumpRegistry : null"
       @reload-from-disk="loadConfigContent"

@@ -838,9 +838,11 @@ heavy_devfile_client() {
 
 # ── The [[flag_sources]] push credential (RFC 0002 §4.3) ─────────────────────
 #
-# A SOC signs `X-Hub-Signature-256: sha256=<hex>` with the source's secret.
-# A `POST` signs the raw body; a `DELETE` has none, so it signs the canonical
-# string below instead — which binds the proof to the one flag it lifts, where
+# A SOC signs `X-Hub-Signature-256: sha256=<hex>` with the source's secret,
+# over `"{timestamp}.{X}"`, and sends the timestamp (unix seconds) as
+# `X-BatleHub-Timestamp`; the server refuses one more than 300 s from its clock,
+# so a captured push or revoke cannot be replayed. X is the raw body for a
+# `POST`; a `DELETE` has none, so X is the canonical string below instead — which binds the proof to the one flag it lifts, where
 # signing the empty string made any observed revoke signature a standing key to
 # lift every flag the source had ever pushed, a `hard_block` on live malware
 # included.
@@ -860,15 +862,16 @@ heavy_flag_revoke_canonical() {
   printf 'DELETE\n/api/v1/flags/%s/%s' "$source" "$external_id"
 }
 
-# heavy_flag_sign <secret> <body> — the header value over arbitrary bytes.
+# heavy_flag_sign <secret> <timestamp> <body> — the signature header value for
+# a request sent with `X-BatleHub-Timestamp: <timestamp>`.
 heavy_flag_sign() {
-  local secret="$1" body="$2"
-  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$secret" "$body"
+  local secret="$1" timestamp="$2" body="$3"
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), (sys.argv[2] + "." + sys.argv[3]).encode(), hashlib.sha256).hexdigest())' "$secret" "$timestamp" "$body"
 }
 
-# heavy_flag_sign_revoke <secret> <source> <external_id> — the header value for
-# a revoke of that one flag.
+# heavy_flag_sign_revoke <secret> <timestamp> <source> <external_id> — the
+# signature header value for a revoke of that one flag.
 heavy_flag_sign_revoke() {
-  local secret="$1" source="$2" external_id="$3"
-  heavy_flag_sign "$secret" "$(heavy_flag_revoke_canonical "$source" "$external_id")"
+  local secret="$1" timestamp="$2" source="$3" external_id="$4"
+  heavy_flag_sign "$secret" "$timestamp" "$(heavy_flag_revoke_canonical "$source" "$external_id")"
 }

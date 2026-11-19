@@ -115,19 +115,25 @@ Une entrée `[[flag_sources]]`
 ([configuration §3.11](/fr/guide/configuration#flag-sources)) permet à la
 plateforme du SOC de pousser elle-même le verdict, signé, sans connexion à la
 console — et cette poussée est l'enregistrement que lit le rapport d'exposition.
+La signature porte sur `"{timestamp}.{corps}"`, l'horodatage étant envoyé dans
+`X-BatleHub-Timestamp` (secondes Unix) ; un horodatage à plus de 300 s de
+l'horloge du serveur est refusé, de sorte qu'une poussée ou une révocation
+capturée ne peut pas être rejouée plus tard.
 
 ```bash
 BODY='{"flags":[{"external_id":"CASE-2026-0912","registry":"npm","package_name":"left-pad",
   "version":"1.3.1","kind":"malware","effect":"hard_block","summary":"credential stealer in postinstall"}]}'
-SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$FLAG_SECRET" | sed 's/^.* //')"
+TS="$(date +%s)"
+SIG="sha256=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$FLAG_SECRET" | sed 's/^.* //')"
 curl -sS -X POST "$BATLEHUB/api/v1/flags/soc" \
-  -H "Content-Type: application/json" -H "X-Hub-Signature-256: $SIG" --data "$BODY"
+  -H "Content-Type: application/json" -H "X-BatleHub-Timestamp: $TS" \
+  -H "X-Hub-Signature-256: $SIG" --data "$BODY"
 ```
 
 `version_range = "*"` signale toutes les versions du paquet. Sur un registre
 doté d'un profil `[registries.security]`, la version est refusée aussitôt ;
 ailleurs, `FlagsRule` la refuse à la requête suivante. Levez le signalement avec
-`DELETE /api/v1/flags/soc/CASE-2026-0912` (signé sur
+`DELETE /api/v1/flags/soc/CASE-2026-0912` (signé sur `"{timestamp}."` suivi de
 `DELETE\n/api/v1/flags/{source}/{external_id}`, de sorte que la signature est liée
 au signalement qu'elle lève) : la ligne reste en pierre tombale, pour que le
 rapport ci-dessous réponde encore.

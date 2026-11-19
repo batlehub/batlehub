@@ -100,6 +100,7 @@ pub(super) fn spawn_release_imports(
     config: &AppConfig,
     imports: &batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap,
     history: Option<Arc<dyn batlehub_core::ports::ImportHistory>>,
+    leader: &Arc<dyn LeaderLock>,
 ) {
     for imp in &config.release_imports {
         let Some(secs) = imp.interval_secs.filter(|s| *s > 0) else {
@@ -114,11 +115,15 @@ pub(super) fn spawn_release_imports(
         };
         let (into, repo) = (imp.into.clone(), imp.repo.clone());
         let history = history.clone();
+        let leader = Arc::clone(leader);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 ticker.tick().await;
+                if !leads(leader.as_ref(), "release import").await {
+                    continue;
+                }
                 let started_at = chrono::Utc::now();
                 let report = svc.import().await;
                 // Logged at info even when nothing happened: "the import ran
@@ -161,6 +166,27 @@ pub(super) fn spawn_release_imports(
     }
 }
 
+// ── Leader election for the estate-wide periodic jobs ─────────────────────────
+
+/// The advisory lock the release imports, the OSV re-scan and the upstream
+/// audit run under: work done once per estate, not once per replica. One lock
+/// for the three, so the leader pins one pool connection, not three.
+pub(super) const PERIODIC_JOBS_LEADER_KEY: i64 = 0x0051_9e71_0d1c;
+
+pub(super) use batlehub_core::ports::LeaderLock;
+
+/// Whether this process runs this tick. An election error skips the tick: the
+/// job is periodic, and running it on every replica is the fault this avoids.
+pub(super) async fn leads(leader: &dyn LeaderLock, job: &str) -> bool {
+    match leader.try_lead().await {
+        Ok(won) => won,
+        Err(e) => {
+            tracing::warn!(error = %e, job, "leader election failed; skipping this run");
+            false
+        }
+    }
+}
+
 // ── Periodic vulnerability scan ─────────────────────────────────────────────────
 
 /// Spawn a background task that re-checks all cached SBOMs against the OSV
@@ -170,12 +196,16 @@ pub(super) fn spawn_release_imports(
 pub(super) fn spawn_periodic_vuln_scan(
     interval_secs: u64,
     scan_svc: Arc<batlehub_core::services::VulnerabilityScanService>,
+    leader: Arc<dyn LeaderLock>,
 ) {
     let period = Duration::from_secs(interval_secs.max(1));
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(period);
         loop {
             ticker.tick().await;
+            if !leads(leader.as_ref(), "vuln-scan").await {
+                continue;
+            }
             tracing::info!("vuln-scan: starting periodic SBOM re-check");
             match scan_svc.scan_all().await {
                 Ok(report) => tracing::info!(
@@ -223,7 +253,8 @@ pub(super) fn spawn_periodic_vuln_scan(
 const CLUSTER_SYNC_SECS: u64 = 15;
 
 /// Keep up with the other replicas: report the config in force here for the
-/// drift warning, and drop the catalogue listings they invalidated. A failure
+/// drift warning, apply a configuration another replica applied once this
+/// replica's file has it, and drop the catalogue listings they invalidated. A failure
 /// is logged and retried at the next tick.
 pub(super) fn spawn_cluster_sync(
     admin_svc: Arc<batlehub_core::services::AdminService>,
@@ -234,11 +265,14 @@ pub(super) fn spawn_cluster_sync(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
-            match reload_svc
-                .heartbeat(batlehub_core::services::explore_cache::TOPIC_PREFIX)
-                .await
-            {
-                Ok(generations) => admin_svc.explore_cache.apply_generations(generations).await,
+            // Every counter, not one prefix: the catalogue's and the applied
+            // configurations' both ride this one statement, and `system_kv`
+            // holds a handful of rows. Each reader keeps its own prefix.
+            match reload_svc.heartbeat("").await {
+                Ok(generations) => {
+                    reload_svc.follow_applied(&generations).await;
+                    admin_svc.explore_cache.apply_generations(generations).await;
+                }
                 Err(e) => tracing::warn!(error = %e, "cluster sync: heartbeat failed"),
             }
         }
@@ -377,6 +411,7 @@ pub(super) fn spawn_audit_trail_jobs(
 pub(super) fn spawn_upstream_audit(
     interval_secs: u64,
     svc: Arc<batlehub_core::services::UpstreamAuditService>,
+    leader: Arc<dyn LeaderLock>,
 ) {
     let period = Duration::from_secs(interval_secs.max(1));
     tokio::spawn(async move {
@@ -385,6 +420,9 @@ pub(super) fn spawn_upstream_audit(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
+            if !leads(leader.as_ref(), "upstream audit").await {
+                continue;
+            }
             let report = svc.run_sweep().await;
             for r in &report.registries {
                 record_sweep(&svc, r).await;
@@ -952,6 +990,25 @@ fn build_otlp_provider(cfg: &OtelConfig) -> anyhow::Result<sdktrace::SdkTracerPr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Fixed(Result<bool, ()>);
+
+    #[async_trait::async_trait]
+    impl LeaderLock for Fixed {
+        async fn try_lead(&self) -> Result<bool, batlehub_core::error::CoreError> {
+            self.0
+                .map_err(|()| batlehub_core::error::CoreError::Database("down".into()))
+        }
+    }
+
+    /// Only the replica holding the lock runs a periodic estate-wide job, and
+    /// an election that errors skips the tick rather than running everywhere.
+    #[tokio::test]
+    async fn only_the_leader_runs_a_periodic_job() {
+        assert!(leads(&Fixed(Ok(true)), "t").await);
+        assert!(!leads(&Fixed(Ok(false)), "t").await);
+        assert!(!leads(&Fixed(Err(())), "t").await);
+    }
 
     /// A shared buffer the JSON layer writes into.
     #[derive(Clone, Default)]

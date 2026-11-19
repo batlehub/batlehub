@@ -913,7 +913,7 @@
           "type": "string"
         },
         "secret": {
-          "description": "Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header.\nWhen absent, any payload is accepted (suitable only for internal networks).",
+          "description": "Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header,\ncomputed over `\"{X-BatleHub-Timestamp}.{body}\"` with a timestamp within 300 s.\nWhen absent, any payload is accepted (suitable only for internal networks).",
           "type": "string"
         }
       },

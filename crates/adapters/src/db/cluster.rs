@@ -5,6 +5,9 @@
 //! - `config:replica:{name}` → `{"fingerprint"}`, rewritten by each replica on a
 //!   timer, its `updated_at` saying when.
 //!
+//! The heartbeat prunes both a replica's report and a `reload:applied:{hash}`
+//! topic (one per applied configuration) a day after their last write.
+//!
 //! Postgres rather than the `[cache]` store: it is present in every
 //! deployment, and a `memory` cache is not shared at all. No migration — the
 //! table has held the banner since 019.
@@ -76,7 +79,8 @@ impl ClusterStatePort for PgClusterState {
                 RETURNING 1
             ), pruned AS (
                 DELETE FROM system_kv
-                WHERE starts_with(key, $3) AND updated_at < NOW() - INTERVAL '1 day'
+                WHERE (starts_with(key, $3) OR starts_with(key, 'reload:applied:'))
+                  AND updated_at < NOW() - INTERVAL '1 day'
                 RETURNING 1
             )
             SELECT key, COALESCE((value->>'gen')::bigint, 0) AS gen

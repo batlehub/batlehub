@@ -104,20 +104,25 @@ what a block changes in each client's listing.
 
 A `[[flag_sources]]` entry ([configuration §3.11](/guide/configuration#flag-sources))
 lets the SOC platform push the verdict itself, signed, without a console
-login — and the push is the record the exposure report reads.
+login — and the push is the record the exposure report reads. The signature
+covers `"{timestamp}.{body}"`, with the timestamp sent as
+`X-BatleHub-Timestamp` (unix seconds); one more than 300 s from the server's
+clock is refused, so a captured push or revoke cannot be replayed later.
 
 ```bash
 BODY='{"flags":[{"external_id":"CASE-2026-0912","registry":"npm","package_name":"left-pad",
   "version":"1.3.1","kind":"malware","effect":"hard_block","summary":"credential stealer in postinstall"}]}'
-SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$FLAG_SECRET" | sed 's/^.* //')"
+TS="$(date +%s)"
+SIG="sha256=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$FLAG_SECRET" | sed 's/^.* //')"
 curl -sS -X POST "$BATLEHUB/api/v1/flags/soc" \
-  -H "Content-Type: application/json" -H "X-Hub-Signature-256: $SIG" --data "$BODY"
+  -H "Content-Type: application/json" -H "X-BatleHub-Timestamp: $TS" \
+  -H "X-Hub-Signature-256: $SIG" --data "$BODY"
 ```
 
 `version_range = "*"` flags every version of the package. On a registry with
 a `[registries.security]` profile the version is denied at once; elsewhere
 `FlagsRule` refuses it on the next request. Lift it with
-`DELETE /api/v1/flags/soc/CASE-2026-0912` (signed over `DELETE\n/api/v1/flags/{source}/{external_id}`, so the signature is bound to the flag it lifts): the
+`DELETE /api/v1/flags/soc/CASE-2026-0912` (signed over `"{timestamp}."` followed by `DELETE\n/api/v1/flags/{source}/{external_id}`, so the signature is bound to the flag it lifts): the
 row stays as a tombstone so the report below still answers.
 
 ### Who pulled a flagged version {#who-pulled-a-flagged-version}

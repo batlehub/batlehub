@@ -39,24 +39,42 @@ fn sign(secret: &str, body: &[u8]) -> String {
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
-fn push_req(source: &str, secret: &str, body: &str) -> actix_http::Request {
-    TestRequest::post()
-        .uri(&format!("/api/v1/flags/{source}"))
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("X-Hub-Signature-256", sign(secret, body.as_bytes())))
-        .set_payload(body.to_owned())
-        .to_request()
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
 }
 
-fn revoke_req(source: &str, secret: &str, external_id: &str) -> actix_http::Request {
+/// The two headers of a request signed at `ts` over `data`: the signature
+/// covers `"{ts}.{data}"`, so a captured one is good for 300 s only.
+fn signed_at(req: TestRequest, secret: &str, ts: i64, data: &[u8]) -> TestRequest {
+    let mut signed = format!("{ts}.").into_bytes();
+    signed.extend_from_slice(data);
+    req.insert_header(("X-BatleHub-Timestamp", ts.to_string()))
+        .insert_header(("X-Hub-Signature-256", sign(secret, &signed)))
+}
+
+fn push_req_at(source: &str, secret: &str, body: &str, ts: i64) -> actix_http::Request {
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/flags/{source}"))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(body.to_owned());
+    signed_at(req, secret, ts, body.as_bytes()).to_request()
+}
+
+fn push_req(source: &str, secret: &str, body: &str) -> actix_http::Request {
+    push_req_at(source, secret, body, now())
+}
+
+fn revoke_req_at(source: &str, secret: &str, external_id: &str, ts: i64) -> actix_http::Request {
     // A DELETE has no body, so the signature covers the method and path. It has
     // to name the flag: signing a constant would make one captured header a
     // standing key to lift every flag the source ever pushed.
     let canonical = format!("DELETE\n/api/v1/flags/{source}/{external_id}");
-    TestRequest::delete()
-        .uri(&format!("/api/v1/flags/{source}/{external_id}"))
-        .insert_header(("X-Hub-Signature-256", sign(secret, canonical.as_bytes())))
-        .to_request()
+    let req = TestRequest::delete().uri(&format!("/api/v1/flags/{source}/{external_id}"));
+    signed_at(req, secret, ts, canonical.as_bytes()).to_request()
+}
+
+fn revoke_req(source: &str, secret: &str, external_id: &str) -> actix_http::Request {
+    revoke_req_at(source, secret, external_id, now())
 }
 
 /// A revoke signed for a *different* flag of the same source: the signature is
@@ -68,10 +86,8 @@ fn revoke_req_signed_for(
     signed_for: &str,
 ) -> actix_http::Request {
     let canonical = format!("DELETE\n/api/v1/flags/{source}/{signed_for}");
-    TestRequest::delete()
-        .uri(&format!("/api/v1/flags/{source}/{external_id}"))
-        .insert_header(("X-Hub-Signature-256", sign(secret, canonical.as_bytes())))
-        .to_request()
+    let req = TestRequest::delete().uri(&format!("/api/v1/flags/{source}/{external_id}"));
+    signed_at(req, secret, now(), canonical.as_bytes()).to_request()
 }
 
 fn user_get(uri: &str) -> actix_http::Request {
@@ -159,6 +175,47 @@ async fn an_unknown_source_and_a_bad_signature_answer_the_same_404() {
     assert_eq!(resp.status(), 200);
     let v: serde_json::Value = actix_web::test::read_body_json(resp).await;
     assert_eq!(v["total"], 0);
+}
+
+/// A signature is good for 300 s: a captured push or revoke replayed later is
+/// refused like a bad signature, and so is one with no timestamp at all.
+#[actix_web::test]
+async fn a_replayed_push_or_revoke_is_refused() {
+    let (app, _) = lab("hard_block").await;
+    let body = one("CASE-R", "1.0.0", "hard_block");
+    let an_hour_ago = now() - 3600;
+
+    let resp = call_service(&app, push_req_at(SOURCE, SECRET, &body, an_hour_ago)).await;
+    assert_eq!(resp.status(), 404, "a push signed an hour ago is a replay");
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&format!("/api/v1/flags/{SOURCE}"))
+            .insert_header(("Content-Type", "application/json"))
+            .insert_header(("X-Hub-Signature-256", sign(SECRET, body.as_bytes())))
+            .set_payload(body.clone())
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 404, "the old body-only signature is refused");
+    assert_eq!(get_json(&app, "/api/v1/admin/flags").await["total"], 0);
+
+    let resp = call_service(&app, push_req(SOURCE, SECRET, &body)).await;
+    assert_eq!(resp.status(), 200, "a fresh push lands");
+
+    let resp = call_service(&app, revoke_req_at(SOURCE, SECRET, "CASE-R", an_hour_ago)).await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "a revoke signed an hour ago is a replay"
+    );
+    assert_eq!(
+        get_json(&app, "/api/v1/admin/flags").await["total"],
+        1,
+        "the replayed revoke lifted nothing"
+    );
+    let resp = call_service(&app, revoke_req(SOURCE, SECRET, "CASE-R")).await;
+    assert_eq!(resp.status(), 200, "a fresh revoke lifts it");
 }
 
 #[actix_web::test]

@@ -46,6 +46,7 @@ fn config_from_str(raw: &str, env: Env<'_>) -> Result<AppConfig> {
     let expanded = expand_env_vars_with(raw, env)?;
     let mut config: AppConfig = toml::from_str(&expanded).with_context(|| "parsing config TOML")?;
     config.apply_env_overrides_from(&env_or_none(env));
+    config.scope_user_subjects();
     config.validate_with(&env_or_none(env))?;
     Ok(config)
 }
@@ -218,6 +219,7 @@ fn config_from_value(value: toml::Value, env: Env<'_>) -> Result<AppConfig> {
         .try_into()
         .with_context(|| "parsing merged config TOML")?;
     config.apply_env_overrides_from(&env_or_none(env));
+    config.scope_user_subjects();
     config.validate_with(&env_or_none(env))?;
     Ok(config)
 }
