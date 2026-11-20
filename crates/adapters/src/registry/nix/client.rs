@@ -12,8 +12,7 @@ use batlehub_core::{
 };
 
 use crate::registry::http_client::{
-    basic_auth_get, cache_control, ensure_url_under_base, new_http_client, to_registry_error,
-    UpstreamHttpOptions,
+    cache_control, ensure_url_under_base, new_http_client, to_registry_error, UpstreamHttpOptions,
 };
 
 /// `cache.nixos.org`'s own content types, which a client validates nothing
@@ -28,7 +27,7 @@ const CT_NAR: &str = "application/x-nix-nar";
 /// index, no search and no version list. Every read is `GET {base}/{path}` and
 /// the only parsing is the narinfo's `Name: value` grammar.
 pub struct NixBinaryCacheClient {
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     /// The cache root — the URL a client would put in `substituters`. Never
     /// carries a query string; `validate_registry_nix` refuses one at boot,
     /// because `?priority=` is a setting on the *client's* store URL and means
@@ -51,8 +50,8 @@ impl NixBinaryCacheClient {
         &self.base_url
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     fn url(&self, path: &str) -> String {

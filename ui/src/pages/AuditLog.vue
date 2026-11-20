@@ -289,7 +289,7 @@ async function purge() {
     <Announcer :message="announcement" />
     <!-- `total`, not the loaded page: the endpoint returns 100 rows by
              default and the count must not silently mean "the first 100". -->
-    <PageHeader variant="display" :title="t('adminNav.auditLog')" :count="total" />
+    <PageHeader :title="t('adminNav.auditLog')" :count="total" />
     <Card>
       <CardHeader class="space-y-3 pb-3">
         <div class="flex flex-row items-center justify-end space-y-0">
@@ -457,7 +457,7 @@ async function purge() {
     <!-- Retention purge (A7), behind a disclosure (RFC 0050 §6.7): a rare,
          destructive control does not sit open between the log and its pages. -->
     <details class="group" data-testid="audit-retention">
-      <summary class="cursor-pointer font-mono text-sm text-muted-foreground hover:text-foreground">
+      <summary class="cursor-pointer font-sans text-sm text-muted-foreground hover:text-foreground">
         {{ t("auditLog.retention") }}
       </summary>
       <Card class="mt-2">
@@ -476,7 +476,7 @@ async function purge() {
             />
           </div>
           <Button
-            variant="destructive"
+            variant="danger"
             size="sm"
             :disabled="!purgeBefore || countingPurge"
             @click="openPurge"

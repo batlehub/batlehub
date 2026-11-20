@@ -14,8 +14,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, ensure_same_origin, new_http_client,
-    percent_encode, to_registry_error, UpstreamHttpOptions,
+    cache_control, encode_path, ensure_same_origin, new_http_client, percent_encode,
+    to_registry_error, UpstreamHttpOptions,
 };
 
 /// npm registry client (registry.npmjs.org or compatible).
@@ -25,7 +25,7 @@ use super::http_client::{
 /// - `version = "1.2.3"` (exact semver)  → version-specific metadata
 /// - `artifact = Some("tarball")`        → stream the `.tgz` for that version
 pub struct NpmRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     base_url: String,
     basic_auth: Option<(String, String)>,
 }
@@ -66,8 +66,8 @@ impl NpmRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 }
 

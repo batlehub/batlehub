@@ -58,7 +58,7 @@ watch(() => props.registry, loadExemptions);
 <template>
   <section class="space-y-3" data-testid="panel-exemptions">
     <div class="flex items-center justify-between">
-      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+      <h2 class="font-sans text-sm font-semibold text-foreground">
         {{ t("adminAuthorization.exemptionsTitle") }}
       </h2>
       <div class="flex items-center gap-2">

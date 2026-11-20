@@ -185,11 +185,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <PageHeader
-      :title="t('adminNav.upstream')"
-      :description="t('adminUpstream.description')"
-      variant="display"
-    >
+    <PageHeader :title="t('adminNav.upstream')" :description="t('adminUpstream.description')">
       <template #actions>
         <Button variant="outline" size="sm" :disabled="loading" @click="load">
           {{ loading ? t("adminUpstream.refreshing") : t("common.refresh") }}

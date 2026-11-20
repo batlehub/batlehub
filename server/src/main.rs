@@ -669,6 +669,13 @@ async fn main() -> Result<()> {
             repo.pool(),
             watcher::PERIODIC_JOBS_LEADER_KEY,
         ));
+    // Not the periodic lock: only workers audit, and a proxy pod holding the
+    // shared lock would keep every worker from ever leading it.
+    let audit_leader: Arc<dyn watcher::LeaderLock> =
+        Arc::new(batlehub_adapters::db::PgAdvisoryLeader::new(
+            repo.pool(),
+            watcher::UPSTREAM_AUDIT_LEADER_KEY,
+        ));
     allocator::spawn_allocator_gauge_sampler();
 
     let storage = setup::initialize_storage(&config, repo.pool()).await?;
@@ -1184,7 +1191,7 @@ async fn main() -> Result<()> {
         repo: &repo,
         admin_svc: &admin_svc,
         notification_svc: &notification_svc,
-        leader: &periodic_leader,
+        leader: &audit_leader,
     });
 
     if !is_proxy {

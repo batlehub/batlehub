@@ -62,7 +62,7 @@ function handleLogout() {
         class="z-50 min-w-[11rem] rounded-sm border border-border bg-ground-sunk p-1"
       >
         <DropdownMenuLabel
-          class="px-2 py-2 text-xs text-muted-foreground font-mono font-normal truncate"
+          class="px-2 py-2 text-xs text-muted-foreground font-sans font-normal truncate"
         >
           {{ identity?.user_id }}
         </DropdownMenuLabel>
@@ -139,7 +139,7 @@ function handleLogout() {
   <RouterLink
     v-else
     to="/login"
-    class="shrink-0 whitespace-nowrap border border-border px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+    class="shrink-0 whitespace-nowrap border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
     >{{ t("userMenu.signIn") }}</RouterLink
   >
 </template>

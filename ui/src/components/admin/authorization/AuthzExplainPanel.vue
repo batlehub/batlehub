@@ -116,7 +116,7 @@ onMounted(() => {
 
 <template>
   <section class="space-y-3" data-testid="panel-explain">
-    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+    <h2 class="font-sans text-sm font-semibold text-foreground">
       {{ t("adminAuthorization.explainTitle") }}
     </h2>
 
@@ -152,7 +152,7 @@ onMounted(() => {
             id="az-subject"
             v-model="subject"
             :options="SUBJECT_FORMS.map((s) => ({ value: s, label: s }))"
-            placeholder="role:user"
+            :placeholder="t('common.example', { value: 'role:user' })"
           />
         </div>
         <CoordinateFields

@@ -107,7 +107,7 @@ function toggle(section: AdminSection) {
 }
 
 const GROUP_HEADER =
-  "flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-xs uppercase tracking-wider text-muted-foreground";
+  "flex w-full items-center gap-2 px-3 py-2 text-left font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground";
 
 const groupId = (section: AdminSection) =>
   `${props.navKey}-group-${section.to.split("/").filter(Boolean).join("-")}`;
@@ -133,7 +133,7 @@ watch(
       class="mb-3 flex w-full flex-col md:mb-0 md:w-52 md:shrink-0 md:border-r md:border-rule-soft md:pr-4 md:pt-2"
     >
       <div
-        class="hidden md:flex items-center gap-2 px-3 py-2 mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+        class="hidden md:flex items-center gap-2 px-3 py-2 mb-2 font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
         <component :is="icon" class="h-3.5 w-3.5" aria-hidden="true" />
         {{ t(title) }}
@@ -141,7 +141,7 @@ watch(
       <!-- RFC 0046 §4.2: the palette's button, at the top of the sidebar. -->
       <button
         type="button"
-        class="mb-2 hidden md:flex items-center gap-2 border border-border px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+        class="mb-2 hidden md:flex items-center gap-2 border border-border px-3 py-2 font-sans text-xs text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         @click="openPalette"
       >
         <Search class="h-3.5 w-3.5" aria-hidden="true" />
@@ -157,7 +157,7 @@ watch(
       -->
       <button
         type="button"
-        class="md:hidden flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-mono text-sm"
+        class="md:hidden flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-sans text-sm"
         :aria-expanded="menuOpen"
         :aria-controls="`${navKey}-nav`"
         @click="menuOpen = !menuOpen"
@@ -204,7 +204,7 @@ watch(
             :to="section.to"
             :aria-current="activePage?.to === section.to ? 'page' : undefined"
             :class="[
-              'flex items-center gap-2 border-l px-3 py-2 font-mono text-sm',
+              'flex items-center gap-2 border-l px-3 py-2 font-sans text-sm',
               activePage?.to === section.to
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -252,7 +252,7 @@ watch(
                 :to="page.to"
                 :aria-current="activePage?.to === page.to ? 'page' : undefined"
                 :class="[
-                  'border-l py-1 pl-10 pr-3 font-mono text-sm',
+                  'border-l py-1 pl-10 pr-3 font-sans text-sm',
                   activePage?.to === page.to
                     ? 'border-primary text-foreground'
                     : 'border-transparent text-muted-foreground hover:text-foreground',

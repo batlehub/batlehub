@@ -39,10 +39,7 @@ const {
 
 <template>
   <section class="space-y-4" aria-labelledby="admin-heading">
-    <h2
-      id="admin-heading"
-      class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground"
-    >
+    <h2 id="admin-heading" class="font-sans text-sm font-semibold text-foreground">
       {{ t("common.administration") }}
     </h2>
 

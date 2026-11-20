@@ -99,7 +99,7 @@ const principalTypeOptions = computed(() => [
         {{ m.granted_by ?? "—" }}
       </TableCell>
       <TableCell class="text-right">
-        <Button variant="outline" size="sm" @click="removeTarget = m">
+        <Button variant="danger" size="sm" @click="removeTarget = m">
           {{ t("common.remove") }}
         </Button>
       </TableCell>

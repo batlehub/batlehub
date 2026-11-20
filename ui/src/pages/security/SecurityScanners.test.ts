@@ -145,7 +145,7 @@ describe("SecurityScanners", () => {
     const w = await mountPage({ tab: "failures" });
     const rows = w.findAll("tbody tr");
     expect(rows[0]!.text()).toContain("tar: unexpected EOF");
-    expect(rows[1]!.text()).toContain("withheld (needs findings:read)");
+    expect(rows[1]!.text()).toContain("hidden — you cannot read findings here");
     expect(rows[2]!.text()).toContain("— (lease expired; no error recorded)");
     // [Rescan] only where the caller holds gates:exempt.
     expect(rows[0]!.find("button").exists()).toBe(false);

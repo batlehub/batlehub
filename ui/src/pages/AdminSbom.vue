@@ -103,7 +103,7 @@ async function exportSbom() {
 
 <template>
   <div class="space-y-6">
-    <PageHeader :title="t('adminNav.sbomExport')" variant="display" />
+    <PageHeader :title="t('adminNav.sbomExport')" />
 
     <!-- Feedback -->
     <div

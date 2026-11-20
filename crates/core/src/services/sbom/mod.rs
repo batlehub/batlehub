@@ -165,10 +165,8 @@ impl SbomService {
         Ok(())
     }
 
-    /// Store SBOMs for a privately published artifact.
-    ///
-    /// Extracts deps from the archive. When `required` is `true` and no manifest
-    /// can be found, returns `CoreError::AccessDenied` so the publish can be rolled back.
+    /// Store SBOMs for a privately published artifact: [`Self::build_for_published`]
+    /// then [`Self::store`].
     pub async fn record_for_published(
         &self,
         registry: &str,
@@ -178,6 +176,36 @@ impl SbomService {
         data: &Bytes,
         opts: SbomPublishOptions<'_>,
     ) -> Result<(), CoreError> {
+        let sboms = self
+            .build_for_published(registry, name, version, artifact_key, data, opts)
+            .await?;
+        self.store(sboms).await
+    }
+
+    /// Persist SBOMs built by [`Self::build_for_published`].
+    pub async fn store(&self, sboms: Vec<ArtifactSbom>) -> Result<(), CoreError> {
+        for sbom in sboms {
+            self.repo.upsert_sbom(sbom).await?;
+        }
+        Ok(())
+    }
+
+    /// Build, without storing, the SBOMs for a privately published artifact.
+    ///
+    /// Extracts deps from the archive. When `required` is `true` and no manifest
+    /// can be found, returns `CoreError::AccessDenied` so the publish can be rolled back.
+    /// Separate from storing so a publish can decide before its commit and
+    /// persist only after it: a row for a version that never committed would
+    /// reach the export and the licence gate.
+    pub async fn build_for_published(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        artifact_key: &str,
+        data: &Bytes,
+        opts: SbomPublishOptions<'_>,
+    ) -> Result<Vec<ArtifactSbom>, CoreError> {
         let SbomPublishOptions {
             registry_type,
             formats,
@@ -211,6 +239,7 @@ impl SbomService {
             cache_control: None,
         };
 
+        let mut sboms = Vec::with_capacity(formats.len());
         for format in formats {
             let document = match format {
                 SbomFormat::Spdx => generate::generate_spdx(
@@ -228,24 +257,22 @@ impl SbomService {
                 ),
             };
 
-            self.repo
-                .upsert_sbom(ArtifactSbom {
-                    id: Uuid::new_v4(),
-                    artifact_key: artifact_key.to_owned(),
-                    registry: registry.to_owned(),
-                    package_name: name.to_owned(),
-                    version: version.to_owned(),
-                    spec_version: format.spec_version().to_owned(),
-                    format: format.clone(),
-                    document,
-                    source: source.clone(),
-                    created_at: Utc::now(),
-                    license: manifest.license.clone(),
-                })
-                .await?;
+            sboms.push(ArtifactSbom {
+                id: Uuid::new_v4(),
+                artifact_key: artifact_key.to_owned(),
+                registry: registry.to_owned(),
+                package_name: name.to_owned(),
+                version: version.to_owned(),
+                spec_version: format.spec_version().to_owned(),
+                format: format.clone(),
+                document,
+                source: source.clone(),
+                created_at: Utc::now(),
+                license: manifest.license.clone(),
+            });
         }
 
-        Ok(())
+        Ok(sboms)
     }
 
     pub async fn get_artifact_sbom(
@@ -312,7 +339,7 @@ impl SbomService {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -338,12 +365,12 @@ mod tests {
         assert_eq!(again, ExtractedManifest::default());
     }
 
-    struct InMemorySbomRepo {
-        items: Mutex<Vec<ArtifactSbom>>,
+    pub(crate) struct InMemorySbomRepo {
+        pub(crate) items: Mutex<Vec<ArtifactSbom>>,
     }
 
     impl InMemorySbomRepo {
-        fn new() -> Arc<Self> {
+        pub(crate) fn new() -> Arc<Self> {
             Arc::new(Self {
                 items: Mutex::new(Vec::new()),
             })

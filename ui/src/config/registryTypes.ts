@@ -173,6 +173,7 @@ export const EXAMPLE_COORDINATES: Record<string, { name: string; version: string
   galaxy: { name: "community.general", version: "9.0.0" },
   openvsx: { name: "redhat.java", version: "1.30.0" },
   "vscode-marketplace": { name: "redhat.java", version: "1.30.0" },
+  "jetbrains-marketplace": { name: "org.rust.lang", version: "0.4.220" },
   github: { name: "owner/repo", version: "v1.0.0" },
   gitlab: { name: "group/project", version: "v1.0.0" },
   forgejo: { name: "owner/repo", version: "v1.0.0" },

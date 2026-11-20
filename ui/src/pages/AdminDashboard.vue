@@ -33,7 +33,7 @@ import SecurityStatusStrip from "@/components/admin/SecurityStatusStrip.vue";
 import StateMark from "@/components/admin/StateMark.vue";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
-import { formatBytes as fmtBytes, formatCount } from "@/lib/format";
+import { formatBytes as fmtBytes, formatCount, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,7 +49,6 @@ import {
 
 import { Resolution } from "@/components/ui/resolution";
 import { AsyncState } from "@/components/ui/async-state";
-import { DateTime } from "@/components/ui/date-time";
 const { t } = useI18n();
 
 const { token, can, canAny } = useAuth();
@@ -245,7 +244,7 @@ const trendText = computed(() => {
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" :title="t('dashboard.title')">
+    <PageHeader :title="t('dashboard.title')">
       <template v-if="monitoring" #actions>
         <Button as-child size="sm" variant="outline">
           <a :href="monitoring" target="_blank" rel="noopener noreferrer" data-testid="monitoring">
@@ -264,7 +263,7 @@ const trendText = computed(() => {
       class="border px-4 py-3"
       :class="verdict.tone === 'bad' ? 'border-destructive' : 'border-border'"
     >
-      <p class="font-mono text-sm" :class="verdict.tone === 'bad' ? 'text-destructive' : ''">
+      <p class="text-sm" :class="verdict.tone === 'bad' ? 'text-destructive' : ''">
         {{ verdict.text }}
       </p>
       <p v-if="verdict.tone === 'bad'" class="mt-2">
@@ -351,33 +350,85 @@ const trendText = computed(() => {
       />
       <Skeleton v-else-if="statsLoading" :lines="2" />
 
-      <!-- What the cache saved, stated as a sentence rather than as four tiles. -->
-      <p v-else-if="stats" class="text-sm text-muted-foreground">
-        <!-- RFC 0050 §6.7: no "of 0 downloads" — a rate of nothing is not a rate. -->
-        <i18n-t
-          :keypath="
-            totalRequests ? 'adminDashboard.cacheSummary' : 'adminDashboard.cacheSummaryNone'
-          "
-          tag="span"
-        >
-          <template #rate
-            ><span class="font-mono text-foreground">{{ fmtPct(hitRate) }}</span></template
+      <!-- The figures, after the verdict and weighted by it: the verdict above
+           says whether anything is wrong, so these four can be read as
+           support rather than as four equal-weight claims (RFC 0003 §6.4).
+           Each is the figure plus the one qualifier it needs to be read. -->
+      <dl
+        v-else-if="stats"
+        class="grid grid-cols-2 gap-3 lg:grid-cols-4"
+        data-testid="dashboard-kpis"
+      >
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiHitRate") }}
+          </dt>
+          <!-- RFC 0050 §6.7: a rate of nothing is not a rate. -->
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ totalRequests ? fmtPct(hitRate) : "—" }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{ t("adminDashboard.kpiSince", { date: formatDate(stats.since_startup) }) }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiDownloads") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ formatCount(totalRequests) }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{
+              t("adminDashboard.kpiFromCache", {
+                count: formatCount(stats.aggregate.artifact_hits ?? 0),
+              })
+            }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiCached") }}
+          </dt>
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ fmtBytes(stats.aggregate.cached_bytes) }}
+          </dd>
+          <dd class="mt-1 text-xs text-muted-foreground">
+            {{ t("adminDashboard.kpiCachedHint") }}
+          </dd>
+        </div>
+        <div class="border border-border px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">
+            {{ t("adminDashboard.kpiRegistries") }}
+          </dt>
+          <!-- The count comes from the health probe: an unread probe is unknown,
+               never "0 registries, all answering" in the healthy colour. -->
+          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {{ health && !healthError ? formatCount(registries.length) : "—" }}
+          </dd>
+          <dd
+            class="mt-1 text-xs"
+            :class="
+              healthError || !health
+                ? 'text-muted-foreground'
+                : degraded.length
+                  ? 'text-destructive'
+                  : 'text-ok'
+            "
+            data-testid="kpi-registries-state"
           >
-          <template #total
-            ><span class="font-mono text-foreground">{{
-              formatCount(totalRequests)
-            }}</span></template
-          >
-          <template #since
-            ><span class="font-mono"><DateTime :iso="stats.since_startup" /></span
-          ></template>
-          <template #size
-            ><span class="font-mono text-foreground">{{
-              fmtBytes(stats.aggregate.cached_bytes)
-            }}</span></template
-          >
-        </i18n-t>
-      </p>
+            {{
+              healthError
+                ? t("dashboard.healthUnknown")
+                : !health
+                  ? "—"
+                  : degraded.length
+                    ? t("adminDashboard.kpiWithErrors", { count: degraded.length })
+                    : t("adminDashboard.kpiAllAnswering")
+            }}
+          </dd>
+        </div>
+      </dl>
 
       <!-- What the counters above structurally cannot say: better or worse than
            before. Absent until there is a rollup to read, rather than showing a
@@ -397,7 +448,7 @@ const trendText = computed(() => {
       </p>
 
       <section v-if="stats && stats.per_registry.length > 0" class="space-y-2">
-        <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+        <h2 class="font-sans text-sm font-semibold text-foreground">
           {{ t("adminDashboard.perRegistry") }}
         </h2>
         <Table :label="t('adminDashboard.perRegistry')">

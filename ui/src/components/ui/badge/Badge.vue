@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-sm border px-2 py-1 text-xs font-mono font-semibold transition-colors",
+  "inline-flex items-center gap-1 rounded-sm border px-2 py-px text-xs font-sans font-medium transition-colors",
   {
     variants: {
       // No alpha fill under the accent text. The `bg-…/10` utilities these drop
@@ -25,9 +25,15 @@ const badgeVariants = cva(
         /* Was `border-secondary bg-secondary`: a --ground-raised border (1.06:1)
            around a --ground-raised fill, so the fill was the only channel and
            the boundary did not exist. Same ink, on a rule that can be seen. */
-        secondary: "border-border text-foreground",
+        /* DESIGN.md (The Interface Face Rule): a neutral label is a flat chip, not a bordered cell.
+           Bordered it was the same shape as a `sm` outline button and sat
+           beside them in the same row (AdminHealth: CARGO · PROXY · Clear
+           cache), so a label read as a control. The fill is not carrying a
+           state here — the word is — and the ink on it is measured on
+           --ground-raised (16.88/5.28:1 dark, 16.64/6.52:1 light). */
+        secondary: "border-transparent bg-muted text-foreground",
         destructive: "border-destructive text-destructive",
-        outline: "border-border text-muted-foreground",
+        outline: "border-transparent bg-muted text-muted-foreground",
         copper: "border-copper text-copper",
         /* An affirmative answer, in the One Synthetic Rule's terms — the same
            reasoning `Alert.vue`'s `success` already carries, ported rather
@@ -46,7 +52,9 @@ const badgeVariants = cva(
            borderless badge. It differs from `outline` on the ink — full
            `--ink` rather than `--ink-dim` — because an answer is not the same
            thing as a neutral label. */
-        known: "border-border text-foreground",
+        known: "border-transparent bg-muted text-foreground",
+        /* Healthy / allowed / serving — the --ok signal (DESIGN.md, The Interface Face Rule). */
+        ok: "border-ok text-ok",
       },
     },
     defaultVariants: { variant: "default" },

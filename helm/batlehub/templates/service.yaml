@@ -13,4 +13,6 @@ spec:
       name: http
   selector:
     {{- include "batlehub.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: server
+    {{- /* No component label: pods of an older chart lack it, so naming it
+         would empty the Service on upgrade. Worker pods match this selector
+         but expose no port named `http`, so they are never an endpoint. */}}

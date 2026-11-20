@@ -90,7 +90,9 @@ const totalCachedBytes = computed<number | null>(() => {
 
 <template>
   <section class="relative overflow-hidden border-b border-rule-soft pb-6 pt-4">
-    <div class="plate" aria-hidden="true"></div>
+    <!-- No texture here (DESIGN.md, The material layer): the dot field is
+         the home page's, where identity is the point; the catalog is a working
+         surface and its header is a title, not a specimen. -->
     <!-- The proof's `.display` rule, ported rather than approximated:
          `line-height:.92`, `letter-spacing:.02em`, uppercase. The body
          line-height is 1.625, which on a 104px element costs 169px per line
@@ -98,7 +100,7 @@ const totalCachedBytes = computed<number | null>(() => {
          measurement caught it. A display face is set tight; that is most of
          what makes it read as display rather than as a very large heading. -->
     <h1
-      class="relative z-10 font-display font-bold uppercase tracking-[0.02em] leading-[0.92] text-display break-words"
+      class="relative z-10 text-title font-semibold tracking-tight leading-tight break-words"
       data-testid="specimen-name"
     >
       {{ specimenRegistry?.name ?? t("packageCatalog.allRegistriesTitle") }}

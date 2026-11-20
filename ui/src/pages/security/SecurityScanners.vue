@@ -171,11 +171,7 @@ onMounted(async () => {
 <template>
   <div class="space-y-6">
     <Announcer :message="announcement" />
-    <PageHeader
-      variant="display"
-      :title="t('securityNav.scanners')"
-      :description="t('adminScans.description')"
-    >
+    <PageHeader :title="t('securityNav.scanners')" :description="t('adminScans.description')">
       <template #actions>
         <Button variant="outline" size="sm" :disabled="loading" @click="onRefresh">
           <RefreshCw class="h-4 w-4" aria-hidden="true" />

@@ -177,24 +177,6 @@ describe("the Undependable Fill Rule", () => {
       "a row tint is not a state",
     ).toEqual([]);
   });
-
-  it("sets no dim ink over the halftone plate", () => {
-    /* The specimen section is the one surface in the product with an image
-       under its text. `--ink` clears 4.5:1 on the plate with room (9.60:1 in
-       dark, 7.70:1 in light); `--ink-dim` measures 3.20:1 and 3.35:1.
-
-       `text-muted-foreground` sat on the facts paragraph and painted no glyph,
-       because every child overrides it — so it was a trap rather than a
-       defect: the next plain word added to that paragraph would have rendered
-       under the floor with nothing to catch it. */
-    const catalog = SOURCES["src/components/catalog/CatalogSpecimen.vue"];
-    const specimen = catalog.slice(
-      catalog.indexOf('<div class="plate"'),
-      catalog.indexOf("</section>", catalog.indexOf('<div class="plate"')),
-    );
-    expect(specimen, "the plate section must not exist without its own test").not.toBe("");
-    expect(specimen).not.toContain("text-muted-foreground");
-  });
 });
 
 /**

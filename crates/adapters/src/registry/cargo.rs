@@ -10,8 +10,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, ensure_same_origin, fetch_text_document,
-    new_http_client, percent_encode, to_registry_error, UpstreamHttpOptions,
+    cache_control, encode_path, ensure_same_origin, fetch_text_document, new_http_client,
+    percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 
 /// crates.io (or compatible) registry client.
@@ -21,7 +21,7 @@ use super::http_client::{
 /// - `version = "1.2.3"`    → specific version metadata
 /// - `artifact = Some("dl")` → stream the `.crate` file for that version
 pub struct CargoRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     base_url: String,
     /// Sparse-index base (`https://index.crates.io`), which is a *different*
     /// host from the API `base_url` (`https://crates.io`). Carried here so the
@@ -52,8 +52,8 @@ impl CargoRegistryClient {
         self
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// The `.crate` URL for an upstream-supplied `dl_path`, refused unless it

@@ -21,17 +21,20 @@ describe("PageHeader", () => {
     expect(wrapper.find("h1").classes()).not.toContain("font-display");
   });
 
-  // The display variant is the only step above the data ramp, so it is the one
-  // place the bitmap face is opted into.
-  it("applies the display variant", () => {
-    const wrapper = mount(PageHeader, { props: { title: "Health", variant: "display" } });
-    expect(wrapper.find("h1").classes()).toContain("font-display");
+  // DESIGN.md (The Interface Face Rule): page titles are set in the interface face, so no variant
+  // opts into the bitmap face any more — it is the wordmark's and the home
+  // greeting's alone.
+  it("sets every variant in the interface face", () => {
+    for (const variant of ["default", "poster"] as const) {
+      const wrapper = mount(PageHeader, { props: { title: "Health", variant } });
+      expect(wrapper.find("h1").classes()).not.toContain("font-display");
+    }
   });
 
   // The Flat-At-Rest Rule: no title in this system carries a glow. Pinned so a
   // reinstated text-shadow fails here rather than in a rendered-page scan.
   it("never glows in either variant", () => {
-    for (const variant of ["default", "display"] as const) {
+    for (const variant of ["default", "poster"] as const) {
       const wrapper = mount(PageHeader, { props: { title: "Health", variant } });
       expect(wrapper.find("h1").classes()).not.toContain("cyber-text-glow");
     }

@@ -10,9 +10,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, fetch_json_document, fetch_text_document,
-    new_http_client, percent_encode, same_origin as urls_same_origin, to_registry_error,
-    UpstreamHttpOptions,
+    cache_control, encode_path, fetch_json_document, fetch_text_document, new_http_client,
+    percent_encode, same_origin as urls_same_origin, to_registry_error, UpstreamHttpOptions,
 };
 
 use batlehub_core::ports::UpstreamPackage;
@@ -37,7 +36,7 @@ use batlehub_core::ports::UpstreamPackage;
 /// like all other artifacts. They may become stale after new module versions are
 /// published. Clear the proxy storage to refresh, or pin versions in `go.sum`.
 pub struct GoProxyRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     /// Credential-free client used for the search host. The default search target
     /// (pkg.go.dev) is a *different* host than the GOPROXY upstream, so the
     /// upstream's auth headers/basic-auth must never be sent to it. `None` when
@@ -98,8 +97,8 @@ impl GoProxyRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 }
 
@@ -336,15 +335,15 @@ impl RegistryClient for GoProxyRegistryClient {
         // Only attach upstream credentials when the search host is the same origin
         // as the GOPROXY upstream; otherwise use the credential-free client so we
         // never leak the upstream token/basic-auth to a third-party search site.
-        let req = match (self.search_authed, self.search_http.as_ref()) {
-            (true, _) => self.get(&url),
-            (false, Some(client)) => client.get(&url),
+        let sent = match (self.search_authed, self.search_http.as_ref()) {
+            (true, _) => self.get(&url).send().await,
+            (false, Some(client)) => client.get(&url).send().await,
             // search_http is built whenever search is enabled and cross-origin, so
             // this is unreachable past the `search_base` guard above; bail safely
             // rather than fall back to the credentialed client and leak auth.
             (false, None) => return Ok(vec![]),
         };
-        let resp = match req.send().await {
+        let resp = match sent {
             Ok(r) if r.status().is_success() => r,
             // Search is best-effort: a transport error or non-200 yields no results
             // rather than failing the whole multi-registry explore search.

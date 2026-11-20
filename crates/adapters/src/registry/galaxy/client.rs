@@ -50,7 +50,7 @@ use batlehub_core::{
 use super::models::{Discovery, RoleSearch, VersionDetail};
 use super::pagination::{collect_pages, PAGE_LIMIT};
 use crate::registry::http_client::{
-    basic_auth_get, cache_control, ensure_same_origin, fetch_json_document, new_http_client,
+    cache_control, ensure_same_origin, fetch_json_document, new_http_client,
     no_redirect_client_pair, to_registry_error, UpstreamHttpOptions,
 };
 use crate::registry::ssrf::fetch_following_redirects_trusting;
@@ -81,7 +81,7 @@ struct CachedDiscovery {
 }
 
 pub struct GalaxyRegistryClient {
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     /// Redirect-following pair for the artifact path: upstream answers
     /// `download_url` with a `302` to a token-signed content URL, and each hop
     /// has to be checked rather than followed by reqwest unseen.
@@ -124,8 +124,8 @@ impl GalaxyRegistryClient {
         &self.configured
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// The upstream's discovery document, probed the way `g_connect` probes it.
@@ -620,7 +620,7 @@ impl GalaxyRegistryClient {
                 let http = http.clone();
                 let auth = auth.clone();
                 Box::pin(async move {
-                    basic_auth_get(&http, &auth, &url)
+                    http.basic_auth_get(&auth, &url)
                         .send()
                         .await
                         .map_err(to_registry_error)

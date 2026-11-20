@@ -55,6 +55,32 @@ impl crate::ports::LocalRegistryBackend for InMemBackend {
         names.dedup();
         Ok(names)
     }
+    async fn append_file(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        file: serde_json::Value,
+    ) -> Result<bool, CoreError> {
+        let mut v = self.versions.lock().unwrap();
+        let Some(p) = v
+            .iter_mut()
+            .find(|p| p.registry == registry && p.name == name && p.version == version)
+        else {
+            return Ok(false);
+        };
+        let files = p.index_metadata.as_object_mut().map(|m| {
+            m.entry("files")
+                .or_insert_with(|| serde_json::json!([]))
+                .clone()
+        });
+        let mut files = files.unwrap_or_else(|| serde_json::json!([]));
+        if let Some(a) = files.as_array_mut() {
+            a.push(file);
+        }
+        p.index_metadata["files"] = files;
+        Ok(true)
+    }
     /// Drops the row: enough for "tombstoned once, then nothing to tombstone".
     async fn tombstone_version(
         &self,

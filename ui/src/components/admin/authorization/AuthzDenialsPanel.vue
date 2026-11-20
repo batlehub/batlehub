@@ -54,7 +54,7 @@ onMounted(loadDenials);
 
 <template>
   <section class="space-y-3" data-testid="panel-denials">
-    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+    <h2 class="font-sans text-sm font-semibold text-foreground">
       {{ t("adminAuthorization.denialsTitle") }}
     </h2>
     <AsyncState

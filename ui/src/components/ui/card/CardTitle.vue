@@ -35,7 +35,7 @@ const props = withDefaults(
 </script>
 
 <template>
-  <component :is="as" :class="cn('font-mono text-base font-normal leading-snug', props.class)">
+  <component :is="as" :class="cn('font-sans text-base font-semibold leading-snug', props.class)">
     <slot /><template v-if="count"
       >{{ " " }}<span class="text-muted-foreground">({{ count }})</span></template
     >

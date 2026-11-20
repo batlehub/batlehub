@@ -32,13 +32,16 @@ const { data, loading, error, reload } = useApi<CoverageList>(
 const rows = computed(() => data.value?.registries ?? []);
 // `cve_gate` alone covers a registry, as `CoverageProtection` draws it.
 const protectedCount = computed(() => rows.value.filter((r) => r.protected || r.cve_gate).length);
+// Left unprotected on purpose (`[console].accepted`): not counted as unprotected.
+const unprotectedCount = computed(
+  () => rows.value.filter((r) => !r.protected && !r.cve_gate && !r.accepted).length,
+);
 const withScanners = computed(() => rows.value.some((r) => r.scanners != null));
 </script>
 
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('securityNav.coverage')"
       :description="t('securityCoverage.description')"
     />
@@ -54,7 +57,7 @@ const withScanners = computed(() => rows.value.some((r) => r.scanners != null));
           t("securityCoverage.summary", {
             total: rows.length,
             protected: protectedCount,
-            unprotected: rows.length - protectedCount,
+            unprotected: unprotectedCount,
           })
         }}
       </p>

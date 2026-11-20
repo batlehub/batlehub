@@ -373,7 +373,9 @@ describe("AdminRegistry", () => {
   it("says system:read is missing on a 403", async () => {
     getRegistryViewMock.mockResolvedValue({ error: {}, response: { status: 403 } });
     const w = await mountPage();
-    expect(w.get('[data-testid="denied"]').text()).toBe("You do not have system:read.");
+    expect(w.get('[data-testid="denied"]').text()).toBe(
+      "You do not have permission to view this registry's system details (system:read).",
+    );
   });
 
   it("shows any other failure with a retry", async () => {

@@ -559,12 +559,7 @@ mod route_tests {
     /// Asked for by name at the root: if it is not on disk it is not there.
     #[test]
     fn a_root_level_file_is_not_the_console() {
-        for path in [
-            "/favicon.ico",
-            "/logo.svg",
-            "/robots.txt",
-            "/halftone-plate.png",
-        ] {
+        for path in ["/favicon.ico", "/logo.svg", "/robots.txt", "/banner.png"] {
             assert!(!is_console_route(path), "{path}");
         }
     }

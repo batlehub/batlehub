@@ -56,7 +56,7 @@
     "layerAccountBlocks": "account blocks",
     "layerIpBlocks": "IP blocks",
     "notCovered": "Not checked: {layers}. Supply the matching field to include them.",
-    "oidc1TeamATeam": "oidc1:team-a, team-b",
+    "oidc1TeamATeam": "e.g. oidc1:team-a, team-b",
     "optional": "(optional)",
     "ruleMatched": "Rule: {rule}",
     "seeBlocks": "See blocks",
@@ -152,7 +152,7 @@
     "nobodyBlockedBody": "No account is barred from authenticating and no address is being refused.",
     "since": "Since",
     "subject": "Blocked",
-    "title": "Blocks",
+    "title": "Blocked accounts & addresses",
     "until": "Until",
     "userId": "User ID"
   },
@@ -254,7 +254,6 @@
     "validating": "Validating…"
   },
   "adminDashboard": {
-    "cacheSummary": "{rate} of {total} artifact downloads were served from cache since this process started {since}, holding {size} of artifacts.",
     "hitRate": "Hit rate",
     "noRegistriesConfiguredYet": "No registries configured yet",
     "nothingIsCachedOrServed": "Nothing is cached or served until a registry exists. Add a [[registries]] block to config.toml and reload.",
@@ -268,8 +267,16 @@
     "trendFlat": "Over the last {days} days the cache served {rate} of downloads, unchanged from the {days} days before.",
     "trendNoBaseline": "Over the last {days} days the cache served {rate} of downloads. There is not enough history yet to compare it with the period before.",
     "trendUp": "Over the last {days} days the cache served {rate} of downloads — {points} points better than the {days} days before.",
-    "cacheSummaryNone": "No artifact has been downloaded since this process started {since}; the cache holds {size} of artifacts.",
-    "configWarnings": "{n} configuration warning | {n} configuration warnings"
+    "configWarnings": "{n} configuration warning | {n} configuration warnings",
+    "kpiAllAnswering": "all answering",
+    "kpiCached": "Held in cache",
+    "kpiCachedHint": "artifacts on storage",
+    "kpiDownloads": "Artifact downloads",
+    "kpiFromCache": "{count} served from cache",
+    "kpiHitRate": "Cache hit rate",
+    "kpiRegistries": "Registries",
+    "kpiSince": "since restart, {date}",
+    "kpiWithErrors": "{count} with errors | {count} with errors"
   },
   "adminHealth": {
     "allCachedArtifactsFor": "All cached artifacts for this registry will be permanently removed. Packages will be\n      re-fetched from upstream on the next request.",
@@ -326,7 +333,7 @@
     "neverRun": "Has not run",
     "noImportsConfigured": "No registries have an import configured. Add a {block} block to your config.",
     "registry": "Registry",
-    "releaseImports": "Release Imports",
+    "releaseImports": "Release imports",
     "repository": "Repository",
     "scheduled": "Scheduled",
     "skipped": "{n} skipped",
@@ -353,8 +360,8 @@
     "sbomExport": "SBOM export",
     "subscriptions": "Notification subscriptions",
     "teamNamespaces": "Team namespaces",
-    "upstream": "Upstream",
-    "warming": "Warming",
+    "upstream": "Upstream disappearance",
+    "warming": "Cache warming",
     "registriesSection": "Registries",
     "allRegistries": "All registries",
     "access": "Access",
@@ -367,7 +374,7 @@
     "atLeast": "≥ {severity}",
     "byFinding": "By finding",
     "byReference": "By reference",
-    "description": "Every finding on the registries where you hold findings:read, most severe first.",
+    "description": "Every finding on the registries you can review, most severe first.",
     "empty": "No findings match these filters.",
     "exempt": "Exempt…",
     "exemptConfirm": "Exempt",
@@ -383,7 +390,7 @@
     "reason": "Reason",
     "reasonRequired": "Give a reason for the exemption.",
     "reference": "Reference",
-    "refused": "You cannot read findings on any registry. Findings name advisories that may be embargoed; they need the findings:read permission.",
+    "refused": "You cannot read findings on any registry. Findings name advisories that may be embargoed, so they need a dedicated permission (findings:read).",
     "scanner": "Scanner",
     "severityCritical": "critical",
     "severityHigh": "high",
@@ -402,7 +409,7 @@
     "coordinate": "Coordinate",
     "deferredSince": "deferred since {when}",
     "description": "The scan queue, the versions whose scan failed, and the verdicts by state.",
-    "errorWithheld": "withheld (needs findings:read)",
+    "errorWithheld": "hidden — you cannot read findings here",
     "failuresEmpty": "No scan has failed.",
     "failuresTab": "Failures ({n})",
     "lastError": "Last error",
@@ -563,13 +570,12 @@
     "wholePackage": "(every version)"
   },
   "adminWarming": {
-    "cacheWarming": "Cache Warming",
+    "cacheWarming": "Cache warming",
     "commaSeparatedForPath": "Comma-separated. For path-addressed registries.",
     "commaSeparatedOmitVersion": "Comma-separated. Omit version to warm latest_n.",
     "deleteCachedArtifact": "Delete Cached Artifact",
     "errorCount": "{count} errors",
     "failuresUnnamed": "A warming task ended without reporting which package it was for.",
-    "lodashReact180": "lodash, react{'@'}18.0.0",
     "noWarmingConfigured": "No registries have warming configured. Add {packages} or {paths} to a registry in your config.",
     "packageMode": "Package",
     "pathMode": "Path",
@@ -802,7 +808,8 @@
     "spanDays": "{n} d",
     "spanHours": "{n} h",
     "spanMinutes": "{n} min",
-    "spanSeconds": "{n} s"
+    "spanSeconds": "{n} s",
+    "example": "e.g. {value}"
   },
   "config": {
     "copyToml": "Copy TOML",
@@ -857,7 +864,7 @@
     "effect": "Effect",
     "empty": "No source has flagged anything.",
     "expires": "expires {when}",
-    "forbidden": "Listing the flags needs the flags:read permission.",
+    "forbidden": "You do not have permission to list vulnerability flags (flags:read).",
     "includeDead": "Include revoked and expired flags",
     "intro": "What every configured flag source has said: which version, how hard, and whether it still stands.",
     "kind": "Kind",
@@ -1087,7 +1094,7 @@
     "tableCaption": "{shown} of {total} versions · releases first, newest first",
     "tableLabel": "Versions of {name}",
     "unlisted": "unlisted",
-    "upstreamBadgeHelp": "The upstream audit (RFC 0014) no longer finds this version at its upstream.",
+    "upstreamBadgeHelp": "The upstream audit no longer finds this version at its upstream.",
     "upstreamBlocked": "blocked by the upstream audit",
     "upstreamDisappeared": "disappeared upstream",
     "upstreamHasNoneEither": "Nothing has been pulled through, and the upstream does not have it either.",
@@ -1344,7 +1351,7 @@
     "noScannerYet": "none answered yet",
     "lastScanned": "Last scanned",
     "never": "never",
-    "findingsWithheld": "Findings are withheld: reading them needs findings:read.",
+    "findingsWithheld": "Findings are hidden: you do not have permission to read them (findings:read).",
     "noFindings": "No findings.",
     "rescan": "Queue a rescan",
     "rescanQueued": "Rescan queued.",
@@ -1388,7 +1395,10 @@
     "changed": "{setting}: {value}",
     "systemNote": "System follows your device — currently {value}",
     "theme": "Theme",
-    "title": "Display"
+    "title": "Display",
+    "density": "Table density",
+    "comfortable": "Comfortable",
+    "compact": "Compact"
   },
   "scanBadge": {
     "notScanned": "not scanned",
@@ -1416,16 +1426,16 @@
     "missing": "No registry named `{name}`.",
     "missingHint": "It is not in the loaded configuration.",
     "backToList": "Back to Registries",
-    "denied": "You do not have system:read.",
+    "denied": "You do not have permission to view this registry's system details (system:read).",
     "loadError": "Could not load the registry: {status}",
     "historyError": "Could not load activity: {status}",
     "editConfig": "Edit configuration",
     "monitoring": "Monitoring ↗",
     "stripLabel": "Registry status",
     "upstream": "Upstream",
-    "degraded": "degraded",
+    "degraded": "Degraded",
     "degradedLong": "upstream degraded (error rate or latency over threshold)",
-    "ok": "ok",
+    "ok": "Healthy",
     "thisReplica": "this replica, since {since}",
     "cache": "Cache",
     "hit": "{pct} hit",
@@ -1490,7 +1500,11 @@
     "description": "Each registry's configuration and health. Live values are this replica's.",
     "loadError": "Could not load the registries",
     "empty": "No registry is configured.",
-    "upstream": "Upstream"
+    "upstream": "Upstream",
+    "type": "Type",
+    "mode": "Mode",
+    "lastPull": "Last pull",
+    "noUpstreamTraffic": "No traffic yet"
   },
   "holdsPanel": {
     "title": "Held versions",
@@ -1825,5 +1839,8 @@
     "loadFailed": "Could not load the held versions.",
     "pageOf": "Page {page} of {pages}",
     "noName": "(no name)"
+  },
+  "configWarnings": {
+    "howToFix": "Details and fix"
   }
 }

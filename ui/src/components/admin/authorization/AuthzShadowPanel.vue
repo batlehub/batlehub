@@ -44,7 +44,7 @@ onMounted(loadShadow);
 
 <template>
   <section class="space-y-3" data-testid="panel-shadow">
-    <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+    <h2 class="font-sans text-sm font-semibold text-foreground">
       {{ t("adminAuthorization.shadowTitle") }}
     </h2>
     <!-- "No shadow" and "a quiet shadow" share the empty panel and not its

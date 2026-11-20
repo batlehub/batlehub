@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import { formatDay } from "@/lib/format";
 import { ref, computed, onUnmounted } from "vue";
 import { Key, Plus, Trash2, Copy, Check, AlertCircle, Clock } from "@lucide/vue";
 import { createToken, listTokens, revokeToken as revokeTokenApi } from "@/client/sdk.gen";
@@ -203,12 +204,9 @@ async function confirmRevoke() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** The app's locale, not the browser's — see `lib/format.ts`. */
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  return formatDay(iso);
 }
 
 function daysUntil(iso: string) {
@@ -221,7 +219,7 @@ const lifetimePresets = [7, 30, 90];
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" as="h2">
+    <PageHeader as="h2">
       <template #title>
         <Key class="h-5 w-5 text-foreground" aria-hidden="true" />
         {{ t("tokensPage.personalApiTokens") }}
@@ -400,9 +398,7 @@ const lifetimePresets = [7, 30, 90];
           in a provider-prefixed id.
         -->
         <fieldset v-if="myGroups.length" class="space-y-2 border-0 p-0 m-0">
-          <legend
-            class="font-mono text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-none"
-          >
+          <legend class="font-sans text-sm font-medium text-foreground leading-none">
             {{ t("tokensPage.whatThisTokenCanSee") }}
           </legend>
           <p class="text-xs text-muted-foreground">
@@ -431,9 +427,7 @@ const lifetimePresets = [7, 30, 90];
         </fieldset>
 
         <fieldset class="space-y-2 border-0 p-0 m-0">
-          <legend
-            class="font-mono text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-none"
-          >
+          <legend class="font-sans text-sm font-medium text-foreground leading-none">
             {{ t("common.lifetime") }}
           </legend>
           <div class="flex gap-2">

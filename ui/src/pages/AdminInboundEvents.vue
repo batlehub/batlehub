@@ -53,7 +53,6 @@ const events = computed(() => inboundResp.value?.events ?? []);
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminNav.inboundEvents')"
       :description="t('adminNotifications.inboundDescription')"
     >

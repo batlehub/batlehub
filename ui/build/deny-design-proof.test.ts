@@ -47,7 +47,7 @@ describe("isDesignProofPath", () => {
     "/packages",
     "/src/pages/PackageCatalog.vue",
     "/logo.svg",
-    "/halftone-plate.png",
+    "/banner.png",
     "/fonts/silkscreen-400.woff2",
     // A whole segment, not a substring: neither of these is the artefact, and a
     // rule that swallowed them would be denying files it was never asked to.

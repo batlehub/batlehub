@@ -182,7 +182,13 @@ impl LocalRegistryService {
                 },
             )
             .await;
-        let mut entry = serde_json::json!({ "filename": req.filename, "sha256": req.sha256 });
+        // `published_by` and `size` let a delete of the version refund this file's slot.
+        let mut entry = serde_json::json!({
+            "filename": req.filename,
+            "sha256": req.sha256,
+            "published_by": publisher.user_id,
+            "size": len,
+        });
         if let Some(r) = req.requires_python {
             entry["requires_python"] = serde_json::Value::String(r.to_owned());
         }

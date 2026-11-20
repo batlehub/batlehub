@@ -35,7 +35,7 @@ function isActive(to: string) {
 
 /* The proof's Meta step, uppercased and tracked out. Shared so the desktop
    segment and the mobile stack cannot drift into two different typographies. */
-const CELL = "text-xs uppercase tracking-[0.1em] transition-colors";
+const CELL = "text-sm font-medium transition-colors";
 
 function cellInk(_to: string, active: boolean) {
   if (active) return "bg-foreground text-background font-bold";

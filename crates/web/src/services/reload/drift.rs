@@ -22,6 +22,13 @@ use super::ConfigReloadService;
 /// within about a minute.
 const REPORT_WINDOW: chrono::Duration = chrono::Duration::seconds(60);
 
+/// Appended to the fingerprint of a replica whose `[console].accepted` names
+/// `config.replica-drift`. The drift row is accepted only when every replica
+/// reporting says so, whichever one answers: the heartbeat carries nothing
+/// else per replica, and two replicas with the same configuration still
+/// report the same fingerprint.
+const ACCEPTS_DRIFT: &str = "+accepts-drift";
+
 impl ConfigReloadService {
     /// Report this replica, as `replica`, to `cluster` and compare it with the
     /// others. Called once at startup; a second call is ignored.
@@ -38,7 +45,12 @@ impl ConfigReloadService {
             .expect("applied_layers lock poisoned")
             .clone();
         let document = batlehub_config::merge_layers(&layers).unwrap_or_else(|_| layers.join("\0"));
-        hex::encode(Sha256::digest(document.as_bytes()))
+        let digest = hex::encode(Sha256::digest(document.as_bytes()));
+        if accepts_drift(&document) {
+            format!("{digest}{ACCEPTS_DRIFT}")
+        } else {
+            digest
+        }
     }
 
     /// Record this replica's fingerprint, and read back the counters under
@@ -94,7 +106,8 @@ impl ConfigReloadService {
                 format!("{}{here} [{}]", replicas.join(", "), &fingerprint[..12])
             })
             .collect();
-        Some(ConfigWarning::new(
+        let accepted = by_config.keys().all(|f| f.ends_with(ACCEPTS_DRIFT));
+        let mut warning = ConfigWarning::new(
             warnings::CONFIG_REPLICA_DRIFT,
             "replicas",
             format!(
@@ -104,6 +117,17 @@ impl ConfigReloadService {
                 by_config.len(),
                 groups.join("; ")
             ),
-        ))
+        );
+        warning.accepted = accepted;
+        Some(warning)
     }
+}
+
+/// Whether the merged document's `[console].accepted` names the drift code.
+fn accepts_drift(document: &str) -> bool {
+    let entry = format!("warning:{}", warnings::CONFIG_REPLICA_DRIFT);
+    toml::from_str::<toml::Value>(document)
+        .ok()
+        .and_then(|v| v.get("console")?.get("accepted")?.as_array().cloned())
+        .is_some_and(|a| a.iter().any(|e| e.as_str() == Some(entry.as_str())))
 }

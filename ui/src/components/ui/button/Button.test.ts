@@ -11,7 +11,7 @@ describe("Button", () => {
 
   it("applies the default variant and size classes", () => {
     const wrapper = mount(Button, { slots: { default: "Go" } });
-    expect(wrapper.classes()).toContain("bg-primary");
+    expect(wrapper.classes()).toContain("bg-foreground");
     expect(wrapper.classes()).toContain("h-9");
   });
 
@@ -45,7 +45,7 @@ describe("Button", () => {
       slots: { default: "Go" },
     });
     expect(wrapper.classes()).toContain("my-custom-class");
-    expect(wrapper.classes()).toContain("bg-primary");
+    expect(wrapper.classes()).toContain("bg-foreground");
   });
 
   const classesOf = (variant: "default" | "destructive" | "outline" | "ghost") =>
@@ -122,5 +122,17 @@ describe("Button", () => {
       expect(classes).toContain("aria-pressed:text-foreground");
       expect(classes).toContain("aria-pressed:border-copper");
     });
+  });
+
+  // DESIGN.md (The Interface Face Rule): a destructive verb among ordinary controls is told apart
+  // before the click — crimson ink on a crimson boundary — and the primary
+  // fill is ink, so the two never share a colour.
+  it("renders the danger variant in crimson, apart from the primary fill", () => {
+    const danger = mount(Button, { props: { variant: "danger" }, slots: { default: "Purge" } });
+    expect(danger.classes()).toContain("border-destructive");
+    expect(danger.classes()).toContain("text-destructive");
+    const primary = mount(Button, { slots: { default: "Save" } });
+    expect(primary.classes()).not.toContain("bg-destructive");
+    expect(primary.classes()).not.toContain("bg-primary");
   });
 });

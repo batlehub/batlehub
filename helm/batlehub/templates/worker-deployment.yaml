@@ -141,13 +141,15 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
+            # Not `http`: that name is the Service's targetPort, and a worker
+            # pod matches the Service's selector.
+            - name: metrics
               containerPort: {{ .Values.config.server.port }}
               protocol: TCP
           livenessProbe:
             httpGet:
               path: /livez
-              port: http
+              port: metrics
             initialDelaySeconds: 10
             periodSeconds: 30
           resources:

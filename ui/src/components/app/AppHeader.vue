@@ -152,7 +152,12 @@ function handleLogout() {
            viewport. Masked to fade at both edges so it reads as a field the bar
            passes through rather than a panel with borders. -->
       <div class="relative hidden self-stretch lg:block lg:flex-1" aria-hidden="true">
+        <!-- The dot field only on the home page: in the console the bar is
+             chrome, and a texture beside every admin title read as decoration.
+             The box itself stays — it is the flex spacer. -->
         <span
+          v-if="route.path === '/'"
+          data-testid="header-dot-field"
           class="pointer-events-none absolute inset-0 opacity-55 [background-image:radial-gradient(var(--rule-soft)_1px,transparent_1.5px)] [background-size:9px_9px] [mask-image:linear-gradient(90deg,transparent,#000_40%,transparent)]"
         />
       </div>
@@ -185,7 +190,7 @@ function handleLogout() {
         <button
           v-if="isAuthenticated"
           type="button"
-          class="hidden xl:flex items-center gap-2 whitespace-nowrap border border-border px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+          class="hidden xl:flex items-center gap-2 whitespace-nowrap border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
           @click="openPalette"
         >
           <Search class="h-3.5 w-3.5" aria-hidden="true" />
@@ -197,7 +202,7 @@ function handleLogout() {
           target="_blank"
           rel="noopener noreferrer"
           :aria-label="t('common.docs')"
-          class="hidden sm:flex items-center gap-2 whitespace-nowrap border border-border px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+          class="hidden sm:flex items-center gap-2 whitespace-nowrap border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         >
           <BookOpen class="h-3.5 w-3.5" />
           <span class="hidden lg:inline">{{ t("common.docs") }}</span>
@@ -243,7 +248,7 @@ function handleLogout() {
           :to="link.to"
           :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'block px-3 py-2 text-xs uppercase tracking-[0.1em] transition-colors',
+            'block px-3 py-2 text-sm font-medium transition-colors',
             isActive(link.to)
               ? 'bg-foreground text-background font-bold'
               : 'text-muted-foreground hover:text-foreground',
@@ -254,7 +259,7 @@ function handleLogout() {
         <button
           v-if="isAuthenticated"
           type="button"
-          class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:text-foreground"
+          class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
           @click="
             mobileOpen = false;
             openPalette();
@@ -267,7 +272,7 @@ function handleLogout() {
           :href="DOCS_URL"
           target="_blank"
           rel="noopener noreferrer"
-          class="flex items-center gap-2 px-3 py-2 text-xs uppercase tracking-[0.1em] text-muted-foreground hover:text-foreground transition-colors"
+          class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           @click="mobileOpen = false"
         >
           <BookOpen class="h-3.5 w-3.5" />
@@ -277,7 +282,7 @@ function handleLogout() {
       <button
         v-if="isAuthenticated"
         type="button"
-        class="mt-3 block w-full border border-border px-3 py-2 text-left text-xs uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+        class="mt-3 block w-full border border-border px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
         @click="handleLogout"
       >
         {{ t("appHeader.signOut") }}

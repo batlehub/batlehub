@@ -184,6 +184,7 @@ async fn cargo_publish_of_a_mixed_case_name_resolves_and_downloads() {
     for uri in [
         "/proxy/local-cargo/registry/my/cr/mycrate",
         "/proxy/local-cargo/MyCrate/0.1.0/download",
+        "/proxy/local-cargo/api/v1/crates/mycrate/owners",
     ] {
         let req = TestRequest::get()
             .uri(uri)
@@ -191,6 +192,113 @@ async fn cargo_publish_of_a_mixed_case_name_resolves_and_downloads() {
             .to_request();
         assert_eq!(call_service(&app, req).await.status(), 200, "{uri}");
     }
+}
+
+/// A crate stored as `MyCrate` before names were folded stays reachable:
+/// its index, download, yank and next publish find the stored row instead of
+/// a `mycrate` that does not exist (404) or collides with it (409).
+#[actix_web::test]
+async fn a_mixed_case_crate_stored_before_folding_stays_reachable() {
+    use batlehub_core::entities::PublishedPackage;
+    use batlehub_core::ports::StorageMeta;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+
+    let mut parts = local_registry_app_parts("local-cargo", "cargo", RegistryMode::Local, None);
+    // Exact names, as Postgres's `name = $2`: the default in-memory store folds
+    // case and would find `MyCrate` under any spelling the handler passed.
+    let backend: Arc<dyn batlehub_core::ports::LocalRegistryBackend> =
+        Arc::new(batlehub_adapters::local_registry::InMemoryLocalRegistry::case_sensitive());
+    let cur = parts.local_svc.clone();
+    parts.local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+        backend: backend.clone(),
+        storage: cur.storage.clone(),
+        hot: cur.hot.clone(),
+        quota: cur.quota.clone(),
+        ownership: cur.ownership.clone(),
+        team_namespace: cur.team_namespace.clone(),
+        sbom: cur.sbom.clone(),
+        explore_cache: cur.explore_cache.clone(),
+        package_repo: cur.package_repo.clone(),
+        readme: cur.readme.clone(),
+    });
+    let body = bytes::Bytes::from_static(b"legacy-crate");
+    let sha = hex::encode(Sha256::digest(&body));
+    backend
+        .publish(PublishedPackage {
+            registry: "local-cargo".into(),
+            name: "MyCrate".into(),
+            version: "0.1.0".into(),
+            checksum: sha.clone(),
+            yanked: false,
+            deprecated: false,
+            deprecation_message: None,
+            unlisted: false,
+            index_metadata: serde_json::json!({
+                "name": "MyCrate", "vers": "0.1.0", "deps": [], "cksum": sha,
+                "features": {}, "yanked": false
+            }),
+            published_at: chrono::Utc::now(),
+            published_by: None,
+            signature_bytes: None,
+            signature_type: None,
+            visibility: Default::default(),
+            retention_keep: false,
+        })
+        .await
+        .unwrap();
+    backend
+        .commit_publish("local-cargo", "MyCrate", "0.1.0")
+        .await
+        .unwrap();
+    parts
+        .local_svc
+        .storage
+        .store(
+            &batlehub_core::services::artifact_storage_key("local-cargo", "MyCrate", "0.1.0"),
+            body,
+            StorageMeta {
+                content_type: None,
+                size: None,
+                checksum: Some(sha),
+            },
+        )
+        .await
+        .unwrap();
+    let app = build_local_registry_app(parts, Default::default(), None).await;
+
+    for uri in [
+        "/proxy/local-cargo/registry/my/cr/mycrate",
+        "/proxy/local-cargo/MyCrate/0.1.0/download",
+    ] {
+        let req = TestRequest::get()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 200, "{uri}");
+    }
+    let req = TestRequest::delete()
+        .uri("/proxy/local-cargo/api/v1/crates/MyCrate/0.1.0/yank")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200, "yank");
+    let req = TestRequest::put()
+        .uri("/proxy/local-cargo/api/v1/crates/new")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_payload(make_publish_payload("MyCrate", "0.2.0"))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200, "publish");
+    // The republished version is one cargo can see: the lowercase sparse path
+    // lists it beside the legacy one.
+    let req = TestRequest::get()
+        .uri("/proxy/local-cargo/registry/my/cr/mycrate")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let index = String::from_utf8(read_body(call_service(&app, req).await).await.to_vec()).unwrap();
+    assert!(
+        index.contains("\"0.1.0\"") && index.contains("\"0.2.0\""),
+        "{index}"
+    );
 }
 
 /// crates.io's rule: `foo_bar` beside `foo-bar` is refused.

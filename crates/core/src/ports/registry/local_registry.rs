@@ -295,6 +295,26 @@ pub trait LocalRegistryBackend: Send + Sync {
         Ok(0)
     }
 
+    /// The stored spelling of a *published* package whose name equals `name`
+    /// ignoring ASCII case, the all-lowercase spelling first; `None` when there
+    /// is none. Cargo folds names, but a crate published before it did keeps
+    /// its mixed-case row and storage key. The default lists every name; a
+    /// backend with an index for it should override it.
+    async fn stored_name_ignore_case(
+        &self,
+        registry: &str,
+        name: &str,
+    ) -> Result<Option<String>, CoreError> {
+        let mut names: Vec<String> = self
+            .list_package_names(registry)
+            .await?
+            .into_iter()
+            .filter(|n| n.eq_ignore_ascii_case(name))
+            .collect();
+        names.sort_by_key(|n| (*n != n.to_ascii_lowercase(), n.clone()));
+        Ok(names.into_iter().next())
+    }
+
     /// Return the distinct package names published in `registry`.
     /// Used to build registry index files (e.g. Composer `packages.json`).
     /// The default implementation returns an empty vec.

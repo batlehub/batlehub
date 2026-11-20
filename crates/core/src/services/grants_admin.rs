@@ -390,7 +390,20 @@ impl GrantAdminService {
         let raw = target;
         let target = &self.canonical(raw).await?;
         let repo = self.repo().await?;
-        let matcher = self.parse_subject(subject).await?;
+        let rows = repo
+            .grants_on_node(&target.registry, target.node_kind(), &target.node_key())
+            .await?;
+        // Scoped as on a write; only when that is ambiguous (several providers)
+        // is a stored legacy bare `user:<id>` removed as written. Trying the
+        // bare form first would delete an inert legacy row and leave the live
+        // scoped grant in place.
+        let matcher = match self.parse_subject(subject).await {
+            Ok(m) => m,
+            Err(err) => match SubjectMatcher::parse(subject) {
+                Ok(exact) if rows.iter().any(|g| g.subject == exact) => exact,
+                _ => return Err(err),
+            },
+        };
 
         // Ownership rows are the projection's to remove. Letting this delete one
         // would make `owner remove` the only way to restore it, and the next
@@ -398,11 +411,7 @@ impl GrantAdminService {
         // on the write side, arriving through the delete.
         self.refuse_ownership_removal(target, &matcher).await?;
 
-        let existed = repo
-            .grants_on_node(&target.registry, target.node_kind(), &target.node_key())
-            .await?
-            .into_iter()
-            .any(|g| g.subject == matcher);
+        let existed = rows.iter().any(|g| g.subject == matcher);
 
         repo.delete_grant(
             &target.registry,
@@ -1414,6 +1423,59 @@ mod tests {
         let left = svc.list(&pkg()).await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].subject, SubjectMatcher::User("bob".to_owned()));
+    }
+
+    /// A bare `user:<id>` stored before principals were scoped is still
+    /// removable once several providers make a new bare subject ambiguous.
+    #[tokio::test]
+    async fn a_legacy_bare_user_grant_is_removable_with_several_providers() {
+        let rows = Arc::new(Rows::default());
+        let svc = service(rows, &[], None, None);
+        svc.set(
+            &pkg(),
+            "user:alice",
+            &["releases:read".to_owned()],
+            &admin(),
+        )
+        .await
+        .unwrap();
+        svc.hot.write().await.user_providers = vec!["gh".to_owned(), "oidc".to_owned()];
+
+        assert!(
+            svc.set(&pkg(), "user:bob", &["releases:read".to_owned()], &admin())
+                .await
+                .is_err(),
+            "a new bare subject is still refused"
+        );
+        assert!(svc.remove(&pkg(), "user:alice").await.unwrap());
+        assert!(svc.list(&pkg()).await.unwrap().is_empty());
+    }
+
+    /// With one provider the bare spelling still means the scoped subject: a
+    /// node holding an inert legacy `user:alice` and the live `user:gh:alice`
+    /// loses the live one, or alice keeps her access.
+    #[tokio::test]
+    async fn removing_a_bare_user_with_one_provider_revokes_the_scoped_grant() {
+        let rows = Arc::new(Rows::default());
+        let svc = service(rows, &[], None, None);
+        let read = ["releases:read".to_owned()];
+        svc.set(&pkg(), "user:alice", &read, &admin())
+            .await
+            .unwrap();
+        svc.hot.write().await.user_providers = vec!["gh".to_owned()];
+        svc.set(&pkg(), "user:alice", &read, &admin())
+            .await
+            .unwrap();
+
+        assert!(svc.remove(&pkg(), "user:alice").await.unwrap());
+        let left: Vec<_> = svc
+            .list(&pkg())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|g| g.subject)
+            .collect();
+        assert_eq!(left, vec![SubjectMatcher::User("alice".to_owned())]);
     }
 
     /// A NuGet grant written in display spelling lands on the lower-cased id

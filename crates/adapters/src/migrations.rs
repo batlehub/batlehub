@@ -290,6 +290,11 @@ pub fn embedded_migrator() -> Migrator {
             "oidc cli handoff",
             "../migrations/072_oidc_cli_handoff.sql"
         ),
+        mig!(
+            73,
+            "local packages lower name",
+            "../migrations/073_local_packages_lower_name.sql"
+        ),
     ])
 }
 

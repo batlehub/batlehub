@@ -25,7 +25,7 @@ const isActive = (to: string): boolean => route.path === to || route.path.starts
 <template>
   <div class="space-y-6">
     <header class="space-y-1">
-      <h1 class="font-display text-2xl font-bold tracking-[0.04em]">{{ title }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ title }}</h1>
       <p v-if="description" class="text-sm text-muted-foreground">{{ description }}</p>
     </header>
 
@@ -35,7 +35,7 @@ const isActive = (to: string): boolean => route.path === to || route.path.starts
           <RouterLink
             :to="tab.to"
             :aria-current="isActive(tab.to) ? 'page' : undefined"
-            class="inline-block border-b px-3 py-2 font-mono text-sm"
+            class="inline-block border-b px-3 py-2 font-sans text-sm"
             :class="
               isActive(tab.to)
                 ? 'border-primary text-foreground'

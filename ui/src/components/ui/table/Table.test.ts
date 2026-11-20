@@ -64,6 +64,13 @@ describe("TableRow", () => {
     const wrapper = mount(TableRow, { props: { class: "my-row" }, slots: { default: "x" } });
     expect(wrapper.classes()).toContain("my-row");
   });
+
+  // The hover fill is the neutral badge's fill: an engaged row repaints its chips.
+  it("keeps neutral badges visible on a hovered or selected row", () => {
+    const wrapper = mount(TableRow, { slots: { default: "x" } });
+    expect(wrapper.classes()).toContain("hover:[&_.bg-muted]:bg-background");
+    expect(wrapper.classes()).toContain("data-[state=selected]:[&_.bg-muted]:bg-background");
+  });
 });
 
 describe("TableCell", () => {

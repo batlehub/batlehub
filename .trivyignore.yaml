@@ -3,9 +3,10 @@
 # to. Every entry carries an expiry, so the gate reopens on its own and the
 # entry has to be re-justified rather than quietly outliving its reason.
 #
-# Empty since Trivy v0.76.2 (2026-11-07): it carries go-jose/v4 4.1.6
-# (CVE-2026-116587) and `x/net` v0.62.0 (CVE-2026-78661). Before that, empty
-# since Trivy v0.76.0 (2026-10-14). The four entries this file carried
+# One entry since #405 (2026-11-20), against the Trivy binary's Go toolchain (below).
+# Trivy v0.76.2 (2026-11-07) had cleared go-jose/v4 4.1.6 (CVE-2026-116587)
+# and `x/net` v0.62.0 (CVE-2026-78661); v0.76.0 (2026-10-14) had emptied it
+# before that. The four entries this file carried
 # were all advisories against the Trivy release binary the worker image ships
 # (`/usr/local/bin/trivy`, pinned by `TRIVY_VERSION` in `Containerfile.worker`):
 # grpc-go CVE-2026-84304 and CVE-2026-84445, and Go standard-library

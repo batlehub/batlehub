@@ -48,7 +48,6 @@ const registry = ref("");
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminAuthorization.title')"
       :description="t('adminAuthorization.description')"
     />
@@ -84,7 +83,7 @@ const registry = ref("");
          page is that the destructive direction is not out of sight, which the
          pointer serves. -->
     <section class="space-y-2" data-testid="panel-retention">
-      <h2 class="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+      <h2 class="font-sans text-sm font-semibold text-foreground">
         {{ t("adminAuthorization.retentionTitle") }}
       </h2>
       <p class="text-sm text-muted-foreground">

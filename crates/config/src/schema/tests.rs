@@ -5729,6 +5729,9 @@ fn a_console_entry_must_name_a_registry_or_a_warning() {
         (r#"["warning:audit.no-retention"]"#, true),
         (r#"["coverage:nope"]"#, false),
         (r#"["warning:"]"#, false),
+        // Said as `console.unknown-warning`, not refused: it may be a newer release's.
+        (r#"["warning:audit.no-retentoin"]"#, true),
+        (r#"["warning:config.replica-drift"]"#, true),
         (r#"["npm"]"#, false),
     ] {
         let cfg = parse_config(&format!(
@@ -5740,4 +5743,35 @@ fn a_console_entry_must_name_a_registry_or_a_warning() {
         "{registry}\n        [console]\n        accepted = [\"coverage:npm\"]"
     ));
     assert_eq!(cfg.console.accepted_coverage().collect::<Vec<_>>(), ["npm"]);
+    let cfg = parse_config(&format!(
+        "{registry}\n        [console]\n        accepted = [\"warning:audit.no-retention\", \"warning:from.newer-release\"]"
+    ));
+    let unknown: Vec<_> = cfg
+        .warnings()
+        .into_iter()
+        .filter(|w| w.code == warnings::CONSOLE_UNKNOWN_WARNING)
+        .map(|w| w.path)
+        .collect();
+    assert_eq!(unknown, ["console.accepted[1]"]);
+}
+
+/// `warnings::ALL` is what `warning:<code>` is checked against: a code left
+/// out of it, wherever it is declared, would be said to be unknown.
+#[test]
+fn every_warning_code_is_in_the_known_list() {
+    let src = include_str!("warnings.rs");
+    let mut n = 0;
+    for chunk in src.split("pub const ").skip(1) {
+        let Some((_, rest)) = chunk.split_once(": &str") else {
+            continue; // `ALL` itself
+        };
+        if let Some(code) = rest.split('"').nth(1) {
+            n += 1;
+            assert!(
+                warnings::ALL.contains(&code),
+                "{code} missing from warnings::ALL"
+            );
+        }
+    }
+    assert_eq!(n, warnings::ALL.len());
 }

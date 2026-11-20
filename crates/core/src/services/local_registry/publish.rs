@@ -797,15 +797,7 @@ impl LocalRegistryService {
                 .await;
         }
 
-        // Step 4: generate SBOM. When `required` is true and generation fails,
-        // roll back the publish (version row + bytes + quota) and return the
-        // error. This runs *before* owner registration so a rejected publish
-        // never leaves a dangling owner claim on a name with no versions.
-        self.run_publish_sbom(&req, &storage_key, bytes)
-            .instrument(stage("publish_sbom"))
-            .await?;
-
-        // Step 5: on first publish, register the publisher as the package admin.
+        // Step 4: on first publish, register the publisher as the package admin.
         // Last, and only once the publish is fully committed, so it is never
         // orphaned by a later rollback.
         self.register_initial_owner(is_new_package, &req.registry, &req.name, &req.publisher)
@@ -888,6 +880,17 @@ impl LocalRegistryService {
             return Err(e);
         }
 
+        // Step 2b: generate the SBOM while the row is still pending. When it is
+        // `required` and fails, the rollback (pending row + bytes + quota) can
+        // only remove a *pending* row: after the commit, a failed SBOM left a
+        // listed version with no bytes that refused every republish.
+        // Built here, stored only after the commit: a row for a version that
+        // never committed would reach the export and the licence gate.
+        let sboms = self
+            .run_publish_sbom(req, storage_key, bytes)
+            .instrument(stage("publish_sbom"))
+            .await?;
+
         // Step 3: promote the pending row to 'published'. On failure, undo both
         // the storage write and the pending row so the caller gets a clean error.
         if let Err(e) = self
@@ -907,6 +910,7 @@ impl LocalRegistryService {
             self.revoke_quota(publisher, registry, bytes).await;
             return Err(e);
         }
+        self.store_publish_sbom(sboms).await;
 
         // After the commit, never before: a reader between a bump and the commit
         // would cache a listing without this version under the new generation.

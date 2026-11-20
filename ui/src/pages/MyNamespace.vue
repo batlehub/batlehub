@@ -56,7 +56,6 @@ function selectNamespace(ns: TeamNamespaceDto) {
       as="h2"
       :title="t('myNamespace.teamNamespace')"
       :description="t('myNamespace.viewAndManageThePackages')"
-      variant="display"
     />
 
     <Card v-if="!hasGroups">

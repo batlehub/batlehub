@@ -56,7 +56,7 @@
     "layerAccountBlocks": "blocages de compte",
     "layerIpBlocks": "blocages d'IP",
     "notCovered": "Non vérifié : {layers}. Renseignez le champ correspondant pour les inclure.",
-    "oidc1TeamATeam": "oidc1:team-a, team-b",
+    "oidc1TeamATeam": "ex. oidc1:team-a, team-b",
     "optional": "(facultatif)",
     "ruleMatched": "Règle : {rule}",
     "seeBlocks": "Voir les blocages",
@@ -152,7 +152,7 @@
     "nobodyBlockedBody": "Aucun compte n'est empêché de s'authentifier et aucune adresse n'est refusée.",
     "since": "Depuis",
     "subject": "Bloqué",
-    "title": "Blocages",
+    "title": "Comptes et adresses bloqués",
     "until": "Jusqu'à",
     "userId": "Identifiant utilisateur"
   },
@@ -254,7 +254,6 @@
     "validating": "Validation…"
   },
   "adminDashboard": {
-    "cacheSummary": "{rate} des {total} téléchargements d'artefacts ont été servis depuis le cache depuis le démarrage de ce processus le {since}, pour {size} d'artefacts conservés.",
     "hitRate": "Taux de hit",
     "noRegistriesConfiguredYet": "Aucun registre configuré",
     "nothingIsCachedOrServed": "Rien n'est mis en cache ni servi tant qu'aucun registre n'existe. Ajoutez un bloc [[registries]] à config.toml puis rechargez.",
@@ -268,8 +267,16 @@
     "trendFlat": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements, comme les {days} jours précédents.",
     "trendNoBaseline": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements. L'historique est encore insuffisant pour comparer avec la période précédente.",
     "trendUp": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements — {points} points de mieux que les {days} jours précédents.",
-    "cacheSummaryNone": "Aucun artefact n'a été téléchargé depuis le démarrage de ce processus le {since} ; le cache conserve {size} d'artefacts.",
-    "configWarnings": "{n} avertissement de configuration | {n} avertissements de configuration"
+    "configWarnings": "{n} avertissement de configuration | {n} avertissements de configuration",
+    "kpiAllAnswering": "tous répondent",
+    "kpiCached": "En cache",
+    "kpiCachedHint": "artefacts sur le stockage",
+    "kpiDownloads": "Téléchargements d'artefacts",
+    "kpiFromCache": "{count} servis depuis le cache",
+    "kpiHitRate": "Taux de cache",
+    "kpiRegistries": "Registres",
+    "kpiSince": "depuis le redémarrage, {date}",
+    "kpiWithErrors": "{count} en erreur | {count} en erreur"
   },
   "adminHealth": {
     "allCachedArtifactsFor": "Tous les artefacts en cache de ce registre seront définitivement supprimés. Les paquets seront de nouveau récupérés depuis l'upstream à la prochaine requête.",
@@ -353,7 +360,7 @@
     "sbomExport": "Export SBOM",
     "subscriptions": "Abonnements aux notifications",
     "teamNamespaces": "Namespaces d'équipe",
-    "upstream": "Amont",
+    "upstream": "Disparition amont",
     "warming": "Préchauffage",
     "registriesSection": "Registres",
     "allRegistries": "Tous les registres",
@@ -367,7 +374,7 @@
     "atLeast": "≥ {severity}",
     "byFinding": "Par constat",
     "byReference": "Par référence",
-    "description": "Les constats des registres où vous détenez findings:read, du plus grave au moins grave.",
+    "description": "Les constats des registres que vous pouvez consulter, du plus grave au moins grave.",
     "empty": "Aucun constat ne correspond à ces filtres.",
     "exempt": "Exempter…",
     "exemptConfirm": "Exempter",
@@ -383,7 +390,7 @@
     "reason": "Motif",
     "reasonRequired": "Indiquez le motif de l'exemption.",
     "reference": "Référence",
-    "refused": "Vous ne pouvez lire les constats d'aucun registre. Ils citent des avis parfois sous embargo ; il faut la permission findings:read.",
+    "refused": "Vous ne pouvez lire les constats d'aucun registre. Ils citent des avis parfois sous embargo et demandent donc une permission dédiée (findings:read).",
     "scanner": "Scanner",
     "severityCritical": "critique",
     "severityHigh": "élevée",
@@ -402,7 +409,7 @@
     "coordinate": "Coordonnée",
     "deferredSince": "différé depuis {when}",
     "description": "La file d'analyse, les versions dont l'analyse a échoué et les verdicts par état.",
-    "errorWithheld": "masquée (nécessite findings:read)",
+    "errorWithheld": "masquée — vous ne pouvez pas lire les constats ici",
     "failuresEmpty": "Aucune analyse n'a échoué.",
     "failuresTab": "Échecs ({n})",
     "lastError": "Dernière erreur",
@@ -563,13 +570,12 @@
     "wholePackage": "(toutes les versions)"
   },
   "adminWarming": {
-    "cacheWarming": "Préchauffage du cache",
+    "cacheWarming": "Préchauffage",
     "commaSeparatedForPath": "Séparés par des virgules. Pour les registres adressés par chemin.",
     "commaSeparatedOmitVersion": "Séparés par des virgules. Omettez la version pour préchauffer latest_n.",
     "deleteCachedArtifact": "Supprimer l'artefact en cache",
     "errorCount": "{count} erreurs",
     "failuresUnnamed": "Une tâche de préchauffage s'est terminée sans indiquer le paquet concerné.",
-    "lodashReact180": "lodash, react{'@'}18.0.0",
     "noWarmingConfigured": "Aucun registre n'a de préchauffage configuré. Ajoutez {packages} ou {paths} à un registre dans votre configuration.",
     "packageMode": "Paquet",
     "pathMode": "Chemin",
@@ -802,7 +808,8 @@
     "spanDays": "{n} j",
     "spanHours": "{n} h",
     "spanMinutes": "{n} min",
-    "spanSeconds": "{n} s"
+    "spanSeconds": "{n} s",
+    "example": "ex. {value}"
   },
   "config": {
     "copyToml": "Copier le TOML",
@@ -857,7 +864,7 @@
     "effect": "Effet",
     "empty": "Aucune source n'a rien signalé.",
     "expires": "expire le {when}",
-    "forbidden": "Lister les signalements requiert la permission flags:read.",
+    "forbidden": "Vous n'avez pas la permission de lister les signalements de vulnérabilité (flags:read).",
     "includeDead": "Inclure les signalements révoqués et expirés",
     "intro": "Ce que chaque source de signalements configurée a déclaré : quelle version, avec quelle force, et si le signalement tient toujours.",
     "kind": "Type",
@@ -1087,7 +1094,7 @@
     "tableCaption": "{shown} versions sur {total} · les versions stables d'abord, les plus récentes en premier",
     "tableLabel": "Versions de {name}",
     "unlisted": "non listée",
-    "upstreamBadgeHelp": "L'audit amont (RFC 0014) ne trouve plus cette version chez son amont.",
+    "upstreamBadgeHelp": "L'audit amont ne trouve plus cette version chez son amont.",
     "upstreamBlocked": "bloqué par l'audit amont",
     "upstreamDisappeared": "disparu chez l'amont",
     "upstreamHasNoneEither": "Rien n'est passé par le proxy, et l'amont ne la connaît pas non plus.",
@@ -1344,7 +1351,7 @@
     "noScannerYet": "aucun n'a encore répondu",
     "lastScanned": "Dernier scan",
     "never": "jamais",
-    "findingsWithheld": "Les constats sont masqués : les lire demande findings:read.",
+    "findingsWithheld": "Les constats sont masqués : vous n'avez pas la permission de les lire (findings:read).",
     "noFindings": "Aucun constat.",
     "rescan": "Relancer un scan",
     "rescanQueued": "Scan relancé.",
@@ -1388,7 +1395,10 @@
     "changed": "{setting} : {value}",
     "systemNote": "Système suit votre appareil — actuellement {value}",
     "theme": "Thème",
-    "title": "Affichage"
+    "title": "Affichage",
+    "density": "Densité des tableaux",
+    "comfortable": "Confortable",
+    "compact": "Compacte"
   },
   "scanBadge": {
     "notScanned": "non analysé",
@@ -1416,16 +1426,16 @@
     "missing": "Aucun registre nommé `{name}`.",
     "missingHint": "Il ne figure pas dans la configuration chargée.",
     "backToList": "Retour aux registres",
-    "denied": "Vous n'avez pas system:read.",
+    "denied": "Vous n'avez pas la permission de voir les détails système de ce registre (system:read).",
     "loadError": "Impossible de charger le registre : {status}",
     "historyError": "Impossible de charger l'activité : {status}",
     "editConfig": "Modifier la configuration",
     "monitoring": "Supervision ↗",
     "stripLabel": "État du registre",
     "upstream": "Amont",
-    "degraded": "dégradé",
+    "degraded": "Dégradé",
     "degradedLong": "amont dégradé (taux d'erreur ou latence au-delà du seuil)",
-    "ok": "ok",
+    "ok": "Sain",
     "thisReplica": "ce réplica, depuis {since}",
     "cache": "Cache",
     "hit": "{pct} de hits",
@@ -1490,7 +1500,11 @@
     "description": "La configuration et la santé de chaque registre. Les valeurs en direct sont celles de ce réplica.",
     "loadError": "Impossible de charger les registres",
     "empty": "Aucun registre n'est configuré.",
-    "upstream": "Amont"
+    "upstream": "Amont",
+    "type": "Type",
+    "mode": "Mode",
+    "lastPull": "Dernier pull",
+    "noUpstreamTraffic": "Aucun trafic pour l'instant"
   },
   "holdsPanel": {
     "title": "Versions retenues",
@@ -1825,5 +1839,8 @@
     "loadFailed": "Impossible de charger les versions retenues.",
     "pageOf": "Page {page} sur {pages}",
     "noName": "(sans nom)"
+  },
+  "configWarnings": {
+    "howToFix": "Détails et correctif"
   }
 }

@@ -55,7 +55,7 @@ watch(name, load, { immediate: true });
       class="text-sm text-muted-foreground hover:underline underline-offset-[3px]"
       >← {{ t("securityNav.coverage") }}</RouterLink
     >
-    <PageHeader variant="display" :title="name" />
+    <PageHeader :title="name" />
     <AsyncState :loading="loading" :error="error" :on-retry="load">
       <p v-if="missing" class="text-sm" data-testid="missing">
         {{ t("securityCoverage.missing", { name }) }}

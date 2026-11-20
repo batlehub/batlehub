@@ -1,6 +1,4 @@
-use super::http_client::{
-    apply_upstream_options, basic_auth_get, to_registry_error, UpstreamHttpOptions,
-};
+use super::http_client::{to_registry_error, upstream_client, UpstreamHttpOptions};
 use super::models::PackagistV2Response;
 use crate::registry::encode_path;
 use batlehub_core::error::CoreError;
@@ -21,7 +19,7 @@ use batlehub_core::error::CoreError;
 ///   - `Some("p2~dev")`   → fetch `p2/{vendor}/{package}~dev.json` bytes (dev variants)
 ///   - `None`             → version metadata only
 pub struct ComposerRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: super::super::http_client::UpstreamClient,
     pub(super) base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
     /// Resolved search base URL. `None` = disabled; `Some(url)` = use this.
@@ -30,8 +28,11 @@ pub struct ComposerRegistryClient {
 
 impl ComposerRegistryClient {
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
-        let builder = reqwest::Client::builder().user_agent("Composer/2.0 batlehub/0.1");
-        let http = apply_upstream_options(builder, opts)?;
+        let http = upstream_client(
+            || reqwest::Client::builder().user_agent("Composer/2.0 batlehub/0.1"),
+            10,
+            opts,
+        )?;
         let base_url = base_url.into().trim_end_matches('/').to_owned();
 
         // Resolve the search base URL:
@@ -59,8 +60,8 @@ impl ComposerRegistryClient {
         })
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> super::super::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// Send a GET to the given p2 URL and check the status code.

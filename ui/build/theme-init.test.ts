@@ -87,6 +87,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   dom.localStorage.clear();
   dom.document.documentElement.removeAttribute("data-theme");
+  dom.document.documentElement.removeAttribute("data-density");
 });
 
 describe("theme-init", () => {
@@ -113,6 +114,19 @@ describe("theme-init", () => {
       systemPrefers(dark);
       run(code);
       expect(applied()).toBe(expected);
+    });
+
+    /* Density follows the same pre-paint path: `compact` is written, anything
+       else leaves the stylesheet's comfortable default alone. */
+    it.each([
+      ["compact", "compact"],
+      ["comfortable", null],
+      ["sideways", null],
+    ])("applies a stored density of %p as %p", (stored, expected) => {
+      dom.localStorage.setItem("batlehub.density", stored);
+      systemPrefers(false);
+      run(code);
+      expect(dom.document.documentElement.getAttribute("data-density")).toBe(expected);
     });
 
     it("follows the system on a first visit, with nothing stored", () => {

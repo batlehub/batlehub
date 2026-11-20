@@ -352,6 +352,22 @@ impl ConfigReloadService {
         self.apply_inner(triggered_by, expected, true).await
     }
 
+    /// Write a staged editor change to disk, refusing it when the file moved
+    /// from under it. A file-watcher reload (`content = None`) writes nothing.
+    async fn persist_pending(&self, pending: &PendingReload) -> Result<(), anyhow::Error> {
+        let Some(ref text) = pending.content else {
+            return Ok(());
+        };
+        if let Some(ref base) = pending.base_hash {
+            self.ensure_file_is(base).await?;
+        }
+        if let Err(e) = self.persist_config_to_disk(text, pending.id).await {
+            tracing::warn!(path = %self.config_file, error = %e, "config editor: the config file could not be written; nothing applied");
+            return Err(ReloadApplyError::PersistFailed(e.to_string()).into());
+        }
+        Ok(())
+    }
+
     /// `announce`: tell the other replicas (`sync.rs`); off when this apply is
     /// itself following one.
     pub(super) async fn apply_inner(
@@ -387,14 +403,14 @@ impl ConfigReloadService {
         // a change that cannot be persisted is not applied, rather than live on
         // this replica only and lost at its next restart. File-watcher reloads
         // set content = None (the file is already correct on disk).
-        if let Some(ref text) = pending.content {
-            if let Some(ref base) = pending.base_hash {
-                self.ensure_file_is(base).await?;
+        if let Err(e) = self.persist_pending(&pending).await {
+            // A refused apply keeps the change staged, so the operator can retry
+            // or rebase it — unless another change was staged meanwhile.
+            let mut slot = self.pending.lock().expect("pending reload lock poisoned");
+            if slot.is_none() {
+                *slot = Some(pending);
             }
-            if let Err(e) = self.persist_config_to_disk(text, pending.id).await {
-                tracing::warn!(path = %self.config_file, error = %e, "config editor: the config file could not be written; nothing applied");
-                return Err(ReloadApplyError::PersistFailed(e.to_string()).into());
-            }
+            return Err(e);
         }
 
         // Set "reload in progress" banner while swapping.

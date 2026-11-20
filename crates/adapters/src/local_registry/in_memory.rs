@@ -80,11 +80,29 @@ type VersionKey = String; // version string
 #[derive(Debug, Default)]
 pub struct InMemoryLocalRegistry {
     inner: Arc<RwLock<HashMap<PackageKey, HashMap<VersionKey, Record>>>>,
+    case_sensitive: bool,
 }
 
 impl InMemoryLocalRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Names matched exactly, as Postgres's `name = $2` does. The default
+    /// folds case, which hides a handler that passes the wrong spelling.
+    pub fn case_sensitive() -> Self {
+        Self {
+            case_sensitive: true,
+            ..Self::default()
+        }
+    }
+
+    fn pkg_key(&self, registry: &str, name: &str) -> PackageKey {
+        if self.case_sensitive {
+            format!("{registry}:{name}")
+        } else {
+            pkg_key(registry, name)
+        }
     }
 }
 
@@ -100,11 +118,10 @@ fn pkg_key(registry: &str, name: &str) -> PackageKey {
 /// no bytes to yank or deprecate.
 fn published_mut<'a>(
     map: &'a mut HashMap<PackageKey, HashMap<VersionKey, Record>>,
-    registry: &str,
-    name: &str,
+    key: &PackageKey,
     version: &str,
 ) -> Option<&'a mut Record> {
-    map.get_mut(&pkg_key(registry, name))
+    map.get_mut(key)
         .and_then(|versions| versions.get_mut(version))
         .filter(|r| r.status == RecordStatus::Published)
 }
@@ -119,7 +136,9 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     /// that retry after a partial failure).
     async fn publish(&self, pkg: PublishedPackage) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        let versions = map.entry(pkg_key(&pkg.registry, &pkg.name)).or_default();
+        let versions = map
+            .entry(self.pkg_key(&pkg.registry, &pkg.name))
+            .or_default();
 
         if let Some(existing) = versions.get(&pkg.version) {
             // A tombstone is checked before the published case: the coordinate is
@@ -162,7 +181,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
         match map
-            .get_mut(&pkg_key(registry, name))
+            .get_mut(&self.pkg_key(registry, name))
             .and_then(|versions| versions.get_mut(version))
         {
             Some(record) if record.status == RecordStatus::Pending => {
@@ -175,7 +194,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
 
     async fn yank(&self, registry: &str, name: &str, version: &str) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.yanked = true;
             if let Some(obj) = r.pkg.index_metadata.as_object_mut() {
                 obj.insert("yanked".to_owned(), serde_json::Value::Bool(true));
@@ -186,7 +205,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
 
     async fn unyank(&self, registry: &str, name: &str, version: &str) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.yanked = false;
             if let Some(obj) = r.pkg.index_metadata.as_object_mut() {
                 obj.insert("yanked".to_owned(), serde_json::Value::Bool(false));
@@ -203,7 +222,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         message: Option<&str>,
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.deprecated = true;
             r.pkg.deprecation_message = message.map(str::to_owned);
             if let Some(obj) = r.pkg.index_metadata.as_object_mut() {
@@ -223,7 +242,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         version: &str,
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.deprecated = false;
             r.pkg.deprecation_message = None;
             if let Some(obj) = r.pkg.index_metadata.as_object_mut() {
@@ -235,7 +254,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
 
     async fn unlist(&self, registry: &str, name: &str, version: &str) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.unlisted = true;
         }
         Ok(())
@@ -243,7 +262,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
 
     async fn relist(&self, registry: &str, name: &str, version: &str) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(r) = published_mut(&mut map, registry, name, version) {
+        if let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) {
             r.pkg.unlisted = false;
         }
         Ok(())
@@ -260,7 +279,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         channel: &str,
     ) -> Result<bool, CoreError> {
         let mut map = self.inner.write().await;
-        match published_mut(&mut map, registry, name, version) {
+        match published_mut(&mut map, &self.pkg_key(registry, name), version) {
             Some(r) => {
                 let current = r
                     .pkg
@@ -293,7 +312,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
             ));
         };
         let mut map = self.inner.write().await;
-        let Some(r) = published_mut(&mut map, registry, name, version) else {
+        let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) else {
             return Ok(false);
         };
         let Some(obj) = r.pkg.index_metadata.as_object_mut() else {
@@ -329,7 +348,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         provided: bool,
     ) -> Result<bool, CoreError> {
         let mut map = self.inner.write().await;
-        let Some(r) = published_mut(&mut map, registry, name, version) else {
+        let Some(r) = published_mut(&mut map, &self.pkg_key(registry, name), version) else {
             return Ok(false);
         };
         let current = r
@@ -363,7 +382,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         keep: bool,
     ) -> Result<bool, CoreError> {
         let mut map = self.inner.write().await;
-        match published_mut(&mut map, registry, name, version) {
+        match published_mut(&mut map, &self.pkg_key(registry, name), version) {
             Some(r) if r.pkg.retention_keep != keep => {
                 r.pkg.retention_keep = keep;
                 Ok(true)
@@ -379,7 +398,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     ) -> Result<Vec<PublishedPackage>, CoreError> {
         let map = self.inner.read().await;
         let mut result: Vec<PublishedPackage> = map
-            .get(&pkg_key(registry, name))
+            .get(&self.pkg_key(registry, name))
             .map(|vs| {
                 vs.values()
                     .filter(|r| r.status == RecordStatus::Published)
@@ -394,7 +413,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     async fn exists(&self, registry: &str, name: &str) -> Result<bool, CoreError> {
         let map = self.inner.read().await;
         Ok(map
-            .get(&pkg_key(registry, name))
+            .get(&self.pkg_key(registry, name))
             .map(|vs| vs.values().any(|r| r.status == RecordStatus::Published))
             .unwrap_or(false))
     }
@@ -409,7 +428,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         version: &str,
     ) -> Result<(), CoreError> {
         let mut map = self.inner.write().await;
-        if let Some(versions) = map.get_mut(&pkg_key(registry, name)) {
+        if let Some(versions) = map.get_mut(&self.pkg_key(registry, name)) {
             // Rollback of a publish: never a published row, never a tombstone.
             if versions
                 .get(version)
@@ -431,7 +450,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         let mut map = self.inner.write().await;
         // `published_mut` filters on `Published`, so a second delete finds
         // nothing and returns `false` with the original `deleted_at` intact.
-        let Some(record) = published_mut(&mut map, registry, name, version) else {
+        let Some(record) = published_mut(&mut map, &self.pkg_key(registry, name), version) else {
             return Ok(false);
         };
         record.status = RecordStatus::Deleted;
@@ -451,7 +470,7 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
     ) -> Result<Option<Tombstone>, CoreError> {
         let map = self.inner.read().await;
         Ok(map
-            .get(&pkg_key(registry, name))
+            .get(&self.pkg_key(registry, name))
             .and_then(|vs| vs.get(version))
             .and_then(Record::as_tombstone))
     }

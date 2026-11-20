@@ -30,7 +30,7 @@ const versionSuggestions = useVersionSuggestions(registry, name);
       v-model="name"
       :options="packageSuggestions.options.value"
       :loading="packageSuggestions.loading.value"
-      placeholder="lodash"
+      :placeholder="t('common.example', { value: 'lodash' })"
     />
   </div>
   <div class="space-y-1">
@@ -44,7 +44,7 @@ const versionSuggestions = useVersionSuggestions(registry, name);
       :loading="versionSuggestions.loading.value"
       :disabled="!versionSuggestions.ready()"
       :disabled-reason="t('adminAccessCheck.versionNeedsPackage')"
-      placeholder="1.0.0"
+      :placeholder="t('common.example', { value: '1.0.0' })"
     />
   </div>
 </template>

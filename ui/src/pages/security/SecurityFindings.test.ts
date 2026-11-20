@@ -119,7 +119,7 @@ describe("SecurityFindings", () => {
     expect(w.find('[data-testid="refused"]').text()).toContain(
       "You cannot read findings on any registry.",
     );
-    expect(w.text()).toContain("findings:read permission");
+    expect(w.text()).toContain("dedicated permission (findings:read)");
     expect(w.find('[data-testid="load-error"]').exists()).toBe(false);
   });
 

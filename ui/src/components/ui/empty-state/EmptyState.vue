@@ -45,10 +45,7 @@ const props = withDefaults(
     <p
       v-if="title"
       :class="
-        cn(
-          'font-display text-sub tracking-[0.04em]',
-          variant === 'error' ? 'text-primary' : 'text-foreground',
-        )
+        cn('text-sub font-semibold', variant === 'error' ? 'text-primary' : 'text-foreground')
       "
     >
       {{ title }}

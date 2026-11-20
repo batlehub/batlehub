@@ -557,7 +557,7 @@ async function bulkUnblock() {
                 }}</Button>
                 <Button
                   v-if="v.cached"
-                  variant="outline"
+                  variant="danger"
                   size="sm"
                   @click="ask({ kind: 'purge-one', version: v })"
                   >{{ t("packageVersionsTable.purgeCache") }}</Button

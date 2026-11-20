@@ -69,7 +69,7 @@ const F = false;
  * is the point, not how many.
  */
 const STATES: Record<ResolutionState, StateSpec> = {
-  cached: { fine: true, on: [T, T, T, T, T, T, T, T, T], klass: "text-foreground" },
+  cached: { fine: true, on: [T, T, T, T, T, T, T, T, T], klass: "text-ok" },
   stale: { fine: true, on: [T, T, T, T, F, T, T, T, T], klass: "text-copper" },
   held: { fine: false, on: [T, T, T, F], klass: "text-copper" },
   pending: { fine: false, on: [T, F, F, T], klass: "text-muted-foreground" },
@@ -115,6 +115,6 @@ const spec = computed(() => STATES[props.state]);
         :class="[lit ? 'opacity-100' : 'opacity-[.18]', spec.fine ? 'size-[5px]' : 'size-[8px]']"
       />
     </span>
-    <span class="font-mono text-xs uppercase tracking-[.1em]">{{ props.label }}</span>
+    <span class="font-sans text-xs font-medium uppercase tracking-wide">{{ props.label }}</span>
   </span>
 </template>

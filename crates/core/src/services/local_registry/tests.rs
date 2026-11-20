@@ -2566,6 +2566,37 @@ async fn publish_propagates_commit_failure_and_rolls_back() {
     );
 }
 
+/// A publish whose commit fails leaves no SBOM row: one would reach the org
+/// export and the licence gate for a version that does not exist, and a retry
+/// would inherit its licence.
+#[tokio::test]
+async fn a_failed_commit_stores_no_sbom() {
+    let repo = crate::services::sbom::tests::InMemorySbomRepo::new();
+    let mut s = svc(CommitFailBackend::arc(), None);
+    s.sbom = Some(Arc::new(crate::services::sbom::SbomService::new(
+        repo.clone(),
+        None,
+        None,
+    )));
+    s.hot.write().await.sbom.insert(
+        "npm".to_owned(),
+        crate::services::hot_config::SbomConfig {
+            enabled: true,
+            formats: vec!["spdx".to_owned()],
+            required: false,
+            fetch_upstream: false,
+            registry_type: "npm".to_owned(),
+        },
+    );
+
+    let err = s
+        .publish(publish_req("npm", "pkg", "1.0.0", user()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Database(_)), "got {err:?}");
+    assert!(repo.items.lock().unwrap().is_empty());
+}
+
 /// The document generation is bumped after the commit, not before: a reader
 /// between the two would cache a listing without the new version under the new
 /// generation, and serve it as current until the TTL. A commit that fails never
@@ -2883,6 +2914,108 @@ mod write_verbs {
         assert!(
             matches!(err, CoreError::QuotaExceeded(_)),
             "only one slot was refunded: {err:?}"
+        );
+    }
+
+    /// A PyPI version's extra file takes a slot of its own, so deleting the
+    /// version gives every one of them back, not only the primary's.
+    #[tokio::test]
+    async fn deleting_a_pypi_version_refunds_every_file() {
+        let mut s = svc_with(
+            InMemBackend::arc(),
+            registry_granting(&[Action::ReleasesPublish, Action::ReleasesDelete]),
+        );
+        let mut configs = HashMap::new();
+        configs.insert(
+            "npm".to_owned(),
+            RegistryQuotaConfig {
+                max_storage_bytes_per_user: None,
+                max_packages_per_user: Some(2),
+                warn_threshold: 0.8,
+                enforcement: QuotaEnforcement::Block,
+            },
+        );
+        s.quota = Some(Arc::new(QuotaService::new(MockQuotaRepo::arc(), configs)));
+        s.hot.write().await.registries.insert(
+            "npm".to_owned(),
+            Arc::new(super::storage_key_collisions::KindClient("pypi")),
+        );
+
+        s.publish(super::publish_req("npm", "pkg", "1.0.0", user()))
+            .await
+            .unwrap();
+        s.add_pypi_file(
+            crate::services::PypiFileUpload {
+                registry: "npm",
+                name: "pkg",
+                version: "1.0.0",
+                filename: "pkg-1.0.0-py3-none-any.whl",
+                bytes: Bytes::from_static(b"wheel"),
+                sha256: "ab",
+                requires_python: None,
+            },
+            &user(),
+        )
+        .await
+        .unwrap();
+        assert!(s
+            .delete_version("npm", "pkg", "1.0.0", &user())
+            .await
+            .unwrap());
+        for v in ["2.0.0", "2.0.1"] {
+            s.publish(super::publish_req("npm", "pkg", v, user()))
+                .await
+                .expect("both slots are free again");
+        }
+    }
+
+    /// npm stores the client's own manifest as `index_metadata`, whose `files`
+    /// is a list of paths, not slots: deleting the version refunds one slot,
+    /// and an entry naming another publisher refunds nobody.
+    #[tokio::test]
+    async fn deleting_an_npm_version_ignores_its_manifest_files() {
+        let mut s = svc_with(
+            InMemBackend::arc(),
+            registry_granting(&[Action::ReleasesPublish, Action::ReleasesDelete]),
+        );
+        let mut configs = HashMap::new();
+        configs.insert(
+            "npm".to_owned(),
+            RegistryQuotaConfig {
+                max_storage_bytes_per_user: None,
+                max_packages_per_user: Some(2),
+                warn_threshold: 0.8,
+                enforcement: QuotaEnforcement::Block,
+            },
+        );
+        s.quota = Some(Arc::new(QuotaService::new(MockQuotaRepo::arc(), configs)));
+        s.hot.write().await.registries.insert(
+            "npm".to_owned(),
+            Arc::new(super::storage_key_collisions::KindClient("npm")),
+        );
+
+        let mut req = super::publish_req("npm", "pkg", "1.0.0", user());
+        req.index_metadata = serde_json::json!({
+            "files": ["dist", "lib", {"published_by": "victim", "size": u64::MAX}],
+        });
+        s.publish(req).await.unwrap();
+        s.publish(super::publish_req("npm", "pkg", "1.0.1", user()))
+            .await
+            .unwrap();
+        assert!(s
+            .delete_version("npm", "pkg", "1.0.0", &user())
+            .await
+            .unwrap());
+        s.publish(super::publish_req("npm", "pkg", "2.0.0", user()))
+            .await
+            .expect("the deleted version's slot is free again");
+        let err = s
+            .publish(super::publish_req("npm", "pkg", "2.0.1", user()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::QuotaExceeded(_)),
+            "the manifest's `files` refunded slots: {err:?}"
         );
     }
 
@@ -4530,7 +4663,7 @@ mod storage_key_collisions {
     use crate::entities::{PackageMetadata, RegistryKind};
     use crate::ports::FetchedArtifact;
 
-    struct KindClient(&'static str);
+    pub(super) struct KindClient(pub(super) &'static str);
 
     #[async_trait]
     impl crate::ports::RegistryClient for KindClient {

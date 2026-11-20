@@ -19,19 +19,22 @@ import { cn } from "@/lib/utils";
  * `opacity: .5` DESIGN.md gives the secondary control, per variant rather than
  * from one shared string that could not tell them apart.
  *
- * **Which variant.** `default` (the crimson fill) is the *one* primary action
- * of a view — never one per row, never a toggle's "on" state. An action on a
- * row is `outline`, whatever it does: an irreversible one earns its weight from
- * its confirmation (`DestructiveConfirm`), not from a red fill. A toggle is
- * `outline` with `aria-pressed`. `ghost` is for low-weight chrome (clear,
- * collapse), not for a destructive verb dressed in crimson text.
+ * **Which variant** (DESIGN.md, The Interface Face Rule). `default` (the ink fill) is the *one*
+ * primary action of a view — never one per row, never a toggle's "on" state.
+ * Crimson now means *this destroys something*: `destructive` is the filled
+ * form, for the confirming button of a destructive dialog, and `danger` the
+ * outlined form, for a destructive verb that sits among ordinary controls
+ * (Clear cache, Purge). The confirmation (`DestructiveConfirm`) still states
+ * the cost; the colour is what tells the verb apart *before* the click, which
+ * an outline identical to Refresh could not. A toggle is `outline` with
+ * `aria-pressed`. `ghost` is for low-weight chrome (clear, collapse).
  */
 const DISABLED_OUTLINED =
   "disabled:bg-transparent disabled:border disabled:border-border disabled:text-muted-foreground";
 const DISABLED_DIM = "disabled:opacity-50";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap font-mono font-semibold text-sm rounded-sm transition-colors disabled:pointer-events-none",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap font-sans font-medium text-sm rounded-sm transition-colors disabled:pointer-events-none",
   {
     variants: {
       variant: {
@@ -47,7 +50,11 @@ const buttonVariants = cva(
            one filled action in the product, in the state a pointer is in when
            it is about to click. DESIGN.md never asked for it: it specifies the
            ring and the pixel step and nothing about the fill. */
-        default: `bg-primary text-primary-foreground hover:[box-shadow:var(--action-ring)] active:[box-shadow:var(--pixel-step)] active:-translate-x-0.5 transition-[box-shadow,background-color,transform] ${DISABLED_OUTLINED}`,
+        /* DESIGN.md (The Interface Face Rule): the primary fill is ink, not crimson, so the one
+           primary action no longer reads as the one dangerous one. Ink on
+           ground is the reversed segment pair tokens.test.ts already holds
+           to 4.5:1, and the two plates are re-inked to match in index.css. */
+        default: `bg-foreground text-background hover:[box-shadow:var(--action-ring)] active:[box-shadow:var(--pixel-step)] active:-translate-x-0.5 transition-[box-shadow,background-color,transform] ${DISABLED_OUTLINED}`,
         /* Same fill and same ink as `default` — `--destructive` resolves to
            `--accent` — so it takes the same hover for the same reason, rather
            than the fill dim that measured the same 4.28:1. */
@@ -73,6 +80,10 @@ const buttonVariants = cva(
            measurable: 3.68/3.41 to 5.62/7.24 on the boundary, 5.62/7.24 to
            16.88/16.64 on the label. */
         outline: `border border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground aria-pressed:text-foreground aria-pressed:border-copper ${DISABLED_DIM}`,
+        /* The outlined destructive verb. Crimson ink and a crimson boundary
+           at rest (5.76/5.63:1 and over 3:1 on --ground), filling to the
+           destructive pair on hover — `--accent-ink` on `--accent`, 5.69/5.97:1. */
+        danger: `border border-destructive bg-transparent text-destructive hover:bg-destructive hover:text-destructive-foreground ${DISABLED_DIM}`,
         ghost: `hover:bg-accent hover:text-accent-foreground ${DISABLED_DIM}`,
       },
       size: {

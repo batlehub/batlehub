@@ -70,7 +70,7 @@ describe("VerdictPanel", () => {
     });
     const w = panel();
     await flushPromises();
-    expect(w.text()).toContain("withheld");
+    expect(w.text()).toContain("Findings are hidden");
     expect(w.find('[data-testid="verdict-findings"]').exists()).toBe(false);
   });
 

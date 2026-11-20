@@ -64,12 +64,12 @@ default `filesystem` backend is backed by the `persistence` PVC, and
 replica, or switch to `s3`, which is the only backend every replica can write to
 concurrently.
 
-The Service and the PodDisruptionBudget select the server pods by
-`app.kubernetes.io/component: server`, so that `worker` pods — which carry the
-same name and instance labels — receive no proxy traffic and do not count
-towards the budget. Server pods created by an older chart lack that label: on
-the upgrade that introduces it, the Service has no endpoint until the first new
-server pod is ready.
+`worker` pods carry the same name and instance labels as the server pods. They
+receive no proxy traffic all the same: the Service targets the port named
+`http`, which only the server pods expose (the worker's is `metrics`), so its
+selector is the one older charts used and an upgrade changes no endpoint. The
+PodDisruptionBudget selects the server pods by `app.kubernetes.io/component:
+server`, so workers do not count towards it.
 
 {{ template "chart.requirementsSection" . }}
 

@@ -29,6 +29,8 @@ aws-sdk-s3 = {
 # The body a fill segment is put from, chunk by chunk (RFC 0048-bis): already
 # in the tree through aws-smithy-types, which the SDK takes it from.
 http-body = { version = "1", optional = true }
+# `http::Error`, the bound `UpstreamRequest::header` forwards to reqwest's.
+http = "1"
 base64.workspace = true
 batlehub-core = { path = "../core" }
 bytes.workspace = true

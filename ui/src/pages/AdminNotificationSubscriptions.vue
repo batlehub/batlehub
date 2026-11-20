@@ -139,7 +139,6 @@ async function testSubscription(id: string) {
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminNav.subscriptions')"
       :description="t('adminNotifications.manageOutboundNotificationSubscriptionsAnd')"
     >
@@ -202,7 +201,7 @@ async function testSubscription(id: string) {
                       <Button variant="outline" size="sm" @click="openEdit(sub)">{{
                         t("common.edit")
                       }}</Button>
-                      <Button variant="outline" size="sm" @click="deleteTarget = sub.id">{{
+                      <Button variant="danger" size="sm" @click="deleteTarget = sub.id">{{
                         t("common.delete")
                       }}</Button>
                     </div>

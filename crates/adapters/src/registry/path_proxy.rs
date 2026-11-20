@@ -18,13 +18,11 @@ use batlehub_core::{
     ports::{FetchedArtifact, RegistryClient},
 };
 
-use super::http_client::{
-    apply_upstream_options, basic_auth_get, to_registry_error, UpstreamHttpOptions,
-};
+use super::http_client::{new_http_client, to_registry_error, UpstreamHttpOptions};
 
 pub struct PathProxyRegistryClient {
     registry_type: String,
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     /// Upstream repository root (no trailing slash).
     base_url: String,
     basic_auth: Option<(String, String)>,
@@ -41,8 +39,7 @@ impl PathProxyRegistryClient {
         base_url: impl Into<String>,
         opts: &UpstreamHttpOptions,
     ) -> Result<Self, CoreError> {
-        let http =
-            apply_upstream_options(reqwest::Client::builder().user_agent("batlehub/0.1"), opts)?;
+        let http = new_http_client(None, opts)?;
         Ok(Self {
             registry_type: registry_type.into(),
             http,
@@ -166,7 +163,9 @@ impl RegistryClient for PathProxyRegistryClient {
             resp.status(),
             reqwest::StatusCode::METHOD_NOT_ALLOWED | reqwest::StatusCode::NOT_IMPLEMENTED
         ) {
-            resp = basic_auth_get(&self.http, &self.basic_auth, &url)
+            resp = self
+                .http
+                .basic_auth_get(&self.basic_auth, &url)
                 .send()
                 .await
                 .map_err(to_registry_error)?;
@@ -184,7 +183,9 @@ impl RegistryClient for PathProxyRegistryClient {
         let url = self.upstream_url(path)?;
         tracing::debug!(url = %url, "fetching {} artifact", self.registry_type);
 
-        let resp = basic_auth_get(&self.http, &self.basic_auth, &url)
+        let resp = self
+            .http
+            .basic_auth_get(&self.basic_auth, &url)
             .send()
             .await
             .map_err(to_registry_error)?;

@@ -135,20 +135,22 @@ fn apply_rlimits(cmd: &mut tokio::process::Command, sandbox: &Sandbox) {
     // before `exec`, where that is exactly what is wanted.
     unsafe {
         cmd.pre_exec(move || {
-            let set = |resource: libc::__rlimit_resource_t, value: u64| {
-                let lim = libc::rlimit {
-                    rlim_cur: value as libc::rlim_t,
-                    rlim_max: value as libc::rlim_t,
-                };
-                // A limit the process may not raise is not an error worth
-                // failing the scan over: the sandbox's other walls stand.
-                let _ = libc::setrlimit(resource, &lim);
+            let lim = |value: u64| libc::rlimit {
+                rlim_cur: value as libc::rlim_t,
+                rlim_max: value as libc::rlim_t,
             };
+            // `setrlimit` is called directly rather than through a helper
+            // taking the resource as a parameter: the resource's type is
+            // `__rlimit_resource_t` on glibc but `c_int` on musl and macOS,
+            // and only inference at the call site is portable across them.
+            //
+            // A limit the process may not raise is not an error worth
+            // failing the scan over: the sandbox's other walls stand.
             if mem > 0 {
-                set(libc::RLIMIT_AS, mem);
+                let _ = libc::setrlimit(libc::RLIMIT_AS, &lim(mem));
             }
             if cpu > 0 {
-                set(libc::RLIMIT_CPU, cpu);
+                let _ = libc::setrlimit(libc::RLIMIT_CPU, &lim(cpu));
             }
             Ok(())
         });

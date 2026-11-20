@@ -4,8 +4,8 @@ use futures::TryStreamExt;
 use serde::Deserialize;
 
 use super::super::http_client::{
-    apply_upstream_options, cache_control, fetch_json_document, parse_http_date, percent_encode,
-    to_registry_error, UpstreamHttpOptions,
+    cache_control, fetch_json_document, parse_http_date, percent_encode, to_registry_error,
+    upstream_client_stripping, UpstreamClient, UpstreamHttpOptions, UpstreamRequest,
 };
 use super::models::normalize_id;
 use batlehub_core::{
@@ -30,7 +30,7 @@ use batlehub_core::{
 ///   - `None` → default `.nupkg` for that version, or the special JSON when version is a sentinel
 ///   - `Some(filename)` → exact filename (e.g. `"newtonsoft.json.13.0.3.nupkg"`, `"*.nuspec"`)
 pub struct NugetRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: UpstreamClient,
     /// `{base}/v3-flatcontainer` — package downloads and version lists.
     pub(super) flat_url: String,
     /// `{base}/v3/registration5` — rich metadata (dependencies, authors, …).
@@ -43,14 +43,17 @@ pub struct NugetRegistryClient {
 
 impl NugetRegistryClient {
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
-        let builder = reqwest::Client::builder()
-            .user_agent("batlehub/0.1")
-            // `api_key` travels as `X-NuGet-ApiKey`, which reqwest does not strip cross-host.
-            .redirect(super::super::http_client::guarded_redirect_policy(
-                10,
-                opts.custom_header.is_some() || opts.bearer_token.is_some(),
-            ));
-        let http = apply_upstream_options(builder, opts)?;
+        // `api_key` travels as `X-NuGet-ApiKey`, which reqwest does not strip cross-host.
+        let secret: &[&str] = match opts.bearer_token {
+            Some(_) => &["X-NuGet-ApiKey"],
+            None => &[],
+        };
+        let http = upstream_client_stripping(
+            || reqwest::Client::builder().user_agent("batlehub/0.1"),
+            10,
+            opts,
+            secret,
+        )?;
 
         let base = base_url.into();
         let base = base.trim_end_matches('/').to_owned();
@@ -90,7 +93,7 @@ impl NugetRegistryClient {
         })
     }
 
-    pub(super) fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+    pub(super) fn request(&self, method: reqwest::Method, url: &str) -> UpstreamRequest {
         let rb = self.http.request(method, url);
         match &self.api_key {
             Some(key) => rb.header("X-NuGet-ApiKey", key),
@@ -98,11 +101,11 @@ impl NugetRegistryClient {
         }
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
+    pub(super) fn get(&self, url: &str) -> UpstreamRequest {
         self.request(reqwest::Method::GET, url)
     }
 
-    pub(super) fn head(&self, url: &str) -> reqwest::RequestBuilder {
+    pub(super) fn head(&self, url: &str) -> UpstreamRequest {
         self.request(reqwest::Method::HEAD, url)
     }
 
@@ -635,5 +638,37 @@ mod tests {
     fn normalize_id_lowercases() {
         assert_eq!(normalize_id("Newtonsoft.Json"), "newtonsoft.json");
         assert_eq!(normalize_id("MYLIB"), "mylib");
+    }
+
+    /// The API key travels as `X-NuGet-ApiKey`, which reqwest keeps on a
+    /// cross-host hop: a redirect off the upstream is followed without it.
+    #[tokio::test]
+    async fn a_cross_origin_redirect_drops_the_api_key() {
+        let mut upstream = Server::new_async().await;
+        let mut blobs = Server::new_async().await;
+        let _hop = upstream
+            .mock("GET", "/v3-flatcontainer/mylib/1.0.0/mylib.1.0.0.nupkg")
+            .match_header("x-nuget-apikey", "key")
+            .with_status(302)
+            .with_header("location", &format!("{}/blob", blobs.url()))
+            .create_async()
+            .await;
+        let blob = blobs
+            .mock("GET", "/blob")
+            .match_header("x-nuget-apikey", mockito::Matcher::Missing)
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_body("nupkg")
+            .create_async()
+            .await;
+        let opts = UpstreamHttpOptions {
+            bearer_token: Some("key".to_owned()),
+            ..Default::default()
+        };
+        let c = NugetRegistryClient::new(upstream.url(), &opts).unwrap();
+        let url = format!("{}/mylib/1.0.0/mylib.1.0.0.nupkg", c.flat_url);
+        let resp = c.get(&url).send().await.unwrap();
+        assert_eq!(resp.text().await.unwrap(), "nupkg");
+        blob.assert_async().await;
     }
 }

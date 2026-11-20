@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 0e8b14d806c800e0
+sourceHash: 2e277f646c7c6a65
 ---
 
 # Rechargement à chaud et configuration dynamique
@@ -218,6 +218,7 @@ d'administration **Configuration** affiche les deux.
 
 | Code | Signification |
 |---|---|
+| `console.unknown-warning` | Un `warning:<code>` de `[console].accepted` ne nomme aucun code que cette version lève : une faute de frappe, ou le code d'une version plus récente pendant un déploiement |
 | `proxy-trust.unconfigured` | Aucune liste `trusted_proxies` nulle part ; l'hôte et le schéma transmis sont crus de n'importe quel client |
 | `proxy-trust.deprecated-key-only` | La confiance envers les proxys vient du `[ip_blocking].trusted_proxies` déprécié |
 | `proxy-trust.invalid-deprecated-entry` | Une entrée du `[ip_blocking].trusted_proxies` déprécié n'est ni une IP ni une plage CIDR, et a été retirée |

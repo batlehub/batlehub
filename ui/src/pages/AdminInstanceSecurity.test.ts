@@ -71,6 +71,33 @@ describe("AdminInstanceSecurity (RFC 0050 §4.5)", () => {
     expect(w.get('[data-testid="warnings-accepted"]').text()).toContain("proxy-trust.unconfigured");
   });
 
+  it("an accepted warning alone leaves the page quiet", async () => {
+    const w = await mountWith({
+      ...base,
+      sign_ins: { state: "ok", rejected: 0, by_kind: {} },
+      token_sources: { new_source: 0 },
+      static_tokens: { plain: 0, paths: [] },
+      warnings: [{ code: "cors.any-origin", path: "server", message: "…", accepted: true }],
+    });
+    expect(w.find('[data-testid="quiet"]').exists()).toBe(true);
+  });
+
+  // Accepting the plain-token warning quiets the static-tokens line it is about.
+  it("an accepted plain-static-token warning leaves the static line OK and the page quiet", async () => {
+    const w = await mountWith({
+      ...base,
+      sign_ins: { state: "ok", rejected: 0, by_kind: {} },
+      token_sources: { new_source: 0 },
+      warnings: [
+        { code: "auth.plain-static-token", path: "auth[0]", message: "…", accepted: true },
+      ],
+    });
+    const line = w.get('[data-testid="line-static"]');
+    expect(line.find('[data-state="ok"]').exists()).toBe(true);
+    expect(line.text()).toContain("auth[0].tokens[1]");
+    expect(w.find('[data-testid="quiet"]').exists()).toBe(true);
+  });
+
   it("a store that did not answer is one unknown line, and the page is not quiet", async () => {
     const w = await mountWith({
       ...base,

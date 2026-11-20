@@ -5,7 +5,7 @@ withDefaults(
   defineProps<{
     title?: string;
     description?: string;
-    variant?: "default" | "display" | "poster";
+    variant?: "default" | "poster";
     /** `h2` for a page rendered inside a hub, whose layout already owns the `h1`. */
     as?: "h1" | "h2";
     /** A count after the title, in parentheses; nothing when 0 or absent. */
@@ -32,17 +32,12 @@ withDefaults(
         :is="as"
         :class="
           cn(
-            'text-2xl font-semibold flex items-center gap-2',
-            // The bitmap face at Pixel Medium — one per view, and the only step
-            // above the data ramp. It carries no glow: depth in this world is
-            // inked, not lit. Tracked 0.04em because Silkscreen's square pixel
-            // sets tight at its own em.
-            variant === 'display' && 'font-display font-bold tracking-[0.04em]',
-            // The page-title step (`--t-display`), the same one the home
-            // greeting and the two package surfaces set. It overrides
-            // `text-2xl` above, so it comes after it.
-            variant === 'poster' &&
-              'font-display font-bold tracking-[0.02em] leading-[0.92] text-display break-words',
+            'text-2xl font-semibold tracking-tight flex items-center gap-2',
+            // Page titles are set in the interface face (DESIGN.md, The Interface Face Rule): the
+            // bitmap face is the wordmark's and the home greeting's, and a
+            // console title in it read as a poster before it read as a page.
+            // `poster` keeps its larger step for the few full-page surfaces.
+            variant === 'poster' && 'text-title leading-tight break-words',
           )
         "
       >

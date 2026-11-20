@@ -70,43 +70,8 @@ const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * declared, and "the admin pages are not redrawn in the specimen grammar" stops
  * being an assertion the moment it is measured.
  */
-const RAMP = new Set([12, 13, 15, 16, 20, 24, 40, 56, 72, 88, 104]);
-
-/**
- * Routes that have a checked-in specification of their own appearance, and what
- * that specification says about the Display step.
- *
- * `ui/design-proof/index.html` is the artefact RFC 0003 Phase 1 produced to
- * settle what this world looks like, and its surface brief names its scope in
- * the first line: *"the package catalog (`/packages`) — the proving surface for
- * the console redesign."* Its `--t-display` is 56px, stepping to 72px at 640,
- * 88px at 880 and 104px at 1140 — read out of the proof's own media queries
- * rather than transcribed from a screenshot.
- *
- * Being *on* the ramp is not the assertion. `/packages` ships a 24px heading,
- * and 24 is a declared Silkscreen step, so every existing check passes it. What
- * the proof says, and the page does not do, is that this surface *spends the
- * Display step* — on the registry being viewed, so the page announces its
- * subject rather than putting a label on a door. That is a distinct
- * measurement and it needs a distinct assertion, or merging the route lists
- * would have changed what is *covered* without changing what is *observed*.
- */
-// Two steps, following `--t-display`: the proof's own four-step ramp was cut
-// to 56/72 when every page title in the console moved onto this step, and the
-// assertion is "spends the Display step on its subject", not "spends 104px".
-// Transcribed from tokens.css now rather than from the proof's media queries —
-// the proof is the artefact of the decision, the token is the decision.
-// 40 below 480 is the narrow step DESIGN.md adopted for phones, where a
-// ten-glyph word at 56px breaks inside itself.
-const PROOF_DISPLAY_STEPS = [
-  [640, 72],
-  [480, 56],
-  [0, 40],
-];
-const PROOF_ROUTES = {
-  "/packages": "ui/design-proof/index.html",
-};
-const proofDisplayFor = (width) => PROOF_DISPLAY_STEPS.find(([min]) => width >= min)[1];
+// DESIGN.md (The Interface Face Rule) added the interface face's 14 (body) and 28 (page title).
+const RAMP = new Set([12, 13, 14, 15, 16, 20, 24, 28, 40, 56, 72, 88, 104]);
 
 /**
  * Both widths, because for fifteen pages neither gate looked at the narrow one.
@@ -127,7 +92,8 @@ const proofDisplayFor = (width) => PROOF_DISPLAY_STEPS.find(([min]) => width >= 
  * break a table are the ones in the middle.
  */
 const VIEWPORTS = [1440, 1024, 768, 390];
-const DISPLAY_FACE = "Silkscreen";
+/** The data face: a page title set in it is a fact, not a heading. */
+const DATA_FACE = "JetBrains Mono";
 
 /*
  * Every admin page of `ui/src/config/adminSections.ts`, plus one concrete
@@ -411,38 +377,23 @@ for (const { role, token, routes } of plans) {
       );
       scanned++;
 
-      const type = await page.evaluate((face) => {
+      const type = await page.evaluate(({ dataFace }) => {
         const sizes = new Set();
-        // The largest thing on the page actually *set* in the display face —
-        // the measurement the design proof makes, and the one "is every size
-        // on the ramp" cannot make.
-        let largestDisplay = 0;
-        /* `sizes` stays leaf-only — that is the ramp check's existing contract.
-           `largestDisplay` cannot be: an element renders text at its own size
-           whenever it has a direct text node, and a heading wrapping a `<slot>`
-           has both text and children. Skipping those measured `/packages` at
-           0px while its `h1` was right there. */
-        const hasOwnText = (el) =>
-          [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
         for (const el of document.querySelectorAll("body *")) {
           if (!el.getClientRects().length) continue;
           const style = getComputedStyle(el);
           const size = Math.round(Number.parseFloat(style.fontSize));
           if (!el.children.length && el.innerText?.trim()) sizes.add(size);
-          if (hasOwnText(el) && style.fontFamily.includes(face)) {
-            largestDisplay = Math.max(largestDisplay, size);
-          }
         }
         const h1 = document.querySelector("main h1") ?? document.querySelector("h1");
         return {
           sizes: [...sizes].sort((a, b) => a - b),
-          largestDisplay,
           h1: h1 && {
             size: Math.round(Number.parseFloat(getComputedStyle(h1).fontSize)),
-            display: getComputedStyle(h1).fontFamily.includes(face),
+            data: getComputedStyle(h1).fontFamily.includes(dataFace),
           },
         };
-      }, DISPLAY_FACE);
+      }, { dataFace: DATA_FACE });
 
       const offRamp = type.sizes.filter((s) => !RAMP.has(s));
       // The document must never scroll sideways. This is the assertion the
@@ -481,18 +432,7 @@ for (const { role, token, routes } of plans) {
       }
       if (offRamp.length) typeProblems.push(`sizes off the ramp: ${offRamp.join(", ")}px`);
       if (!type.h1) typeProblems.push("no h1");
-      else if (!type.h1.display) typeProblems.push(`h1 not in the display face (${type.h1.size}px)`);
-
-      const proof = PROOF_ROUTES[route];
-      if (proof) {
-        const expected = proofDisplayFor(width);
-        if (type.largestDisplay < expected) {
-          typeProblems.push(
-            `spends ${type.largestDisplay}px on its largest ${DISPLAY_FACE} element; ` +
-              `${proof} spends ${expected}px at this width, on the registry being viewed`,
-          );
-        }
-      }
+      else if (type.h1.data) typeProblems.push(`h1 set in the data face (${type.h1.size}px)`);
 
       if (typeProblems.length) {
         fail();

@@ -13,17 +13,19 @@ colors:
   accent-ink: "oklch(0.10 0.02 18)"
   copper: "oklch(0.72 0.14 52)"
   focus: "oklch(0.85 0.16 85)"
-  light-ground: "oklch(0.97 0.008 18)"
-  light-ground-raised: "oklch(0.935 0.010 18)"
-  light-ground-sunk: "oklch(0.99 0.004 18)"
-  light-ink: "oklch(0.20 0.022 20)"
-  light-ink-dim: "oklch(0.44 0.04 25)"
-  light-rule-soft: "oklch(0.80 0.02 25)"
-  light-rule-strong: "oklch(0.62 0.05 25)"
+  ok: "oklch(0.74 0.15 150)"
+  light-ground: "oklch(0.975 0.002 18)"
+  light-ground-raised: "oklch(0.94 0.003 18)"
+  light-ground-sunk: "oklch(0.995 0.001 18)"
+  light-ink: "oklch(0.20 0.010 20)"
+  light-ink-dim: "oklch(0.45 0.015 25)"
+  light-rule-soft: "oklch(0.86 0.004 25)"
+  light-rule-strong: "oklch(0.62 0.012 25)"
   light-accent: "oklch(0.52 0.21 25)"
   light-accent-ink: "oklch(0.99 0.004 18)"
   light-copper: "oklch(0.50 0.12 52)"
   light-focus: "oklch(0.55 0.11 85)"
+  light-ok: "oklch(0.5 0.12 150)"
 typography:
   # The Silkscreen ramp, enumerated. The named roles below carry one size each,
   # which is enough for a face with one size — but this one is drawn on an 8px
@@ -59,6 +61,18 @@ typography:
     fontWeight: 400
     lineHeight: 1.6
     letterSpacing: "0.04em"
+  title:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "28px"
+    fontWeight: 600
+    lineHeight: 1.25
+    letterSpacing: "-0.01em"
+  ui:
+    fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "14px"
+    fontWeight: 400
+    lineHeight: 1.5
+    letterSpacing: "normal"
   head:
     fontFamily: "JetBrains Mono, ui-monospace, monospace"
     fontSize: "20px"
@@ -100,9 +114,9 @@ spacing:
   s6: "40px"
 components:
   button-action:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.accent-ink}"
-    typography: "{typography.pixel-sm}"
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.ground}"
+    typography: "{typography.ui}"
     rounded: "{rounded.none}"
     padding: "12px 16px"
   button-action-disabled:
@@ -200,9 +214,11 @@ components:
 
 # Design System: BatleHub
 
-Recorded from the built proving surface at `ui/design-proof/index.html` (plus its authored
-`halftone-plate.png` and self-hosted faces). That build is the ground truth for every value below;
-where it diverges from the RFC's earlier intent, the build wins and the divergence is noted.
+Recorded from the built proving surface at `ui/design-proof/index.html` (plus its self-hosted
+faces). That build is the ground truth for every value below; where it diverges from the RFC's
+earlier intent, the build wins and the divergence is noted. One divergence runs the other way: the
+proof still carries its halftone plate, and the application no longer renders one (see The material
+layer).
 `ui/src` has not been migrated yet — Phase 2 derives `ui/src/design/tokens.css` from this file, **now
 for two renditions.**
 
@@ -210,7 +226,7 @@ for two renditions.**
 automatically verified. The human author has since opened the built surface in a real browser and
 confirmed **both renditions**, and that viewing produced one real defect, since fixed: horizontal
 overflow of the whole page at small widths, caused by fixed table column widths. Still unverified:
-the plate as composited, reflow at 320–480px under the longer French labels, focus rings as painted,
+reflow at 320–480px under the longer French labels, focus rings as painted,
 whether the `woff2` files decode, and whether `filter: blur()` on `<tr>` animates cleanly. The
 pager's Next control remains drawn but unwired. Contrast ratios below were computed, not sampled.
 
@@ -225,9 +241,8 @@ the `:root[data-theme="light"]` overrides. There is no third set and no per-comp
 
 A press proof. One form is set at poster scale and captioned by its facts; everything under it is
 ruled rows, hairlines and ink. The world is an Emigre bitmap type specimen: a square-pixel display
-face carrying identity and scale, a mono text face carrying every fact, and an authored halftone
-plate as the only image on the page. There is no photography, no illustration, no card, no tile, and
-no glow.
+face carrying identity and scale, a mono text face carrying every fact, and no image on the page.
+There is no photography, no illustration, no card, no tile, and no glow.
 
 The organising idea is **resolution as state**. What BatleHub holds and has verified renders at full
 resolution — a fine 3×3 dot matrix, ink-white; what it does not renders coarse — a 2×2 matrix at
@@ -257,8 +272,8 @@ it was also the right palette for this world.
 - State reads as resolution — fine dots for held-and-verified, coarse dots for not — and the state
   grammar is identical in both renditions.
 - Every denial states its own rule, in its own row, tied to the artifact it refused.
-- One authored raster (a 60 lpi halftone plate) is the only image in the system; it is the ink of
-  whichever ground it sits on.
+- No raster image anywhere in the interface; the one texture is a dot field drawn in CSS, on the
+  home page only.
 - Theme and locale are stored as *preferences*, never as resolved values, and share one control.
 
 ## Colors
@@ -267,10 +282,18 @@ One palette, two grounds. Each rendition carries a ground, warm ink, one synthet
 sparingly, and a copper second voice for anything that is *waiting* rather than *refused*.
 
 **The renditions are the same system, not two systems.** The evidence is in the build: apart from the
-token block itself, the entire stylesheet contains exactly **one** rendition-specific rule — the
-plate's opacity and fill. No component, no state, no border and no type step is re-specified for
-light. That is possible because the state grammar never depended on fill in the first place (see The
+token block itself and the code highlighter's switch between its two Shiki themes, the stylesheet
+contains no rendition-specific rule. No component, no state, no border and no type step is
+re-specified for light. That is possible because the state grammar never depended on fill in the first place (see The
 Undependable Fill Rule), so nothing had to be re-invented when the ground flipped.
+
+**The Neutral Paper Rule.** The light rendition's neutrals — ground, raised, sunk, ink, dim ink and
+both rules — keep their hue and carry almost no chroma (0.001–0.015). At 0.008–0.05 the paper read
+pink beside every other tool on an operator's screen, and the signal hues had a tinted ground to
+compete with. Crimson, copper and green keep their full chroma; they are the only colour on paper.
+The ratios moved with it and are asserted in `tokens.test.ts`: `--ink` 16.87:1, `--ink-dim`
+6.97:1 (6.28:1 raised), `--rule-strong` 3.40:1 (3.07:1 raised). The documentation site shares
+the token file, so its light rendition follows.
 
 **Direction, not lightness, is what the neutral names mean.** `--ground-raised` moves toward the ink
 pole and `--ground-sunk` away from it, so on near-black raised is *lighter* (L .155 over L .07) and on
@@ -281,8 +304,9 @@ rendition moves it toward its own opposite pole.
 
 - **Signal Crimson** — `--accent`, the one synthetic colour in the world. `#ff343d` as painted on
   near-black at **5.76:1**; `#c50220` as painted on paper at **5.63:1**. Load-bearing exactly four
-  ways and no more: link text, the fill under counter-ink on the one primary action, the `blocked`
-  state, and the 1px lit edge on the selected registry. Both renditions' authored values are clamped
+  ways and no more: link text, *destruction* (the filled destructive button and the outlined
+  `danger` verb — never the ordinary primary action, which is ink), the `blocked` state, and the 1px
+  lit edge on the selected registry. Both renditions' authored values are clamped
   to the sRGB gamut — see The In-Gamut Rule, which this token has now confirmed twice.
 - **Counter-Ink** — `--accent-ink`, the foreground that rides on a crimson fill and nowhere else
   (plus the near edge of the pixel step on `:active`). Near-black at chroma 0.02 in the dark
@@ -295,8 +319,8 @@ rendition moves it toward its own opposite pole.
   and it means *pending or held*, never *good*: the `stale` and `held` states, the instance hostname
   in the identity strip, the pressed border on a toggled control, the "synthetic fixture data" tag,
   a measured value moving the wrong way but not yet refused — a falling hit rate, a quota approaching
-  its limit — and the plate's ink in the dark rendition. It is the only colour that appears as a large
-  area anywhere in the system, and only through the plate. Its lightness is re-derived per ground —
+  its limit. It is text, a 1px border, a state matrix or a meter's fill, never a large area — no
+  colour in the system is. Its lightness is re-derived per ground —
   see The Re-Derived Lightness Rule.
 
   The degradation job was added after two surfaces reached for it independently — `AdminDashboard`'s
@@ -306,6 +330,12 @@ rendition moves it toward its own opposite pole.
   true is the negative half: copper never means *good*. What is no longer exhaustive is *pending or
   held* — a worsening metric is neither, and it is still not a refusal, which is the distinction the
   hue exists to carry. See RFC 0004-bis §11/O1.
+
+- **Signal Green** — `--ok`, `oklch(0.74 0.15 150)` on near-black and `oklch(0.50 0.12 150)` on
+  paper, both asserted at 4.5:1 or better on all three grounds in `tokens.test.ts`. It means
+  *healthy, allowed, serving* and nothing else: the `cached` resolution state, the `ok` badge, an
+  upstream that answers. An operator scanning a state column has a colour for "fine" instead of
+  reading its absence. It is the one hue The One Synthetic Rule admits beside crimson.
 
 ### Tertiary
 
@@ -373,15 +403,30 @@ the dark crimson (5.97:1). It is never "white on the accent" by habit: the incum
 current UI. Do not re-inherit the incumbent pairing when porting a Monofolio component, and do not
 assume the counter-ink keeps its polarity across renditions.
 
-**The One Synthetic Rule.** Crimson is the world's only invented colour and stays on its four jobs.
-Copper carries "waiting"; ink carries "known"; dim ink carries everything ordinary. A fifth hue does
-not get added to signal a fifth condition — the dot pattern does that.
+**The One Synthetic Rule.** Crimson is the world's only invented *brand* colour and stays on its four
+jobs. Copper carries "waiting"; green (`--ok`) carries "healthy"; ink carries "known"; dim ink carries
+everything ordinary. Green was admitted once, deliberately, because a console read by platform
+teams needs a positive signal and absence-of-colour is not one; a further hue still does not get
+added to signal a further condition — the dot pattern does that. Off-palette Tailwind hues remain
+banned at the source (`tokens.test.ts`).
 
 ## Typography
 
-**Display Font:** Silkscreen 400/700 (self-hosted `woff2`, fallback `monospace`)
-**Body / Data Font:** JetBrains Mono, variable weight 100–800 (self-hosted `woff2`, fallback
-`ui-monospace, monospace`)
+**Display Font:** Silkscreen 400/700 (self-hosted `woff2`, fallback `monospace`) — the wordmark and
+the home greeting only.
+**Interface Font:** the operating system's UI sans (`system-ui, -apple-system, "Segoe UI", Roboto,
+…`) — labels, controls, navigation, headings and prose. Nothing is downloaded.
+**Data Font:** JetBrains Mono, variable weight 100–800 (self-hosted `woff2`, fallback
+`ui-monospace, monospace`) — every value a reader compares: versions, sizes, hashes, counts,
+coordinates, registry and package names.
+
+**The Interface Face Rule.** The console is an operating tool read by platform teams next to their
+other tools, so it is set in the interface face and the specimen faces are opted into. Page titles
+are interface-face semibold at 24px (`text-2xl`) or 28px (`--t-title`, full-page surfaces);
+`--t-ui` (14px) is the reading size and what `text-sm` resolves to in the console. `font-mono` marks
+data; `font-display` marks identity. A page title in the data face is a defect
+(`build/design-routes.mjs` reports it). `--t-body` stays 13px: it is the data face's reading size and
+the documentation site's code step, which shares this token file.
 
 **Character:** A square-pixel bitmap face for identity and scale against a precise, humane mono for
 every fact on the page. The pairing is a specimen sheet's: one form shown large enough to see how it
@@ -469,6 +514,11 @@ specimen head, and then a two-column sheet: a 232px registry bay (sticky to the 
 and a fluid catalog column that is allowed to shrink (`min-width: 0`) so the table controls its own
 overflow.
 
+**Density.** Tables have two densities, chosen per browser in the display settings beside theme
+and language: *comfortable* (the default — 16px cell padding, a 40px header) and *compact* (8px
+and 32px). It is `data-density="compact"` on `<html>`, applied before first paint by
+`build/theme-init.js`; it changes rows, never type.
+
 **Rhythm.** One 4px-based scale, six steps: 4 / 8 / 12 / 16 / 24 / 40. 12px is the inside of a
 control, 16px the inside of a popover, 24px the inside of a region, 40px the top of the specimen and
 the inside of an empty-state panel. There is no 32px step and no half-steps; a value not on the scale
@@ -486,8 +536,7 @@ overflow purposes, which is exactly the case that matters.
 - **640 / 880 / 1140px** — display size steps only (72 / 88 / 104px). Nothing else moves.
 - **900px and below** — the sheet collapses to one column; the bay unsticks and becomes a
   horizontally scrolling row of registry chips with its selection edge moving from the left border to
-  a 2px bottom border; region padding drops 24 → 16px; the plate widens to 64% and drops to 26%
-  opacity; the two least load-bearing columns (Size, Last fetch) are removed from the table rather
+  a 2px bottom border; region padding drops 24 → 16px; the two least load-bearing columns (Size, Last fetch) are removed from the table rather
   than being squeezed; the remaining fixed column widths release to `width: auto`; and the state chip
   is allowed to wrap.
 
@@ -512,7 +561,7 @@ small widths — so it is recorded as law rather than as a fix.
 
 **This system has no elevation.** There are no ambient shadows, no blurs, no layered surfaces, and
 no glow — the Monofolio `--cyber-glow` / `--steam-glow` utilities do not survive into this world.
-Depth is entirely inked: a hairline changes weight, a value changes, or a texture appears. The two
+Depth is entirely inked: a hairline changes weight or a value changes. The two
 tonal steps that exist (`--ground-raised`, `--ground-sunk`) are confirmation, not elevation, and
 cannot be seen on their own in either rendition (see The Undependable Fill Rule). The settings
 popover is no exception: it is a 1px-framed box on `--ground-sunk`, floated by `z-index` alone, with
@@ -532,25 +581,16 @@ zero blur, solid colour, on the primary action only:
 
 ### The material layer
 
-**The plate** is the system's one image: an authored raster (`halftone-plate.png`), a 45° halftone
-screen at 60 lpi generated deterministically, running **99.7% ink coverage down to 6.3%** across its
-width, emitted as 8-bit grayscale + alpha. It is applied as a CSS **mask** over a colour fill, so the
-ink stays a token rather than being baked into the file. It sits behind the specimen head at
-`min(52%, 620px)` wide, anchored right, `pointer-events: none`, `aria-hidden`.
+**There is no image.** The proof's halftone plate — an authored raster applied as a CSS mask behind
+the specimen head — was ported once and then retired: the application ships no raster in its
+interface, and nothing about either rendition depends on one.
 
-**The same authored raster serves both renditions, inked with its own ground's colour**: `--copper`
-at **34%** opacity on near-black (26% below 900px), `--ink` at **20%** on paper — lower, because dark
-dots on a light ground carry further. Same screen, same geometry, the ink of its own ground. Nothing
-else about the plate changes.
-
-Two rules the build encodes and Phase 2 must keep: the plate is **mirrored** (`scaleX(-1)`) so its
-dense end bleeds off the outer margin instead of facing the caption — copper at 34% over near-black
-composites to roughly `#513021`, where `--ink-dim` would fall to 3.21:1; and its fill is
-**transparent until masking is confirmed supported**, in both renditions.
-
-**The dot field** is the second texture: a 9×9px radial dot grid in `--rule-soft` at 55% opacity,
-gradient-masked to fade at both ends. It lives only in the masthead's flex spacer — the one box that
-holds no text and cannot acquire any, and which collapses to zero width exactly when the bar wraps.
+**The dot field** is the one texture: a 9×9px radial dot grid in `--rule-soft` at 55% opacity,
+gradient-masked to fade at both ends. It is identity, and identity is what the home page is for; the
+console is a working surface, and a texture beside every admin title read as decoration, so it
+renders only on `/`. Its box stays everywhere, because it is the bar's flex spacer — the one box
+that holds no text and cannot acquire any, and which collapses to zero width exactly when the bar
+wraps.
 Measured behind wrapped 12px `--ink-dim`, the field drops that text to 4.50:1, so it is confined by
 construction rather than tuned by opacity.
 
@@ -563,12 +603,6 @@ shadow anywhere else — cards, panels, popovers, the masthead — is out of the
 **The Texture-In-Empty-Boxes Rule.** A texture may only occupy a box that holds no text and cannot
 come to hold text. Painting order is not contrast: if a field can end up behind a label, it is
 confined, not faded.
-
-**The Gated Material Rule.** A masked element's fill is declared **only inside the `@supports` query
-that confirms the mask**, per rendition. An engine or minifier that dropped the mask would otherwise
-paint a solid copper (or ink) block over the right half of the specimen — precisely the 3.21:1
-condition the whole treatment exists to avoid. A material's failure mode must be *absence*, never a
-solid block.
 
 ## Shapes
 
@@ -599,18 +633,25 @@ and their own separate frames.
 ## Components
 
 Buttons, fields and rows are all built the same way: a 1px `--rule-strong` boundary, a square corner,
-uppercase tracked mono, and no fill unless the control is the one action on the view. Every component
+the interface face, and no fill unless the control is the one action on the view. Every component
 below is written once and renders in both renditions unchanged.
 
 ### Buttons
 
 - **Shape:** square (0 radius), 1px boundary.
-- **Primary — the one filled action** (`.action`): crimson fill under counter-ink, Pixel Small
-  uppercase, 12/16px padding. Exactly one per view. Hover paints the cut-out ring; `:active` fires
-  the pixel step; disabled drops the fill entirely and becomes a dim outlined control (crimson never
-  appears in a disabled state).
-- **Secondary — the control** (`.ctl`): transparent, 1px `--rule-strong`, `--ink-dim` Meta uppercase,
-  8/12px padding. Hover lifts the text to `--ink` and the border to `--ink-dim`. `aria-pressed="true"`
+- **Primary — the one filled action** (`.action`): `--ink` fill under `--ground` text, interface
+  face, medium weight. Exactly one per view. Hover paints the cut-out ring; `:active` fires the pixel
+  step — both inked to match the fill; disabled drops the fill entirely and becomes a dim outlined
+  control. It is not crimson: the primary action and the destructive one never share a colour.
+- **Danger — the destructive verb** (`variant="danger"`): transparent, 1px crimson boundary, crimson
+  text, filling to the destructive pair on hover. For Clear cache, Purge, Delete, Remove sitting
+  among ordinary controls; the filled `destructive` form is the confirming button of
+  `DestructiveConfirm`, which still states the cost.
+- **Badges are labels, not controls:** a neutral badge is a flat `--ground-raised` chip with no
+  border, so it cannot be mistaken for an outline button beside it; a badge that carries a state
+  (crimson, copper, `--ok`) keeps its coloured boundary.
+- **Secondary — the control** (`.ctl`): transparent, 1px `--rule-strong`, `--ink-dim` interface
+  face, 8/12px padding. Hover lifts the text to `--ink` and the border to `--ink-dim`. `aria-pressed="true"`
   lifts the text to `--ink` and turns the border copper. Disabled is `opacity: .5`.
 - **Focus:** every control shows the shared amber ring (`2px solid var(--focus)`, 2px offset). Focus
   is never suppressed, never replaced by a colour change, and never inherited from the browser
@@ -630,7 +671,7 @@ below is written once and renders in both renditions unchanged.
 ### Navigation
 
 - **Primary nav** is a single 1px `--rule-strong` frame with hairline cell dividers and no gaps — one
-  segmented block, not a row of links. Cells are Meta uppercase, `--ink-dim`, hover to `--ink`.
+  segmented block, not a row of links. Cells are the interface face at 14px medium, sentence case, `--ink-dim`, hover to `--ink`.
 - **Current page reverses to a solid block**: `--ink` background, `--ground` text, weight 700. This is
   the system's one full contrast reversal, and it costs no scanning room.
 - **The registry bay** is a ranked list, not a menu: Pixel Small registry name plus a right-aligned
@@ -749,8 +790,8 @@ mode) degrades to session-only, never to a thrown error.
   as confirmation only — 1.06:1 on near-black and 1.11:1 on paper (The Undependable Fill Rule).
 - **Do** port a token's hue across renditions and re-derive its lightness against the new ground, then
   re-measure every pair it participates in (The Re-Derived Lightness Rule).
-- **Do** write components rendition-blind: ask for `--accent`, never for a rendition. The plate's
-  opacity and fill are the only rendition-specific rules the system is allowed.
+- **Do** write components rendition-blind: ask for `--accent`, never for a rendition. Outside the
+  token block, the code highlighter's theme switch is the only rendition-specific rule.
 - **Do** store `system|light|dark` and `system|en|fr` as preferences, resolve theme before first
   paint, and re-resolve on environment change only while the preference is System.
 - **Do** draw every mutually-exclusive choice set as one bounding box with 1px dividers and the
@@ -764,8 +805,7 @@ mode) degrades to session-only, never to a thrown error.
   on unbreakable identifiers; the body must never scroll horizontally.
 - **Do** drop whole table columns when width runs out, and release the remaining fixed widths to
   `auto`; State, Package and Version stay at every size.
-- **Do** confine texture to boxes that hold no text and cannot acquire any, and declare a masked
-  element's fill only inside the `@supports` query that confirms the mask.
+- **Do** confine texture to boxes that hold no text and cannot acquire any.
 - **Do** keep the amber focus ring on everything focusable, at `2px` with `2px` offset.
 - **Do** state each refusal's rule in its own row, tied by `aria-describedby`.
 - **Do** move focus deliberately after any re-render that destroys the focused element — flip

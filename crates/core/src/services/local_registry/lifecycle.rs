@@ -238,7 +238,7 @@ impl LocalRegistryService {
         }
 
         // Only after *this* call tombstoned the row, so a version is refunded once.
-        if let Some((publisher, bytes)) = refund {
+        for (publisher, bytes) in refund {
             self.revoke_quota(&publisher, registry, bytes).await;
         }
         self.drop_version_bytes(registry, name, version).await;
@@ -691,25 +691,64 @@ impl LocalRegistryService {
     }
 
     /// Whom a deleted version's quota goes back to, and how many bytes: its
-    /// original publisher (not the deleter) and the stored artifact's size.
-    /// `None` when no quota is configured or nobody is recorded as publisher.
+    /// original publisher (not the deleter) and the stored artifact's size,
+    /// then one entry per extra PyPI file, each charged a slot of its own by
+    /// `add_pypi_file`. Empty when no quota is configured.
     async fn quota_refund(
         &self,
         registry: &str,
         name: &str,
         version: &str,
-    ) -> Option<(Identity, u64)> {
-        self.quota.as_ref()?;
-        let row = self
+    ) -> Vec<(Identity, u64)> {
+        if self.quota.is_none() {
+            return Vec::new();
+        }
+        let Some(row) = self
             .backend
             .get_versions(registry, name)
             .await
-            .ok()?
-            .into_iter()
-            .find(|p| p.version == version)?;
-        let publisher = Identity {
-            user_id: Some(row.published_by?),
+            .ok()
+            .and_then(|v| v.into_iter().find(|p| p.version == version))
+        else {
+            return Vec::new();
+        };
+        let who = |user_id: String| Identity {
+            user_id: Some(user_id),
             ..Identity::anonymous()
+        };
+        let mut refund = Vec::new();
+        // Only PyPI's `files` is ours (`add_pypi_file`); npm, composer and
+        // terraform store the client's own manifest, whose `files` is not a slot.
+        let is_pypi = {
+            let hot = self.hot.read().await;
+            hot.registries
+                .get(registry)
+                .and_then(|client| client.registry_type().parse::<RegistryKind>().ok())
+                == Some(RegistryKind::Pypi)
+        };
+        let files = row
+            .index_metadata
+            .get("files")
+            .and_then(|f| f.as_array())
+            .filter(|_| is_pypi);
+        for f in files.into_iter().flatten().filter(|f| {
+            f.get("filename").is_some_and(serde_json::Value::is_string)
+                && f.get("sha256").is_some_and(serde_json::Value::is_string)
+        }) {
+            // An entry from before `published_by` was recorded goes to the version's publisher.
+            let by = f
+                .get("published_by")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .or_else(|| row.published_by.clone());
+            if let Some(by) = by {
+                // Clamped: the Postgres counter is an i64.
+                let size = f.get("size").and_then(serde_json::Value::as_u64);
+                refund.push((who(by), size.unwrap_or(0).min(i64::MAX as u64)));
+            }
+        }
+        let Some(publisher) = row.published_by else {
+            return refund;
         };
         // shortcut: a multi-file version (Maven) refunds the main key's size only;
         // the version still counts as one package back, which is what the cap limits.
@@ -721,7 +760,8 @@ impl LocalRegistryService {
             Ok(Some(stored)) => stored.meta.size.unwrap_or(0),
             _ => 0,
         };
-        Some((publisher, bytes))
+        refund.push((who(publisher), bytes));
+        refund
     }
 
     pub(super) async fn revoke_quota(&self, identity: &Identity, registry: &str, bytes: u64) {
@@ -814,16 +854,16 @@ impl LocalRegistryService {
         req: &PublishRequest,
         storage_key: &str,
         bytes: u64,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Vec<crate::entities::ArtifactSbom>, CoreError> {
         let Some(ref sbom_svc) = self.sbom else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let sbom_cfg = {
             let hot = self.hot.read().await;
             hot.sbom.get(&req.registry).cloned()
         };
         let Some(cfg) = sbom_cfg.filter(|c| c.enabled) else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let formats: Vec<SbomFormat> = cfg
             .formats
@@ -831,7 +871,7 @@ impl LocalRegistryService {
             .filter_map(|s| SbomFormat::parse(s))
             .collect();
         let result = sbom_svc
-            .record_for_published(
+            .build_for_published(
                 &req.registry,
                 &req.name,
                 &req.version,
@@ -857,9 +897,20 @@ impl LocalRegistryService {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "sbom generation failed (non-fatal)");
-                Ok(())
+                Ok(Vec::new())
             }
-            Ok(()) => Ok(()),
+            Ok(sboms) => Ok(sboms),
+        }
+    }
+
+    /// Persist the SBOMs [`Self::run_publish_sbom`] built, once the version has
+    /// committed. Non-fatal: the version is published and cannot be rolled back.
+    pub(super) async fn store_publish_sbom(&self, sboms: Vec<crate::entities::ArtifactSbom>) {
+        let Some(ref sbom_svc) = self.sbom else {
+            return;
+        };
+        if let Err(e) = sbom_svc.store(sboms).await {
+            tracing::error!(error = %e, "sbom: storing a committed version's SBOM failed");
         }
     }
 }

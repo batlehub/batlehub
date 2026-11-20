@@ -760,6 +760,10 @@ async fn apply_refuses_when_the_config_file_cannot_be_written() {
         "{err:#}"
     );
     assert_eq!(svc.hot.read().await.max_artifact_size_bytes, None);
+    assert!(
+        svc.pending_snapshot().is_some(),
+        "a refused apply keeps the change staged for a retry"
+    );
 }
 
 /// Two admins: the one who reviewed the first staged change cannot apply the
@@ -814,6 +818,10 @@ async fn an_editor_save_never_overwrites_a_file_that_changed_since() {
         "{err:#}"
     );
     assert_eq!(std::fs::read_to_string(file.path()).unwrap(), newer);
+    assert!(
+        svc.pending_snapshot().is_some(),
+        "a refused apply keeps the change staged for a rebase"
+    );
     // And staging against the old version is refused up front.
     assert!(svc
         .load_pending_from_editor(OTHER_PORT_CONFIG, "alice", Some(&base))
@@ -1330,6 +1338,27 @@ async fn replicas_serving_different_configs_raise_a_drift_warning() {
         warning.message
     );
     assert!(warning.message.contains("pod-b"), "{}", warning.message);
+}
+
+/// Accepting the drift is the replicas' joint answer: one replica accepting it
+/// does not make the row accepted, whichever replica is asked.
+#[tokio::test]
+async fn the_drift_is_accepted_only_when_every_replica_accepts_it() {
+    let accepting =
+        |c: &str| format!("{c}\n[console]\naccepted = [\"warning:config.replica-drift\"]\n");
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", &accepting(MINIMAL_CONFIG), &cluster).await;
+    let (b, _fb) = replica_named("pod-b", OTHER_PORT_CONFIG, &cluster).await;
+    assert!(!a.replica_drift().await.expect("drift").accepted);
+    assert!(!b.replica_drift().await.expect("drift").accepted);
+
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", &accepting(MINIMAL_CONFIG), &cluster).await;
+    let (b, _fb) = replica_named("pod-b", &accepting(OTHER_PORT_CONFIG), &cluster).await;
+    assert!(a.replica_drift().await.expect("drift").accepted);
+    assert!(b.replica_drift().await.expect("drift").accepted);
 }
 
 #[tokio::test]

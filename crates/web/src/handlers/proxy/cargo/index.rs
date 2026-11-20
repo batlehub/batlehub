@@ -184,9 +184,18 @@ async fn serve_local_index(
     index_path: &str,
     identity: &batlehub_core::entities::Identity,
 ) -> Result<HttpResponse, AppError> {
-    let name = super::helpers::local_crate_name(crate_name_from_index_path(index_path));
-    let name = name.as_str();
-    match local_svc.get_index(registry, name, identity).await {
+    let mut name = super::helpers::local_crate_name(crate_name_from_index_path(index_path));
+    let mut found = local_svc.get_index(registry, &name, identity).await;
+    // The sparse path is always lowercase; a crate stored as `MyCrate` before
+    // names were folded is looked up only once the folded name missed.
+    if matches!(found, Err(CoreError::NotFound(_))) {
+        let stored = super::helpers::local_crate_key(local_svc, registry, &name).await?;
+        if stored != name {
+            name = stored;
+            found = local_svc.get_index(registry, &name, identity).await;
+        }
+    }
+    match found {
         Ok(content) => Ok(HttpResponse::Ok()
             .content_type("text/plain; charset=utf-8")
             .body(content)),
@@ -262,10 +271,15 @@ pub async fn download_crate(
     require_cargo(&registry, &map)?;
     // A local crate is keyed by its lowercased name; an upstream keeps the
     // spelling the client sent.
-    let key_name = if mode_map.get(&registry) == RegistryMode::Proxy {
+    // cargo builds this URL from the index entry's own `name`, so a lowercase
+    // request is a lowercase crate and needs no lookup; a mixed-case one may be
+    // a crate stored as `MyCrate` before names were folded.
+    let key_name = if mode_map.get(&registry) == RegistryMode::Proxy
+        || name == super::helpers::local_crate_name(&name)
+    {
         name.clone()
     } else {
-        super::helpers::local_crate_name(&name)
+        super::helpers::local_crate_key(&local_svc, &registry, &name).await?
     };
 
     let mut resp = serve_local_or_proxy_artifact(

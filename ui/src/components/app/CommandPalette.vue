@@ -160,9 +160,7 @@ function onKeydown(event: KeyboardEvent) {
 <template>
   <Dialog v-model:open="open" class="max-w-xl gap-0 p-0">
     <template #title>
-      <span class="block px-4 pt-4 font-mono text-sm uppercase tracking-wider">{{
-        t("palette.title")
-      }}</span>
+      <span class="block px-4 pt-4 font-sans text-sm font-semibold">{{ t("palette.title") }}</span>
     </template>
     <div class="border-b border-border px-4 pb-3 pt-3">
       <input
@@ -177,7 +175,7 @@ function onKeydown(event: KeyboardEvent) {
         :aria-activedescendant="items.length ? `${listId}-opt-${active}` : undefined"
         :aria-label="t('palette.inputLabel')"
         :placeholder="t('palette.placeholder')"
-        class="flex h-9 w-full border border-border bg-ground-sunk px-3 py-1 font-mono text-sm focus-visible:border-primary placeholder:text-muted-foreground"
+        class="flex h-9 w-full border border-border bg-ground-sunk px-3 py-1 font-sans text-sm focus-visible:border-primary placeholder:text-muted-foreground"
         @keydown="onKeydown"
       />
     </div>
@@ -222,7 +220,7 @@ function onKeydown(event: KeyboardEvent) {
       </template>
     </Listbox>
 
-    <p class="border-t border-border px-4 py-2 font-mono text-xs text-muted-foreground">
+    <p class="border-t border-border px-4 py-2 font-sans text-xs text-muted-foreground">
       {{ t("palette.keys") }}
     </p>
   </Dialog>

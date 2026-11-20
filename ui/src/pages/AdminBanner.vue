@@ -68,11 +68,7 @@ async function clearBannerAction() {
 <template>
   <div class="space-y-6">
     <Announcer :message="successMsg ?? ''" />
-    <PageHeader
-      variant="display"
-      :title="t('adminNav.globalBanner')"
-      :description="t('adminBanner.description')"
-    />
+    <PageHeader :title="t('adminNav.globalBanner')" :description="t('adminBanner.description')" />
 
     <Card>
       <CardHeader>

@@ -42,8 +42,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, ensure_url_under_base, fetch_json_document, new_http_client,
-    to_registry_error, UpstreamHttpOptions,
+    cache_control, ensure_url_under_base, fetch_json_document, new_http_client, to_registry_error,
+    UpstreamHttpOptions,
 };
 
 /// How long one fetched v2 index answers `resolve_metadata` before it is
@@ -62,7 +62,7 @@ struct CachedIndex {
 }
 
 pub struct DevfileRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     base_url: String,
     basic_auth: Option<(String, String)>,
     index: Mutex<Option<CachedIndex>>,
@@ -88,8 +88,8 @@ impl DevfileRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// The v2 index of stacks, from the in-process copy when it is fresh.

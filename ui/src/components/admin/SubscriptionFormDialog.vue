@@ -256,9 +256,7 @@ async function submitForm() {
           />
         </div>
         <fieldset class="space-y-2 border-0 p-0 m-0">
-          <legend
-            class="font-mono text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-none"
-          >
+          <legend class="font-sans text-sm font-medium text-foreground leading-none">
             {{ t("adminNotifications.eventTypes") }} <span class="text-destructive">*</span>
           </legend>
           <div class="flex flex-wrap gap-2">

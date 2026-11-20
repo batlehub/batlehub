@@ -89,7 +89,7 @@ function linkLabel(url: string): string {
        nothing, since Refresh is the same size wherever it sits. -->
   <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
     <div class="min-w-0 flex-1">
-      <h1 class="font-display font-bold tracking-[0.02em] leading-[0.92] text-display break-words">
+      <h1 class="text-title font-semibold tracking-tight leading-tight break-words">
         {{ data.name }}
       </h1>
       <!-- The separator is `text-muted-foreground`, not `text-border`.

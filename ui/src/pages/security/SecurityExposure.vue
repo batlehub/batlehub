@@ -9,7 +9,7 @@ const { t } = useI18n();
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" :title="t('securityNav.exposure')" />
+    <PageHeader :title="t('securityNav.exposure')" />
     <ExposurePanel />
   </div>
 </template>

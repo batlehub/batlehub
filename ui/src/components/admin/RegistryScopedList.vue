@@ -65,7 +65,7 @@ function closeAdd() {
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" :title="title" :description="description">
+    <PageHeader :title="title" :description="description">
       <template #actions>
         <Button size="sm" :disabled="!selectedRegistry" @click="addDialogOpen = true">{{
           addLabel

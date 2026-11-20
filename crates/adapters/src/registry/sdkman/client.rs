@@ -37,7 +37,7 @@ use batlehub_core::{
 
 use super::models::{broker_download_url, parse_validate_answer, relayed_path_is_allowed};
 use crate::registry::http_client::{
-    basic_auth_get, cache_control, fetch_text_document, new_http_client, no_redirect_client_pair,
+    cache_control, fetch_text_document, new_http_client, no_redirect_client_pair,
     to_registry_error, UpstreamHttpOptions,
 };
 use crate::registry::ssrf;
@@ -48,7 +48,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 pub struct SdkmanRegistryClient {
     /// The candidates API: small text documents, redirects followed by
     /// reqwest itself (the API never redirects off-host).
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     /// The broker download, with reqwest's own redirect following disabled so
     /// every hop of the `302` chain goes through the SSRF guard.
     dl_credentialed: reqwest::Client,
@@ -83,8 +83,8 @@ impl SdkmanRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     fn api(&self, path: &str) -> String {
