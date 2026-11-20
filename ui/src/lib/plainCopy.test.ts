@@ -12,6 +12,20 @@ describe("withoutDocRefs", () => {
     expect(withoutDocRefs("Shadowed (RFC 0045-bis §3, §4) here.")).toBe("Shadowed here.");
   });
 
+  it("keeps a parenthesis that only mentions an RFC, and an outer one", () => {
+    expect(withoutDocRefs("Kept (RFC 0019 is the source) here.")).toBe(
+      "Kept (RFC 0019 is the source) here.",
+    );
+    expect(withoutDocRefs("Both (outer (see RFC-0004)) stay.")).toBe("Both (outer) stay.");
+  });
+
+  it("stays linear on a long run of spaces", () => {
+    const text = `a${" ".repeat(200_000)}b (RFC 0019)`;
+    const start = performance.now();
+    expect(withoutDocRefs(text)).toBe(`a${" ".repeat(200_000)}b`);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
   it("leaves text without a citation untouched", () => {
     expect(withoutDocRefs("No upstream_auth is configured.")).toBe(
       "No upstream_auth is configured.",

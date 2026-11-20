@@ -7,13 +7,50 @@
  * displayed; the stable `code` beside the message is what links back to it.
  */
 
-/** A parenthesised RFC citation, with the whitespace that led into it. */
-const RFC_CITATION =
-  /\s*\((?:see\s+)?RFC[\s-]?\d{4}(?:-[a-z]+)?(?:\s*§\s*[\d.]+)?(?:[,;]\s*[^)]*)?\)/gi;
+/** The opening of an RFC citation's contents: `RFC 0019`, `see RFC-0004`. */
+const RFC_HEAD = /^\s*(?:see\s+)?RFC[\s-]?\d{4}/i;
+/** What may follow it: a `-bis` suffix, a `§ 4.1`, then a `,`/`;` list or the end. */
+const RFC_TAIL = /^(?:-[a-z]+)?(?:\s*§\s*[\d.]+)?(?:[,;]|$)/i;
 
-/** `text` without its parenthesised RFC citations. */
+/** Whether a parenthesis's contents are an RFC citation. */
+function isRfcCitation(inner: string): boolean {
+  const head = RFC_HEAD.exec(inner);
+  return head !== null && RFC_TAIL.test(inner.slice(head[0].length));
+}
+
+/**
+ * `text` without its parenthesised RFC citations, and the whitespace that led
+ * into each. Scanned by hand rather than with one regex: the single pattern
+ * backtracked super-linearly on long server messages.
+ */
 export function withoutDocRefs(text: string): string {
-  return text.replace(RFC_CITATION, "").replace(/\s+([.,;:])/g, "$1");
+  let out = "";
+  let from = 0;
+  for (;;) {
+    const close = text.indexOf(")", from);
+    if (close < 0) break;
+    // The innermost parenthesis that this `)` closes.
+    const open = text.lastIndexOf("(", close);
+    if (open >= from && isRfcCitation(text.slice(open + 1, close))) {
+      out += text.slice(from, open).trimEnd();
+    } else {
+      out += text.slice(from, close + 1);
+    }
+    from = close + 1;
+  }
+  return withoutSpaceBeforePunctuation(out + text.slice(from));
+}
+
+/** `text` with the whitespace in front of `.`, `,`, `;` and `:` removed. */
+function withoutSpaceBeforePunctuation(text: string): string {
+  const out: string[] = [];
+  for (const ch of text) {
+    if (".,;:".includes(ch)) {
+      while (out.length > 0 && /\s/.test(out[out.length - 1] ?? "")) out.pop();
+    }
+    out.push(ch);
+  }
+  return out.join("");
 }
 
 /**
