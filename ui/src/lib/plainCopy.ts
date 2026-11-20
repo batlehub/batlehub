@@ -46,7 +46,7 @@ function withoutSpaceBeforePunctuation(text: string): string {
   const out: string[] = [];
   for (const ch of text) {
     if (".,;:".includes(ch)) {
-      while (out.length > 0 && /\s/.test(out[out.length - 1] ?? "")) out.pop();
+      while (out.length > 0 && /\s/.test(out.at(-1) ?? "")) out.pop();
     }
     out.push(ch);
   }
