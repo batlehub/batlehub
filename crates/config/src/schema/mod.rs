@@ -885,7 +885,7 @@ impl AppConfig {
         ] {
             if url.as_deref().is_some_and(|u| u.starts_with("http:")) {
                 out.push(ConfigWarning::new(
-                    "stats.monitoring-url-http",
+                    warnings::STATS_MONITORING_URL_HTTP,
                     format!("stats.{field}"),
                     "the monitoring link uses http; the browser follows it in clear text",
                 ));
@@ -3821,7 +3821,11 @@ impl AppConfig {
                 if !self.registries.iter().any(|reg| reg.name == r) {
                     anyhow::bail!("`console.accepted`: \"{a}\" names no registry");
                 }
-            } else if a.strip_prefix("warning:").is_none_or(str::is_empty) {
+            } else if let Some(code) = a.strip_prefix("warning:") {
+                if !warnings::ALL.contains(&code) {
+                    anyhow::bail!("`console.accepted`: \"{a}\" names no config warning");
+                }
+            } else {
                 anyhow::bail!(
                     "`console.accepted`: \"{a}\" is neither `coverage:<registry>` nor `warning:<code>`"
                 );

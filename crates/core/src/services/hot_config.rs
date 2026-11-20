@@ -509,6 +509,10 @@ pub struct HotConfig {
     /// `[console].accepted`'s `coverage:` entries: registries left
     /// unprotected on purpose, which the Coverage line no longer counts.
     pub accepted_unprotected: std::collections::BTreeSet<String>,
+    /// `[console].accepted`'s `warning:` codes, applied where every warning
+    /// is assembled — the replica-drift and mise ones are raised outside
+    /// `AppConfig::warnings`.
+    pub accepted_warnings: std::collections::BTreeSet<String>,
     /// The gates a `[security]` registry runs as scanners instead of rules
     /// (RFC 0018 §6.1): `block_list`, `cve_gate` and the three wrapped
     /// metadata gates, built per registry because each holds that registry's
@@ -703,6 +707,7 @@ impl Default for HotConfig {
             forge_refs: HashMap::new(),
             security: HashMap::new(),
             accepted_unprotected: std::collections::BTreeSet::new(),
+            accepted_warnings: std::collections::BTreeSet::new(),
             forge_raw: HashMap::new(),
             forge_api_reads: HashMap::new(),
             air_gap: crate::entities::AirGapPolicy::default(),

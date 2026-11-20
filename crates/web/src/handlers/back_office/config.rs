@@ -521,6 +521,11 @@ pub async fn get_config_warnings(
             &|name| anonymous.contains(name),
         ));
     }
+    // `[console].accepted` covers the rows raised outside `AppConfig::warnings` too.
+    let accepted = hot.read().await.accepted_warnings.clone();
+    for w in &mut warnings {
+        w.accepted |= accepted.contains(&w.code);
+    }
     Ok(web::Json(ConfigWarningsResponse { warnings }))
 }
 

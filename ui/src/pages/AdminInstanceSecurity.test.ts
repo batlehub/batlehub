@@ -71,6 +71,17 @@ describe("AdminInstanceSecurity (RFC 0050 §4.5)", () => {
     expect(w.get('[data-testid="warnings-accepted"]').text()).toContain("proxy-trust.unconfigured");
   });
 
+  it("an accepted warning alone leaves the page quiet", async () => {
+    const w = await mountWith({
+      ...base,
+      sign_ins: { state: "ok", rejected: 0, by_kind: {} },
+      token_sources: { new_source: 0 },
+      static_tokens: { plain: 0, paths: [] },
+      warnings: [{ code: "cors.any-origin", path: "server", message: "…", accepted: true }],
+    });
+    expect(w.find('[data-testid="quiet"]').exists()).toBe(true);
+  });
+
   it("a store that did not answer is one unknown line, and the page is not quiet", async () => {
     const w = await mountWith({
       ...base,

@@ -53,6 +53,16 @@ describe("SecurityCoverage (RFC 0050 §4.5)", () => {
     expect(rows[2]!.text()).toContain("not protected");
   });
 
+  it("does not count a registry accepted as unprotected", async () => {
+    const w = await mountWith([
+      row({}),
+      row({ registry: "go-public", protected: false, security_mode: null, accepted: true }),
+    ]);
+    expect(w.get('[data-testid="coverage-summary"]').text()).toContain(
+      "2 registries · 1 protected · 0 not protected",
+    );
+  });
+
   it("has no scanners column without config:read (the server leaves them out)", async () => {
     const w = await mountWith([row({})]);
     expect(w.text()).not.toContain("Scanners");

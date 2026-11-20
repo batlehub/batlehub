@@ -68,6 +68,8 @@ struct ReloadAppOpts {
     builder: HotConfigBuilder,
     /// Unioned onto the instance node, as a top-level `[grants]` block is.
     instance_grants: Option<batlehub_core::entities::GrantMap>,
+    /// `[console].accepted`'s `warning:` codes, as the hot config carries them.
+    accepted_warnings: std::collections::BTreeSet<String>,
 }
 
 impl Default for ReloadAppOpts {
@@ -79,6 +81,7 @@ impl Default for ReloadAppOpts {
             hot_reload_enabled: true,
             builder: Arc::new(|_| anyhow::bail!("not used in tests")),
             instance_grants: None,
+            accepted_warnings: Default::default(),
         }
     }
 }
@@ -144,6 +147,7 @@ async fn build_reload_app(
             )),
             registries: HashMap::new(),
             policies: HashMap::new(),
+            accepted_warnings: opts.accepted_warnings,
             ..Default::default()
         }),
         storage,
@@ -435,6 +439,34 @@ async fn config_warnings_endpoint_returns_the_active_warnings() {
     assert_eq!(warnings[0]["code"], codes::PROXY_TRUST_UNCONFIGURED);
     // `path` is shown verbatim so an operator can grep the TOML for it.
     assert_eq!(warnings[0]["path"], "server.trusted_proxies");
+}
+
+/// `config.replica-drift` and the mise rows are raised outside
+/// `AppConfig::warnings`, so the endpoint applies `[console].accepted` itself.
+#[actix_web::test]
+async fn config_warnings_endpoint_marks_a_warning_raised_outside_the_config_accepted() {
+    use batlehub_config::schema::{warnings as codes, ConfigWarning};
+    let app = build_reload_app(ReloadAppOpts {
+        warnings: vec![ConfigWarning::new(
+            codes::CONFIG_REPLICA_DRIFT,
+            "replicas",
+            "the replicas serve 2 different configurations",
+        )],
+        accepted_warnings: [codes::CONFIG_REPLICA_DRIFT.to_owned()].into(),
+        ..Default::default()
+    })
+    .await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/admin/config/warnings")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["warnings"][0]["accepted"], true);
 }
 
 #[actix_web::test]

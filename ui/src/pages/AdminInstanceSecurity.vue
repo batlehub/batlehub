@@ -67,6 +67,9 @@ const byKind = computed(() =>
     .map(([k, n]) => `${AUDIT_ACTION_LABEL_KEYS[k] ? t(AUDIT_ACTION_LABEL_KEYS[k]!) : k} ${n}`)
     .join(", "),
 );
+/** `[console].accepted`: still listed, never counted as attention. */
+const openWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => !w.accepted));
+const acceptedWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => w.accepted));
 const quiet = computed(() => {
   const d = data.value;
   if (!d) return false;
@@ -80,13 +83,9 @@ const quiet = computed(() => {
     !d.token_sources.new_source &&
     !d.static_tokens.plain &&
     !(d.exemptions?.expiring_7d ?? 0) &&
-    !(d.warnings?.length ?? 0)
+    !openWarnings.value.length
   );
 });
-
-/** `[console].accepted`: still listed, never counted as attention. */
-const openWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => !w.accepted));
-const acceptedWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => w.accepted));
 </script>
 
 <template>
