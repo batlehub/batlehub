@@ -346,7 +346,7 @@ function settleLeave(leave: boolean) {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="successMsg ?? ''" />
-    <PageHeader variant="display" :title="t('adminNav.configReload')" />
+    <PageHeader :title="t('adminNav.configReload')" />
 
     <!--
       The config could not be read: say so, say what it costs, offer a retry.

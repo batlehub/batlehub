@@ -14,15 +14,14 @@ import { TriangleAlert } from "@lucide/vue";
 import type { ConfigWarning } from "@/client/types.gen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { leadSentence, withoutDocRefs } from "@/lib/plainCopy";
+import { leadSentence, sentenceStart, withoutDocRefs } from "@/lib/plainCopy";
 
 defineProps<{ warnings: ConfigWarning[]; dismissible?: boolean }>();
 const emit = defineEmits<{ dismiss: [warning: ConfigWarning] }>();
 const { t } = useI18n();
 
 /** The server writes its messages lower-case, as log lines; a row leads with a capital. */
-const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-const parts = (w: ConfigWarning) => leadSentence(capitalised(withoutDocRefs(w.message)));
+const parts = (w: ConfigWarning) => leadSentence(sentenceStart(withoutDocRefs(w.message)));
 </script>
 
 <template>

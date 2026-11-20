@@ -103,7 +103,9 @@ describe("AdminWarming", () => {
    */
   it("offers a package field to a package registry and a path field to a path one", async () => {
     const wrapper = await mountPage();
-    expect(warmRow(wrapper, "npm").find("input").attributes("placeholder")).toMatch(/lodash/);
+    expect(warmRow(wrapper, "npm").find("input").attributes("placeholder")).toMatch(
+      /@scope\/package/,
+    );
     expect(warmRow(wrapper, "jb").find("input").attributes("placeholder")).toMatch(/idea/);
   });
 

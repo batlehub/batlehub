@@ -235,7 +235,6 @@ function reset() {
     <PageHeader
       :title="t('adminNav.bulkBlock')"
       :description="t('adminBulk.blockOrUnblockMultiplePackages')"
-      variant="display"
     />
 
     <!-- Format reference -->

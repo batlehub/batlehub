@@ -8,9 +8,10 @@ import { computed } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import { adminStats, registryHealth } from "@/client/sdk.gen";
-import type { RegistryHealthDto, StatsResponse } from "@/client/types.gen";
+import type { RegistryHealthDto, RegistryStatsDto, StatsResponse } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
+import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,13 +35,21 @@ const { data, loading, error, reload } = useApi<StatsResponse>(
 const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 /**
- * What each registry *is*, beside how it is doing: type, mode, size and last
- * activity, from the health probe the dashboard already reads. A list of names
- * and hit rates left an operator opening each registry to learn which one was
- * the npm proxy and which the private gems. Joined by name; a registry the
- * probe does not return keeps its stats row with dashes, never disappears.
- * The probe asks `system:read` and this page only `stats:read`: without it the
- * probe is not called — a 403 on every load — and the columns stay dashes.
+ * What each registry *is*, beside how it is doing. Type and mode come from the
+ * role-filtered registry list, which any viewer of this page can read; a list
+ * of names and hit rates left an operator opening each registry to learn which
+ * one was the npm proxy and which the private gems. Joined by name; a registry
+ * missing from it keeps its stats row with dashes, never disappears.
+ */
+const { registries } = useRegistryOptions();
+const infoByName = computed(() => new Map(registries.value.map((r) => [r.name, r] as const)));
+
+/**
+ * The last pull is only in the health probe, which asks `system:read` where
+ * this page asks `stats:read`: without it the probe is not called — a 403 on
+ * every load — and the column says "—", not "Never", since nothing was asked.
+ * Kept for the operator who holds it: when a registry was last used is the
+ * one thing here that tells a dead registry from a quiet one.
  */
 const { data: health } = useApi<RegistryHealthDto[]>(
   () =>
@@ -52,6 +61,19 @@ const { data: health } = useApi<RegistryHealthDto[]>(
 const healthByName = computed(
   () => new Map((health.value ?? []).map((h) => [h.registry, h] as const)),
 );
+
+/**
+ * `upstream_degraded: false` is also what a registry with no upstream traffic
+ * reports (local mode, nothing fetched since restart, just hot-reloaded), so
+ * the green "healthy" needs evidence the upstream was asked: a miss, or a
+ * recorded latency or error rate.
+ */
+function upstreamState(r: RegistryStatsDto): "degraded" | "ok" | "idle" | "none" {
+  if (r.upstream_degraded) return "degraded";
+  if (infoByName.value.get(r.registry)?.mode === "local") return "none";
+  const asked = r.artifact_misses > 0 || r.upstream_latency_ms > 0 || r.upstream_error_rate > 0;
+  return asked ? "ok" : "idle";
+}
 
 /** The whole row opens the registry, for a pointer; the name stays the link. */
 const router = useRouter();
@@ -66,7 +88,6 @@ function openRow(name: string, event: MouseEvent) {
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminRegistries.title')"
       :description="t('adminRegistries.description')"
     />
@@ -115,14 +136,14 @@ function openRow(name: string, event: MouseEvent) {
                   <template v-else>{{ r.registry }}</template>
                 </TableCell>
                 <TableCell>
-                  <Badge v-if="healthByName.get(r.registry)" variant="secondary">{{
-                    healthByName.get(r.registry)?.registry_type
+                  <Badge v-if="infoByName.get(r.registry)" variant="secondary">{{
+                    infoByName.get(r.registry)?.type
                   }}</Badge>
                   <span v-else class="text-muted-foreground">—</span>
                 </TableCell>
                 <TableCell class="hidden md:table-cell">
-                  <Badge v-if="healthByName.get(r.registry)" variant="outline">{{
-                    healthByName.get(r.registry)?.mode
+                  <Badge v-if="infoByName.get(r.registry)" variant="outline">{{
+                    infoByName.get(r.registry)?.mode
                   }}</Badge>
                   <span v-else class="text-muted-foreground">—</span>
                 </TableCell>
@@ -138,13 +159,26 @@ function openRow(name: string, event: MouseEvent) {
                     :title="formatDate(healthByName.get(r.registry)?.last_pull_at)"
                     >{{ formatRelative(healthByName.get(r.registry)?.last_pull_at) }}</time
                   >
-                  <template v-else>{{ t("common.never") }}</template>
+                  <template v-else-if="healthByName.has(r.registry)">{{
+                    t("common.never")
+                  }}</template>
+                  <template v-else>—</template>
                 </TableCell>
                 <TableCell
                   class="text-sm"
-                  :class="r.upstream_degraded ? 'text-destructive' : 'text-ok'"
+                  :class="{
+                    'text-destructive': upstreamState(r) === 'degraded',
+                    'text-ok': upstreamState(r) === 'ok',
+                    'text-muted-foreground': ['idle', 'none'].includes(upstreamState(r)),
+                  }"
                   >{{
-                    r.upstream_degraded ? t("adminRegistry.degraded") : t("adminRegistry.ok")
+                    upstreamState(r) === "degraded"
+                      ? t("adminRegistry.degraded")
+                      : upstreamState(r) === "ok"
+                        ? t("adminRegistry.ok")
+                        : upstreamState(r) === "idle"
+                          ? t("adminRegistries.noUpstreamTraffic")
+                          : "—"
                   }}</TableCell
                 >
               </TableRow>

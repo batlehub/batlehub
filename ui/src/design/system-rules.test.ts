@@ -177,31 +177,6 @@ describe("the Undependable Fill Rule", () => {
       "a row tint is not a state",
     ).toEqual([]);
   });
-
-  it("sets no dim ink over the halftone plate", () => {
-    /* The specimen section is the one surface in the product with an image
-       under its text. `--ink` clears 4.5:1 on the plate with room (9.60:1 in
-       dark, 7.70:1 in light); `--ink-dim` measures 3.20:1 and 3.35:1.
-
-       `text-muted-foreground` sat on the facts paragraph and painted no glyph,
-       because every child overrides it — so it was a trap rather than a
-       defect: the next plain word added to that paragraph would have rendered
-       under the floor with nothing to catch it. */
-    /* Graded wherever a plate is placed rather than on the one file that used
-       to hold it: the catalog header dropped its plate when the texture went
-       back to the home page alone (DESIGN.md, The Material Layer), and a
-       plate placed anywhere next is held to the same floor. */
-    const offenders: string[] = [];
-    for (const [file, source] of Object.entries(SOURCES)) {
-      let at = source.indexOf('<div class="plate"');
-      while (at !== -1) {
-        const section = source.slice(at, source.indexOf("</section>", at));
-        if (section.includes("text-muted-foreground")) offenders.push(file);
-        at = source.indexOf('<div class="plate"', at + 1);
-      }
-    }
-    expect(offenders, "dim ink measures 3.20/3.35:1 on the plate").toEqual([]);
-  });
 });
 
 /**

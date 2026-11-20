@@ -25,7 +25,7 @@ describe("PageHeader", () => {
   // opts into the bitmap face any more — it is the wordmark's and the home
   // greeting's alone.
   it("sets every variant in the interface face", () => {
-    for (const variant of ["default", "display", "poster"] as const) {
+    for (const variant of ["default", "poster"] as const) {
       const wrapper = mount(PageHeader, { props: { title: "Health", variant } });
       expect(wrapper.find("h1").classes()).not.toContain("font-display");
     }
@@ -34,7 +34,7 @@ describe("PageHeader", () => {
   // The Flat-At-Rest Rule: no title in this system carries a glow. Pinned so a
   // reinstated text-shadow fails here rather than in a rendered-page scan.
   it("never glows in either variant", () => {
-    for (const variant of ["default", "display"] as const) {
+    for (const variant of ["default", "poster"] as const) {
       const wrapper = mount(PageHeader, { props: { title: "Health", variant } });
       expect(wrapper.find("h1").classes()).not.toContain("cyber-text-glow");
     }

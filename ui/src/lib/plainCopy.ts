@@ -29,3 +29,14 @@ export function leadSentence(text: string): { lead: string; rest: string } {
   if (!match) return { lead: text, rest: "" };
   return { lead: match[1], rest: text.slice(match[0].length) };
 }
+
+/**
+ * `text` with a capital first letter, unless it opens on an identifier — a
+ * TOML key (`overlay = true`, `on_confirmed`), a path or a tool spec
+ * (`github:jdx/mise`) — whose spelling is what the operator searches for.
+ */
+export function sentenceStart(text: string): string {
+  const first = text.split(/\s/, 1)[0] ?? "";
+  if (/[_=:./[\]]/.test(first) || /^\S+\s+=/.test(text)) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

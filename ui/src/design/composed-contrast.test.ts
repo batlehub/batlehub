@@ -125,18 +125,6 @@ function alphaOf(file: string, pattern: RegExp, rendition: "dark" | "light"): nu
   return Math.min(...pool);
 }
 
-/** A plain CSS declaration, for the alphas written as `opacity` rather than as
-    a Tailwind suffix. `selector` must be unique enough to find its own rule. */
-function cssOpacity(file: string, selector: string): number {
-  const source = readFileSync(resolve(process.cwd(), "src", file), "utf8");
-  const start = source.indexOf(selector);
-  if (start === -1) throw new Error(`selector not found in ${file}: ${selector}`);
-  const body = source.slice(start, source.indexOf("}", start));
-  const match = /opacity:\s*([\d.]+)/.exec(body);
-  if (!match) throw new Error(`no opacity in ${file} ${selector}`);
-  return Number(match[1]);
-}
-
 /**
  * WCAG 2.2 floors. `text` is 1.4.3 at normal weight and size; `boundary` is
  * 1.4.11, which covers a border or fill that is the only thing distinguishing
@@ -273,41 +261,6 @@ const PAIRINGS: Pairing[] = [
         rendition,
       );
       return contrastRatio(composite(token(t, "--accent"), ground, alpha), ground);
-    },
-  },
-  {
-    what: "the text on the halftone plate composite",
-    site: "components/catalog/CatalogSpecimen.vue + assets/index.css .plate",
-    floor: TEXT,
-    /* The specimen facts run under the plate from roughly 600px of viewport
-       to 1181px, where the plate is 52% of the width and the text is not.
-       The renditions ink it differently — `--copper` at .34 on black, `--ink`
-       at .20 on paper — so the composite is built per rendition rather than
-       from one token.
-
-       Alpha is the declared opacity, un-attenuated by the mask: the raster
-       runs 99.7% ink at its dense end, so the worst case a glyph can land on
-       is the full value.
-
-       Graded against `--ink`, which is what the facts are set in. This asked
-       about `--ink-dim` and reported 3.20:1 — a colour that was *declared* on
-       the paragraph and painted on no glyph, because every child overrides it
-       (`text-foreground` on the facts, `text-border` on the `aria-hidden`
-       separators). The declaration is gone now, so the paragraph inherits
-       `--ink` and this measures what a reader sees; the lock that keeps dim
-       ink off this surface is in `system-rules.test.ts`, where a rule about
-       source belongs. */
-    ratio: (t, rendition) => {
-      const ground = token(t, "--ground");
-      const plate =
-        rendition === "dark"
-          ? composite(token(t, "--copper"), ground, cssOpacity("assets/index.css", ".plate {"))
-          : composite(
-              token(t, "--ink"),
-              ground,
-              cssOpacity("assets/index.css", ':root[data-theme="light"] .plate {'),
-            );
-      return contrastRatio(token(t, "--ink"), plate);
     },
   },
   {

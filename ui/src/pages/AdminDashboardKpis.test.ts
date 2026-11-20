@@ -15,6 +15,7 @@ vi.mock("@/client/sdk.gen", () => ({
 
 import AdminDashboard from "./AdminDashboard.vue";
 import { useAuth } from "@/composables/useAuth";
+import { formatDate } from "@/lib/format";
 
 const stats = {
   since_startup: "2026-08-12T10:00:00Z",
@@ -52,6 +53,12 @@ describe("AdminDashboard figures", () => {
     expect(kpis(w).text()).toContain("100");
     expect(registriesState(w).text()).toBe("all answering");
     expect(registriesState(w).classes()).toContain("text-ok");
+  });
+
+  // RFC 0050 §6.7: a restart is dated to the minute, not the day.
+  it("dates the restart with its time of day", async () => {
+    const w = await mountDashboard();
+    expect(kpis(w).text()).toContain(`since restart, ${formatDate(stats.since_startup)}`);
   });
 
   it("counts registries with upstream errors", async () => {

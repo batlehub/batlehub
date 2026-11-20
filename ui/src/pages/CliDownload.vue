@@ -173,7 +173,7 @@ const usageSnippets = [
     <!-- Header -->
     <div class="flex items-center gap-3">
       <Terminal class="h-6 w-6 text-foreground shrink-0" aria-hidden="true" />
-      <PageHeader as="h2" variant="display" :title="t('account.cli')" class="flex-1">
+      <PageHeader as="h2" :title="t('account.cli')" class="flex-1">
         <template #description>
           <i18n-t keypath="cliDownload.downloadAndConfigure" tag="span">
             <template #cli><code class="font-mono text-xs">batlehub-cli</code></template>

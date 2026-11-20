@@ -285,11 +285,7 @@ async function confirmUnblock() {
 <template>
   <div class="space-y-6">
     <Announcer :message="announcement" />
-    <PageHeader
-      variant="display"
-      :title="t('adminNav.blocks')"
-      :description="t('adminBlocks.description')"
-    >
+    <PageHeader :title="t('adminNav.blocks')" :description="t('adminBlocks.description')">
       <template #actions>
         <Button variant="outline" size="sm" :disabled="loading" @click="refresh">
           {{ loading ? t("common.refreshing") : t("common.refresh") }}

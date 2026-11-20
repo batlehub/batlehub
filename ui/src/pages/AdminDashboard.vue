@@ -33,7 +33,7 @@ import SecurityStatusStrip from "@/components/admin/SecurityStatusStrip.vue";
 import StateMark from "@/components/admin/StateMark.vue";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
-import { formatBytes as fmtBytes, formatCount, formatDay } from "@/lib/format";
+import { formatBytes as fmtBytes, formatCount, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -244,7 +244,7 @@ const trendText = computed(() => {
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" :title="t('dashboard.title')">
+    <PageHeader :title="t('dashboard.title')">
       <template v-if="monitoring" #actions>
         <Button as-child size="sm" variant="outline">
           <a :href="monitoring" target="_blank" rel="noopener noreferrer" data-testid="monitoring">
@@ -368,7 +368,7 @@ const trendText = computed(() => {
             {{ totalRequests ? fmtPct(hitRate) : "—" }}
           </dd>
           <dd class="mt-1 text-xs text-muted-foreground">
-            {{ t("adminDashboard.kpiSince", { date: formatDay(stats.since_startup) }) }}
+            {{ t("adminDashboard.kpiSince", { date: formatDate(stats.since_startup) }) }}
           </dd>
         </div>
         <div class="border border-border px-4 py-3">

@@ -42,7 +42,6 @@ const withScanners = computed(() => rows.value.some((r) => r.scanners != null));
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('securityNav.coverage')"
       :description="t('securityCoverage.description')"
     />

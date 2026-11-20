@@ -105,7 +105,6 @@ watch(pastedUrl, parseUrl);
       as="h2"
       :title="t('pathMapper.urlMapper')"
       :description="t('pathMapper.pasteAnUpstreamUrlOr')"
-      variant="display"
     />
 
     <!-- Universal paste input -->

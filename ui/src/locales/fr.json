@@ -1503,7 +1503,8 @@
     "upstream": "Amont",
     "type": "Type",
     "mode": "Mode",
-    "lastPull": "Dernier pull"
+    "lastPull": "Dernier pull",
+    "noUpstreamTraffic": "Aucun trafic pour l'instant"
   },
   "holdsPanel": {
     "title": "Versions retenues",

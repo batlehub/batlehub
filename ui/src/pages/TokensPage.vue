@@ -219,7 +219,7 @@ const lifetimePresets = [7, 30, 90];
 
 <template>
   <div class="space-y-6">
-    <PageHeader variant="display" as="h2">
+    <PageHeader as="h2">
       <template #title>
         <Key class="h-5 w-5 text-foreground" aria-hidden="true" />
         {{ t("tokensPage.personalApiTokens") }}

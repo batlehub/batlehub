@@ -271,11 +271,7 @@ watch(
     </Alert>
 
     <template v-else-if="view">
-      <PageHeader
-        variant="display"
-        :title="view.name"
-        :description="`${view.registry_type} · ${view.mode}`"
-      >
+      <PageHeader :title="view.name" :description="`${view.registry_type} · ${view.mode}`">
         <template #actions>
           <Button v-if="monitoring" as-child size="sm" variant="outline">
             <a

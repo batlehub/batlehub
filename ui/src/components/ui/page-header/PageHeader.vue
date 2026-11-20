@@ -5,7 +5,7 @@ withDefaults(
   defineProps<{
     title?: string;
     description?: string;
-    variant?: "default" | "display" | "poster";
+    variant?: "default" | "poster";
     /** `h2` for a page rendered inside a hub, whose layout already owns the `h1`. */
     as?: "h1" | "h2";
     /** A count after the title, in parentheses; nothing when 0 or absent. */

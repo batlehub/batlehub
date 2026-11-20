@@ -139,7 +139,6 @@ async function testSubscription(id: string) {
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminNav.subscriptions')"
       :description="t('adminNotifications.manageOutboundNotificationSubscriptionsAnd')"
     >

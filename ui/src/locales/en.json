@@ -1503,7 +1503,8 @@
     "upstream": "Upstream",
     "type": "Type",
     "mode": "Mode",
-    "lastPull": "Last pull"
+    "lastPull": "Last pull",
+    "noUpstreamTraffic": "No traffic yet"
   },
   "holdsPanel": {
     "title": "Held versions",

@@ -102,10 +102,6 @@ const tableCaption = computed(() =>
          indented, in the gutter of a list it is not part of, is the one
          placement that undercuts that.
 
-         `overflow-hidden` contains the plate; `relative` gives it a frame.
-         The h1 sits above it on z-index — the plate is `aria-hidden` and
-         purely decorative.
-
          The bottom rule is `--rule-soft`, the separator token, rather than
          `--border` (`--rule-strong`): it now divides the specimen from the
          sheet across the whole window, which is the job the proof gives

@@ -173,7 +173,6 @@ const decisionText = (d: DecisionItem) =>
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('securityNav.overview')"
       :description="t('securityOverview.description')"
     />

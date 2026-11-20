@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leadSentence, withoutDocRefs } from "./plainCopy";
+import { leadSentence, sentenceStart, withoutDocRefs } from "./plainCopy";
 
 describe("withoutDocRefs", () => {
   it("drops a parenthesised RFC citation and its section", () => {
@@ -43,5 +43,22 @@ describe("leadSentence", () => {
       lead: "server.trusted_proxies is unset.",
       rest: "Set it.",
     });
+  });
+});
+
+describe("sentenceStart", () => {
+  it("capitalises a prose opening", () => {
+    expect(sentenceStart("no upstream is set.")).toBe("No upstream is set.");
+  });
+
+  it("leaves an opening identifier as the server spelled it", () => {
+    for (const text of [
+      "overlay = true shadows the base.",
+      "on_confirmed is ignored here.",
+      "github:jdx/mise has no release.",
+      "server.trusted_proxies is empty.",
+    ]) {
+      expect(sentenceStart(text)).toBe(text);
+    }
   });
 });

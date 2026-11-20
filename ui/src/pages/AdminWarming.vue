@@ -169,7 +169,6 @@ onMounted(() => void loadStatus());
   <div class="space-y-6">
     <Announcer :message="announcement" />
     <PageHeader
-      variant="display"
       :title="t('adminNav.warming')"
       :description="t('adminWarming.registriesWithWarmingConfiguredTrigger')"
     >

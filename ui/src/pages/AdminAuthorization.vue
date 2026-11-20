@@ -48,7 +48,6 @@ const registry = ref("");
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminAuthorization.title')"
       :description="t('adminAuthorization.description')"
     />

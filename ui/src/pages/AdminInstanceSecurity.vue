@@ -70,6 +70,12 @@ const byKind = computed(() =>
 /** `[console].accepted`: still listed, never counted as attention. */
 const openWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => !w.accepted));
 const acceptedWarnings = computed(() => (data.value?.warnings ?? []).filter((w) => w.accepted));
+/** Plain static tokens, unless their config warning was accepted: the line then says so, calmly. */
+const staticAttention = computed(
+  () =>
+    !!data.value?.static_tokens.plain &&
+    !acceptedWarnings.value.some((w) => w.code === "auth.plain-static-token"),
+);
 const quiet = computed(() => {
   const d = data.value;
   if (!d) return false;
@@ -81,7 +87,7 @@ const quiet = computed(() => {
     !d.sign_ins.rejected &&
     !(d.bans?.active ?? 0) &&
     !d.token_sources.new_source &&
-    !d.static_tokens.plain &&
+    !staticAttention.value &&
     !(d.exemptions?.expiring_7d ?? 0) &&
     !openWarnings.value.length
   );
@@ -91,7 +97,6 @@ const quiet = computed(() => {
 <template>
   <div class="space-y-6">
     <PageHeader
-      variant="display"
       :title="t('adminNav.instanceSecurity')"
       :description="t('instanceSecurity.description')"
     >
@@ -189,7 +194,7 @@ const quiet = computed(() => {
             >
           </li>
           <li class="flex flex-col gap-1 py-2 lg:flex-row lg:gap-3" data-testid="line-static">
-            <StateMark :state="data.static_tokens.plain ? 'attention' : 'ok'" />
+            <StateMark :state="staticAttention ? 'attention' : 'ok'" />
             <span class="w-36 shrink-0 font-mono">{{ t("instanceSecurity.staticTokens") }}</span>
             <span class="min-w-0 flex-1">
               <template v-if="data.static_tokens.plain">

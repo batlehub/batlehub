@@ -161,7 +161,6 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
     <PageHeader
       :title="t('adminNav.health')"
       :description="t('adminHealth.liveSnapshotOfEachRegistry')"
-      variant="display"
     >
       <template #actions>
         <Button variant="outline" size="sm" :disabled="loading" @click="reload">

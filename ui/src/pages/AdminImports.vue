@@ -152,7 +152,6 @@ onMounted(() => void loadImports());
   <div class="space-y-6">
     <Announcer :message="announcement" />
     <PageHeader
-      variant="display"
       :title="t('adminNav.releaseImports')"
       :description="t('adminImports.configuredImportsDescription')"
     >

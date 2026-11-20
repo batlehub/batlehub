@@ -175,11 +175,7 @@ const cell = (v: number | null | undefined) => (v == null ? t("trendChart.noData
 
 <template>
   <div class="space-y-6">
-    <PageHeader
-      variant="display"
-      :title="t('securityNav.trends')"
-      :description="t('securityTrends.description')"
-    />
+    <PageHeader :title="t('securityNav.trends')" :description="t('securityTrends.description')" />
 
     <div class="flex flex-wrap items-end gap-4">
       <fieldset class="min-w-0 space-y-1">
