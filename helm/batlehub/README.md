@@ -53,12 +53,14 @@ default `filesystem` backend is backed by the `persistence` PVC, and
 replica, or switch to `s3`, which is the only backend every replica can write to
 concurrently.
 
-The Service and the PodDisruptionBudget select the server pods by
-`app.kubernetes.io/component: server`, so that `worker` pods — which carry the
-same name and instance labels — receive no proxy traffic and do not count
-towards the budget. Server pods created by an older chart lack that label: on
-the upgrade that introduces it, the Service has no endpoint until the first new
-server pod is ready.
+With `worker.enabled`, the Service and the PodDisruptionBudget also select the
+server pods by `app.kubernetes.io/component: server`, so that `worker` pods —
+which carry the same name and instance labels — receive no proxy traffic and do
+not count towards the budget. Without workers there is nothing to keep out and
+the selector stays as it was, so an upgrade changes nothing. With workers,
+server pods created by an older chart lack that label: on the upgrade that
+introduces it, the Service has no endpoint until the first new server pod is
+ready — plan that upgrade for a quiet window.
 
 ## Requirements
 

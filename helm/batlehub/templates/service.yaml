@@ -13,4 +13,10 @@ spec:
       name: http
   selector:
     {{- include "batlehub.selectorLabels" . | nindent 4 }}
+    {{- /* Only when worker pods exist to keep out: the label is new, and a
+         selector naming it drops every pod of the previous release from
+         the Service until a new one is Ready. Without workers, nothing
+         changes on upgrade. */}}
+    {{- if .Values.worker.enabled }}
     app.kubernetes.io/component: server
+    {{- end }}
