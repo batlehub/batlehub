@@ -90,7 +90,7 @@ const totalCachedBytes = computed<number | null>(() => {
 
 <template>
   <section class="relative overflow-hidden border-b border-rule-soft pb-6 pt-4">
-    <!-- No halftone plate here (DESIGN.md, The Material Layer): the texture is
+    <!-- No texture here (DESIGN.md, The material layer): the dot field is
          the home page's, where identity is the point; the catalog is a working
          surface and its header is a title, not a specimen. -->
     <!-- The proof's `.display` rule, ported rather than approximated:
