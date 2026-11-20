@@ -11,9 +11,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, ensure_same_origin, fetch_linked_text,
-    new_http_client, no_redirect_client_pair, percent_encode, to_registry_error,
-    UpstreamHttpOptions,
+    cache_control, encode_path, ensure_same_origin, fetch_linked_text, new_http_client,
+    no_redirect_client_pair, percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 
 /// OpenVSX registry client (open-vsx.org or compatible).
@@ -24,7 +23,7 @@ use super::http_client::{
 /// - `version = "1.2.3"`  → specific semver version
 /// - `artifact = Some("vsix")` → stream the `.vsix` extension package
 pub struct OpenVsxRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     /// The no-redirect pair, used by **both** reads that leave this origin: the
     /// linked README (see [`fetch_linked_text`]) and the artifact fetch.
     /// Redirects are disabled so the SSRF guard validates every hop, and
@@ -65,8 +64,8 @@ impl OpenVsxRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// Hosts a linked asset may be read from besides the base URL's own origin.

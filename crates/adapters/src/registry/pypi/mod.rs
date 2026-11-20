@@ -2,8 +2,7 @@ use batlehub_core::error::CoreError;
 use serde::Deserialize;
 
 use super::http_client::{
-    apply_upstream_options, apply_upstream_tls, basic_auth_get, new_http_client,
-    UpstreamHttpOptions,
+    apply_upstream_options, apply_upstream_tls, new_http_client, UpstreamHttpOptions,
 };
 use super::ssrf;
 
@@ -26,7 +25,7 @@ pub use client::{fetch_simple_page, normalize_name, rewrite_simple_page, SIMPLE_
 /// - `artifact`: filename of the specific distribution file
 ///   When `None`, `resolve_metadata` returns metadata without a specific artifact URL.
 pub struct PypiRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: super::http_client::UpstreamClient,
     /// Credentialed client for artifact downloads, with redirects DISABLED so the
     /// SSRF guard re-validates every hop. Carries the same auth default headers as
     /// `http`; the guard only attaches them while the URL stays on `base_url`.
@@ -65,8 +64,8 @@ impl PypiRegistryClient {
         })
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// Fetch an artifact download URL taken from the (untrusted) index JSON.

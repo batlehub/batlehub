@@ -4,7 +4,7 @@ use tracing as log;
 
 use batlehub_core::{entities::PackageId, error::CoreError, ports::UpstreamPackage};
 
-use super::http_client::{basic_auth_get, new_http_client, percent_encode, UpstreamHttpOptions};
+use super::http_client::{new_http_client, percent_encode, UpstreamHttpOptions};
 
 mod client;
 mod models;
@@ -23,7 +23,7 @@ mod providers;
 /// `PackageId.version`: `"versions"` for listing or a semver string.
 /// `PackageId.artifact`: `None` (listing), `"{os}/{arch}"` (provider download), `"download"` (module).
 pub struct TerraformRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: super::http_client::UpstreamClient,
     pub(super) base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
     /// Resolved search base URL. `None` = disabled; `Some(url)` = use this.
@@ -84,8 +84,8 @@ impl TerraformRegistryClient {
         }
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// Build the upstream URL for the given `PackageId`.

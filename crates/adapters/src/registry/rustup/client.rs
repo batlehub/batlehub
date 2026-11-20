@@ -44,8 +44,7 @@ use batlehub_core::{
 
 use super::models::ReleaseStable;
 use crate::registry::http_client::{
-    basic_auth_get, cache_control, fetch_text_document, new_http_client, to_registry_error,
-    UpstreamHttpOptions,
+    cache_control, fetch_text_document, new_http_client, to_registry_error, UpstreamHttpOptions,
 };
 
 /// How long one fetched `manifests.txt` answers a date lookup before it is
@@ -64,7 +63,7 @@ struct CachedManifests {
 }
 
 pub struct RustupRegistryClient {
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     base_url: String,
     basic_auth: Option<(String, String)>,
     manifests: Mutex<Option<CachedManifests>>,
@@ -86,11 +85,11 @@ impl RustupRegistryClient {
         &self.base_url
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
-    fn head(&self, url: &str) -> reqwest::RequestBuilder {
+    fn head(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
         let rb = self.http.head(url);
         match &self.basic_auth {
             Some((u, p)) => rb.basic_auth(u, Some(p)),

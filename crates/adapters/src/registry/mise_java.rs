@@ -52,7 +52,7 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, fetch_document_bytes, new_http_client, no_redirect_client_pair,
+    cache_control, fetch_document_bytes, new_http_client, no_redirect_client_pair,
     to_registry_error, UpstreamHttpOptions,
 };
 
@@ -121,7 +121,7 @@ struct State {
 }
 
 pub struct MiseJavaRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     /// Downloads: no redirects (followed by hand), no credential, public DNS.
     dl: reqwest::Client,
     base_url: String,
@@ -195,7 +195,7 @@ impl MiseJavaRegistryClient {
         }
         let url = format!("{}/{}", self.base_url, p.path());
         let fetched = fetch_document_bytes(
-            basic_auth_get(&self.http, &self.basic_auth, &url),
+            self.http.basic_auth_get(&self.basic_auth, &url),
             "mise-java metadata document",
         )
         .await;

@@ -28,7 +28,7 @@ use super::models::{
 /// - `version = "1.2.3"`  → specific semver version
 /// - `artifact = Some("vsix")` → stream the `.vsix` extension package
 pub struct VsCodeMarketplaceRegistryClient {
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     /// The linked-asset pair: redirects disabled so the SSRF guard validates
     /// every hop, credentials attached only while the chain stays on `base_url`
     /// (see [`fetch_linked_text`]). The public gallery's assets live off that

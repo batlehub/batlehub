@@ -40,7 +40,7 @@ pub fn normalize_name(name: &str) -> String {
 /// Returns the raw body bytes and the `Content-Type` header value so the
 /// handler can forward it to the client after URL rewriting.
 pub async fn fetch_simple_page(
-    client: &reqwest::Client,
+    client: &crate::registry::http_client::UpstreamClient,
     base_url: &str,
     name: &str,
     basic_auth: Option<&(String, String)>,

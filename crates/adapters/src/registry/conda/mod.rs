@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::registry::encode_path;
 use batlehub_core::{entities::PackageId, error::CoreError};
 
-use super::http_client::{basic_auth_get, new_http_client, UpstreamHttpOptions};
+use super::http_client::{new_http_client, UpstreamHttpOptions};
 
 mod client;
 mod models;
@@ -31,7 +31,7 @@ pub use models::CondaPackageInfo;
 /// `list_platforms` (default: `noarch` + the four major binary platforms) and
 /// collecting every distinct version string for the named package.
 pub struct CondaRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: super::http_client::UpstreamClient,
     pub(super) base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
     /// Platforms queried when `list_versions` is called.
@@ -82,12 +82,12 @@ impl CondaRegistryClient {
         self
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// `HEAD` of the same URL, with the same credential.
-    pub(super) fn head(&self, url: &str) -> reqwest::RequestBuilder {
+    pub(super) fn head(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
         let req = self.http.head(url);
         match &self.basic_auth {
             Some((user, pass)) => req.basic_auth(user, Some(pass)),

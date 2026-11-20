@@ -19,15 +19,13 @@ use batlehub_core::{
     services::mise_versions::versions,
 };
 
-use super::http_client::{
-    basic_auth_get, encode_path, fetch_text_document, new_http_client, UpstreamHttpOptions,
-};
+use super::http_client::{encode_path, fetch_text_document, new_http_client, UpstreamHttpOptions};
 
 /// The host mise asks when nothing is configured.
 pub const DEFAULT_BASE: &str = "https://mise-versions.jdx.dev";
 
 pub struct MiseVersionsRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     base_url: String,
     basic_auth: Option<(String, String)>,
 }
@@ -44,7 +42,7 @@ impl MiseVersionsRegistryClient {
     async fn version_list(&self, tool: &str) -> Result<VersionDocument, CoreError> {
         let url = format!("{}/data/{}.toml", self.base_url, encode_path(tool));
         fetch_text_document(
-            basic_auth_get(&self.http, &self.basic_auth, &url),
+            self.http.basic_auth_get(&self.basic_auth, &url),
             &format!("version list for '{tool}'"),
             "application/toml",
         )

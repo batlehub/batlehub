@@ -9,8 +9,8 @@ use batlehub_core::{
 };
 
 use super::super::http_client::{
-    basic_auth_get, cache_control, new_http_client, parse_http_date, percent_encode,
-    to_registry_error, UpstreamHttpOptions,
+    cache_control, new_http_client, parse_http_date, percent_encode, to_registry_error,
+    UpstreamHttpOptions,
 };
 use super::models::{decode_name, extract_all_xml_tags, extract_xml_tag, parse_last_updated};
 
@@ -31,7 +31,7 @@ use super::models::{decode_name, extract_all_xml_tags, extract_xml_tag, parse_la
 ///   - `Some(filename)` → the exact filename to fetch from the version directory
 ///     (e.g. `"guava-32.0.1-jre.jar"`, `"guava-32.0.1-jre.jar.sha1"`)
 pub struct MavenRegistryClient {
-    pub(super) http: reqwest::Client,
+    pub(super) http: super::super::http_client::UpstreamClient,
     pub(super) base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
     /// Resolved search URL base. `None` = disabled; `Some(url)` = use this.
@@ -60,11 +60,11 @@ impl MavenRegistryClient {
         })
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
-    pub(super) fn head(&self, url: &str) -> reqwest::RequestBuilder {
+    pub(super) fn head(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
         let rb = self.http.head(url);
         match &self.basic_auth {
             Some((u, p)) => rb.basic_auth(u, Some(p)),

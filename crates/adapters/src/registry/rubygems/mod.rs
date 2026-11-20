@@ -1,6 +1,6 @@
 use batlehub_core::{entities::PackageId, error::CoreError};
 
-use super::http_client::{basic_auth_get, new_http_client, UpstreamHttpOptions};
+use super::http_client::{new_http_client, UpstreamHttpOptions};
 use crate::registry::encode_path;
 
 mod client;
@@ -32,7 +32,7 @@ pub use models::{GemDependency, GemMetadata};
 ///   - `Some("gemspec")` → `/quick/Marshal.4.8/{name}-{version}.gemspec.rz`
 ///   - `None` → REST endpoint determined by `version` field
 pub struct RubyGemsRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     pub(super) base_url: String,
     basic_auth: Option<(String, String)>,
 }
@@ -47,8 +47,8 @@ impl RubyGemsRegistryClient {
         })
     }
 
-    pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    pub(super) fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> Result<String, CoreError> {

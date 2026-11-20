@@ -209,7 +209,9 @@ async fn fetch_simple_page_returns_body_and_content_type() {
         .create_async()
         .await;
 
-    let client = reqwest::Client::new();
+    let client =
+        crate::registry::http_client::new_http_client(None, &UpstreamHttpOptions::default())
+            .unwrap();
     let (body, content_type) = fetch_simple_page(&client, &server.url(), "My_Package", None, None)
         .await
         .unwrap();
@@ -228,7 +230,9 @@ async fn fetch_simple_page_404_returns_not_found() {
         .create_async()
         .await;
 
-    let client = reqwest::Client::new();
+    let client =
+        crate::registry::http_client::new_http_client(None, &UpstreamHttpOptions::default())
+            .unwrap();
     let err = fetch_simple_page(&client, &server.url(), "nonexistent", None, None)
         .await
         .unwrap_err();
@@ -244,7 +248,9 @@ async fn fetch_simple_page_500_returns_registry_error() {
         .create_async()
         .await;
 
-    let client = reqwest::Client::new();
+    let client =
+        crate::registry::http_client::new_http_client(None, &UpstreamHttpOptions::default())
+            .unwrap();
     let err = fetch_simple_page(&client, &server.url(), "broken", None, None)
         .await
         .unwrap_err();
@@ -264,7 +270,9 @@ async fn fetch_simple_page_sends_basic_auth_and_accept_headers() {
         .create_async()
         .await;
 
-    let client = reqwest::Client::new();
+    let client =
+        crate::registry::http_client::new_http_client(None, &UpstreamHttpOptions::default())
+            .unwrap();
     let auth = ("user".to_owned(), "pass".to_owned());
     let (_body, content_type) = fetch_simple_page(
         &client,

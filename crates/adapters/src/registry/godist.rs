@@ -37,8 +37,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, fetch_document_bytes, new_http_client,
-    to_registry_error, UpstreamHttpOptions,
+    cache_control, encode_path, fetch_document_bytes, new_http_client, to_registry_error,
+    UpstreamHttpOptions,
 };
 
 /// How long one fetched release document answers `resolve_metadata`. The
@@ -55,7 +55,7 @@ struct CachedRows {
 }
 
 pub struct GoDistRegistryClient {
-    http: reqwest::Client,
+    http: super::http_client::UpstreamClient,
     base_url: String,
     metadata_url: String,
     basic_auth: Option<(String, String)>,
@@ -77,8 +77,8 @@ impl GoDistRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     async fn releases(&self) -> Result<Vec<Release>, CoreError> {

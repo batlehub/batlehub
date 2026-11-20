@@ -8,8 +8,7 @@ use batlehub_core::{
 };
 
 use super::super::http_client::{
-    basic_auth_get, cache_control, new_http_client, percent_encode, to_registry_error,
-    UpstreamHttpOptions,
+    cache_control, new_http_client, percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 use super::models::{
     parse_plugin_list, PluginIdentity, PluginListEntry, PluginUpdate, SearchPluginsResponse,
@@ -26,7 +25,7 @@ use super::models::{
 /// - `artifact = Some("plugin@{channel}")` → same, from a release channel
 /// - `artifact = Some("file/{fileName}")` → `/files/{name}/{version}/{fileName}`
 pub struct JetbrainsMarketplaceRegistryClient {
-    http: reqwest::Client,
+    http: super::super::http_client::UpstreamClient,
     base_url: String,
     basic_auth: Option<(String, String)>,
 }
@@ -42,8 +41,8 @@ impl JetbrainsMarketplaceRegistryClient {
         })
     }
 
-    fn get(&self, url: &str) -> reqwest::RequestBuilder {
-        basic_auth_get(&self.http, &self.basic_auth, url)
+    fn get(&self, url: &str) -> crate::registry::http_client::UpstreamRequest {
+        self.http.basic_auth_get(&self.basic_auth, url)
     }
 
     /// Fetch every published version of `xml_id` in one hop.
