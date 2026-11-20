@@ -671,6 +671,27 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         Ok(result.rows_affected())
     }
 
+    /// Served by `idx_local_packages_registry_lower_name` (migration 073).
+    async fn stored_name_ignore_case(
+        &self,
+        registry: &str,
+        name: &str,
+    ) -> Result<Option<String>, CoreError> {
+        let row = sqlx::query(
+            "SELECT name FROM local_packages \
+             WHERE registry = $1 AND lower(name) = lower($2) \
+               AND status = 'published' AND deleted_at IS NULL \
+             ORDER BY name = lower(name) DESC, name ASC \
+             LIMIT 1",
+        )
+        .bind(registry)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| CoreError::Database(e.to_string()))?;
+        Ok(row.map(|r| r.get::<String, _>("name")))
+    }
+
     async fn list_package_names(&self, registry: &str) -> Result<Vec<String>, CoreError> {
         let rows = sqlx::query(
             "SELECT DISTINCT name FROM local_packages \

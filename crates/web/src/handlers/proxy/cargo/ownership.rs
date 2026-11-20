@@ -231,10 +231,10 @@ pub async fn cargo_add_owners(
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
     require_cargo(&registry, &map)?;
-    let name = super::helpers::local_crate_key(&local_svc, &registry, &name).await?;
     // Ownership is a local-registry concept; a proxy-mode registry has none to
     // change, and answering here would imply otherwise.
     require_local_mode(&registry, &mode_map)?;
+    let name = super::helpers::local_crate_key(&local_svc, &registry, &name).await?;
     require_owner_mutation(&local_svc, &registry, &name, &identity.0).await?;
 
     let ownership = local_svc.ownership.as_ref().expect("checked above");
@@ -299,8 +299,8 @@ pub async fn cargo_remove_owners(
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
     require_cargo(&registry, &map)?;
-    let name = super::helpers::local_crate_key(&local_svc, &registry, &name).await?;
     require_local_mode(&registry, &mode_map)?;
+    let name = super::helpers::local_crate_key(&local_svc, &registry, &name).await?;
     require_owner_mutation(&local_svc, &registry, &name, &identity.0).await?;
 
     let ownership = local_svc.ownership.as_ref().expect("checked above");

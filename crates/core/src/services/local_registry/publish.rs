@@ -884,7 +884,10 @@ impl LocalRegistryService {
         // `required` and fails, the rollback (pending row + bytes + quota) can
         // only remove a *pending* row: after the commit, a failed SBOM left a
         // listed version with no bytes that refused every republish.
-        self.run_publish_sbom(req, storage_key, bytes)
+        // Built here, stored only after the commit: a row for a version that
+        // never committed would reach the export and the licence gate.
+        let sboms = self
+            .run_publish_sbom(req, storage_key, bytes)
             .instrument(stage("publish_sbom"))
             .await?;
 
@@ -907,6 +910,7 @@ impl LocalRegistryService {
             self.revoke_quota(publisher, registry, bytes).await;
             return Err(e);
         }
+        self.store_publish_sbom(sboms).await;
 
         // After the commit, never before: a reader between a bump and the commit
         // would cache a listing without this version under the new generation.

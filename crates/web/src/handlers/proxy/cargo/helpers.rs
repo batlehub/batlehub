@@ -356,30 +356,21 @@ pub(super) fn stored_crate_name(existing: &[String], name: &str) -> String {
         .unwrap_or(folded)
 }
 
-/// [`stored_crate_name`] against the registry, listing names only when no
-/// row answers to the folded name and the client sent another spelling. The row's own `name` is taken because a
-/// backend may match names case-insensitively while storage keys do not.
+/// The stored spelling of `name` in the registry: the folded name, or the
+/// mixed-case one a crate published before names were folded keeps (its
+/// storage key is `{registry}/MyCrate/{version}`), or the folded name when
+/// there is neither. One indexed lookup; call it after the auth/mode guards.
 pub(super) async fn local_crate_key(
     local_svc: &batlehub_core::services::LocalRegistryService,
     registry: &str,
     name: &str,
 ) -> Result<String, crate::error::AppError> {
     let folded = local_crate_name(name);
-    if let Some(row) = local_svc
+    Ok(local_svc
         .backend
-        .get_versions(registry, &folded)
+        .stored_name_ignore_case(registry, &folded)
         .await?
-        .first()
-    {
-        return Ok(row.name.clone());
-    }
-    // A lowercase request (every sparse-index path) never listed a mixed-case
-    // crate before folding either; skipping it keeps a hybrid miss to one read.
-    if folded == name {
-        return Ok(folded);
-    }
-    let existing = local_svc.backend.list_package_names(registry).await?;
-    Ok(stored_crate_name(&existing, name))
+        .unwrap_or(folded))
 }
 
 /// crates.io's uniqueness rule: case-insensitive, with `-` and `_` equal.

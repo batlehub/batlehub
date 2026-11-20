@@ -79,6 +79,45 @@ async fn publish_inserts_package() {
     assert_eq!(versions[0].version, "1.0.0");
 }
 
+/// The stored spelling is found under any case, and the lowercase one wins
+/// when both exist: `name = $2` alone misses a crate stored as `MyCrate`.
+#[tokio::test]
+async fn stored_name_ignore_case_finds_a_mixed_case_row() {
+    let Some(url) = db_url() else { return };
+    let t = make_registry(&url).await;
+    let r = t.registry.as_str();
+    assert_eq!(
+        t.reg.stored_name_ignore_case(r, "mycrate").await.unwrap(),
+        None
+    );
+    t.reg.publish(pkg(r, "MyCrate", "1.0.0")).await.unwrap();
+    assert_eq!(
+        t.reg.stored_name_ignore_case(r, "mycrate").await.unwrap(),
+        None,
+        "a pending row is not published"
+    );
+    t.reg.commit_publish(r, "MyCrate", "1.0.0").await.unwrap();
+    assert!(t.reg.get_versions(r, "mycrate").await.unwrap().is_empty());
+    assert_eq!(
+        t.reg
+            .stored_name_ignore_case(r, "mycrate")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("MyCrate")
+    );
+    t.reg.publish(pkg(r, "mycrate", "2.0.0")).await.unwrap();
+    t.reg.commit_publish(r, "mycrate", "2.0.0").await.unwrap();
+    assert_eq!(
+        t.reg
+            .stored_name_ignore_case(r, "MYCRATE")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("mycrate")
+    );
+}
+
 #[tokio::test]
 async fn publish_duplicate_version_returns_conflict() {
     let Some(url) = db_url() else { return };

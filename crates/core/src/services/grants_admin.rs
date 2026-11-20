@@ -393,14 +393,16 @@ impl GrantAdminService {
         let rows = repo
             .grants_on_node(&target.registry, target.node_kind(), &target.node_key())
             .await?;
-        let exact = SubjectMatcher::parse(subject)
-            .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
-        // A stored subject is removed as written: a legacy bare `user:<id>`
-        // cannot be scoped once several providers are configured.
-        let matcher = if rows.iter().any(|g| g.subject == exact) {
-            exact
-        } else {
-            self.parse_subject(subject).await?
+        // Scoped as on a write; only when that is ambiguous (several providers)
+        // is a stored legacy bare `user:<id>` removed as written. Trying the
+        // bare form first would delete an inert legacy row and leave the live
+        // scoped grant in place.
+        let matcher = match self.parse_subject(subject).await {
+            Ok(m) => m,
+            Err(err) => match SubjectMatcher::parse(subject) {
+                Ok(exact) if rows.iter().any(|g| g.subject == exact) => exact,
+                _ => return Err(err),
+            },
         };
 
         // Ownership rows are the projection's to remove. Letting this delete one
@@ -1447,6 +1449,33 @@ mod tests {
         );
         assert!(svc.remove(&pkg(), "user:alice").await.unwrap());
         assert!(svc.list(&pkg()).await.unwrap().is_empty());
+    }
+
+    /// With one provider the bare spelling still means the scoped subject: a
+    /// node holding an inert legacy `user:alice` and the live `user:gh:alice`
+    /// loses the live one, or alice keeps her access.
+    #[tokio::test]
+    async fn removing_a_bare_user_with_one_provider_revokes_the_scoped_grant() {
+        let rows = Arc::new(Rows::default());
+        let svc = service(rows, &[], None, None);
+        let read = ["releases:read".to_owned()];
+        svc.set(&pkg(), "user:alice", &read, &admin())
+            .await
+            .unwrap();
+        svc.hot.write().await.user_providers = vec!["gh".to_owned()];
+        svc.set(&pkg(), "user:alice", &read, &admin())
+            .await
+            .unwrap();
+
+        assert!(svc.remove(&pkg(), "user:alice").await.unwrap());
+        let left: Vec<_> = svc
+            .list(&pkg())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|g| g.subject)
+            .collect();
+        assert_eq!(left, vec![SubjectMatcher::User("alice".to_owned())]);
     }
 
     /// A NuGet grant written in display spelling lands on the lower-cased id

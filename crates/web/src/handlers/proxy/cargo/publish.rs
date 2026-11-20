@@ -199,8 +199,8 @@ pub async fn cargo_yank(
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
     require_cargo(&registry, &map)?;
-    let name = local_crate_key(&local_svc, &registry, &name).await?;
     require_local_mode(&registry, &mode_map)?;
+    let name = local_crate_key(&local_svc, &registry, &name).await?;
     let actor = identity.0.user_id.clone().unwrap_or_default();
     local_svc
         .yank(&registry, &name, &version, &identity.0)
@@ -244,8 +244,8 @@ pub async fn cargo_unyank(
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
     require_cargo(&registry, &map)?;
-    let name = local_crate_key(&local_svc, &registry, &name).await?;
     require_local_mode(&registry, &mode_map)?;
+    let name = local_crate_key(&local_svc, &registry, &name).await?;
     let actor = identity.0.user_id.clone().unwrap_or_default();
     local_svc
         .unyank(&registry, &name, &version, &identity.0)
