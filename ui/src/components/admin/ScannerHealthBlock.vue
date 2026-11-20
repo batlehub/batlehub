@@ -35,7 +35,7 @@ const live = computed(() => (data.value?.workers ?? []).filter((w) => w.live));
 const lastSeen = computed(() =>
   (data.value?.workers ?? [])
     .map((w) => w.last_seen)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .at(-1),
 );
 const scannerState = (s: string) => (s === "ok" ? "ok" : "attention") as "ok" | "attention";

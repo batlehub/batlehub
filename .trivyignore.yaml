@@ -16,4 +16,13 @@
 #
 #   go version -m /usr/local/bin/trivy | head -1
 #   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod
-vulnerabilities: []
+vulnerabilities:
+  # Trivy v0.76.2 (the latest release, 2026-11-05) is built with Go 1.27.3;
+  # the fix is in Go 1.27.4 and no Trivy release carries it yet. The advisory is
+  # about HTTP/1 *servers* (`http.MaxBytesReader`), and the worker runs Trivy
+  # only as a CLI (`trivy fs`, `scanners/trivy.rs`), never `trivy server`.
+  - id: CVE-2026-97054
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-19
+    statement: Go stdlib HTTP/1 server bug in the Trivy CLI binary; no Trivy release with Go 1.27.4 yet, and the worker never runs it as a server.

@@ -3,8 +3,8 @@
   "@id": "https://batleforc.git.batleforc.fr/batlehub/vex/batlehub",
   "author": "BatleHub maintainers",
   "role": "Project maintainers",
-  "timestamp": "2026-11-07T00:00:00Z",
-  "version": 5,
+  "timestamp": "2026-11-19T00:00:00Z",
+  "version": 6,
   "tooling": "hand-maintained; validated and rendered by .github/scripts/vex.py",
   "statements": [
     {
@@ -153,6 +153,30 @@
       ],
       "status": "fixed",
       "status_notes": "Fixed after 1.9.0: Trivy v0.76.2 (TRIVY_VERSION in Containerfile.worker) carries go-jose/v4 4.1.6. Until then it was not_affected: the worker runs Trivy as `trivy ... --server <endpoint>` and never takes the opt-in sigstore/Rekor paths that parse JWKs."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-97054",
+        "description": "Go net/http: HTTP/1 servers keep reading a request body after http.MaxBytesReader's limit is exceeded"
+      },
+      "timestamp": "2026-11-19T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/batlehub-worker",
+          "subcomponents": [
+            { "@id": "pkg:golang/stdlib@v1.27.3" }
+          ]
+        },
+        {
+          "@id": "pkg:oci/batlehub-worker-guarddog",
+          "subcomponents": [
+            { "@id": "pkg:golang/stdlib@v1.27.3" }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The worker images ship the Trivy release binary (v0.76.2, built with Go 1.27.3) and run it only as a client: `trivy ... --server <endpoint>` or a local `trivy fs`. Neither starts an HTTP server, so the net/http server path the advisory is about never runs. The Trivy server, when deployed, is the upstream sub-chart's own image, not these."
     }
   ]
 }
