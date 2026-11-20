@@ -3516,7 +3516,10 @@ accepted = [
 
 Une entrée qui n'a aucune des deux formes, ou une entrée `coverage:` qui ne nomme
 aucun registre, est refusée au chargement : une faute de frappe n'accepterait
-sinon rien, en silence. Qui peut voir les téléchargements d'un consommateur ne
+sinon rien, en silence. Une entrée `warning:` qui nomme un code que cette
+version ne lève pas n'est pas refusée — pendant une mise à jour progressive ou
+un retour arrière, la configuration partagée peut nommer un code que seule
+l'autre version connaît —, mais elle lève `console.unknown-warning`. Qui peut voir les téléchargements d'un consommateur ne
 change pas : Exposition reste réservée à `audit:read`.
 
 ---

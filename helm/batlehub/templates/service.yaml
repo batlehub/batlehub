@@ -13,10 +13,6 @@ spec:
       name: http
   selector:
     {{- include "batlehub.selectorLabels" . | nindent 4 }}
-    {{- /* Only when worker pods exist to keep out: the label is new, and a
-         selector naming it drops every pod of the previous release from
-         the Service until a new one is Ready. Without workers, nothing
-         changes on upgrade. */}}
-    {{- if .Values.worker.enabled }}
-    app.kubernetes.io/component: server
-    {{- end }}
+    {{- /* No component label: pods of an older chart lack it, so naming it
+         would empty the Service on upgrade. Worker pods match this selector
+         but expose no port named `http`, so they are never an endpoint. */}}

@@ -191,6 +191,7 @@ Configuration admin page renders both.
 
 | Code | Meaning |
 |---|---|
+| `console.unknown-warning` | A `warning:<code>` in `[console].accepted` names no code this release raises: a typo, or a newer release's code during a rollout |
 | `proxy-trust.unconfigured` | No `trusted_proxies` list anywhere; forwarded host/scheme are believed from any client |
 | `proxy-trust.deprecated-key-only` | Proxy trust comes from the deprecated `[ip_blocking].trusted_proxies` |
 | `proxy-trust.invalid-deprecated-entry` | An entry of the deprecated `[ip_blocking].trusted_proxies` is not an IP or CIDR range and was dropped |

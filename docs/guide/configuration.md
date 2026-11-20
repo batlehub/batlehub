@@ -2752,7 +2752,10 @@ accepted = [
 | `warning:<code>` | The warning is still listed on Instance security and on the Configuration page, marked *accepted in [console]*, and no longer turns the *Config* line to `ATTENTION`. It is logged at `INFO` instead of `WARN`. |
 
 An entry that is neither form, or a `coverage:` entry naming no registry, is
-refused at load: a typo would otherwise accept nothing, silently. Who may still
+refused at load: a typo would otherwise accept nothing, silently. A `warning:`
+entry naming a code this release does not raise is not refused — during a
+rolling upgrade or a rollback the shared config may name a code only the other
+release knows — but it raises `console.unknown-warning`. Who may still
 see a consumer's downloads is unchanged — Exposure stays behind `audit:read`.
 
 ---

@@ -828,6 +828,7 @@ impl AppConfig {
         self.stats_url_warnings(&mut out);
         self.static_token_warnings(&mut out);
         self.security_history_warnings(&mut out);
+        self.console_warnings(&mut out);
         for w in &mut out {
             w.accepted = self.console.accepts_warning(&w.code);
         }
@@ -850,6 +851,24 @@ impl AppConfig {
             }
         }
         out
+    }
+
+    /// A `warning:<code>` in `[console].accepted` that this release never raises.
+    fn console_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (i, a) in self.console.accepted.iter().enumerate() {
+            if let Some(code) = a.strip_prefix("warning:") {
+                if !warnings::ALL.contains(&code) {
+                    out.push(ConfigWarning::new(
+                        warnings::CONSOLE_UNKNOWN_WARNING,
+                        format!("console.accepted[{i}]"),
+                        format!(
+                            "\"{a}\" names no config warning this release raises, so it accepts \
+                             nothing: a typo, or a code from a newer release."
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     /// RFC 0050 §4.3: a static token accepted in clear is said, by path only.
@@ -3821,10 +3840,10 @@ impl AppConfig {
                 if !self.registries.iter().any(|reg| reg.name == r) {
                     anyhow::bail!("`console.accepted`: \"{a}\" names no registry");
                 }
-            } else if let Some(code) = a.strip_prefix("warning:") {
-                if !warnings::ALL.contains(&code) {
-                    anyhow::bail!("`console.accepted`: \"{a}\" names no config warning");
-                }
+            } else if a.strip_prefix("warning:").is_some_and(|c| !c.is_empty()) {
+                // A code this binary does not know is said, not refused: a
+                // shared config may name one a newer release raises, and
+                // bailing would crash-loop the older replicas of a rollout.
             } else {
                 anyhow::bail!(
                     "`console.accepted`: \"{a}\" is neither `coverage:<registry>` nor `warning:<code>`"

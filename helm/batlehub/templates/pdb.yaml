@@ -32,13 +32,11 @@ spec:
   selector:
     matchLabels:
       {{- include "batlehub.selectorLabels" . | nindent 6 }}
-      {{- /* Only when worker pods exist to keep out: the label is new, and a
-           selector naming it drops every pod of the previous release from
-           the Service until a new one is Ready. Without workers, nothing
-           changes on upgrade. */}}
-      {{- if .Values.worker.enabled }}
+      {{- /* Worker pods carry the selector labels too and must not count
+           towards the budget. Unlike the Service's, a budget selector that
+           misses the older pods during an upgrade drops nothing: it only
+           leaves them unguarded against evictions until they are replaced. */}}
       app.kubernetes.io/component: server
-      {{- end }}
   {{- if $maxSet }}
   maxUnavailable: {{ $maxRaw }}
   {{- else }}

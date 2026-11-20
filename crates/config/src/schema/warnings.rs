@@ -487,8 +487,13 @@ pub const UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD: &str = "upstream-audit.block-withou
 /// `[stats]` monitoring link over `http` (RFC 0044 §4.3).
 pub const STATS_MONITORING_URL_HTTP: &str = "stats.monitoring-url-http";
 
-/// Every code above: what `[console].accepted`'s `warning:<code>` is checked
-/// against at load, so a typo is refused rather than accepting nothing.
+/// A `warning:<code>` in `[console].accepted` names no code of this release.
+/// Not refused: during a rolling upgrade or a rollback the shared config may
+/// name a code only the other release raises.
+pub const CONSOLE_UNKNOWN_WARNING: &str = "console.unknown-warning";
+
+/// Every code: what `[console].accepted`'s `warning:<code>` is checked
+/// against, so a typo is said rather than accepting nothing in silence.
 pub const ALL: &[&str] = &[
     MISE_WIRE_PREFIX_CLAIMED,
     MISE_OVERLAY_BACKEND_UNWIRED,
@@ -561,4 +566,5 @@ pub const ALL: &[&str] = &[
     UPSTREAM_AUDIT_NO_WORKER,
     UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD,
     STATS_MONITORING_URL_HTTP,
+    CONSOLE_UNKNOWN_WARNING,
 ];
