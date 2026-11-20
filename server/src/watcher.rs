@@ -168,10 +168,16 @@ pub(super) fn spawn_release_imports(
 
 // ── Leader election for the estate-wide periodic jobs ─────────────────────────
 
-/// The advisory lock the release imports, the OSV re-scan and the upstream
-/// audit run under: work done once per estate, not once per replica. One lock
-/// for the three, so the leader pins one pool connection, not three.
+/// The advisory lock the release imports and the OSV re-scan run under: work
+/// done once per estate, not once per replica. One lock for the two, so the
+/// leader pins one pool connection, not two.
 pub(super) const PERIODIC_JOBS_LEADER_KEY: i64 = 0x0051_9e71_0d1c;
+
+/// The upstream audit's own lock. It runs on the worker role only, while the
+/// two jobs above run on every role: under the shared lock a `--roles proxy`
+/// pod that won the election held it for its lifetime, and no worker ever
+/// audited — silently, since losing an election is not an error.
+pub(super) const UPSTREAM_AUDIT_LEADER_KEY: i64 = 0x0051_9e71_0d1d;
 
 pub(super) use batlehub_core::ports::LeaderLock;
 
