@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: cabce79ef4266d56
+sourceHash: bf002dfb20860d40
 ---
 
 # Référence de configuration
@@ -2912,7 +2912,7 @@ dry_run             = false
 
 | Champ | Type | Défaut | Notes |
 |---|---|---|---|
-| `keep_versions` | entier | *(non défini)* | Garder les N versions les plus récentes de chaque paquet, par date de publication |
+| `keep_versions` | entier | *(non défini)* | Garder les N versions non retirées les plus récentes de chaque paquet, par date de publication — plus la version stable la plus haute, quelle que soit sa date de publication |
 | `keep_for_days` | entier | *(non défini)* | Garder tout ce qui a été **publié** dans cette fenêtre |
 | `keep_if_pulled_days` | entier | *(non défini)* | Garder tout ce qui a été **téléchargé** dans cette fenêtre |
 | `keep_yanked` | booléen | `true` | Garder les versions retirées |
@@ -3206,6 +3206,7 @@ une seule question d'opérateur — même si les deux moitiés diffèrent :
 [stats]
 history_enabled        = true   # défaut
 history_retention_days = 30     # défaut ; 0 désactive l'élagage, pas l'historique
+security_history_retention_days = 90  # défaut : les tendances de sécurité de la console
 metrics_enabled        = true   # défaut : le comportement d'avant la RFC 0004
 # Liens de monitoring (absents par défaut : pas de bouton)
 dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
@@ -3216,6 +3217,7 @@ registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batl
 |---|---|---|---|
 | `history_enabled` | booléen | `true` | Enregistrer le cumul horaire du cache derrière la tendance du tableau de bord. `false` rétablit le tableau de bord d'avant la RFC 0004, qui n'affiche que les compteurs depuis le démarrage du processus courant |
 | `history_retention_days` | u32 | `30` | Supprimer les lignes de cumul plus anciennes. `0` garde toutes les lignes — cela désactive l'*élagage*, pas l'historique |
+| `security_history_retention_days` | u32 | `90` | Jours du cumul quotidien de sécurité derrière *Sécurité → Tendances* ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)). Suit `history_enabled`. `0` garde chaque jour ; au-delà de `365` ou à `0`, lève `stats.security-history-long`, le cumul survivant alors aux lignes d'audit qu'il résume. Une version antérieure à la RFC 0050 refuse cette clé : retirez-la avant un retour arrière |
 | `metrics_enabled` | booléen | `true` | Installer le collecteur Prometheus et servir `/metrics`. `false` fait répondre `503 metrics not configured` à `/metrics` |
 | `dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de *Admin → Tableau de bord*. Aucun paramètre |
 | `registry_dashboard_url` | chaîne | — | Le lien [Monitoring ↗] de chaque page de registre. `{registry}` est son seul paramètre, et il est obligatoire ; il est remplacé encodé en pourcentage, le modèle doit donc le placer dans la requête |
@@ -3457,8 +3459,12 @@ comme des identifiants et injectez-les par `env` plutôt que de les écrire dans
 fichier.
 
 **Les webhooks entrants.** Chaque bloc `[[notifications.inbound]]` accepte des
-événements venus d'ailleurs, vérifiés contre `X-Hub-Signature-256` quand un
-`secret` est défini. Sans secret, **toute charge est acceptée**, ce qui ne
+événements venus d'ailleurs, vérifiés quand un `secret` est défini : la requête
+porte `X-BatleHub-Timestamp: <secondes Unix>` et `X-Hub-Signature-256: sha256=<hex>`,
+un HMAC-SHA256 sur `"{timestamp}.{corps}"`. Un horodatage à plus de 300 secondes
+de l'horloge du serveur est refusé comme une mauvaise signature, de sorte qu'une
+requête capturée ne peut pas être rejouée plus tard — par exemple pour rétablir un
+`hard_block` que sa source a depuis révoqué. Sans secret, **toute charge est acceptée**, ce qui ne
 convient qu'à un réseau où rien de non fiable n'atteint le port. Un registre doté
 de [`[registries.security]`](#registries-security) rend le secret obligatoire :
 un événement `security.*` sur un webhook non signé permettrait à quiconque sur le
@@ -3485,6 +3491,33 @@ Les trois mêmes sont
 [la référence de la CLI](/fr/use/cli#notifications). Les canaux eux-mêmes sont de
 la configuration : en ajouter un est un changement de configuration et un
 rechargement, pas un appel d'API.
+
+---
+
+### 3.8e `[console]` (facultatif) {#console}
+
+Ce que la console de sécurité considère comme connu et assumé, plutôt que comme
+demandant de l'attention. Absent, rien n'est accepté. La liste vit dans la
+configuration et non derrière un bouton : un acquittement est relu et versionné
+comme tout autre changement, et il est le même pour tous les administrateurs.
+
+```toml
+[console]
+accepted = [
+  "coverage:go-public",               # un registre laissé sans [security] ni cve_gate, volontairement
+  "warning:proxy-trust.unconfigured", # un avertissement de configuration lu et conservé
+]
+```
+
+| Entrée | Effet |
+| --- | --- |
+| `coverage:<registre>` | La ligne et la page *Couverture* ne comptent plus le registre comme non protégé : la ligne indique *Tous protégés sauf go-public, laissé sans protection exprès*, et sa ligne de tableau *non protégé, exprès (config)*. |
+| `warning:<code>` | L'avertissement reste listé sur Sécurité de l'instance et sur la page Configuration, marqué *accepté dans [console]*, et ne fait plus passer la ligne *Config* en `ATTENTION`. Il est journalisé en `INFO` au lieu de `WARN`. |
+
+Une entrée qui n'a aucune des deux formes, ou une entrée `coverage:` qui ne nomme
+aucun registre, est refusée au chargement : une faute de frappe n'accepterait
+sinon rien, en silence. Qui peut voir les téléchargements d'un consommateur ne
+change pas : Exposition reste réservée à `audit:read`.
 
 ---
 
@@ -3741,7 +3774,7 @@ max_flags_per_minute = 600          # 0 désactive la limite
 | Clé | Défaut | Signification |
 | --- | --- | --- |
 | `name` | — | `[a-z0-9][a-z0-9_-]*`, 64 caractères au plus, unique — et distinct de tout nom de `[[notifications.inbound]]`, parce qu'un événement `security.verdict` stocke son `hard_block` sous le nom du webhook et que c'est le secret de cette source qui révoque un signalement sous ce nom. La source pousse sur `POST /api/v1/flags/{name}` et révoque par `DELETE /api/v1/flags/{name}/{external_id}`. |
-| `secret` | — | La clé HMAC-SHA256. La poussée porte `X-Hub-Signature-256: sha256=<hex>` sur le corps brut (sur un `DELETE`, qui n'en a pas, sur la chaîne canonique `DELETE\n/api/v1/flags/{source}/{external_id}`, de sorte qu'une signature de révocation capturée ne lève que le signalement qu'elle nomme), le même schéma que vérifie `[[notifications.inbound]]`. Un nom inconnu et une mauvaise signature répondent le même `404`. |
+| `secret` | — | La clé HMAC-SHA256. La poussée porte `X-BatleHub-Timestamp: <secondes Unix>` et `X-Hub-Signature-256: sha256=<hex>` sur `"{timestamp}.{corps}"` (sur un `DELETE`, qui n'a pas de corps, la chaîne canonique `DELETE\n/api/v1/flags/{source}/{external_id}` en tient lieu, de sorte qu'une signature de révocation capturée ne lève que le signalement qu'elle nomme), le même schéma que vérifie `[[notifications.inbound]]`. Un horodatage à plus de 300 s de l'horloge du serveur est refusé, de sorte qu'une poussée ou une révocation capturée ne peut pas être rejouée. Un nom inconnu et une mauvaise signature répondent le même `404`. |
 | `max_effect` | `gate` | L'effet le plus fort que cette source peut poser. Une poussée qui en demande plus est stockée au plafond et en est informée (`effect_capped: true`). |
 | `registries` | `[]` | Les registres que la source peut signaler. Un élément qui en nomme un autre est rejeté, élément par élément. |
 | `max_flags_per_minute` | `600` | Éléments par minute, toutes poussées confondues ; au-delà, la poussée entière vaut `429`, avec un `Retry-After`. |

@@ -53,6 +53,30 @@ pub struct ReloadResponse {
     /// the caller only discovers the difference when the subsequent apply fails
     /// with `404 No pending reload`.
     pub pending_created: bool,
+    /// The staged change's id, when `from-content` staged one: send it back to
+    /// `pending/apply` so it applies this change and not one staged since.
+    pub pending_id: Option<uuid::Uuid>,
+}
+
+/// Which staged change `pending/apply` is meant to apply.
+#[derive(Deserialize, ToSchema, Default)]
+pub struct ApplyPendingRequest {
+    /// The `id` of the pending change the caller reviewed (from `from-content`
+    /// or `GET pending`). When given and no longer the staged one, `409`.
+    #[serde(default)]
+    pub pending_id: Option<uuid::Uuid>,
+}
+
+/// The status a failed apply answers with.
+fn apply_error(e: anyhow::Error) -> AppError {
+    match e.downcast_ref::<ReloadApplyError>() {
+        Some(ReloadApplyError::NoPendingReload) => AppError::not_found(e.to_string()),
+        Some(ReloadApplyError::Expired | ReloadApplyError::Stale(_)) => {
+            AppError::conflict(e.to_string())
+        }
+        Some(ReloadApplyError::PersistFailed(_)) => AppError::internal(e.to_string()),
+        _ => AppError::bad_request(e.to_string()),
+    }
 }
 
 /// Immediately reload the configuration (load, validate, and apply atomically).
@@ -92,6 +116,7 @@ pub async fn reload_config(
         warnings: reload_svc.warnings(),
         // This call consumed the pending reload; nothing is left staged.
         pending_created: false,
+        pending_id: None,
     }))
 }
 
@@ -133,11 +158,13 @@ pub async fn get_pending_reload(
     post,
     path = "/api/v1/admin/config/pending/apply",
     tag = "back-office",
+    request_body(content = Option<ApplyPendingRequest>, description = "Optional: the id of the pending change being applied"),
     responses(
         (status = 200, description = "Pending reload applied", body = ReloadResponse),
         (status = 403, description = "`config:write` required"),
         (status = 404, description = "No pending reload"),
-        (status = 409, description = "Pending reload expired"),
+        (status = 409, description = "Pending reload expired, replaced by another one, or the config file changed since the editor loaded it"),
+        (status = 500, description = "The config file could not be written; nothing was applied"),
         (status = 503, description = "Hot reload disabled"),
     ),
     security(("bearer_token" = [])),
@@ -145,6 +172,7 @@ pub async fn get_pending_reload(
 #[post("/api/v1/admin/config/pending/apply")]
 pub async fn apply_pending_reload(
     identity: AuthIdentity,
+    body: Option<web::Json<ApplyPendingRequest>>,
     reload_svc: web::Data<Arc<ConfigReloadService>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
@@ -157,18 +185,17 @@ pub async fn apply_pending_reload(
     .await?;
     require_hot_reload(&reload_svc)?;
     let user_id = identity.0.user_id.as_deref().unwrap_or("unknown");
-    let diff = reload_svc.apply(user_id).await.map_err(|e| {
-        match e.downcast_ref::<ReloadApplyError>() {
-            Some(ReloadApplyError::NoPendingReload) => AppError::not_found(e.to_string()),
-            Some(ReloadApplyError::Expired) => AppError::conflict(e.to_string()),
-            _ => AppError::bad_request(e.to_string()),
-        }
-    })?;
+    let expected = body.and_then(|b| b.into_inner().pending_id);
+    let diff = reload_svc
+        .apply_checked(user_id, expected)
+        .await
+        .map_err(apply_error)?;
     Ok(web::Json(ReloadResponse {
         diff,
         warnings: reload_svc.warnings(),
         // This call consumed the pending reload; nothing is left staged.
         pending_created: false,
+        pending_id: None,
     }))
 }
 
@@ -292,6 +319,9 @@ pub struct ConfigContentResponse {
     /// True when hot reload is disabled (e.g. Kubernetes ConfigMap mount).
     /// Changes submitted via the editor API will be rejected when this is true.
     pub is_readonly: bool,
+    /// SHA-256 of `content`, hex: send it back as `from-content`'s `base_hash`
+    /// so a save never overwrites a file that changed since it was loaded.
+    pub content_hash: String,
 }
 
 /// Retrieve the raw TOML content of the current config file.
@@ -329,6 +359,7 @@ pub async fn get_config_content(
             ))),
         })?;
     Ok(web::Json(ConfigContentResponse {
+        content_hash: crate::services::content_hash(&content),
         content,
         is_readonly: !reload_svc.hot_reload_enabled,
     }))
@@ -337,6 +368,10 @@ pub async fn get_config_content(
 #[derive(Deserialize, ToSchema)]
 pub struct ConfigFromContentRequest {
     pub content: String,
+    /// `content_hash` of the file the editor loaded. Given, `from-content`
+    /// (and the apply after it) answers `409` if the file changed since.
+    #[serde(default)]
+    pub base_hash: Option<String>,
 }
 
 /// Validate a config TOML string without creating a pending reload.
@@ -351,7 +386,7 @@ pub struct ConfigFromContentRequest {
     responses(
         (status = 200, description = "Config is valid; diff returned", body = ReloadResponse),
         (status = 400, description = "Validation failure"),
-        (status = 403, description = "`config:read` required"),
+        (status = 403, description = "`config:write` required"),
         (status = 503, description = "Hot reload disabled"),
     ),
     security(("bearer_token" = [])),
@@ -363,9 +398,11 @@ pub async fn validate_config_content(
     reload_svc: web::Data<Arc<ConfigReloadService>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
+    // `config:write`, not read: the submitted file is expanded against the
+    // server's environment and a validation error can quote the expansion.
     crate::handlers::back_office::require_verb(
         &identity,
-        batlehub_core::entities::Action::ConfigRead,
+        batlehub_core::entities::Action::ConfigWrite,
         None,
         &hot,
     )
@@ -379,6 +416,7 @@ pub async fn validate_config_content(
         diff: outcome.diff,
         warnings: outcome.warnings,
         pending_created: outcome.pending_created,
+        pending_id: outcome.pending_id,
     }))
 }
 
@@ -396,6 +434,7 @@ pub async fn validate_config_content(
     responses(
         (status = 200, description = "Pending reload created", body = ReloadResponse),
         (status = 400, description = "Validation failure"),
+        (status = 409, description = "The config file changed since `base_hash` was read"),
         (status = 403, description = "`config:write` required"),
         (status = 503, description = "Hot reload disabled"),
     ),
@@ -418,13 +457,14 @@ pub async fn load_config_from_content(
     require_hot_reload(&reload_svc)?;
     let user_id = identity.0.user_id.as_deref().unwrap_or("unknown");
     let outcome = reload_svc
-        .load_pending_from_content(&body.content, user_id)
+        .load_pending_from_editor(&body.content, user_id, body.base_hash.as_deref())
         .await
-        .map_err(|e| AppError::bad_request(e.to_string()))?;
+        .map_err(apply_error)?;
     Ok(web::Json(ReloadResponse {
         diff: outcome.diff,
         warnings: outcome.warnings,
         pending_created: outcome.pending_created,
+        pending_id: outcome.pending_id,
     }))
 }
 

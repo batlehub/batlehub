@@ -20,6 +20,12 @@ pub enum ReloadApplyError {
     NoPendingReload,
     #[error("pending reload expired")]
     Expired,
+    /// Someone else staged or applied a change since this caller looked.
+    #[error("{0}")]
+    Stale(String),
+    /// The config file could not be written; nothing was applied.
+    #[error("the configuration was not applied: writing the config file failed ({0}). On a read-only mount (a Kubernetes Secret or ConfigMap) edit the file at its source instead")]
+    PersistFailed(String),
 }
 
 /// A row from the `config_changes` audit table.
@@ -141,7 +147,9 @@ impl ConfigReloadService {
                 &ReloadDiff::default(),
                 triggered_by,
                 "rejected",
-                Some(&format!("{e:#}")),
+                // The headline only: a TOML error's later lines quote the source
+                // after `${VAR}` expansion, and this row is `config:read`.
+                format!("{e:#}").lines().next(),
             )
             .await;
         }
@@ -164,6 +172,7 @@ impl ConfigReloadService {
             // A dry run by contract: this endpoint answers "would this config be
             // accepted", and never stages anything to apply.
             pending_created: false,
+            pending_id: None,
         })
     }
 
@@ -196,6 +205,7 @@ impl ConfigReloadService {
                 diff: ReloadDiff::default(),
                 warnings: self.load_layers(content).await?.0.warnings(),
                 pending_created: false,
+                pending_id: None,
             });
         }
         let loaded = match self.load_layers(content).await {
@@ -210,14 +220,55 @@ impl ConfigReloadService {
         self.record_rejection(&loaded, by).await;
         let (diff, warnings) = loaded?;
         // Store the raw content so apply() can persist it to disk.
+        let mut pending_id = None;
         if let Some(ref mut p) = *self.pending.lock().expect("pending reload lock poisoned") {
             p.content = Some(content.to_owned());
+            pending_id = Some(p.id);
         }
         Ok(ReloadOutcome {
             diff,
             warnings,
             pending_created: true,
+            pending_id,
         })
+    }
+
+    /// [`Self::load_pending_from_content`] for the editor, which says which
+    /// version of the file it started from (`base_hash`, a [`content_hash`] of
+    /// what `config/content` served). Refused when the file has changed since,
+    /// and the staged change remembers it so the apply checks again.
+    ///
+    /// [`content_hash`]: super::content_hash
+    pub async fn load_pending_from_editor(
+        &self,
+        content: &str,
+        by: &str,
+        base_hash: Option<&str>,
+    ) -> Result<ReloadOutcome, anyhow::Error> {
+        if let Some(base) = base_hash {
+            self.ensure_file_is(base).await?;
+        }
+        let outcome = self.load_pending_from_content(content, by).await?;
+        if let Some(ref mut p) = *self.pending.lock().expect("pending reload lock poisoned") {
+            if Some(p.id) == outcome.pending_id {
+                p.base_hash = base_hash.map(str::to_owned);
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// [`ReloadApplyError::Stale`] unless the primary file still hashes to `base`.
+    async fn ensure_file_is(&self, base: &str) -> Result<(), anyhow::Error> {
+        let on_disk = super::content_hash(&self.config_file.read().await?);
+        if on_disk != base {
+            return Err(ReloadApplyError::Stale(
+                "the config file changed since the editor loaded it; reload the editor and \
+                 make the change again"
+                    .to_owned(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     /// Read the current on-disk config content without parsing or validating it.
@@ -260,6 +311,7 @@ impl ConfigReloadService {
             source,
             diff: diff.clone(),
             content: None, // set by load_pending_from_content when originating from the editor
+            base_hash: None,
             layers,
             new_hot: built.hot,
             new_access: built.access,
@@ -286,18 +338,63 @@ impl ConfigReloadService {
     /// Applies the current pending reload: swaps hot config + access config, persists audit row,
     /// clears the pending state. Returns the diff that was applied.
     pub async fn apply(&self, triggered_by: &str) -> Result<ReloadDiff, anyhow::Error> {
+        self.apply_inner(triggered_by, None, true).await
+    }
+
+    /// [`Self::apply`], refused with [`ReloadApplyError::Stale`] — and the
+    /// staged change left in place — when the pending reload is not
+    /// `expected`: another admin staged over the one this caller reviewed.
+    pub async fn apply_checked(
+        &self,
+        triggered_by: &str,
+        expected: Option<uuid::Uuid>,
+    ) -> Result<ReloadDiff, anyhow::Error> {
+        self.apply_inner(triggered_by, expected, true).await
+    }
+
+    /// `announce`: tell the other replicas (`sync.rs`); off when this apply is
+    /// itself following one.
+    pub(super) async fn apply_inner(
+        &self,
+        triggered_by: &str,
+        expected: Option<uuid::Uuid>,
+        announce: bool,
+    ) -> Result<ReloadDiff, anyhow::Error> {
         if !self.hot_reload_enabled {
             return Err(ReloadApplyError::Disabled.into());
         }
-        let pending = self
-            .pending
-            .lock()
-            .expect("pending reload lock poisoned")
-            .take()
-            .ok_or(ReloadApplyError::NoPendingReload)?;
+        let pending = {
+            let mut slot = self.pending.lock().expect("pending reload lock poisoned");
+            match (slot.as_ref(), expected) {
+                (None, _) => return Err(ReloadApplyError::NoPendingReload.into()),
+                (Some(p), Some(id)) if p.id != id => {
+                    return Err(ReloadApplyError::Stale(
+                        "another change was staged since you reviewed this one; review the \
+                         pending change again before applying it"
+                            .to_owned(),
+                    )
+                    .into())
+                }
+                _ => slot.take().ok_or(ReloadApplyError::NoPendingReload)?,
+            }
+        };
 
         if Utc::now() > pending.expires_at {
             return Err(ReloadApplyError::Expired.into());
+        }
+
+        // Write editor-submitted content to disk *before* anything is swapped:
+        // a change that cannot be persisted is not applied, rather than live on
+        // this replica only and lost at its next restart. File-watcher reloads
+        // set content = None (the file is already correct on disk).
+        if let Some(ref text) = pending.content {
+            if let Some(ref base) = pending.base_hash {
+                self.ensure_file_is(base).await?;
+            }
+            if let Err(e) = self.persist_config_to_disk(text, pending.id).await {
+                tracing::warn!(path = %self.config_file, error = %e, "config editor: the config file could not be written; nothing applied");
+                return Err(ReloadApplyError::PersistFailed(e.to_string()).into());
+            }
         }
 
         // Set "reload in progress" banner while swapping.
@@ -402,21 +499,15 @@ impl ConfigReloadService {
                 .inspect_err(|e| tracing::warn!(error = %e, "failed to clear reload banner"));
         }
 
-        // Write editor-submitted content back to disk so the change survives a restart.
-        // File-watcher reloads set content = None (the file is already correct on disk).
-        if let Some(ref text) = pending.content {
-            if let Err(e) = self.persist_config_to_disk(text, pending.id).await {
-                tracing::warn!(
-                    path = %self.config_file,
-                    error = %e,
-                    "failed to persist editor config to disk; change is live in memory but will be lost on restart"
-                );
-            }
-        }
-
         // Persist audit row (best-effort — do not fail the reload if DB is unavailable).
         self.persist_audit(&pending.diff, triggered_by, "applied", None)
             .await;
+
+        if announce {
+            if let Some(primary) = pending.layers.first() {
+                self.announce_applied(primary).await;
+            }
+        }
 
         Ok(pending.diff)
     }

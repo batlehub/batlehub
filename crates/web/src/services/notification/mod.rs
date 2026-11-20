@@ -95,3 +95,32 @@ pub fn verify_inbound_hmac(secret: &str, body: &[u8], header_value: &str) -> boo
         .fold(0u8, |acc, (a, b)| acc | (a ^ b))
         == 0
 }
+
+/// Unix seconds at which the sender signed the request; part of the HMAC input.
+pub const TIMESTAMP_HEADER: &str = "X-BatleHub-Timestamp";
+
+/// How far the signed timestamp may be from this server's clock, either way.
+pub const MAX_SKEW_SECS: i64 = 300;
+
+/// The signature covers `"{timestamp}.{body}"` and the timestamp is within
+/// [`MAX_SKEW_SECS`] of `now`. Without the timestamp a captured request could be
+/// replayed forever — re-imposing a `hard_block` its source had since revoked.
+/// Shared by the inbound webhook and the `[[flag_sources]]` push and revoke.
+pub fn signed_and_fresh(
+    secret: &str,
+    timestamp: &str,
+    body: &[u8],
+    signature: &str,
+    now: i64,
+) -> bool {
+    let Ok(ts) = timestamp.parse::<i64>() else {
+        return false;
+    };
+    let mut signed = Vec::with_capacity(timestamp.len() + 1 + body.len());
+    signed.extend_from_slice(timestamp.as_bytes());
+    signed.push(b'.');
+    signed.extend_from_slice(body);
+    // Both checks run, so the answer's timing does not say which one failed.
+    let fresh = now.abs_diff(ts) <= MAX_SKEW_SECS.unsigned_abs();
+    verify_inbound_hmac(secret, &signed, signature) & fresh
+}

@@ -238,3 +238,11 @@ path = "fuzz_targets/fuzz_mise_wire_target.rs"
 test = false
 doc = false
 bench = false
+
+# The workspace root's stubs, mirrored: this is a separate workspace, so the
+# root's [patch.crates-io] does not reach it, and without these the fuzz lock
+# carried sqlx-mysql and libsqlite3-sys (RUSTSEC-2026-0459) the root removed.
+[patch.crates-io]
+sqlx-macros = { path = "../patches/sqlx-macros" }
+sqlx-mysql  = { path = "../patches/sqlx-mysql" }
+sqlx-sqlite = { path = "../patches/sqlx-sqlite" }

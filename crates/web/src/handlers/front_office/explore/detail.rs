@@ -1159,6 +1159,20 @@ async fn enforce_detail_gates(
         return Err(not_found());
     }
 
+    // The grant hierarchy, which `visibility` does not see: a namespace seal
+    // refuses the download, so the page describing the package must not open.
+    if !crate::handlers::front_office::packages::coordinate_grant(
+        hot, registry, name, None, identity,
+    )
+    .await
+    {
+        tracing::debug!(
+            registry = %registry, package = %name,
+            "explore detail: no read grant on this package"
+        );
+        return Err(not_found());
+    }
+
     Ok(())
 }
 
@@ -1417,7 +1431,13 @@ async fn enrich_page(
     };
 
     for row in versions.iter_mut() {
-        row.socket_badge_url = badge_for(&row.version);
+        // A locally published name may be private; the badge is an <img> the
+        // browser fetches from socket.dev, which would disclose it.
+        row.socket_badge_url = if row.source == "local" {
+            None
+        } else {
+            badge_for(&row.version)
+        };
         // Graded here because this is the one funnel every row the console draws
         // passes through — the page, and the selected row when it is on another
         // one. It reads only fields the row already carries, so it costs nothing.

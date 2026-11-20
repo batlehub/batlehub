@@ -714,10 +714,21 @@ pub async fn effective_verbs(hot: &HotConfigLock, identity: &Identity) -> Effect
     }
 }
 
-/// The first node on the path whose shadow is still in force today.
+/// The first node on the path whose shadow is still in force today, from the
+/// deepest seal down.
+///
+/// An enforced seal stays enforced under a shadow higher up: a registry-tier
+/// trial must not reopen a namespace that already refuses. The seal node's own
+/// shadow still counts — that is how a sealed namespace is put on trial.
 fn active_shadow(path: &[crate::entities::Node]) -> Option<&crate::entities::Node> {
     let today = chrono::Utc::now().date_naive();
-    path.iter()
+    let seal = path.iter().rposition(|n| {
+        n.grants
+            .as_ref()
+            .is_some_and(crate::entities::GrantMap::is_sealed)
+    });
+    path[seal.unwrap_or(0)..]
+        .iter()
         .find(|n| n.dry_run.as_ref().is_some_and(|d| d.is_active(today)))
 }
 
@@ -790,8 +801,8 @@ async fn record_shadowed(
 /// into a config file.
 fn subject_spelling(subject: &crate::entities::Subject) -> String {
     let identity = subject.identity();
-    match &identity.user_id {
-        Some(id) => format!("user:{id}"),
+    match identity.user_principal() {
+        Some(principal) => format!("user:{principal}"),
         // An anonymous caller has no user form, so the role is the narrowest
         // true statement about them.
         None => format!("role:{}", identity.role),
@@ -1932,6 +1943,22 @@ mod instance_tier_tests {
             until: chrono::Utc::now().date_naive() + chrono::Duration::days(7),
         }));
         assert!(!installable(&hot(None, Some(shadowed)), &anon).await);
+    }
+
+    /// A registry-tier shadow does not reopen an enforced seal below it; the
+    /// sealed node's own shadow does.
+    #[test]
+    fn a_shadow_above_an_enforced_seal_does_not_cross_it() {
+        use crate::entities::{DryRun, GrantMap, Node, Tier};
+        let trial = || {
+            Some(DryRun {
+                until: chrono::Utc::now().date_naive() + chrono::Duration::days(7),
+            })
+        };
+        let registry = Node::new(Tier::Registry, "registry:npm", None).shadowed(trial());
+        let seal = Node::new(Tier::Namespace, "namespace:@acme", Some(GrantMap::sealed()));
+        assert!(active_shadow(&[registry.clone(), seal.clone()]).is_none());
+        assert!(active_shadow(&[registry, seal.shadowed(trial())]).is_some());
     }
 
     /// `upstreams:read` is the administrator's by translation and anyone

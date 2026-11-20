@@ -187,6 +187,10 @@ pub async fn terraform_provider_binary_upload(
     // limit) that `terraform_provider_upload` gets via `publish_and_respond`.
     let name = format!("providers/{namespace}/{ptype}");
     let artifact_len = bytes.len() as u64;
+    let key =
+        terraform_provider_binary_storage_key(&registry, &namespace, &ptype, &version, &os, &arch);
+    // The manifest already created the version row, so only the key tells a
+    // first upload of this platform from a replacement of it.
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -196,15 +200,23 @@ pub async fn terraform_provider_binary_upload(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                artifact_key: Some(&key),
             },
             &identity.0,
         )
         .await
         .map_err(AppError::from)?;
+    // Nothing forces the manifest first: a binary of a new provider must claim it.
+    if let Err(e) = local_svc
+        .claim_unowned_package(&registry, &name, &identity.0)
+        .await
+    {
+        local_svc
+            .revoke_publish_quota(&identity.0, &registry, artifact_len)
+            .await;
+        return Err(AppError::from(e));
+    }
 
-    let key =
-        terraform_provider_binary_storage_key(&registry, &namespace, &ptype, &version, &os, &arch);
     if let Err(e) = local_svc
         .storage
         .store(
@@ -369,6 +381,7 @@ async fn upload_shasums_file(
     // two files decide what `terraform init` accepts.
     let name = format!("providers/{namespace}/{ptype}");
     let artifact_len = bytes.len() as u64;
+    let key = terraform_provider_shasums_storage_key(&registry, &namespace, &ptype, &version, file);
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -378,7 +391,7 @@ async fn upload_shasums_file(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                artifact_key: Some(&key),
             },
             &identity.0,
         )
@@ -409,7 +422,6 @@ async fn upload_shasums_file(
         }
     };
 
-    let key = terraform_provider_shasums_storage_key(&registry, &namespace, &ptype, &version, file);
     let content_type = match file {
         TerraformShasumsFile::Sums => "text/plain",
         TerraformShasumsFile::Signature => "application/octet-stream",

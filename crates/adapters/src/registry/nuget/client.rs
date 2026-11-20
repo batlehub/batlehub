@@ -45,7 +45,11 @@ impl NugetRegistryClient {
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
         let builder = reqwest::Client::builder()
             .user_agent("batlehub/0.1")
-            .redirect(reqwest::redirect::Policy::limited(10));
+            // `api_key` travels as `X-NuGet-ApiKey`, which reqwest does not strip cross-host.
+            .redirect(super::super::http_client::guarded_redirect_policy(
+                10,
+                opts.custom_header.is_some() || opts.bearer_token.is_some(),
+            ));
         let http = apply_upstream_options(builder, opts)?;
 
         let base = base_url.into();

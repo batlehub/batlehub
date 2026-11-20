@@ -226,23 +226,39 @@ impl BatleHubClient {
         Ok(body)
     }
 
-    /// The admin listing (RFC 0018 phase 5), raw: the caller prints it.
-    pub async fn list_verdicts(
-        &self,
-        registry: &str,
-        state: Option<&str>,
-        limit: Option<u64>,
-    ) -> Result<serde_json::Value> {
-        let mut path = format!(
-            "/api/v1/admin/verdicts?registry={}",
-            super::auth::percent_encode(registry)
-        );
-        if let Some(s) = state {
-            path.push_str(&format!("&state={}", super::auth::percent_encode(s)));
+    /// `GET /api/v1/admin/security/overview` (RFC 0050), raw: the caller
+    /// renders it and `--json` prints it as the one document.
+    pub async fn security_overview(&self) -> Result<serde_json::Value> {
+        let resp = self
+            .send(self.request(Method::GET, "/api/v1/admin/security/overview"))
+            .await?;
+        super::expect_ok(resp).await
+    }
+
+    /// The admin listing (RFC 0018 phase 5), one page, raw: the caller
+    /// prints it.
+    pub async fn list_verdicts(&self, p: &VerdictListParams<'_>) -> Result<serde_json::Value> {
+        let mut query: Vec<String> = Vec::new();
+        for (key, value) in [
+            ("registry", p.registry),
+            ("state", p.state),
+            ("reason", p.reason),
+        ] {
+            if let Some(v) = value {
+                query.push(format!("{key}={}", super::auth::percent_encode(v)));
+            }
         }
-        if let Some(l) = limit {
-            path.push_str(&format!("&limit={l}"));
+        if let Some(n) = p.page {
+            query.push(format!("page={n}"));
         }
+        if let Some(n) = p.per_page {
+            query.push(format!("per_page={n}"));
+        }
+        let path = if query.is_empty() {
+            "/api/v1/admin/verdicts".to_owned()
+        } else {
+            format!("/api/v1/admin/verdicts?{}", query.join("&"))
+        };
         let resp = self.send(self.request(Method::GET, &path)).await?;
         super::expect_ok(resp).await
     }
@@ -271,6 +287,16 @@ impl BatleHubClient {
         );
         self.post_no_body_json(&path).await
     }
+}
+
+/// The filters of `GET /api/v1/admin/verdicts`; `None` leaves one out.
+#[derive(Default)]
+pub struct VerdictListParams<'a> {
+    pub registry: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub page: Option<u64>,
+    pub per_page: Option<u64>,
 }
 
 #[cfg(test)]

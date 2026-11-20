@@ -31,7 +31,7 @@ use crate::entities::Action;
 /// Longer than a healthy upstream fetch and shorter than a page load anybody
 /// would sit through: the point is to collapse concurrent readers, not to make
 /// one reader's slow upstream everybody's problem.
-const SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(10);
+pub(super) const SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(10);
 
 /// What one discovery read did, so the page can say which rung answered.
 pub struct DiscoveryOutcome {

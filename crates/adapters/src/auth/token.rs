@@ -8,7 +8,7 @@ use base64::Engine as _;
 use tokio::task::spawn_blocking;
 
 use batlehub_core::{
-    entities::{Identity, Role},
+    entities::{is_argon2_hash, Identity, Role},
     error::CoreError,
     ports::{AuthProvider, RawAuthRequest},
 };
@@ -18,10 +18,6 @@ struct TokenRecord {
     user_id: Option<String>,
     role: Role,
     groups: Vec<String>,
-}
-
-fn is_argon2_hash(s: &str) -> bool {
-    s.starts_with("$argon2id$") || s.starts_with("$argon2i$") || s.starts_with("$argon2d$")
 }
 
 /// Constant-time byte comparison for secret values. Unlike `==`, this never
@@ -154,6 +150,12 @@ impl AuthProvider for StaticTokenAuthProvider {
             return Ok(None);
         };
 
+        // An empty secret (`Basic user:`, `Bearer `) is never a credential,
+        // even if a misconfigured empty token value is loaded.
+        if token.is_empty() {
+            return Ok(None);
+        }
+
         // Plain-text tokens: compare against every entry in constant time,
         // never short-circuiting on the first match, so a request's timing
         // can't reveal how close a guessed token is to a real one or which
@@ -263,6 +265,21 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(id.user_id.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_secret_never_matches_an_empty_token() {
+        use base64::Engine as _;
+        let p =
+            StaticTokenAuthProvider::new([(String::new(), Some("root".to_owned()), Role::Admin)]);
+        for user in ["user:", "user"] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(user);
+            assert!(p
+                .authenticate(&req(&format!("Basic {encoded}")))
+                .await
+                .unwrap()
+                .is_none());
+        }
     }
 
     #[tokio::test]

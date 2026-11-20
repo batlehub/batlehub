@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: e30ef76fdd1edf82
+sourceHash: 5c9dfd99ecfc029f
 ---
 
 # batlehub-cli
@@ -743,9 +743,26 @@ batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <
 Connecte par le fournisseur OIDC du serveur et enregistre le token, avec son
 token de rafraîchissement, dans le profil `-P`. La CLI écoute sur `127.0.0.1`,
 sur un port libre, et ouvre votre navigateur sur la connexion du serveur. Une
-fois que le fournisseur vous a connecté, le serveur renvoie le navigateur vers
-ce port. La CLI vérifie que le retour appartient bien à la connexion qu'elle a
-lancée, puis ferme le port. Elle attend jusqu'à cinq minutes.
+fois que le fournisseur vous a connecté, le serveur affiche d'abord une page,
+**Authorize batlehub-cli on this machine?**, qui indique quand la connexion a été
+lancée, depuis quelle adresse et quel client, et le port local auquel elle sera
+remise. N'autorisez que si vous venez de lancer `batlehub-cli auth login`
+vous-même : sur une machine partagée, un lien vers la connexion suffit à
+quelqu'un d'autre pour faire terminer par *votre* navigateur une connexion
+qu'*il* a lancée, et c'est sur cette page que cela s'arrête. Cancel abandonne la
+connexion ; la page expire au bout de cinq minutes et ne répond qu'une fois.
+Après **Authorize**, le serveur renvoie le navigateur vers ce port avec un code
+à usage unique, jamais le token lui-même. La CLI vérifie que le retour
+appartient à la connexion qu'elle a lancée, ferme le port, et échange le code
+contre le token avec un secret qu'elle seule détient (un vérificateur de type
+PKCE dont elle a envoyé le hash au lancement de la connexion). Un autre
+programme à l'écoute sur ce port, ou qui lit l'historique du navigateur, obtient
+un code dont il ne peut rien faire. Le code expire au bout de 60 secondes et ne
+sert qu'une fois. La CLI attend le navigateur jusqu'à cinq minutes.
+
+Le serveur refuse une connexion par boucle locale qui ne porte pas ce hash : une
+`batlehub-cli` antérieure à ce changement ne peut donc plus se connecter par le
+navigateur. Mettez-la à jour, ou utilisez `--no-browser`.
 
 Le navigateur est `$BROWSER` quand la variable est définie, sinon `xdg-open`,
 `open` ou le gestionnaire d'URL de Windows. Si aucun ne démarre, la CLI imprime
@@ -1246,6 +1263,26 @@ version, le signalement couvre toutes les versions. Renvoyer le même
 `--external-id` met à jour le signalement. `flag delete` le révoque et est
 [destructrice](#confirmation) : les versions qu'il retenait sont de nouveau
 servies.
+
+### État de la sécurité {#security-status}
+
+Le bandeau d'état de la console de sécurité, pour les scripts d'astreinte
+([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)) : une
+ligne par domaine que le jeton peut lire — retenues, signalements, scanners et
+worker, couverture — avec son état (`OK`, `ATTENTION`, `UNKNOWN`) et la page de
+la console qui permet d'agir.
+
+```
+batlehub-cli security status [--json]
+```
+
+La commande sort en `0` quand toutes les lignes sont `OK`, en `1` dès qu'une
+ligne est `ATTENTION`, en `7` quand aucune ne l'est mais qu'une est `UNKNOWN` ou
+illisible pour ce jeton (la sortie la nomme), et en `4` quand le jeton ne
+détient ni `quarantine:read` ni `flags:read`. `1` est aussi le code d'un échec
+de transport : un script qui doit distinguer « malware retenu » de « serveur
+injoignable » lit `--json`, qui imprime le corps de
+`GET /api/v1/admin/security/overview` comme unique document.
 
 ### Politiques et exemptions {#policy}
 
@@ -1972,7 +2009,7 @@ qui est retenu, et qui l'a déjà récupéré*.
 
 ```
 batlehub-cli verdict pullers  <registry>/<name>@<version> [--since <window>] [--format csv]
-batlehub-cli verdict list     -r <r> [--state <s>] [--limit <n>]
+batlehub-cli verdict list     [-r <r>] [--all-registries] [--state <s>] [--reason <code>] [--page <n>] [--limit <n>]
 batlehub-cli verdict backfill -r <r>
 batlehub-cli verdict rescan   -r <r> [--state <s>]
 ```
@@ -1987,9 +2024,19 @@ l'endpoint d'export, pour le transmettre à quelqu'un qui n'a pas la CLI.
 batlehub-cli verdict pullers npm/left-pad@1.3.1 --since 30d --format csv
 ```
 
-`list` montre les verdicts d'un registre par état — `allowed`, `warned`,
-`quarantined`, `denied`, ou tous les états quand `--state` est omis. `--limit`
-s'applique par état, vaut 100 par défaut et plafonne à 1000.
+`list` montre les verdicts refusés d'abord, puis en quarantaine, avertis et
+autorisés, chacun du plus récent au plus ancien, page par page, avec le
+total de toutes les correspondances. `--state` accepte `allowed`, `warned`,
+`quarantined`, `denied` ou `held` (refusés et en quarantaine), tous les états
+quand il est omis ; `--reason` ne garde que les verdicts qui portent un code de
+motif ; `--all-registries` couvre tous les registres protégés que vous pouvez
+lire au lieu du registre configuré. `--limit` est la taille de page, 100 par
+défaut et 1000 au plus, et `--page` parcourt les pages. Lors d'une
+compromission de masse, toutes les versions bloquées par un SOC :
+
+```sh
+batlehub-cli verdict list --all-registries --state held --reason SOC_VERDICT --limit 1000 --page 2
+```
 
 `backfill` met en file une analyse de basse priorité de toutes les versions en
 cache d'un registre, pour celles qui étaient déjà là quand l'analyse a été

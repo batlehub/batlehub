@@ -222,7 +222,7 @@ for who in secops user admin; do
   extra=()
   case "$who" in
     secops) extra=(--palette config) ;;
-    admin) extra=(--palette rescan --enter 1 --bookmarks 1 --editor 1) ;;
+    admin) extra=(--palette rescan --enter 1 --bookmarks 1 --nav 1 --editor 1) ;;
   esac
   if node tests/heavy/console_security.mjs --base "$CONSOLE" --token "$token" "${extra[@]}" \
     "${BROWSER_ARGS[@]}" >"$HEAVY_WORK/security-$who.jsonl" 2>"$HEAVY_WORK/security-$who.err"; then RC=0; else RC=$?; fi
@@ -238,6 +238,10 @@ secops, user, admin = (json.loads(open(p).read().splitlines()[-1]) for p in sys.
 assert "/security" in secops["links"] and "/admin" in secops["links"], secops
 assert secops["securityLanded"] == "/security", secops
 assert {"holds-panel", "flags-panel", "exposure-panel"} <= set(secops["panels"]), secops
+# RFC 0050 obs. 10: the overview's strip has its four lines, each with a state.
+assert {s["line"] for s in secops["status"]} == {"status-holds", "status-flags", "status-scanners", "status-coverage"}, secops["status"]
+assert all(s["state"] in ("ok", "attention", "unknown") for s in secops["status"]), secops["status"]
+assert secops["holdsLanded"] == "/security/holds", secops
 assert secops["adminLanded"] == "/admin/system/audit-log", secops
 assert "/security" not in user["links"] and "/admin" not in user["links"], user
 assert user["securityLanded"] == "/", user
@@ -251,19 +255,24 @@ assert secops["adminRequests"] == [], secops["adminRequests"]
 # Obs. 2: "rescan" leads to the scans page's failures, and that page fetched
 # its own data and nothing of another admin page.
 p = admin["palette"]
-assert p["opened"] and p["rows"][0] == "/admin/security/scans?tab=failures", p
-assert p["landed"] == "/admin/security/scans?tab=failures", p
+assert p["opened"] and p["rows"][0] == "/security/scanners?tab=failures", p
+assert p["landed"] == "/security/scanners?tab=failures", p
 assert "/api/v1/admin/scans" in p["requests"], p
-assert all(r.startswith(("/api/v1/admin/scans", "/api/v1/admin/verdicts")) for r in p["requests"]), p
+# RFC 0050: the page's health block reads /admin/security/scanners as well.
+assert all(r.startswith(("/api/v1/admin/scans", "/api/v1/admin/verdicts", "/api/v1/admin/security/scanners")) for r in p["requests"]), p
 # Obs. 6: every old path of §15 Q8 lands on its section-tree page, query kept.
 wrong = [b for b in admin["bookmarks"] if b["landed"] != b["want"]]
-assert len(admin["bookmarks"]) == 17 and not wrong, wrong
+assert len(admin["bookmarks"]) == 20 and not wrong, wrong
 # Obs. 5 and 7: Ctrl+K inside the editor opens nothing and types nothing; an
 # unsaved edit asks before the sidebar, the palette and the tab take it away.
 e = admin["editor"]
 assert e["shortcutInEditorOpened"] is False and e["textareaUnchangedByShortcut"], e
 assert e["sidebarAsked"] and e["keptAfterSidebar"] and e["paletteAsked"] and e["editKept"], e
 assert e["unloadPrompt"], e
+# RFC 0050 obs. 11 (phase 1): no tab strip, and Access, opened by the reader,
+# is still open after a reload (closed by default: only the current group is).
+n = admin["sidebar"]
+assert n == {"tabStrips": 0, "before": "false", "afterClick": "true", "afterReload": "true"}, n
 print("secops:", secops["links"], secops["panels"], "| user:", user["links"], "| admin palette:", p["rows"][:3], "| editor:", e)
 PY
 heavy_log "SECURITY-CONSOLE-OK (secops sees Security and its three panels, and is turned from the configuration page to its audit log; a user sees neither; the palette lists no more than the guard opens, and an unsaved config edit asks before it is lost)"

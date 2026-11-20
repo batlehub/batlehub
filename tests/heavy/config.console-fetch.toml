@@ -73,3 +73,25 @@ console_fetch = true
 anonymous = ["releases:read", "source:read"]
 user = ["releases:read", "source:read"]
 admin = ["*"]
+
+# ── A protected registry, for the security console's status strip ────────────
+#
+# RFC 0050 obs. 10: with no `[registries.security]` anywhere the overview draws
+# only Coverage and Flags, and the suite could not prove the four lines. This
+# registry is never downloaded from — nothing is queued, no scanner is called —
+# and it is shut to `anonymous` and `user`, so the catalogue the Fetch button
+# sits on lists only the registry above. The security delegate still reads it:
+# its verbs are granted at the instance tier.
+[[registries]]
+type = "npm"
+name = "npm-sec-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.security]
+mode = "block"

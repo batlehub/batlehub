@@ -17,7 +17,7 @@ const event = (over: Record<string, unknown> = {}) => ({
 
 async function mountPage() {
   const wrapper = mount(AdminInboundEvents, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   await flushPromises();
   return wrapper;

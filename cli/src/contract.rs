@@ -370,9 +370,14 @@ impl ContractFile {
     /// that vanished.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
+            // Only a directory this call creates is ours to lock down: chmod-ing
+            // an existing `/tmp` or `$HOME` to 0700 breaks everyone else using it.
+            let created = !parent.exists();
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
-            restrict_dir(parent);
+            if created {
+                restrict_dir(parent);
+            }
         }
         let body = serde_json::to_string_pretty(self).context("serializing the contract")?;
         let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));

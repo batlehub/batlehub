@@ -219,3 +219,24 @@ async fn maven_put_proxy_mode_registry_rejected() {
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 404);
 }
+
+/// A jar is stored without the three-phase publish, so it must claim an unowned
+/// coordinate itself: otherwise a second user's POM made them the owner of the
+/// first user's jar, served as their 1.0.0.
+#[actix_web::test]
+async fn maven_jar_claims_an_unowned_coordinate() {
+    let app = local_ownership_app("local-maven", "maven").await;
+    let put = |file: &str, token: &str, body: &'static str| {
+        TestRequest::put()
+            .uri(&format!(
+                "/proxy/local-maven/maven2/com/example/mylib/1.0.0/{file}"
+            ))
+            .insert_header(("Authorization", bearer(token)))
+            .set_payload(body)
+            .to_request()
+    };
+    let jar = call_service(&app, put("mylib-1.0.0.jar", NS_PLAIN_USER_TOKEN, "jar")).await;
+    assert_eq!(jar.status(), 201);
+    let pom = call_service(&app, put("mylib-1.0.0.pom", NS_MEMBER_TOKEN, SAMPLE_POM)).await;
+    assert_eq!(pom.status(), 403, "the jar's publisher owns the coordinate");
+}

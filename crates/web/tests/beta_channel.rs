@@ -87,6 +87,18 @@ async fn make_app_with_beta_store(
     Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
     Error = actix_web::Error,
 > {
+    make_app_with_providers(beta_store, &[]).await
+}
+
+/// The same app, with `providers` as the identity providers that yield user ids.
+async fn make_app_with_providers(
+    beta_store: Arc<dyn BetaChannelPort>,
+    providers: &[&str],
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
     let EmptyAppParts {
         proxy_svc,
         admin_svc,
@@ -96,6 +108,8 @@ async fn make_app_with_beta_store(
         cargo_indexes,
         local_svc,
     } = empty_app_parts();
+    local_svc.hot.write().await.user_providers =
+        providers.iter().map(|p| (*p).to_owned()).collect();
 
     finish_test_app_with_extra(
         proxy_svc,
@@ -219,4 +233,34 @@ async fn beta_channel_requires_admin() {
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 403);
+}
+
+/// A bare user id is stored as `<provider>:<id>` when one provider yields user
+/// ids, and refused when several do: a bare id would match every provider's.
+#[actix_web::test]
+async fn beta_channel_scopes_a_bare_user_to_its_provider() {
+    let add = |id: &str| {
+        TestRequest::post()
+            .uri("/api/v1/admin/registries/my-npm/beta-channel")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(serde_json::json!({"principal_type": "user", "principal_id": id}))
+            .to_request()
+    };
+
+    let store: Arc<dyn BetaChannelPort> = InMemoryBetaChannelStore::new();
+    let app = make_app_with_providers(Arc::clone(&store), &["corp"]).await;
+    assert_eq!(call_service(&app, add("alice")).await.status(), 204);
+    let ids: Vec<String> = store
+        .list_members("my-npm")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.principal_id)
+        .collect();
+    assert_eq!(ids, vec!["corp:alice"]);
+
+    let store: Arc<dyn BetaChannelPort> = InMemoryBetaChannelStore::new();
+    let app = make_app_with_providers(store, &["corp", "signup"]).await;
+    assert_eq!(call_service(&app, add("alice")).await.status(), 400);
+    assert_eq!(call_service(&app, add("signup:alice")).await.status(), 204);
 }

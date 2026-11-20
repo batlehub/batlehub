@@ -106,7 +106,7 @@ const mounted: VueWrapper[] = [];
 
 async function mountPage() {
   const wrapper = mount(AdminConfigReload, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   mounted.push(wrapper);
   await flushPromises();
@@ -339,7 +339,10 @@ describe("AdminConfigReload", () => {
 
     await confirmDialog(wrapper, "Apply");
 
-    expect(sdk.applyPendingReloadMock).toHaveBeenCalled();
+    // The change on screen, by id: another admin's staged since is a 409.
+    expect(sdk.applyPendingReloadMock).toHaveBeenCalledWith({
+      body: { pending_id: "11111111-1111-1111-1111-111111111111" },
+    });
     expect(wrapper.text()).toContain("Applied: +1 -0 registries");
     // The pending is gone, so the page must not still offer to apply it.
     expect(applyButton(wrapper)).toBeUndefined();
@@ -449,6 +452,34 @@ describe("AdminConfigReload", () => {
     expect(wrapper.text()).toContain("no upstreams configured");
   });
 
+  it("shows a new warning that lands on an index the config in force already warns on", async () => {
+    const old = warning({ code: "auth.plain-static-token", path: "auth[0].tokens[0]" });
+    routes(null, {
+      "/config/warnings": { json: { warnings: [old] } },
+      // Same code, same positional path, one more of them: the second is new.
+      "/config/validate": {
+        json: { warnings: [old, warning({ ...old, path: "auth[0].tokens[1]" })] },
+      },
+    });
+    const wrapper = await mountPage();
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("auth[0].tokens[1]");
+    expect(wrapper.text().split("auth[0].tokens[0]").length - 1).toBe(2);
+  });
+
+  it("validates against a dismissed warning too, rather than hiding it twice", async () => {
+    routes(null, {
+      "/config/warnings": { json: { warnings: [warning()] } },
+      "/config/validate": { json: { warnings: [warning()] } },
+    });
+    const wrapper = await mountPage();
+    await button(wrapper, "Dismiss")!.trigger("click");
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("no upstreams configured");
+  });
+
   it("surfaces the parser's complaint when validation fails", async () => {
     routes(null, {
       "/config/validate": { status: 400, json: { error: "expected `=` at line 3" } },
@@ -502,6 +533,23 @@ describe("AdminConfigReload", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("disk full");
+  });
+
+  it("stages against the file it loaded, so a newer file is never overwritten", async () => {
+    routes(null, {
+      "/config/content": {
+        json: { content: "[server]\nport = 8080\n", is_readonly: false, content_hash: "abc123" },
+      },
+    });
+    const wrapper = await mountPage();
+
+    await button(wrapper, "Validate")!.trigger("click");
+    await flushPromises();
+    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await flushPromises();
+
+    const call = authFetchMock.mock.calls.find(([url]) => String(url).includes("/from-content"));
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ base_hash: "abc123" });
   });
 
   it("says why the config could not be read instead of showing an empty editor", async () => {

@@ -10,16 +10,29 @@ import { useI18n } from "vue-i18n";
  * when you do not know which of them matters, and here we do: if a registry is
  * erroring, nothing else on this page is the story.
  */
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ExternalLink } from "@lucide/vue";
-import { adminStats, adminStatsHistory, registryHealth } from "@/client/sdk.gen";
-import type { StatsResponse, StatsHistoryResponse, RegistryHealthDto } from "@/client/types.gen";
+import {
+  adminStats,
+  adminStatsHistory,
+  getConfigWarnings,
+  instanceSecurity,
+  registryHealth,
+  securityOverview,
+} from "@/client/sdk.gen";
+import type {
+  ConfigWarningsResponse,
+  InstanceSecurity,
+  SecurityOverview,
+  StatsResponse,
+  StatsHistoryResponse,
+  RegistryHealthDto,
+} from "@/client/types.gen";
+import SecurityStatusStrip from "@/components/admin/SecurityStatusStrip.vue";
+import StateMark from "@/components/admin/StateMark.vue";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
-import { useAuthFetch } from "@/composables/useAuthFetch";
-import { API_BASE_URL } from "@/config";
-import type { ConfigWarning } from "@/client/types.gen";
 import { formatBytes as fmtBytes, formatCount, formatDay } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
@@ -38,7 +51,60 @@ import { Resolution } from "@/components/ui/resolution";
 import { AsyncState } from "@/components/ui/async-state";
 const { t } = useI18n();
 
-const { token, can } = useAuth();
+const { token, can, canAny } = useAuth();
+
+/**
+ * RFC 0050 §4.2 (the critique's P0): the dashboard says whether anything
+ * security-wise is wrong, line by line for the verbs the viewer holds —
+ * holds, flags, scanners from the security overview, and the security
+ * warnings of the config from instance security. A line whose verb is not
+ * held is absent (decision 11).
+ */
+const canSecurity = computed(() => canAny(["quarantine:read", "flags:read"]));
+const {
+  data: security,
+  error: securityError,
+  reload: reloadSecurity,
+} = useApi<SecurityOverview>(
+  () =>
+    canSecurity.value
+      ? (securityOverview() as Promise<{ data?: unknown; error?: unknown }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+const canConfigLine = computed(() => can("config:read"));
+/** Instance security needs `system:read` too; without it, the config page's own list. */
+const viaInstance = computed(() => canConfigLine.value && can("system:read"));
+const { data: instance, error: instanceError } = useApi<InstanceSecurity>(
+  () =>
+    viaInstance.value
+      ? (instanceSecurity({ query: { window: "24h" } }) as Promise<{
+          data?: unknown;
+          error?: unknown;
+        }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+const { data: configWarnings, error: configWarningsError } = useApi<ConfigWarningsResponse>(
+  () =>
+    canConfigLine.value && !viaInstance.value
+      ? (getConfigWarnings() as Promise<{ data?: unknown; error?: unknown }>)
+      : Promise.resolve({ data: null }),
+  [token],
+);
+// Accepted in `[console]`: known and kept, not a reason for ATTENTION here.
+const securityWarnings = computed(
+  () =>
+    (viaInstance.value
+      ? (instance.value?.warnings ?? null)
+      : (configWarnings.value?.warnings ?? null)
+    )?.filter((w) => !w.accepted) ?? null,
+);
+/** The config line is owed to whoever may read it: a failed read is UNKNOWN, not absent. */
+const configLineUnknown = computed(
+  () =>
+    canConfigLine.value && !!(viaInstance.value ? instanceError.value : configWarningsError.value),
+);
 
 const {
   data: stats,
@@ -124,49 +190,6 @@ const monitoring = computed(() => {
 const fmtPct = (n: number | null): string => (n == null ? "—" : `${(n * 100).toFixed(1)}%`);
 
 /**
- * What needs a human, gathered where the operator lands rather than left on
- * the page that owns it. Config warnings only ever appeared on the
- * Configuration page, below the editor, so an instance could carry six of them
- * for weeks and the dashboard still read "all answering". Read with
- * `config:read`; absent without it, never an error the reader cannot act on.
- */
-const { authFetch } = useAuthFetch();
-const configWarnings = ref<ConfigWarning[]>([]);
-async function loadConfigWarnings() {
-  if (!can("config:read")) return;
-  try {
-    const res = await authFetch(`${API_BASE_URL}/api/v1/admin/config/warnings`);
-    if (!res.ok) return;
-    const body = (await res.json()) as { warnings?: ConfigWarning[] };
-    configWarnings.value = body.warnings ?? [];
-  } catch {
-    // Non-critical: the block simply stays away.
-  }
-}
-watch(token, () => void loadConfigWarnings(), { immediate: true });
-
-const attention = computed(() => {
-  const items: { key: string; text: string; to: string; tone: "bad" | "warn" }[] = [];
-  if (degraded.value.length > 0) {
-    items.push({
-      key: "degraded",
-      text: t("adminDashboard.attentionDegraded", { count: degraded.value.length }),
-      to: "/admin/system/health",
-      tone: "bad",
-    });
-  }
-  if (configWarnings.value.length > 0) {
-    items.push({
-      key: "config",
-      text: t("adminDashboard.attentionConfigWarnings", { count: configWarnings.value.length }),
-      to: "/admin/system/configuration",
-      tone: "warn",
-    });
-  }
-  return items;
-});
-
-/**
  * The trend, from the persisted rollup rather than the live counters
  * (RFC 0004 §2.3, §4.3).
  *
@@ -250,6 +273,59 @@ const trendText = computed(() => {
       </p>
     </div>
 
+    <section
+      v-if="canSecurity || securityWarnings"
+      class="space-y-2"
+      aria-labelledby="dashboard-security"
+      data-testid="dashboard-security"
+    >
+      <h2 id="dashboard-security" class="font-mono text-xs uppercase tracking-wider">
+        {{ t("nav.security") }}
+      </h2>
+      <p v-if="canSecurity && securityError" class="text-sm" data-testid="security-unknown">
+        <StateMark state="unknown" /> {{ t("securityStatus.couldNotRead") }}
+        <Button variant="outline" size="sm" class="ml-2" @click="reloadSecurity">{{
+          t("common.retry")
+        }}</Button>
+      </p>
+      <SecurityStatusStrip
+        v-if="security || securityWarnings || configLineUnknown"
+        :overview="security ?? { computed_at: '', decisions: { total: 0, by_kind: {}, items: [] } }"
+        :domains="['holds', 'flags', 'scanners']"
+        @retry="reloadSecurity"
+      >
+        <li
+          v-if="securityWarnings || configLineUnknown"
+          class="flex flex-col gap-1 py-2 lg:flex-row lg:items-baseline lg:gap-3"
+          data-testid="status-config"
+        >
+          <StateMark
+            :state="!securityWarnings ? 'unknown' : securityWarnings.length ? 'attention' : 'ok'"
+          />
+          <span class="w-40 shrink-0 font-mono text-sm">{{ t("instanceSecurity.config") }}</span>
+          <span class="min-w-0 flex-1 text-sm">{{
+            !securityWarnings
+              ? t("securityStatus.couldNotRead")
+              : viaInstance
+                ? t("instanceSecurity.warnings", { n: securityWarnings.length })
+                : t("adminDashboard.configWarnings", { n: securityWarnings.length })
+          }}</span>
+          <RouterLink
+            v-if="viaInstance"
+            to="/admin/instance-security"
+            class="shrink-0 text-sm text-primary underline underline-offset-[3px]"
+            >→ {{ t("adminNav.instanceSecurity") }}</RouterLink
+          >
+          <RouterLink
+            v-else
+            to="/admin/system/configuration"
+            class="shrink-0 text-sm text-primary underline underline-offset-[3px]"
+            >→ {{ t("adminNav.configReload") }}</RouterLink
+          >
+        </li>
+      </SecurityStatusStrip>
+    </section>
+
     <EmptyState
       v-if="isFresh"
       :title="t('adminDashboard.noRegistriesConfiguredYet')"
@@ -287,8 +363,9 @@ const trendText = computed(() => {
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiHitRate") }}
           </dt>
+          <!-- RFC 0050 §6.7: a rate of nothing is not a rate. -->
           <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
-            {{ fmtPct(hitRate) }}
+            {{ totalRequests ? fmtPct(hitRate) : "—" }}
           </dd>
           <dd class="mt-1 text-xs text-muted-foreground">
             {{ t("adminDashboard.kpiSince", { date: formatDay(stats.since_startup) }) }}
@@ -324,45 +401,34 @@ const trendText = computed(() => {
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiRegistries") }}
           </dt>
+          <!-- The count comes from the health probe: an unread probe is unknown,
+               never "0 registries, all answering" in the healthy colour. -->
           <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
-            {{ formatCount(registries.length) }}
+            {{ health && !healthError ? formatCount(registries.length) : "—" }}
           </dd>
           <dd
             class="mt-1 text-xs"
-            :class="degraded.length ? 'text-destructive' : 'text-ok'"
+            :class="
+              healthError || !health
+                ? 'text-muted-foreground'
+                : degraded.length
+                  ? 'text-destructive'
+                  : 'text-ok'
+            "
             data-testid="kpi-registries-state"
           >
             {{
-              degraded.length
-                ? t("adminDashboard.kpiWithErrors", { count: degraded.length })
-                : t("adminDashboard.kpiAllAnswering")
+              healthError
+                ? t("dashboard.healthUnknown")
+                : !health
+                  ? "—"
+                  : degraded.length
+                    ? t("adminDashboard.kpiWithErrors", { count: degraded.length })
+                    : t("adminDashboard.kpiAllAnswering")
             }}
           </dd>
         </div>
       </dl>
-
-      <!-- Needs attention: one line per kind of problem, each a way in. -->
-      <section v-if="attention.length" class="space-y-2" data-testid="dashboard-attention">
-        <h2 class="font-sans text-sm font-semibold text-foreground">
-          {{ t("adminDashboard.attentionTitle") }}
-        </h2>
-        <ul class="border border-border">
-          <li
-            v-for="item in attention"
-            :key="item.key"
-            class="flex items-center justify-between gap-3 border-b border-rule-soft px-4 py-3 last:border-b-0"
-          >
-            <span
-              class="text-sm"
-              :class="item.tone === 'bad' ? 'text-destructive' : 'text-copper'"
-              >{{ item.text }}</span
-            >
-            <Button as-child size="sm" variant="outline">
-              <RouterLink :to="item.to">{{ t("adminDashboard.attentionReview") }}</RouterLink>
-            </Button>
-          </li>
-        </ul>
-      </section>
 
       <!-- What the counters above structurally cannot say: better or worse than
            before. Absent until there is a rollup to read, rather than showing a

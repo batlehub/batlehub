@@ -323,7 +323,8 @@ pub enum GrantCmd {
     /// Write a subject's grant on a node, replacing its row [admin]
     Set {
         coordinate: String,
-        /// `user:alice`, `group:oidc1:eng`, `role:user`, or `*`
+        /// `user:oidc1:alice`, `group:oidc1:eng`, `role:user`, or `*` (a bare `user:alice` is
+        /// accepted only when one identity provider yields user ids)
         #[arg(long)]
         subject: String,
         /// Comma-separated verbs or patterns, e.g. `releases:read,releases:list`

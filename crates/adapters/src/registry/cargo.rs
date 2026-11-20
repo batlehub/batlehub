@@ -10,8 +10,8 @@ use batlehub_core::{
 };
 
 use super::http_client::{
-    basic_auth_get, cache_control, encode_path, fetch_text_document, new_http_client,
-    percent_encode, to_registry_error, UpstreamHttpOptions,
+    basic_auth_get, cache_control, encode_path, ensure_same_origin, fetch_text_document,
+    new_http_client, percent_encode, to_registry_error, UpstreamHttpOptions,
 };
 
 /// crates.io (or compatible) registry client.
@@ -54,6 +54,16 @@ impl CargoRegistryClient {
 
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
         basic_auth_get(&self.http, &self.basic_auth, url)
+    }
+
+    /// The `.crate` URL for an upstream-supplied `dl_path`, refused unless it
+    /// stays on `base_url`'s origin: `dl_path` is upstream data, and a plain
+    /// concatenation turns `.evil.example/x` into another host that receives
+    /// this registry's credentials.
+    fn dl_url(&self, dl_path: &str) -> Result<String, CoreError> {
+        let url = format!("{}{}", self.base_url, dl_path);
+        ensure_same_origin(&url, &self.base_url)?;
+        Ok(url)
     }
 }
 
@@ -117,7 +127,7 @@ impl RegistryClient for CargoRegistryClient {
 
         let download_url = if pkg.artifact.as_deref() == Some("dl") {
             // dl_path is a relative path like /api/v1/crates/serde/1.0.0/download
-            Some(format!("{}{}", self.base_url, version.dl_path))
+            Some(self.dl_url(&version.dl_path)?)
         } else {
             None
         };
@@ -203,7 +213,7 @@ impl RegistryClient for CargoRegistryClient {
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let resp = self.fetch_crate_info(&pkg.name).await?;
         let version = Self::resolve_version(&resp, pkg)?;
-        let url = format!("{}{}", self.base_url, version.dl_path);
+        let url = self.dl_url(&version.dl_path)?;
         tracing::debug!(url = %url, "fetching cargo crate");
 
         let response = self
@@ -365,5 +375,17 @@ mod tests {
             CargoRegistryClient::resolve_version(&r, &pkg),
             Err(CoreError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn dl_url_refuses_a_dl_path_that_changes_the_host() {
+        let c =
+            CargoRegistryClient::new("https://crates.io", &UpstreamHttpOptions::default()).unwrap();
+        assert_eq!(
+            c.dl_url("/api/v1/crates/serde/1.0.0/download").unwrap(),
+            "https://crates.io/api/v1/crates/serde/1.0.0/download"
+        );
+        assert!(c.dl_url(".evil.example/x").is_err());
+        assert!(c.dl_url("@169.254.169.254/latest/meta-data/").is_err());
     }
 }

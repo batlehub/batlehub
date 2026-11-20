@@ -223,7 +223,7 @@ CVE detection runs continuously across every layer; see `docs/contributing/secur
 
 **A new CI scanner is placed on the grid of `docs/contributing/security-scanning.md` § The scale** (RFC 0041 §4): severity, root class (`ships` / `builds` / `dev`) and gate action (`block` / `block-new` / `report` / `budget`) — not decided one workflow at a time. A gate script under `.github/scripts/` lands with its tests in `.github/scripts/tests/` (`task test:scripts`, the `scripts-test.yaml` job), fixtures recorded from the real tool.
 
-Stance is **no suppressions**: keep `advisories.ignore = []` in `deny.toml` and `.cargo/audit.toml` empty; fix or patch rather than ignore.
+Stance is **no suppressions**: fix or patch rather than ignore. The one entry in `deny.toml`'s `advisories.ignore` and `.cargo/audit.toml` (keep the two in step) is RUSTSEC-2026-0543 (chrono *unmaintained*, no fix): the audit-seal digest hashes chrono's timestamp text, so leaving chrono needs a v2 seal format — do that the day chrono carries a vulnerability. `memmap2` 0.5 (RUSTSEC-2026-0186) is substituted by `patches/memmap2`, a re-export of 0.9, the same way as `paste`.
 
 ### Frontend
 

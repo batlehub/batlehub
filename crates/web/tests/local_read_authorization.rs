@@ -930,3 +930,65 @@ async fn cargo_owners_are_hidden_from_a_non_member_of_a_team_visible_crate() {
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
 }
+
+/// The console's package page honours a namespace seal the download honours.
+///
+/// `enforce_detail_gates` checked `catalogue:browse` and package `visibility`
+/// only, so a sealed namespace's package — refused on every proxy route — still
+/// opened its explore page (versions, licence, README) to the caller the seal
+/// excludes. Also pins that a socket.dev badge is never emitted for a locally
+/// published row: that `<img>` would send the private name to a third party.
+#[actix_web::test]
+async fn a_namespace_seal_is_honoured_by_the_explore_detail_page() {
+    use batlehub_core::entities::Action;
+
+    let app = composer_app_with(
+        &["acme/lib", "other/lib"],
+        hierarchy(
+            &[
+                Action::ReleasesRead,
+                Action::ReleasesList,
+                Action::CatalogueBrowse,
+            ],
+            &[("acme", None)],
+        ),
+    )
+    .await;
+
+    let get = |uri: &str| {
+        TestRequest::get()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request()
+    };
+    let control = call_service(
+        &app,
+        get("/api/v1/explore/packages/local-composer/other%2Flib"),
+    )
+    .await;
+    assert_eq!(
+        control.status(),
+        200,
+        "the control: an unsealed package opens"
+    );
+    let body: serde_json::Value = actix_web::test::read_body_json(control).await;
+    let versions = body["versions"].as_array().expect("versions");
+    assert!(!versions.is_empty(), "the published version must be listed");
+    for v in versions {
+        assert!(
+            v["socket_badge_url"].is_null(),
+            "a locally published row must carry no third-party badge: {v}"
+        );
+    }
+
+    for uri in [
+        "/api/v1/explore/packages/local-composer/acme%2Flib",
+        "/api/v1/explore/packages/local-composer/acme%2Flib/readme",
+    ] {
+        assert_eq!(
+            call_service(&app, get(uri)).await.status(),
+            404,
+            "{uri}: a sealed package must look absent"
+        );
+    }
+}

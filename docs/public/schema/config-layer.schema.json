@@ -454,6 +454,21 @@
       ],
       "type": "string"
     },
+    "ConsoleConfig": {
+      "additionalProperties": false,
+      "description": "`[console]`: the console's acknowledgements, kept in the config so they are\nversioned, reviewed and the same for every admin.\n\n```toml\n[console]\naccepted = [\"coverage:go-public\", \"warning:proxy-trust.unconfigured\"]\n```",
+      "properties": {
+        "accepted": {
+          "default": [],
+          "description": "`coverage:<registry>` — a registry left without `[security]` or a\n`cve_gate` on purpose: the Coverage line no longer counts it. And\n`warning:<code>` — a config warning the operator has read and keeps:\nstill listed, drawn as accepted, no longer `ATTENTION`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "CveGateConfig": {
       "description": "Gate downloads of package versions with known vulnerabilities, as discovered\nby the periodic SBOM re-scan (`[vulnerability_scan]`).\n\n```toml\n[[registries.rules]]\nkind = \"cve_gate\"\nmin_severity = \"high\"        # unknown | low | medium | high | critical\nblock = true                 # false (default) = warn-only, surfaced in UI but never blocked\nbypass_roles = [\"admin\"]\n```",
       "properties": {
@@ -510,7 +525,7 @@
         },
         "read_cache": {
           "default": true,
-          "description": "The in-process read cache of blocks, flags, visibility, tokens, user\nblocks and dedup mappings. `false` reads every one from the database\non every request, and no listener is started.",
+          "description": "The in-process read cache of blocks, flags, visibility, tokens, user\nblocks and dedup mappings, and the security console's source cache\n(RFC 0050 §4.4). `false` reads every one from the database on every\nrequest, and no listener is started.",
           "type": "boolean"
         },
         "type": {
@@ -836,7 +851,7 @@
           "type": "string"
         },
         "secret": {
-          "description": "Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header.\nWhen absent, any payload is accepted (suitable only for internal networks).",
+          "description": "Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header,\ncomputed over `\"{X-BatleHub-Timestamp}.{body}\"` with a timestamp within 300 s.\nWhen absent, any payload is accepted (suitable only for internal networks).",
           "type": "string"
         }
       },
@@ -2940,6 +2955,13 @@
         "registry_dashboard_url": {
           "description": "The per-registry monitoring link, shown on each registry page.\n`{registry}` is its only placeholder, replaced percent-encoded by\n[`monitoring_url_for`].",
           "type": "string"
+        },
+        "security_history_retention_days": {
+          "default": 90,
+          "description": "How many days of the daily security rollup behind `/security/trends`\nto keep (RFC 0050 §4.1). `0` keeps every day; the rollup itself is off\nonly with `history_enabled = false`. Over 365, or `0`, is accepted\nwith the `stats.security-history-long` warning.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -3488,6 +3510,10 @@
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
+    },
+    "console": {
+      "$ref": "#/$defs/ConsoleConfig",
+      "description": "`[console]` — what the security console treats as known and accepted\nrather than as needing attention. Absent accepts nothing."
     },
     "database": {
       "$ref": "#/$defs/DatabaseConfig"

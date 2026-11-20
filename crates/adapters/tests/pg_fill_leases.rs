@@ -23,6 +23,13 @@ use batlehub_core::ports::{
 };
 use batlehub_core::services::proxy::{sweep_fills, FILL_SWEEP_LEADER_KEY};
 
+/// `sweep_fills` claims every expired lease in the table, not only its own:
+/// run beside a test whose lease is expired on purpose, it took that lease
+/// first (`reap_claims_only_a_still_expired_lease` read `None`, main CI,
+/// 2026-11-18). The sweep test holds this exclusively, every other one shared.
+static SWEEP: std::sync::LazyLock<tokio::sync::RwLock<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
+
 async fn repo() -> Option<PgPackageRepository> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         if std::env::var("BATLEHUB_REQUIRE_DB").is_ok_and(|v| v == "1") {
@@ -62,6 +69,7 @@ fn started(t: Taken) -> (uuid::Uuid, Option<(uuid::Uuid, u32)>) {
 #[tokio::test]
 async fn a_stale_holder_cannot_commit_into_a_taken_over_fill() {
     let Some(repo) = repo().await else { return };
+    let _shared = SWEEP.read().await;
     let leases = PgFillLeases::with_ttl(repo.pool(), Duration::from_millis(400));
     let k = key();
 
@@ -119,6 +127,7 @@ async fn a_stale_holder_cannot_commit_into_a_taken_over_fill() {
 #[tokio::test]
 async fn an_ended_row_tells_a_late_follower_and_is_taken_over_at_once() {
     let Some(repo) = repo().await else { return };
+    let _shared = SWEEP.read().await;
     let leases = PgFillLeases::new(repo.pool());
     let k = key();
     let (fill, _) = started(leases.take(&k, "a").await.unwrap());
@@ -148,7 +157,10 @@ async fn an_ended_row_tells_a_late_follower_and_is_taken_over_at_once() {
 #[tokio::test]
 async fn reap_claims_only_a_still_expired_lease() {
     let Some(repo) = repo().await else { return };
-    let ttl = Duration::from_millis(300);
+    let _shared = SWEEP.read().await;
+    // A second, not less: "alive" is read one round trip after the heartbeat or
+    // take, and a loaded CI runner under coverage has spent 300 ms on that.
+    let ttl = Duration::from_secs(1);
     let leases = PgFillLeases::with_ttl(repo.pool(), ttl);
     let k = key();
     let (fill, _) = started(leases.take(&k, "a").await.unwrap());
@@ -168,6 +180,7 @@ async fn reap_claims_only_a_still_expired_lease() {
 #[tokio::test]
 async fn concurrent_takes_start_one_fill() {
     let Some(repo) = repo().await else { return };
+    let _shared = SWEEP.read().await;
     let leases = Arc::new(PgFillLeases::new(repo.pool()));
     let k = key();
     let takes = futures::future::join_all((0..8).map(|i| {
@@ -195,6 +208,7 @@ async fn concurrent_takes_start_one_fill() {
 #[tokio::test]
 async fn a_follower_hears_progress_by_polling_then_by_notify() {
     let Some(repo) = repo().await else { return };
+    let _shared = SWEEP.read().await;
     let holder = PgFillLeases::new(repo.pool());
     let follower = PgFillLeases::new(repo.pool());
     let k = key();
@@ -271,7 +285,10 @@ async fn a_follower_hears_progress_by_polling_then_by_notify() {
 #[tokio::test]
 async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
     let Some(repo) = repo().await else { return };
-    let ttl = Duration::from_millis(300);
+    let _alone = SWEEP.write().await;
+    // A second, not less: "alive" is read one round trip after the heartbeat or
+    // take, and a loaded CI runner under coverage has spent 300 ms on that.
+    let ttl = Duration::from_secs(1);
     let leases = PgFillLeases::with_ttl(repo.pool(), ttl);
     let storage = InMemoryStorageBackend::new();
     let (dead_key, live_key) = (key(), key());
@@ -327,6 +344,7 @@ async fn the_sweep_deletes_an_expired_fills_segments_behind_the_leader() {
 #[tokio::test]
 async fn an_end_racing_a_take_is_not_a_takeover() {
     let Some(repo) = repo().await else { return };
+    let _shared = SWEEP.read().await;
     let pool = repo.pool();
     let leases = PgFillLeases::new(pool.clone());
     let k = key();

@@ -17,7 +17,7 @@
  * of everything currently trusting an operator to remember."*
  *
  * So the order is deliberate. **Shadow first**, because it is the only one that
- * is actively serving requests the model refuses. Then Exemptions, then Explain.
+ * is actively serving requests the model refuses. Then Exemptions, then Explain and the download simulation.
  * Recent denials sits below the fold because it is diagnostic rather than
  * standing risk — an operator arrives at it from a ticket, not from a review.
  */
@@ -25,15 +25,16 @@ import { useI18n } from "vue-i18n";
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { ACCESS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import AuthzShadowPanel from "@/components/admin/authorization/AuthzShadowPanel.vue";
 import AuthzExemptionsPanel from "@/components/admin/authorization/AuthzExemptionsPanel.vue";
 import AuthzExplainPanel from "@/components/admin/authorization/AuthzExplainPanel.vue";
 import AuthzDenialsPanel from "@/components/admin/authorization/AuthzDenialsPanel.vue";
+import AuthzSimulatePanel from "@/components/admin/authorization/AuthzSimulatePanel.vue";
+import { useAuth } from "@/composables/useAuth";
 
 const { t } = useI18n();
+const { can } = useAuth();
 
 // The three standing-risk panels load without being asked. An operator who
 // has to press a button to discover a shadow-mode node is serving everything has a page
@@ -46,7 +47,6 @@ const registry = ref("");
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="ACCESS_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminAuthorization.title')"
@@ -62,7 +62,17 @@ const registry = ref("");
     <AuthzExemptionsPanel :registry="registry" />
 
     <!-- ── Explain ──────────────────────────────────────────────────────── -->
-    <AuthzExplainPanel v-model:registry="registry" />
+    <!-- RFC 0050 §6.7: grants for one coordinate (`#explain`). -->
+    <div id="explain" class="scroll-mt-16">
+      <AuthzExplainPanel v-model:registry="registry" />
+    </div>
+
+    <!-- ── Simulate ─────────────────────────────────────────────────────────
+         The whole download (blocks, then rules), where Explain resolves grants
+         only. The retired access check lands here (`#simulate`). -->
+    <div v-if="can('authz:read')" id="simulate" class="scroll-mt-16">
+      <AuthzSimulatePanel />
+    </div>
 
     <!-- ── Recent denials ───────────────────────────────────────────────── -->
     <AuthzDenialsPanel />

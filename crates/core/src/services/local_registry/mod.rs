@@ -11,6 +11,7 @@ pub use eco_nix::{NixPublishRequest, NixStagingLimits, PublishedStorePath};
 mod eco_nuget;
 mod eco_openvsx;
 mod eco_pypi;
+pub use eco_pypi::{PypiFileUpload, PypiLocalFile};
 mod eco_rubygems;
 mod eco_terraform;
 mod lifecycle;
@@ -269,6 +270,10 @@ pub const VERSION_SIBLING_SUFFIXES: [&str; 2] = [SIGNATURE_SUFFIX, PROVIDED_SIGN
 
 /// The registry-signed VSX signature archive, beside the artifact key.
 pub const SIGNATURE_SUFFIX: &str = ".sigzip";
+
+/// `index_metadata` key marking an npm version published under a tag other
+/// than `latest` (`npm publish --tag legacy`); stripped before serving.
+pub const NPM_NOT_LATEST: &str = "_batlehub_not_latest";
 
 /// An upstream-provided VSX signature archive (RFC 0020 §13.6).
 pub const PROVIDED_SIGNATURE_SUFFIX: &str = ".sigzip.upstream";

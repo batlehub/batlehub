@@ -1602,6 +1602,30 @@ async fn integrity_unparseable_checksum_warns_and_serves() {
 }
 
 #[tokio::test]
+async fn integrity_require_metadata_blocks_an_unparseable_checksum() {
+    let reg = Arc::new(ChecksumRegistry {
+        checksum: Some("sha256:not-hex".to_owned()),
+        body: BODY,
+    });
+    let policy = crate::services::IntegrityPolicy {
+        enabled: true,
+        block_on_mismatch: true,
+        require_metadata: true,
+        bypass_roles: vec![],
+        verify_on_serve: false,
+    };
+    let (svc, storage) = proxy_with_integrity("npm", reg, Some(policy));
+
+    let result = svc.handle(req("npm")).await;
+    assert!(
+        matches!(result, Err(CoreError::IntegrityFailure(_))),
+        "a checksum that verifies nothing must not satisfy require_metadata"
+    );
+    let artifact_key = format!("artifact:{}", req("npm").package_id.cache_key());
+    assert!(!storage.exists(&artifact_key).await.unwrap());
+}
+
+#[tokio::test]
 async fn integrity_disabled_skips_verification_even_on_mismatch() {
     let reg = Arc::new(ChecksumRegistry {
         checksum: Some(sha256_hex(b"some-other-bytes")),
@@ -4227,4 +4251,127 @@ async fn a_stalled_upstream_ends_the_fill_and_its_lease() {
         "the failed fill released its lease"
     );
     assert!(!svc.storage.exists(&key).await.unwrap(), "nothing stored");
+}
+
+/// Answers `latest` with whatever `latest` currently is; serves bytes named
+/// after the version asked for.
+struct MovingLatestRegistry {
+    latest: Mutex<String>,
+}
+
+#[async_trait]
+impl RegistryClient for MovingLatestRegistry {
+    fn registry_type(&self) -> &str {
+        "test"
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        let mut id = pkg.clone();
+        if id.version == "latest" {
+            id.version = self.latest.lock().unwrap().clone();
+        }
+        Ok(PackageMetadata {
+            id,
+            published_at: Some(Utc::now() - chrono::Duration::days(30)),
+            download_url: None,
+            checksum: None,
+            is_signed: None,
+            extra: serde_json::json!({}),
+            cache_control: None,
+        })
+    }
+    async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        let version = if pkg.version == "latest" {
+            self.latest.lock().unwrap().clone()
+        } else {
+            pkg.version.clone()
+        };
+        let data = Bytes::from(format!("bytes-{version}"));
+        Ok(FetchedArtifact {
+            stream: Box::pin(stream::once(async move { Ok::<Bytes, CoreError>(data) })),
+            cache_control: None,
+        })
+    }
+}
+
+/// Denies the one version named in `blocked`, judged on the resolved id.
+struct BlockVersionRule(Arc<Mutex<Option<String>>>);
+
+#[async_trait]
+impl crate::rules::Rule for BlockVersionRule {
+    fn name(&self) -> &str {
+        "block_version"
+    }
+    async fn evaluate(&self, ctx: &crate::rules::RuleContext<'_>) -> crate::rules::RuleDecision {
+        if self.0.lock().unwrap().as_deref() == Some(ctx.package.id.version.as_str()) {
+            crate::rules::RuleDecision::Deny {
+                reason: "blocked".to_owned(),
+            }
+        } else {
+            crate::rules::RuleDecision::Allow
+        }
+    }
+}
+
+#[tokio::test]
+async fn latest_never_serves_a_version_blocked_after_it_was_cached() {
+    let client = Arc::new(MovingLatestRegistry {
+        latest: Mutex::new("1.0.0".into()),
+    });
+    let blocked = Arc::new(Mutex::new(None));
+    let svc = proxy(
+        "crates",
+        client.clone(),
+        SpyRepo::new(),
+        vec![Box::new(BlockVersionRule(Arc::clone(&blocked)))],
+    );
+    let latest = || ProxyRequest {
+        package_id: PackageId::new("crates", "serde", "latest").with_artifact("dl"),
+        ..req("crates")
+    };
+
+    assert_eq!(
+        body_of(svc.handle(latest()).await.unwrap()).await,
+        "bytes-1.0.0"
+    );
+
+    // 1.0.0 is blocked, upstream moves on, the metadata entry expires.
+    *blocked.lock().unwrap() = Some("1.0.0".into());
+    *client.latest.lock().unwrap() = "1.0.1".into();
+    svc.cache
+        .invalidate(&super::proxy_meta_key(&latest().package_id))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        body_of(svc.handle(latest()).await.unwrap()).await,
+        "bytes-1.0.1",
+        "`latest` resolved to 1.0.1 must not be answered with the cached 1.0.0 bytes"
+    );
+}
+
+/// Counts upstream resolves; each one takes long enough for the others to pile up.
+struct SlowCountingRegistry(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl RegistryClient for SlowCountingRegistry {
+    fn registry_type(&self) -> &str {
+        "test"
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        FixedRegistry.resolve_metadata(pkg).await
+    }
+    async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        FixedRegistry.fetch_artifact(pkg).await
+    }
+}
+
+#[tokio::test]
+async fn concurrent_metadata_misses_resolve_upstream_once() {
+    let client = Arc::new(SlowCountingRegistry(Default::default()));
+    let svc = proxy("npm", client.clone(), SpyRepo::new(), vec![]);
+    let results = futures::future::join_all((0..10).map(|_| svc.handle(req("npm")))).await;
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(client.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

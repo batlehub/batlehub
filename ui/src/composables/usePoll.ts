@@ -17,7 +17,8 @@ function retryAfterMs(e: unknown): number {
 }
 
 /**
- * The bounded poll of RFC 0044 §4.2: `fn` every 5 s while `active` is true.
+ * The bounded poll of RFC 0044 §4.2: `fn` every 5 s while `active` is true,
+ * or every `interval` ms (RFC 0050's overview polls at 30 s).
  *
  * - paused while the document is hidden, resumed when it is shown again;
  * - stopped after 10 minutes (`stopped = "timeout"`), so a stuck job cannot
@@ -27,12 +28,16 @@ function retryAfterMs(e: unknown): number {
  *
  * `restart()` is the page's [Refresh]: it runs `fn` now and starts again.
  */
-export function usePoll(fn: () => Promise<void>, active: Ref<boolean>) {
+export function usePoll(
+  fn: () => Promise<void>,
+  active: Ref<boolean>,
+  { interval = POLL_INTERVAL_MS }: { interval?: number } = {},
+) {
   const stopped = ref<PollStop | null>(null);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let startedAt = 0;
   let failures = 0;
-  let delay = POLL_INTERVAL_MS;
+  let delay = interval;
 
   const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 
@@ -57,7 +62,7 @@ export function usePoll(fn: () => Promise<void>, active: Ref<boolean>) {
     try {
       await fn();
       failures = 0;
-      delay = POLL_INTERVAL_MS;
+      delay = interval;
     } catch (e) {
       failures += 1;
       if (failures >= POLL_MAX_FAILURES) {
@@ -72,7 +77,7 @@ export function usePoll(fn: () => Promise<void>, active: Ref<boolean>) {
   function start() {
     startedAt = Date.now();
     failures = 0;
-    delay = POLL_INTERVAL_MS;
+    delay = interval;
     stopped.value = null;
     schedule();
   }

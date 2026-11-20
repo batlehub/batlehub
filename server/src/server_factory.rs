@@ -244,6 +244,11 @@ pub(super) struct ServerParams {
     pub reload_svc: Arc<ConfigReloadService>,
     pub banner_svc: Arc<BannerService>,
     pub storage_admin_repo: Arc<dyn batlehub_core::ports::StorageAdminRepository>,
+    /// RFC 0050 §4.4 — the security console's source cache: one per
+    /// process, built outside the factory so the workers share it.
+    pub security_console_cache: web::Data<batlehub_web::handlers::security_console::SourceCache>,
+    /// `[stats] history_enabled`, for the trends page.
+    pub security_history_enabled: bool,
 }
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
@@ -306,11 +311,16 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         banner_svc,
         storage_admin_repo,
         search_config,
+        security_console_cache,
+        security_history_enabled,
     } = p;
 
     let notification_svc_for_shutdown = notification_svc.clone();
     // Outside the factory: one throttle for the process, not one per worker.
     let rejection_audit = batlehub_web::CredentialRejectionAudit::new(admin_svc.clone());
+    // A burst that stops is written within a window, not only on a next attempt.
+    let rejection_flusher = rejection_audit.spawn_flusher();
+    let rejection_audit_for_shutdown = Arc::clone(&rejection_audit);
 
     HttpServer::new(move || {
         let configure = configure_app(
@@ -379,6 +389,12 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .app_data(web::Data::new(flag_sources.clone()))
             .app_data(web::Data::new(exposure_config.clone()))
             .app_data(web::Data::new(Arc::clone(&reload_svc)))
+            .app_data(security_console_cache.clone())
+            .app_data(web::Data::new(
+                batlehub_web::handlers::security_console::SecurityHistoryEnabled(
+                    security_history_enabled,
+                ),
+            ))
             .app_data(web::Data::new(reload_svc.registry_views()))
             .app_data(web::Data::new(Arc::clone(&banner_svc)))
             .app_data(web::Data::new(proxy_trust.clone()))
@@ -504,6 +520,10 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
     .await
     .context("HTTP server error")?;
 
+    rejection_audit_for_shutdown
+        .flush_held(std::time::Instant::now(), true)
+        .await;
+    rejection_flusher.abort();
     if let Some(svc) = &notification_svc_for_shutdown {
         svc.shutdown().await;
     }

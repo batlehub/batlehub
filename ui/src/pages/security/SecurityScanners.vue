@@ -4,18 +4,15 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { RefreshCw } from "@lucide/vue";
 
-import { listRegistries, listScans, listVerdicts, rescanVerdict } from "@/client/sdk.gen";
-import type { ScanJobRow, ScanQueuePage, Verdict } from "@/client/types.gen";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
+import { listRegistries, listScans, rescanVerdict } from "@/client/sdk.gen";
+import type { ScanJobRow, ScanQueuePage } from "@/client/types.gen";
 import ScanBadge from "@/components/package/ScanBadge.vue";
-import { SECURITY_TABS } from "@/config/adminSections";
 import { usePoll } from "@/composables/usePoll";
 import { formatDate, formatRelative } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Alert } from "@/components/ui/alert";
 import { Announcer } from "@/components/ui/announcer";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -30,9 +27,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import ScannerHealthBlock from "@/components/admin/ScannerHealthBlock.vue";
 
 /**
- * The scan queue, its failures and the verdicts by state (RFC 0044 §4.5,
+ * The scan queue and its failures (RFC 0044 §4.5,
  * phase 2). Rows come filtered by the server: a registry where the caller
  * lacks `quarantine:read` contributes none, and `last_error` needs
  * `findings:read` (T16).
@@ -42,7 +40,7 @@ const route = useRoute();
 const router = useRouter();
 
 const PER_PAGE = 50;
-const TABS = ["queue", "failures", "verdicts"] as const;
+const TABS = ["queue", "failures"] as const;
 type Tab = (typeof TABS)[number];
 
 const activeTab = computed<Tab>({
@@ -159,75 +157,6 @@ async function rescan(row: ScanJobRow) {
 const totalPages = (p: ScanQueuePage | null) =>
   p ? Math.max(1, Math.ceil(p.total / p.per_page)) : 1;
 
-// ── Verdicts by state ────────────────────────────────────────────────────────
-
-const verdictState = ref("");
-const verdicts = ref<Verdict[]>([]);
-const verdictsLoading = ref(false);
-const verdictsError = ref<string | null>(null);
-
-function verdictWord(state: string): string {
-  switch (state) {
-    case "warned":
-      return t("scanBadge.verdict.warned");
-    case "quarantined":
-      return t("scanBadge.verdict.quarantined");
-    case "denied":
-      return t("scanBadge.verdict.denied");
-    default:
-      return t("scanBadge.verdict.allowed");
-  }
-}
-
-const verdictStateOptions = computed(() => [
-  { value: "", label: t("adminScans.anyState") },
-  ...["quarantined", "denied", "warned", "allowed"].map((s) => ({
-    value: s,
-    label: verdictWord(s),
-  })),
-]);
-
-async function loadVerdicts() {
-  verdicts.value = [];
-  verdictsError.value = null;
-  if (!registry.value) return;
-  verdictsLoading.value = true;
-  try {
-    const { data, error, response } = await listVerdicts({
-      query: { registry: registry.value, state: verdictState.value || undefined },
-    });
-    if (error || !data) {
-      throw new Error(
-        t("adminScans.verdictsError", {
-          status: response ? `${response.status} ${response.statusText}`.trim() : "—",
-        }),
-      );
-    }
-    verdicts.value = data.items;
-  } catch (e) {
-    verdictsError.value = (e as Error).message;
-  } finally {
-    verdictsLoading.value = false;
-  }
-}
-
-watch(
-  [registry, verdictState, () => activeTab.value === "verdicts"],
-  ([, , open]) => {
-    if (open) void loadVerdicts();
-  },
-  { immediate: true },
-);
-
-const verdictsEmpty = computed(() =>
-  verdictState.value
-    ? t("adminScans.noVerdictsInState", {
-        registry: registry.value,
-        state: verdictWord(verdictState.value),
-      })
-    : t("adminScans.noVerdicts", { registry: registry.value }),
-);
-
 onMounted(async () => {
   void load();
   try {
@@ -241,11 +170,10 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SECURITY_TABS" />
     <Announcer :message="announcement" />
     <PageHeader
       variant="display"
-      :title="t('adminScans.title')"
+      :title="t('securityNav.scanners')"
       :description="t('adminScans.description')"
     >
       <template #actions>
@@ -274,6 +202,9 @@ onMounted(async () => {
       <Button variant="outline" size="sm" @click="onRefresh">{{ t("common.retry") }}</Button>
     </Alert>
 
+    <!-- RFC 0050 §4.5: whether anything is scanning, before the queue. -->
+    <ScannerHealthBlock />
+
     <Tabs v-model="activeTab">
       <TabsList :aria-label="t('adminScans.tabsLabel')" class="flex-wrap h-auto">
         <TabsTrigger value="queue">{{
@@ -282,11 +213,11 @@ onMounted(async () => {
         <TabsTrigger value="failures">{{
           t("adminScans.failuresTab", { n: failures?.total ?? 0 })
         }}</TabsTrigger>
-        <TabsTrigger value="verdicts">{{ t("adminScans.verdictsTab") }}</TabsTrigger>
       </TabsList>
 
       <TabsContent value="queue" class="space-y-4">
-        <div class="space-y-1">
+        <!-- RFC 0050 §6.7: no filter over an empty, unfiltered queue. -->
+        <div v-if="queueState || (queue?.total ?? 0) > 0" class="space-y-1">
           <Label for="scans-state">{{ t("adminScans.state") }}</Label>
           <Select id="scans-state" v-model="queueState" :options="stateOptions" />
         </div>
@@ -397,50 +328,6 @@ onMounted(async () => {
             :total-pages="totalPages(failures)"
           />
         </AsyncState>
-      </TabsContent>
-
-      <TabsContent value="verdicts" class="space-y-4">
-        <p v-if="!registry" class="text-sm text-muted-foreground" data-testid="pick-registry">
-          {{ t("adminScans.pickRegistry") }}
-        </p>
-        <template v-else>
-          <div class="space-y-1">
-            <Label for="verdicts-state">{{ t("adminScans.state") }}</Label>
-            <Select id="verdicts-state" v-model="verdictState" :options="verdictStateOptions" />
-          </div>
-          <AsyncState
-            :loading="verdictsLoading"
-            :error="verdictsError"
-            :empty="verdicts.length === 0"
-            :empty-message="verdictsEmpty"
-            :on-retry="loadVerdicts"
-          >
-            <Card>
-              <CardContent class="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{{ t("adminScans.coordinate") }}</TableHead>
-                      <TableHead>{{ t("adminScans.verdict") }}</TableHead>
-                      <TableHead>{{ t("adminScans.reasons") }}</TableHead>
-                      <TableHead>{{ t("adminScans.evaluated") }}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow v-for="v in verdicts" :key="coord(v.package)">
-                      <TableCell class="font-mono text-xs">{{ coord(v.package) }}</TableCell>
-                      <TableCell
-                        ><Badge variant="outline">{{ verdictWord(v.state) }}</Badge></TableCell
-                      >
-                      <TableCell class="text-xs">{{ v.reason_codes.join(", ") || "—" }}</TableCell>
-                      <TableCell>{{ formatDate(v.evaluated_at) }}</TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </AsyncState>
-        </template>
       </TabsContent>
     </Tabs>
   </div>

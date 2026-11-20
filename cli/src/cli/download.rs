@@ -197,7 +197,10 @@ async fn explain_refusal(
     };
     match client.pullability(registry, name, Some(version)).await {
         Ok(answer) => {
-            eprint!("{}", super::why::render(registry, name, &answer));
+            eprint!(
+                "{}",
+                crate::render::terminal_safe(&super::why::render(registry, name, &answer))
+            );
             CliError::quiet(if status == 404 {
                 ExitCode::NotFound
             } else {

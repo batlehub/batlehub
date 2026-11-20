@@ -60,3 +60,10 @@ test("an unclosed `<` run strips in linear time", () => {
   extractDescription(`${"<".repeat(50_000)} text`);
   assert.ok(Date.now() - t < 200);
 });
+
+test("a nested tag leaves no markup behind", () => {
+  assert.equal(
+    extractDescription("# X\n\nA <scr<b>ipt>alert(1)</script> page.\n"),
+    "A alert(1) page.",
+  );
+});

@@ -9,9 +9,10 @@
  * the guard then bounces.
  */
 import type { RouteLocationRaw } from "vue-router";
-import { ADMIN_PAGE_VERBS, ADMIN_SECTIONS } from "@/config/adminSections";
+import { ADMIN_PAGE_VERBS, ADMIN_SECTIONS, canOpen } from "@/config/adminSections";
+import { SECURITY_PAGE_VERBS, SECURITY_SECTIONS } from "@/config/securitySections";
 import { RED_PATHS } from "@/config/redPaths";
-import { accountTabs, registryHubPath, SECURITY_VERBS, TOOLS_TABS } from "@/config/navigation";
+import { accountTabs, registryHubPath, TOOLS_TABS } from "@/config/navigation";
 
 export type PaletteKind = "page" | "action" | "registry" | "search";
 
@@ -58,18 +59,22 @@ export function looksLikeCredential(query: string): boolean {
 
 /** Every page the viewer may open, the ones the guard would refuse left out. */
 export function pageEntries(viewer: PaletteViewer, t: Translate): PaletteEntry[] {
-  const admin = ADMIN_SECTIONS.flatMap((section) =>
-    section.pages
-      .filter((page) => viewer.can(page.verb))
-      .map<PaletteEntry>((page) => ({
-        key: `page:${page.to}`,
-        kind: "page",
-        label: t(page.label),
-        hint: t(section.label),
-        to: page.to,
-        keywords: [t(section.label)],
-      })),
-  );
+  // The security pages are found by the space's name too: their sections are
+  // "Overview", "Triage", "Follow-up", none of which says "security".
+  const space = (sections: typeof ADMIN_SECTIONS, extra: string[]) =>
+    sections.flatMap((section) =>
+      section.pages
+        .filter((page) => canOpen(viewer.can, page.verb))
+        .map<PaletteEntry>((page) => ({
+          key: `page:${page.to}`,
+          kind: "page",
+          label: t(page.label),
+          hint: t(section.label),
+          to: page.to,
+          keywords: [t(section.label), ...extra],
+        })),
+    );
+  const admin = [...space(SECURITY_SECTIONS, [t("nav.security")]), ...space(ADMIN_SECTIONS, [])];
   return [...admin, ...ownPages(viewer, t)];
 }
 
@@ -83,7 +88,6 @@ export function ownPages(viewer: PaletteViewer, t: Translate): PaletteEntry[] {
     keywords: [],
   });
   const out: PaletteEntry[] = [];
-  if (viewer.canAny(SECURITY_VERBS)) out.push(page("/security", "nav.security"));
   if (viewer.isAuthenticated) {
     out.push(...accountTabs({ isOidc: viewer.isOidc }).map((l) => page(l.to, l.label)));
   }
@@ -94,8 +98,10 @@ export function ownPages(viewer: PaletteViewer, t: Translate): PaletteEntry[] {
 /** The red-path actions whose page the viewer may open, in §2.1 order. */
 export function actionEntries(viewer: PaletteViewer, t: Translate, query: string): PaletteEntry[] {
   return RED_PATHS.flatMap<PaletteEntry>((rp) => {
-    const verb = rp.verb ?? ADMIN_PAGE_VERBS[rp.to];
-    if (!verb || !viewer.can(verb)) return [];
+    // A target missing from both tables is dropped: `adminSections.test.ts`
+    // asserts none is (RFC 0050 §6.6).
+    const verb = rp.verb ?? ADMIN_PAGE_VERBS[rp.to] ?? SECURITY_PAGE_VERBS[rp.to];
+    if (!verb || !canOpen(viewer.can, verb)) return [];
     // RP-6 needs a package before it can block one: it hands the query to the
     // catalog, like the search row, instead of naming a fixed page.
     const handoff = rp.verb !== undefined;
@@ -103,7 +109,7 @@ export function actionEntries(viewer: PaletteViewer, t: Translate, query: string
     const to: RouteLocationRaw =
       handoff && query.trim()
         ? { path: rp.to, query: { q: query.trim() } }
-        : { path: rp.to, query: rp.query ?? {} };
+        : { path: rp.to, query: rp.query ?? {}, hash: rp.hash ?? "" };
     return [
       {
         key: `action:${rp.id}`,

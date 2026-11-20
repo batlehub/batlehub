@@ -20,17 +20,17 @@ import type {
   StatsHistoryPointDto,
   Suggestion,
 } from "@/client/types.gen";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
 import StatsTrendChart from "@/components/admin/StatsTrendChart.vue";
-import { ADMIN_PAGE_VERBS, REGISTRIES_TABS } from "@/config/adminSections";
+import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
 import { useAuth } from "@/composables/useAuth";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatEvery } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import DeleteCachedArtifact from "@/components/admin/DeleteCachedArtifact.vue";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -166,18 +166,13 @@ const tabLink = (tab: string) => ({ path: route.path, query: { ...route.query, t
 
 // ── wording ──────────────────────────────────────────────────────────────────
 
-function every(secs: number): string {
-  if (secs % 86_400 === 0) return t("verdictPanel.nextRescanEveryDays", { n: secs / 86_400 });
-  if (secs % 3600 === 0) return t("verdictPanel.nextRescanEveryHours", { n: secs / 3600 });
-  if (secs % 60 === 0) return t("verdictPanel.nextRescanEveryMinutes", { n: secs / 60 });
-  return t("verdictPanel.nextRescanEverySeconds", { n: secs });
-}
+const every = formatEvery;
 
 const rescanInterval = computed(() => view.value?.config?.security?.rescan_interval_secs ?? null);
 const has = (code: Suggestion["code"]) =>
   view.value?.suggestions.some((s) => s.code === code) ?? false;
 const scansLink = computed(() => ({
-  path: "/admin/security/scans",
+  path: "/security/scanners",
   query: { registry: name.value },
 }));
 
@@ -193,7 +188,7 @@ function suggestionText(s: Suggestion): string {
 }
 function suggestionLink(s: Suggestion) {
   if (s.code === "scan_failures") {
-    return { path: "/admin/security/scans", query: { tab: "failures", registry: name.value } };
+    return { path: "/security/scanners", query: { tab: "failures", registry: name.value } };
   }
   return tabLink(view.value?.config ? "config" : "overview");
 }
@@ -245,7 +240,6 @@ watch(
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <RouterLink
       to="/admin/registries"
       class="text-sm text-muted-foreground hover:underline underline-offset-[3px]"
@@ -443,6 +437,9 @@ watch(
               </template>
             </dd>
           </dl>
+          <!-- RFC 0050 §6.7: deleting one cached artifact is about one
+               registry, so it sits on that registry's page, not on Health. -->
+          <DeleteCachedArtifact :registries="[name]" />
         </TabsContent>
 
         <TabsContent v-if="tabs.includes('activity')" value="activity" class="space-y-4">
@@ -506,8 +503,13 @@ watch(
                 :values="hitRates"
                 :max="1"
                 :format="(v) => pct(v)"
+                unit="hour"
               />
-              <StatsTrendChart :label="t('adminRegistry.requests')" :values="requests" />
+              <StatsTrendChart
+                :label="t('adminRegistry.requests')"
+                :values="requests"
+                unit="hour"
+              />
             </CardContent>
           </Card>
           <p class="text-xs text-muted-foreground" data-testid="footnote">

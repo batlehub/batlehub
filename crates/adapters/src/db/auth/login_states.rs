@@ -17,8 +17,9 @@ impl LoginStateStore for PgPackageRepository {
         sqlx::query(
             r#"
             INSERT INTO oidc_login_states
-                (state, provider, code_verifier, nonce, spa_state, expires_at, return_to)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (state, provider, code_verifier, nonce, spa_state, expires_at, return_to,
+                 code_challenge, handoff, started)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(state)
@@ -28,6 +29,9 @@ impl LoginStateStore for PgPackageRepository {
         .bind(&value.spa_state)
         .bind(expires_at)
         .bind(&value.return_to)
+        .bind(&value.code_challenge)
+        .bind(&value.handoff)
+        .bind(&value.started)
         .execute(&self.pool)
         .await
         .db_err()?;
@@ -47,7 +51,8 @@ impl LoginStateStore for PgPackageRepository {
             r#"
             DELETE FROM oidc_login_states
             WHERE state = $1 AND expires_at > NOW()
-            RETURNING provider, code_verifier, nonce, spa_state, return_to
+            RETURNING provider, code_verifier, nonce, spa_state, return_to, code_challenge, handoff,
+                      started
             "#,
         )
         .bind(state)
@@ -61,6 +66,9 @@ impl LoginStateStore for PgPackageRepository {
             nonce: r.get("nonce"),
             spa_state: r.get("spa_state"),
             return_to: r.get("return_to"),
+            code_challenge: r.get("code_challenge"),
+            handoff: r.get("handoff"),
+            started: r.get("started"),
         }))
     }
 

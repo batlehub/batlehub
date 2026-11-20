@@ -43,6 +43,7 @@ pub async fn cargo_owners(
     identity: AuthIdentity,
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
+    let name = super::helpers::local_crate_name(&name);
     require_cargo(&registry, &map)?;
 
     require_readable_crate(&local_svc, &registry, &name, &identity).await?;
@@ -226,8 +227,10 @@ pub async fn cargo_add_owners(
     map: web::Data<RegistryMap>,
     mode_map: web::Data<RegistryModeMap>,
     local_svc: web::Data<Arc<LocalRegistryService>>,
+    hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
+    let name = super::helpers::local_crate_name(&name);
     require_cargo(&registry, &map)?;
     // Ownership is a local-registry concept; a proxy-mode registry has none to
     // change, and answering here would imply otherwise.
@@ -236,7 +239,7 @@ pub async fn cargo_add_owners(
 
     let ownership = local_svc.ownership.as_ref().expect("checked above");
     let mut added = Vec::new();
-    for login in &body.users {
+    for login in &scoped_logins(&hot, &body.users).await? {
         match ownership
             .add_owner(
                 &registry,
@@ -292,8 +295,10 @@ pub async fn cargo_remove_owners(
     map: web::Data<RegistryMap>,
     mode_map: web::Data<RegistryModeMap>,
     local_svc: web::Data<Arc<LocalRegistryService>>,
+    hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
+    let name = super::helpers::local_crate_name(&name);
     require_cargo(&registry, &map)?;
     require_local_mode(&registry, &mode_map)?;
     require_owner_mutation(&local_svc, &registry, &name, &identity.0).await?;
@@ -308,9 +313,10 @@ pub async fn cargo_remove_owners(
         .list_owners(&registry, &name)
         .await
         .map_err(AppError::from)?;
+    let users = scoped_logins(&hot, &body.users).await?;
     let remaining = current
         .iter()
-        .filter(|e| !body.users.contains(&e.principal_id))
+        .filter(|e| !users.contains(&e.principal_id))
         .count();
     if remaining == 0 && !current.is_empty() {
         return Err(AppError::conflict(format!(
@@ -319,7 +325,7 @@ pub async fn cargo_remove_owners(
         )));
     }
 
-    for login in &body.users {
+    for login in &users {
         ownership
             .remove_owner(&registry, &name, "user", login)
             .await
@@ -330,4 +336,22 @@ pub async fn cargo_remove_owners(
         ok: true,
         msg: format!("removed {} from owners of {name}", body.users.join(", ")),
     }))
+}
+
+/// `cargo owner` names users by login; stored as `<provider>:<login>` like
+/// every user owner.
+async fn scoped_logins(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    logins: &[String],
+) -> Result<Vec<String>, AppError> {
+    let mut out = Vec::with_capacity(logins.len());
+    for login in logins {
+        out.push(
+            crate::handlers::back_office::governance::ownership::scope_owner_principal(
+                hot, "user", login,
+            )
+            .await?,
+        );
+    }
+    Ok(out)
 }

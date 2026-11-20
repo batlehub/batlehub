@@ -468,6 +468,11 @@ pub struct HotConfig {
     /// wired none, and is *not* the same as "they deny": a tier with no rows
     /// inherits.
     pub grant_repo: Option<Arc<dyn crate::ports::GrantRepository>>,
+    /// The `[[auth]]` names whose identities carry a user id (plus
+    /// `static-token` when a static token sets one): what a `user:` grant or a
+    /// user owner written as a bare id is scoped against
+    /// ([`crate::entities::scope_user_principal`]).
+    pub user_providers: Vec<String>,
     /// Where forge ref resolutions are remembered (RFC 0019 §5.2).
     ///
     /// `None` means refs still resolve — resolution is what builds the cache
@@ -501,6 +506,9 @@ pub struct HotConfig {
     /// registry with no entry has no quarantine: its gates run as rules,
     /// exactly as before the section existed.
     pub security: HashMap<String, crate::entities::SecurityPolicy>,
+    /// `[console].accepted`'s `coverage:` entries: registries left
+    /// unprotected on purpose, which the Coverage line no longer counts.
+    pub accepted_unprotected: std::collections::BTreeSet<String>,
     /// The gates a `[security]` registry runs as scanners instead of rules
     /// (RFC 0018 §6.1): `block_list`, `cve_gate` and the three wrapped
     /// metadata gates, built per registry because each holds that registry's
@@ -512,6 +520,21 @@ pub struct HotConfig {
     pub verdicts: Option<Arc<dyn crate::ports::VerdictRepository>>,
     /// The scan queue the proxy enqueues on and the worker leases from.
     pub scan_queue: Option<Arc<dyn crate::ports::ScanQueue>>,
+    /// `worker_heartbeats`, read by the security console (RFC 0050 §6.1).
+    pub worker_registry: Option<Arc<dyn crate::ports::WorkerRegistry>>,
+    /// `scanner_status`: written by the worker, read by the console.
+    pub scanner_status: Option<Arc<dyn crate::ports::ScannerStatusRepository>>,
+    /// `security_daily`: the trends rollup (RFC 0050 §5.2).
+    pub security_daily: Option<Arc<dyn crate::ports::SecurityDailyRepository>>,
+    /// The `[[auth.tokens]]` entries stored in clear, as `(config path,
+    /// user id)` — never the value (RFC 0050 §4.3, T4). Read by
+    /// `/admin/instance-security`.
+    pub plain_static_tokens: Arc<Vec<(String, Option<String>)>>,
+    /// The kinds each `[scanners]` entry can scan (the worker's `supports`).
+    /// A scanner absent here (an enricher) applies to every kind. Read by the
+    /// console, which does not count a scanner against a registry it cannot
+    /// scan.
+    pub scanner_kinds: Arc<HashMap<String, Vec<crate::entities::RegistryKind>>>,
     /// Storage for the package and version *policy* tiers (RFC 0015 §6.3).
     ///
     /// `None` means those two tiers contribute nothing, which is the correct
@@ -674,10 +697,12 @@ impl Default for HotConfig {
             signing_keys: None,
             policy_tiers: HashMap::new(),
             grant_repo: None,
+            user_providers: Vec::new(),
             ref_resolutions: None,
             rate_limit_budget: None,
             forge_refs: HashMap::new(),
             security: HashMap::new(),
+            accepted_unprotected: std::collections::BTreeSet::new(),
             forge_raw: HashMap::new(),
             forge_api_reads: HashMap::new(),
             air_gap: crate::entities::AirGapPolicy::default(),
@@ -685,6 +710,11 @@ impl Default for HotConfig {
             internal_scanners: HashMap::new(),
             verdicts: None,
             scan_queue: None,
+            worker_registry: None,
+            scanner_status: None,
+            security_daily: None,
+            plain_static_tokens: Arc::default(),
+            scanner_kinds: Arc::default(),
             policy_repo: None,
             shadow_log: None,
             document_cache: None,

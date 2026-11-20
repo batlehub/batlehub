@@ -11,11 +11,11 @@ pub struct OwnerEntry {
     pub granted_by: Option<String>,
 }
 
-/// Whether an owner row names this identity: its user id, or one of its
-/// groups.
+/// Whether an owner row names this identity: its `<provider>:<user id>`
+/// ([`Identity::user_principal`]), or one of its groups.
 pub fn explicit_owner(entry: &OwnerEntry, identity: &Identity) -> bool {
     match entry.principal_type.as_str() {
-        "user" => identity.user_id.as_deref() == Some(entry.principal_id.as_str()),
+        "user" => identity.user_principal().as_deref() == Some(entry.principal_id.as_str()),
         "group" => identity.groups.contains(&entry.principal_id),
         _ => false,
     }

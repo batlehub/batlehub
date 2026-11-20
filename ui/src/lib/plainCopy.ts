@@ -24,7 +24,8 @@ export function withoutDocRefs(text: string): string {
  * `rest` is empty when the text is a single sentence.
  */
 export function leadSentence(text: string): { lead: string; rest: string } {
-  const match = /^(.+?[.!?])\s+(?=[A-Z0-9'"`[(])/s.exec(text);
+  // Not after an abbreviation: "e.g. Foo" is one sentence.
+  const match = /^(.+?(?<!\b(?:e\.g|i\.e|etc|vs))[.!?])\s+(?=[A-Z0-9'"`[(])/s.exec(text);
   if (!match) return { lead: text, rest: "" };
   return { lead: match[1], rest: text.slice(match[0].length) };
 }

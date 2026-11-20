@@ -9,7 +9,7 @@ Only code is read — fenced blocks and inline spans that start with the binary 
 so prose such as "the batlehub server" is not a command. Synopsis notation is
 reduced first: `[optional]` groups go, `<a|b>` becomes `a`, other `<placeholder>`s
 become a dummy value, and shell around the command (`| jq`, `> file`, `&& npm ci`)
-is cut. A word written `plan|seed|export` is checked once per alternative. An inline mention of a flag without its value is accepted.
+is cut, `;` included. A word written `plan|seed|export` is checked once per alternative. An inline mention of a flag without its value is accepted.
 
 Usage: python3 check_doc_commands.py <batlehub-cli binary> <docs dir>
 """
@@ -23,7 +23,7 @@ TOP = (
     "profile registry package owner visibility grant namespace publish download why check me "
     "wait verdict audit authz auth setup mise proxy vsx policy exemption upstream user quota "
     "ip-block server cache import retention banner exposure bundle air-gap flag gdpr sbom "
-    "notification java tui completion admin version owners verdicts config"
+    "notification java tui completion admin version owners verdicts config security"
 ).split()
 # The pages that show old spellings on purpose, and the trees that are not published.
 SKIP = ("rfc/", "fr/rfc/", "internal/", ".vitepress/")
@@ -57,7 +57,8 @@ def code_of(path):
 
 def args_of(raw):
     text = re.sub(r"\$\([^)]*\)", "X", raw).replace("…", "")
-    text = re.split(r"\s(?:\||>|>>|>>>|<<<|&&|;)\s", text + " ")[0]
+    # `;` ends a command even when it touches the word before it (`status; echo`).
+    text = re.split(r"\s(?:\||>|>>|>>>|<<<|&&)\s|;\s", text + " ")[0]
     while re.search(r"\[[^\[\]]*\]", text):
         text = re.sub(r"\[[^\[\]]*\]", "", text)
     text = re.sub(r"<([^<>|]*)\|[^<>]*>", r"\1", text)

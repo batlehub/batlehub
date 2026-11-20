@@ -44,7 +44,13 @@ impl ChannelDispatcher for WebhookDispatcher {
             req = req.header("X-BatleHub-Signature-256", format!("sha256={sig}"));
         }
 
-        let resp = req.body(body).send().await?;
+        // `without_url`: a Slack/Teams/webhook URL is the credential, and the
+        // error is logged.
+        let resp = req
+            .body(body)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
         if !resp.status().is_success() {
             anyhow::bail!("webhook returned HTTP {}", resp.status());
         }
@@ -82,7 +88,8 @@ impl ChannelDispatcher for SlackDispatcher {
             .timeout(self.timeout)
             .json(&payload)
             .send()
-            .await?;
+            .await
+            .map_err(reqwest::Error::without_url)?;
         if !resp.status().is_success() {
             anyhow::bail!("slack returned HTTP {}", resp.status());
         }
@@ -123,7 +130,8 @@ impl ChannelDispatcher for TeamsDispatcher {
             .timeout(self.timeout)
             .json(&payload)
             .send()
-            .await?;
+            .await
+            .map_err(reqwest::Error::without_url)?;
         if !resp.status().is_success() {
             anyhow::bail!("teams returned HTTP {}", resp.status());
         }
@@ -391,6 +399,18 @@ mod tests {
         };
         dispatcher.send_test().await.unwrap();
         mock.assert_async().await;
+    }
+
+    /// The webhook URL is the credential; a transport error is logged.
+    #[tokio::test]
+    async fn a_transport_error_does_not_carry_the_webhook_url() {
+        let dispatcher = SlackDispatcher {
+            url: "http://127.0.0.1:1/services/T0/B0/hook-secret".to_owned(),
+            client: Arc::new(reqwest::Client::new()),
+            timeout: Duration::from_secs(5),
+        };
+        let err = dispatcher.dispatch(&sample_event(None)).await.unwrap_err();
+        assert!(!format!("{err:#}").contains("hook-secret"), "{err:#}");
     }
 
     #[tokio::test]

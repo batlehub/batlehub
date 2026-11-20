@@ -15,11 +15,12 @@ pub mod release_import;
 pub mod sbom;
 pub mod scanner;
 pub mod security;
+pub mod security_daily;
 pub mod stats_history;
 pub mod storage;
 pub mod vulnerability;
 
-pub use advisory::AdvisoryRepository;
+pub use advisory::{AdvisoryRepository, FlagPulls};
 pub use air_gap::{BundleHistory, MissRecorder};
 pub use audit_trail::{
     AuditTrailStore, CandidateQuery, ErasedElsewhere, LeaderLock, RowOp, TrailBatch,
@@ -63,7 +64,11 @@ pub use sbom::{
     UpstreamSbomFetcher, LICENSE_EXTRACTION_TYPES, README_EXTRACTION_TYPES, README_EXTRACT_CEILING,
 };
 pub use scanner::{ArtifactScanner, FindingEnricher, ScanInput, ScannerError};
-pub use security::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
+pub use security::{
+    HoldCounts, QueuedCount, ScanQueue, ScannerStatus, ScannerStatusRepository, VerdictPage,
+    VerdictRepository, WorkerHeartbeat, WorkerRegistry,
+};
+pub use security_daily::{DailyEvents, DailyState, SecurityDailyRepository, SecurityDailyRow};
 pub use stats_history::{StatsHistoryRepository, StatsRollupRow};
 pub use storage::{
     collect_byte_stream, fill_staging_key, require_segment_key, require_segments, segment_key,

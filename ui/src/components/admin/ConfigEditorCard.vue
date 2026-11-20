@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ConfigWarning } from "@/client/types.gen";
@@ -25,6 +25,8 @@ const props = defineProps<{
   hotReloadEnabled: boolean | null;
   /** Whether a reload is staged; the editor then folds behind one control. */
   hasPending: boolean;
+  /** `content_hash` of the file the editor was loaded from; the server refuses the save (409) if the file changed since. */
+  baseHash?: string | null;
   /** Re-reads the pending reload once one is staged; awaited, so the button waits for it. */
   refreshPending: () => Promise<void>;
   /**
@@ -33,6 +35,11 @@ const props = defineProps<{
    * loaded — never on mount against an empty editor.
    */
   jumpTo?: string | null;
+  /**
+   * RFC 0050 §6.7: the warnings already in force, drawn by the page above.
+   * A candidate's warning that is one of them is not drawn a second time.
+   */
+  activeWarnings?: ConfigWarning[];
 }>();
 const emit = defineEmits<{
   reloadFromDisk: [];
@@ -41,6 +48,22 @@ const emit = defineEmits<{
 }>();
 const configContent = defineModel<string>("content", { required: true });
 const candidateWarnings = defineModel<ConfigWarning[]>("candidateWarnings", { required: true });
+/**
+ * The candidate's warnings that the config in force does not already raise.
+ * Paths are positional (`registries[3]`), so a new warning can land on an old
+ * index: a code whose count grows shows every warning of that code, and only
+ * an exact code + path + message match is hidden otherwise.
+ */
+const newWarnings = computed(() => {
+  const active = props.activeWarnings ?? [];
+  const key = (w: ConfigWarning) => `${w.code}@${w.path}@${w.message}`;
+  const activeKeys = new Set(active.map(key));
+  const count = (ws: ConfigWarning[], code: string) => ws.filter((w) => w.code === code).length;
+  return candidateWarnings.value.filter(
+    (w) =>
+      !activeKeys.has(key(w)) || count(candidateWarnings.value, w.code) > count(active, w.code),
+  );
+});
 
 const { t, locale } = useI18n();
 const { authFetch } = useAuthFetch();
@@ -140,7 +163,10 @@ async function createPendingFromContent() {
     const res = await authFetch(`${API_BASE_URL}/api/v1/admin/config/from-content`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: validatedContent.value ?? configContent.value }),
+      body: JSON.stringify({
+        content: validatedContent.value ?? configContent.value,
+        base_hash: props.baseHash ?? null,
+      }),
     });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -233,13 +259,13 @@ async function createPendingFromContent() {
         <div v-if="editorNotice" class="border border-copper px-4 py-2 text-sm text-copper">
           {{ editorNotice }}
         </div>
-        <div v-if="candidateWarnings.length" class="space-y-2">
+        <div v-if="newWarnings.length" class="space-y-2">
           <p class="text-sm text-muted-foreground">
             <i18n-t keypath="adminConfigReload.validWithWarnings" tag="span">
-              <template #count>{{ candidateWarnings.length }}</template>
+              <template #count>{{ newWarnings.length }}</template>
             </i18n-t>
           </p>
-          <ConfigWarningList :warnings="candidateWarnings" />
+          <ConfigWarningList :warnings="newWarnings" />
         </div>
         <Alert v-if="editorError" variant="destructive">{{ editorError }}</Alert>
         <!-- One filled action per view: staging is it here — unless a reload

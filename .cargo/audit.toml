@@ -1,2 +1,9 @@
 # cargo-audit configuration
-# All advisories must be resolved — no suppressions.
+# All advisories must be resolved — no suppressions, with one exception kept in
+# step with `deny.toml`'s `advisories.ignore`:
+#
+# RUSTSEC-2026-0543 — chrono is *unmaintained*: no vulnerability, no version to
+# move to, and the audit-seal digest hashes chrono's timestamp text, so leaving
+# it needs a v2 seal format. Re-open the day chrono carries a vulnerability.
+[advisories]
+ignore = ["RUSTSEC-2026-0543"]

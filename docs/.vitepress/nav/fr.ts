@@ -169,6 +169,10 @@ export const sidebar = {
       ],
     },
     {
+      text: "Essayer",
+      items: [{ text: "Déployer la démo", link: "/fr/guide/install/demo" }],
+    },
+    {
       text: "Migration",
       items: [{ text: "Migrer depuis Nexus", link: "/fr/guide/install/migrate-from-nexus" }],
     },

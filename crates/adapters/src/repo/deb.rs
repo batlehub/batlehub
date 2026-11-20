@@ -79,30 +79,46 @@ fn extract_control_member(bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// Decompress a control tarball based on the `control.tar` suffix (`.gz`/`.xz`/
 /// `.zst`/empty).
 fn decompress(ext: &str, raw: &[u8]) -> Result<Vec<u8>, CoreError> {
-    let out = match ext {
-        "" => raw.to_vec(),
-        ".gz" => {
-            let mut d = flate2::read::GzDecoder::new(raw);
-            let mut out = Vec::new();
-            d.read_to_end(&mut out)
-                .map_err(|e| CoreError::InvalidInput(format!("gz control: {e}")))?;
-            out
+    // The upload cap bounds the compressed bytes only: a bomb of a few MiB
+    // would otherwise inflate to gigabytes before `control` is even looked at.
+    let mut sink = super::pacman::CappedWriter {
+        buf: Vec::new(),
+        limit: MAX_CONTROL_PLAIN,
+    };
+    let res = match ext {
+        "" => {
+            if raw.len() as u64 > MAX_CONTROL_PLAIN {
+                return Err(control_too_large());
+            }
+            return Ok(raw.to_vec());
         }
-        ".xz" => {
-            let mut out = Vec::new();
-            lzma_rs::xz_decompress(&mut std::io::Cursor::new(raw), &mut out)
-                .map_err(|e| CoreError::InvalidInput(format!("xz control: {e}")))?;
-            out
-        }
-        ".zst" => zstd::decode_all(raw)
-            .map_err(|e| CoreError::InvalidInput(format!("zstd control: {e}")))?,
+        ".gz" => std::io::copy(&mut flate2::read::GzDecoder::new(raw), &mut sink)
+            .map(drop)
+            .map_err(|e| format!("gz control: {e}")),
+        ".xz" => lzma_rs::xz_decompress(&mut std::io::Cursor::new(raw), &mut sink)
+            .map_err(|e| format!("xz control: {e}")),
+        ".zst" => zstd::stream::read::Decoder::new(raw)
+            .and_then(|mut d| std::io::copy(&mut d, &mut sink))
+            .map(drop)
+            .map_err(|e| format!("zstd control: {e}")),
         other => {
             return Err(CoreError::InvalidInput(format!(
                 "unsupported control compression '{other}'"
             )))
         }
     };
-    Ok(out)
+    res.map_err(CoreError::InvalidInput)?;
+    Ok(sink.buf)
+}
+
+/// Decompressed ceiling for `control.tar` and its `control` entry: maintainer
+/// scripts and a few text files, never close to this.
+const MAX_CONTROL_PLAIN: u64 = 64 * 1024 * 1024;
+
+fn control_too_large() -> CoreError {
+    CoreError::InvalidInput(format!(
+        "deb control member exceeds the {MAX_CONTROL_PLAIN}-byte size limit"
+    ))
 }
 
 /// Read the `control` entry out of a decompressed control tarball.
@@ -112,7 +128,7 @@ fn read_control_from_tar(tar_bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
         .entries()
         .map_err(|e| CoreError::InvalidInput(format!("control tar: {e}")))?;
     for entry in entries {
-        let mut entry = entry.map_err(|e| CoreError::InvalidInput(format!("control tar: {e}")))?;
+        let entry = entry.map_err(|e| CoreError::InvalidInput(format!("control tar: {e}")))?;
         let path = entry
             .path()
             .map_err(|e| CoreError::InvalidInput(format!("control tar path: {e}")))?
@@ -122,8 +138,12 @@ fn read_control_from_tar(tar_bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
         if path == "control" {
             let mut out = Vec::new();
             entry
+                .take(MAX_CONTROL_PLAIN + 1)
                 .read_to_end(&mut out)
                 .map_err(|e| CoreError::InvalidInput(format!("reading control: {e}")))?;
+            if out.len() as u64 > MAX_CONTROL_PLAIN {
+                return Err(control_too_large());
+            }
             return Ok(out);
         }
     }
@@ -387,6 +407,38 @@ mod tests {
             // (No data.tar member needed for control parsing.)
         }
         deb
+    }
+
+    #[test]
+    fn a_control_member_decompression_bomb_is_refused() {
+        let mut gz = Vec::new();
+        {
+            let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::best());
+            let chunk = vec![0u8; 1024 * 1024];
+            for _ in 0..=MAX_CONTROL_PLAIN / (1024 * 1024) {
+                enc.write_all(&chunk).unwrap();
+            }
+            enc.finish().unwrap();
+        }
+        assert!(gz.len() < 1024 * 1024, "the fixture must be a bomb");
+        let mut deb = Vec::new();
+        {
+            let mut builder = ar::Builder::new(&mut deb);
+            builder
+                .append(
+                    &ar::Header::new(b"debian-binary".to_vec(), 4),
+                    &b"2.0\n"[..],
+                )
+                .unwrap();
+            builder
+                .append(
+                    &ar::Header::new(b"control.tar.gz".to_vec(), gz.len() as u64),
+                    &gz[..],
+                )
+                .unwrap();
+        }
+        let err = parse_deb(&deb).unwrap_err();
+        assert!(format!("{err:?}").contains("size limit"), "{err:?}");
     }
 
     #[test]

@@ -482,10 +482,12 @@ async fn the_newest_pull_wins_when_a_version_has_several() {
 async fn keep_versions_keeps_the_newest_by_the_adapters_own_ordering() {
     let e = estate!();
     // Published out of version order on purpose: the rank is by date, and a
-    // string comparison on `version` would pick a different pair.
+    // comparison on `version` would pick a different pair (1.0.0 and 2.0.0).
+    // The highest stable version is the newest here, so the veto that always
+    // keeps it is not what decides this test.
     e.publish("p", "1.0.0", 10).await;
-    e.publish("p", "9.0.0", 500).await;
-    e.publish("p", "2.0.0", 1).await;
+    e.publish("p", "2.0.0", 500).await;
+    e.publish("p", "9.0.0", 1).await;
     e.publish("p", "3.0.0", 300).await;
 
     let mut p = policy();
@@ -495,12 +497,12 @@ async fn keep_versions_keeps_the_newest_by_the_adapters_own_ordering() {
     let report = e.run(&p).await;
     assert_eq!(
         report.reclaimed_coordinates,
-        vec!["p@3.0.0", "p@9.0.0"],
+        vec!["p@2.0.0", "p@3.0.0"],
         "the two oldest by publish date go, whatever their numbers say"
     );
     let mut live = e.live_versions("p").await;
     live.sort();
-    assert_eq!(live, vec!["1.0.0", "2.0.0"]);
+    assert_eq!(live, vec!["1.0.0", "9.0.0"]);
 }
 
 // ── The version pin, as a column ──────────────────────────────────────────────

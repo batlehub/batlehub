@@ -185,6 +185,44 @@ pub struct AppConfig {
     /// `[worker]` — how the scan worker role is tuned (RFC 0018 §4.1).
     #[serde(default)]
     pub worker: WorkerConfig,
+    /// `[console]` — what the security console treats as known and accepted
+    /// rather than as needing attention. Absent accepts nothing.
+    #[serde(default)]
+    pub console: ConsoleConfig,
+}
+
+/// `[console]`: the console's acknowledgements, kept in the config so they are
+/// versioned, reviewed and the same for every admin.
+///
+/// ```toml
+/// [console]
+/// accepted = ["coverage:go-public", "warning:proxy-trust.unconfigured"]
+/// ```
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleConfig {
+    /// `coverage:<registry>` — a registry left without `[security]` or a
+    /// `cve_gate` on purpose: the Coverage line no longer counts it. And
+    /// `warning:<code>` — a config warning the operator has read and keeps:
+    /// still listed, drawn as accepted, no longer `ATTENTION`.
+    #[serde(default)]
+    pub accepted: Vec<String>,
+}
+
+impl ConsoleConfig {
+    /// The registries accepted as unprotected.
+    pub fn accepted_coverage(&self) -> impl Iterator<Item = &str> {
+        self.accepted
+            .iter()
+            .filter_map(|a| a.strip_prefix("coverage:"))
+    }
+
+    /// Whether a config warning with `code` is accepted.
+    pub fn accepts_warning(&self, code: &str) -> bool {
+        self.accepted
+            .iter()
+            .any(|a| a.strip_prefix("warning:") == Some(code))
+    }
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -258,6 +296,10 @@ fn default_history_retention_days() -> u32 {
     30
 }
 
+fn default_security_history_retention_days() -> u32 {
+    90
+}
+
 /// Both of the instance's statistical outputs, in one block.
 ///
 /// They live together because an operator deciding "do I want this instance
@@ -291,6 +333,13 @@ pub struct StatsConfig {
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
 
+    /// How many days of the daily security rollup behind `/security/trends`
+    /// to keep (RFC 0050 §4.1). `0` keeps every day; the rollup itself is off
+    /// only with `history_enabled = false`. Over 365, or `0`, is accepted
+    /// with the `stats.security-history-long` warning.
+    #[serde(default = "default_security_history_retention_days")]
+    pub security_history_retention_days: u32,
+
     /// Install the Prometheus recorder and serve `/metrics`.
     ///
     /// **This is a security control, not a preference** (RFC 0004 §7).
@@ -320,6 +369,7 @@ impl Default for StatsConfig {
         Self {
             history_enabled: true,
             history_retention_days: default_history_retention_days(),
+            security_history_retention_days: default_security_history_retention_days(),
             metrics_enabled: true,
             dashboard_url: None,
             registry_dashboard_url: None,
@@ -776,7 +826,55 @@ impl AppConfig {
         self.air_gap_warnings(&mut out);
         self.audit_warnings(&mut out);
         self.stats_url_warnings(&mut out);
+        self.static_token_warnings(&mut out);
+        self.security_history_warnings(&mut out);
+        for w in &mut out {
+            w.accepted = self.console.accepts_warning(&w.code);
+        }
         out
+    }
+
+    /// The `[[auth.tokens]]` values stored in clear, as `(config path, user
+    /// id)` — never the value (RFC 0050 §4.3). The path is
+    /// `auth[i].tokens[j]`, `i` counting every `[[auth]]` block.
+    pub fn plain_static_tokens(&self) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        for (i, auth) in self.auth.iter().enumerate() {
+            let AuthConfig::Token(t) = auth else { continue };
+            for (j, token) in t.tokens.iter().enumerate() {
+                // The verifier's own rule: a value it would compare in clear
+                // is a plain token here.
+                if !batlehub_core::entities::is_argon2_hash(&token.value) {
+                    out.push((format!("auth[{i}].tokens[{j}]"), token.user_id.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// RFC 0050 §4.3: a static token accepted in clear is said, by path only.
+    fn static_token_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (path, _) in self.plain_static_tokens() {
+            out.push(ConfigWarning::new(
+                warnings::AUTH_PLAIN_STATIC_TOKEN,
+                path,
+                "this static token is stored in clear in the config: anyone who can read the \
+                 file can use it. Store the output of `batlehub hash-token` instead.",
+            ));
+        }
+    }
+
+    /// RFC 0050 §4.3: a security history kept longer than a year, or forever.
+    fn security_history_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let days = self.stats.security_history_retention_days;
+        if days == 0 || days > 365 {
+            out.push(ConfigWarning::new(
+                warnings::STATS_SECURITY_HISTORY_LONG,
+                "stats.security_history_retention_days",
+                "the daily security rollup is kept longer than a year (or forever): its rows \
+                 are small, but they summarise an audit log whose own retention is shorter.",
+            ));
+        }
     }
 
     /// RFC 0044 §4.3: an `http` monitoring link is accepted, and said.
@@ -2075,6 +2173,17 @@ impl AppConfig {
                 // has no identity to collide with.
                 AuthConfig::Token(_) => continue,
             };
+            // `user:<provider>:<id>` and `group:<provider>:<name>` split on the
+            // first `:`, and `static-token` / `user-token:` are the names the
+            // static-token provider and PATs report.
+            if name.contains(':') || name == STATIC_TOKEN_PROVIDER || name.starts_with("user-token")
+            {
+                bail!(
+                    "[[auth]] name = \"{name}\" is reserved or contains ':' — a grant subject \
+                     splits on the first ':', and 'static-token' / 'user-token' are what static \
+                     tokens and personal access tokens report"
+                );
+            }
             if let Some(first) = seen.insert(name, kind) {
                 bail!(
                     "[[auth]] name = \"{name}\" is used by both type = \"{first}\" and type = \
@@ -2083,6 +2192,122 @@ impl AppConfig {
                      provider as far as everything downstream is concerned — give them distinct \
                      names."
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// The `[[auth]]` providers whose identities carry a user id — every named
+    /// one, plus `static-token` when a static token sets `user_id` — which is
+    /// what a `user:` grant is scoped by (`user:<provider>:<id>`).
+    pub fn user_id_providers(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for auth in &self.auth {
+            match auth {
+                AuthConfig::Oidc(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::ActionsOidc(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::Kubernetes(cfg) => out.push(cfg.name.clone()),
+                AuthConfig::Token(t) if t.tokens.iter().any(|e| e.user_id.is_some()) => {
+                    out.push(STATIC_TOKEN_PROVIDER.to_owned());
+                }
+                AuthConfig::Token(_) => {}
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Every `user:` grant key of the file, mutably: instance, registry and
+    /// namespace tiers.
+    fn grant_maps_mut(&mut self) -> Vec<&mut std::collections::HashMap<String, Vec<String>>> {
+        let mut maps: Vec<_> = self.grants.iter_mut().collect();
+        for reg in &mut self.registries {
+            maps.extend(reg.grants.iter_mut());
+            for ns in &mut reg.namespaces {
+                maps.extend(ns.grants.iter_mut());
+            }
+        }
+        maps
+    }
+
+    /// Rewrite a bare `user:<id>` to `user:<provider>:<id>` when exactly one
+    /// provider yields user ids — what the bare form always meant there. With
+    /// several, the bare key is left for [`Self::validate`] to refuse.
+    pub fn scope_user_subjects(&mut self) {
+        let providers = self.user_id_providers();
+        let [only] = providers.as_slice() else {
+            return;
+        };
+        let only = only.clone();
+        for map in self.grant_maps_mut() {
+            let bare: Vec<String> = map
+                .keys()
+                .filter(|k| {
+                    k.strip_prefix("user:").is_some_and(|p| {
+                        !batlehub_core::entities::user_principal_is_scoped(
+                            p,
+                            std::slice::from_ref(&only),
+                        )
+                    })
+                })
+                .cloned()
+                .collect();
+            for key in bare {
+                if let Some(actions) = map.remove(&key) {
+                    let scoped = format!("user:{only}:{}", &key["user:".len()..]);
+                    map.entry(scoped).or_default().extend(actions);
+                }
+            }
+        }
+    }
+
+    /// A bare `user:<id>` with several user-id providers names nobody in
+    /// particular: the same id from each provider is a different person.
+    fn validate_user_subjects(&self) -> Result<()> {
+        let providers = self.user_id_providers();
+        if providers.len() < 2 {
+            return Ok(());
+        }
+        let mut grant_maps: Vec<&std::collections::HashMap<String, Vec<String>>> =
+            self.grants.iter().collect();
+        for reg in &self.registries {
+            grant_maps.extend(reg.grants.iter());
+            for ns in &reg.namespaces {
+                grant_maps.extend(ns.grants.iter());
+            }
+        }
+        for map in grant_maps {
+            for key in map.keys() {
+                if let Some(principal) = key.strip_prefix("user:") {
+                    if !batlehub_core::entities::user_principal_is_scoped(principal, &providers) {
+                        bail!(
+                            "grant subject '{key}' names no identity provider, and {} \
+                             providers yield user ids ({}): the same id from each is a \
+                             different person. Write it as 'user:<provider>:{principal}'.",
+                            providers.len(),
+                            providers.join(", ")
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// An empty `[[auth.tokens]].value` — typically `${VAR}` with the variable
+    /// unset — would match the empty secret of any `Basic user:` header.
+    fn validate_static_token_values(&self) -> Result<()> {
+        for (i, auth) in self.auth.iter().enumerate() {
+            let AuthConfig::Token(t) = auth else { continue };
+            for (j, token) in t.tokens.iter().enumerate() {
+                if token.value.trim().is_empty() {
+                    bail!(
+                        "auth[{i}].tokens[{j}].value is empty — an unset ${{VAR}} expands to \
+                         \"\", and an empty token would authenticate any request whose \
+                         credential has no secret. Set the variable or remove the token."
+                    );
+                }
             }
         }
         Ok(())
@@ -2432,6 +2657,8 @@ impl AppConfig {
         // `PROXY_TRUST_INVALID_DEPRECATED_ENTRY` instead.
         self.validate_auth_issuers()?;
         self.validate_auth_names()?;
+        self.validate_static_token_values()?;
+        self.validate_user_subjects()?;
         self.validate_actions_oidc_audience()?;
         self.validate_host_routing()?;
         self.validate_signed_urls()?;
@@ -2439,6 +2666,7 @@ impl AppConfig {
         self.validate_search()?;
         self.validate_registries()?;
         self.validate_security_globals(env)?;
+        self.validate_console()?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
         self.validate_mise_auto_wire()?;
@@ -3585,6 +3813,23 @@ impl AppConfig {
 
     /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
     /// (RFC 0018 §4.3): the rows that are about the whole config.
+    /// `[console].accepted`: every entry is `coverage:<a registry>` or
+    /// `warning:<code>`. A typo would otherwise accept nothing, silently.
+    fn validate_console(&self) -> Result<()> {
+        for a in &self.console.accepted {
+            if let Some(r) = a.strip_prefix("coverage:") {
+                if !self.registries.iter().any(|reg| reg.name == r) {
+                    anyhow::bail!("`console.accepted`: \"{a}\" names no registry");
+                }
+            } else if a.strip_prefix("warning:").is_none_or(str::is_empty) {
+                anyhow::bail!(
+                    "`console.accepted`: \"{a}\" is neither `coverage:<registry>` nor `warning:<code>`"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_security_globals(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
         self.validate_scanners()?;
         if self.server.roles.is_empty() {
@@ -5146,3 +5391,6 @@ fn apply_proxy_env_overrides(
 
 #[cfg(test)]
 mod tests;
+
+/// What `Identity::auth_provider` reads for a static `[[auth.tokens]]` entry.
+pub const STATIC_TOKEN_PROVIDER: &str = "static-token";

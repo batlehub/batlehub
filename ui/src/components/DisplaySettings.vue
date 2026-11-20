@@ -15,7 +15,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useColorMode } from "@vueuse/core";
+import { useColorMode, usePreferredDark } from "@vueuse/core";
 import { PopoverRoot, PopoverTrigger, PopoverPortal, PopoverContent } from "radix-vue";
 import { SlidersHorizontal } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
@@ -62,7 +62,9 @@ const labelOf = (list: readonly { value: string; key: string }[], value: string)
   t(list.find((o) => o.value === value)?.key ?? value);
 
 /* What "System" resolves to right now, said under its group (DESIGN § preferences). */
-const systemTheme = computed(() => labelOf(THEMES, mode.system.value));
+// What `mode.system` holds, read at its source: a property on the mode ref reads as a ref misuse.
+const prefersDark = usePreferredDark();
+const systemTheme = computed(() => labelOf(THEMES, prefersDark.value ? "dark" : "light"));
 const systemLanguage = computed(() => labelOf(LOCALES, systemLocale()));
 
 const announcement = ref("");

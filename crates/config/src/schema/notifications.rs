@@ -115,7 +115,8 @@ fn default_smtp_port() -> u16 {
 #[derive(Debug, Deserialize, Clone, schemars::JsonSchema)]
 pub struct InboundWebhookConfig {
     pub name: String,
-    /// Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header.
+    /// Optional HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header,
+    /// computed over `"{X-BatleHub-Timestamp}.{body}"` with a timestamp within 300 s.
     /// When absent, any payload is accepted (suitable only for internal networks).
     pub secret: Option<String>,
 }

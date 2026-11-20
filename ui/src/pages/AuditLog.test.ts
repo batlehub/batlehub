@@ -46,7 +46,7 @@ afterEach(() => {
 
 async function mountPage() {
   const wrapper = mount(AuditLog, {
-    global: { stubs: { RouterLink: { template: "<a><slot /></a>" }, SectionTabs: true } },
+    global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } },
   });
   await flushPromises();
   active = wrapper;

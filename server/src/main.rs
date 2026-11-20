@@ -325,12 +325,34 @@ fn spawn_stats_rollup_if_enabled(
     );
 }
 
+/// The daily security rollup behind `/security/trends` (RFC 0050 §5.2):
+/// at startup, then hourly. Follows `[stats] history_enabled`.
+fn spawn_security_rollup_if_enabled(
+    config: &batlehub_config::schema::AppConfig,
+    stores: &hot_config::SecurityStores,
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+) {
+    if !config.stats.history_enabled {
+        return;
+    }
+    let (Some(repo), Some(leader)) = (stores.security_daily.clone(), stores.queue.clone()) else {
+        return;
+    };
+    watcher::spawn_security_rollup(Arc::new(batlehub_core::services::SecurityRollupService {
+        repo,
+        leader,
+        hot: Arc::clone(hot),
+        retention_days: config.stats.security_history_retention_days,
+    }));
+}
+
 /// Periodic SBOM re-check against the OSV vulnerability database.
 fn spawn_vuln_scan_if_enabled(
     config: &batlehub_config::schema::AppConfig,
     sbom_svc: &Arc<batlehub_core::services::SbomService>,
     vuln_repo: &Arc<dyn VulnerabilityRepository>,
     advisory_repo: &Arc<dyn batlehub_core::ports::AdvisoryRepository>,
+    leader: &Arc<dyn watcher::LeaderLock>,
 ) -> Result<()> {
     let Some(vuln_cfg) = config.vulnerability_scan.as_ref().filter(|v| v.enabled) else {
         return Ok(());
@@ -351,7 +373,7 @@ fn spawn_vuln_scan_if_enabled(
         )
         .with_advisories(Arc::clone(advisory_repo)),
     );
-    watcher::spawn_periodic_vuln_scan(vuln_cfg.interval_secs, scan_svc);
+    watcher::spawn_periodic_vuln_scan(vuln_cfg.interval_secs, scan_svc, Arc::clone(leader));
     tracing::info!(
         interval_secs = vuln_cfg.interval_secs,
         "vuln-scan: periodic SBOM re-check enabled"
@@ -429,6 +451,7 @@ fn start_scan_worker(p: &StartWorkerParams<'_>) -> Result<()> {
             ))) as Arc<dyn batlehub_core::ports::NotificationSink>
         }),
         events: Some(Arc::clone(p.repo) as Arc<dyn batlehub_core::ports::PackageRepository>),
+        status_writes: Default::default(),
     });
     tokio::spawn(Arc::clone(&worker).run());
     // RFC 0018 phase 4: the rescan timer, one per estate — every worker
@@ -485,6 +508,7 @@ struct UpstreamAuditParams<'a> {
     repo: &'a Arc<PgPackageRepository>,
     admin_svc: &'a Arc<AdminService>,
     notification_svc: &'a Option<Arc<batlehub_web::services::NotificationService>>,
+    leader: &'a Arc<dyn watcher::LeaderLock>,
 }
 
 /// RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
@@ -544,7 +568,7 @@ fn build_upstream_audit(
     let svc = svc.with_admin(Arc::clone(p.admin_svc));
     log_blocking_registries(p.config, &svc);
     let svc = Arc::new(svc);
-    watcher::spawn_upstream_audit(audit.interval_secs, Arc::clone(&svc));
+    watcher::spawn_upstream_audit(audit.interval_secs, Arc::clone(&svc), Arc::clone(p.leader));
     tracing::info!(
         interval_secs = audit.interval_secs,
         confirm_after = audit.confirm_after,
@@ -628,6 +652,7 @@ async fn main() -> Result<()> {
         .context("connecting to database")?,
     );
     repo.run_migrations().await.context("running migrations")?;
+    scope_bare_user_principals(&repo.pool(), &config).await;
     // The per-download reads are cached only while this listener is connected
     // (migration 066's triggers keep every replica's copy coherent).
     // `read_cache = false`: never live, so every read goes to the database.
@@ -639,6 +664,11 @@ async fn main() -> Result<()> {
     }
     stores::spawn_db_pool_gauge_sampler(repo.pool());
     stores::spawn_db_housekeeping(repo.pool());
+    let periodic_leader: Arc<dyn watcher::LeaderLock> =
+        Arc::new(batlehub_adapters::db::PgAdvisoryLeader::new(
+            repo.pool(),
+            watcher::PERIODIC_JOBS_LEADER_KEY,
+        ));
     allocator::spawn_allocator_gauge_sampler();
 
     let storage = setup::initialize_storage(&config, repo.pool()).await?;
@@ -776,6 +806,12 @@ async fn main() -> Result<()> {
         workers: Some(Arc::new(batlehub_adapters::db::PgWorkerRegistry::new(
             repo.pool(),
         ))),
+        scanner_status: Some(Arc::new(
+            batlehub_adapters::db::PgScannerStatusRepository::new(repo.pool()),
+        )),
+        security_daily: Some(Arc::new(
+            batlehub_adapters::db::PgSecurityDailyRepository::new(repo.pool()),
+        )),
         // RFC 0014: only when the audit is on. Absent, the presence scanner is
         // not built and the eviction hold holds nothing — the pre-0014 tree.
         upstream_status: config.upstream_audit.enabled.then(|| {
@@ -783,6 +819,10 @@ async fn main() -> Result<()> {
                 repo.pool(),
             )) as Arc<dyn batlehub_core::ports::UpstreamStatusPort>
         }),
+        // The config `initialize_auth_providers` read above; `[auth]` is
+        // restart-only, so a reload keeps these.
+        plain_static_tokens: Arc::new(config.plain_static_tokens()),
+        scanner_kinds: Arc::new(setup::scanner_kinds(&config)),
     };
 
     // RFC 0041 §6.8: how many versions and artifacts hold an unrated
@@ -1060,7 +1100,12 @@ async fn main() -> Result<()> {
         "listening"
     );
     watcher::spawn_startup_warming(&config, &warming_map);
-    watcher::spawn_release_imports(&config, &release_imports, Some(Arc::clone(&import_history)));
+    watcher::spawn_release_imports(
+        &config,
+        &release_imports,
+        Some(Arc::clone(&import_history)),
+        &periodic_leader,
+    );
 
     // Hourly cache-statistics rollup, so the dashboard's trend survives a
     // deploy (RFC 0004 §2.3). `history_enabled = false` restores the previous
@@ -1073,8 +1118,18 @@ async fn main() -> Result<()> {
         &registry_names,
     );
 
+    // RFC 0050 §5.2: the daily security rollup, on the proxy and worker
+    // roles alike; the leader lock picks one process per estate.
+    spawn_security_rollup_if_enabled(&config, &security_stores, &hot);
+
     // Periodic SBOM re-check against the OSV vulnerability database.
-    spawn_vuln_scan_if_enabled(&config, &sbom_svc, &vuln_repo, &advisory_repo)?;
+    spawn_vuln_scan_if_enabled(
+        &config,
+        &sbom_svc,
+        &vuln_repo,
+        &advisory_repo,
+        &periodic_leader,
+    )?;
 
     // RFC 0018 §5.4 — the worker role: lease scan jobs, run the scanners,
     // record verdicts. Embedded by default; `--roles worker` runs it alone.
@@ -1129,6 +1184,7 @@ async fn main() -> Result<()> {
         repo: &repo,
         admin_svc: &admin_svc,
         notification_svc: &notification_svc,
+        leader: &periodic_leader,
     });
 
     if !is_proxy {
@@ -1234,6 +1290,10 @@ async fn main() -> Result<()> {
         reload_svc,
         banner_svc,
         storage_admin_repo,
+        security_console_cache: actix_web::web::Data::new(
+            batlehub_web::handlers::security_console::SourceCache::new(config.database.read_cache),
+        ),
+        security_history_enabled: config.stats.history_enabled,
     })
     .await;
     repo.flush_access_events().await;
@@ -1247,6 +1307,32 @@ fn hostname_or(fallback: &str) -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| fallback.to_owned())
+}
+
+/// Scope the `user:` grants and user owners written before they carried their
+/// provider. Never fatal: a failure leaves bare rows, which match nobody.
+async fn scope_bare_user_principals(pool: &sqlx::PgPool, config: &batlehub_config::AppConfig) {
+    let providers = config.user_id_providers();
+    match batlehub_adapters::db::governance::grants::scope_bare_user_principals(pool, &providers)
+        .await
+    {
+        Ok(r) if r.left > 0 => tracing::warn!(
+            scoped = r.scoped,
+            left = r.left,
+            providers = %providers.join(", "),
+            "user grants/owners without an identity provider match nobody: \
+             several providers yield user ids, so re-grant them as \
+             'user:<provider>:<id>' (owners: '<provider>:<id>')"
+        ),
+        Ok(r) if r.scoped > 0 => {
+            tracing::info!(
+                scoped = r.scoped,
+                "scoped legacy user grants/owners to their provider"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "scoping legacy user grants/owners failed"),
+    }
 }
 
 #[cfg(test)]

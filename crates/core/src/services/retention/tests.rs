@@ -1139,3 +1139,79 @@ async fn an_incomplete_run_is_still_audited() {
         "a run that faulted is still a run somebody started"
     );
 }
+
+/// A pin set after `judge` read its snapshot still wins: a live run re-reads
+/// the row right before tombstoning it.
+#[tokio::test]
+async fn a_version_pinned_mid_run_is_not_reclaimed() {
+    let backend = Arc::new(Backend::default());
+    backend.seed(pkg("p", "1.0.0", 900)).await;
+    backend.seed(pkg("p", "2.0.0", 800)).await;
+    let svc = local_svc(backend.clone());
+    let retention = RetentionService::new(svc, None);
+    let mut p = policy();
+    p.keep_versions = Some(1);
+    p.dry_run = false;
+
+    let versions = backend.get_versions("reg", "p").await.unwrap();
+    let mut report = RetentionReport::default();
+    let doomed = RetentionService::judge(&versions, &[], &p, Utc::now(), &mut report);
+    assert_eq!(doomed.len(), 1, "1.0.0 is doomed by the snapshot");
+
+    // The operator pins 1.0.0 while the run is under way.
+    for (v, _) in backend.versions.write().await.iter_mut() {
+        if v.version == "1.0.0" {
+            v.retention_keep = true;
+        }
+    }
+    let _ = retention
+        .reclaim("reg", &doomed, &p, &admin(), &mut report)
+        .await;
+    assert_eq!(report.reclaimed, 0);
+    assert!(backend
+        .find_tombstone("reg", "p", "1.0.0")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// `keep_versions` keeps the highest stable version even when backports were
+/// published after it, and a yanked version does not use up a slot.
+#[tokio::test]
+async fn keep_versions_never_reclaims_the_newest_stable_or_counts_yanked() {
+    let mut yanked = pkg("p", "3.0.0", 10);
+    yanked.yanked = true;
+    let svc = seeded(vec![
+        pkg("p", "2.1.0", 300),
+        pkg("p", "1.9.5", 200),
+        pkg("p", "1.9.6", 100),
+        yanked,
+    ])
+    .await;
+    let mut p = policy();
+    p.keep_versions = Some(1);
+    p.keep_yanked = true;
+
+    let r = RetentionService::new(svc, None)
+        .run("reg", &p, &admin())
+        .await
+        .unwrap();
+    let kept = |v: &str| {
+        r.decisions
+            .iter()
+            .find(|d| d.version == v)
+            .unwrap()
+            .kept_because
+    };
+    assert_eq!(
+        kept("2.1.0"),
+        Some(KeepReason::KeepVersions),
+        "newest stable"
+    );
+    assert_eq!(
+        kept("1.9.6"),
+        Some(KeepReason::KeepVersions),
+        "newest live by date"
+    );
+    assert_eq!(kept("1.9.5"), None);
+}

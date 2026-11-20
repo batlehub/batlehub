@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatBytes, formatDate, formatRelative, formatCount } from "./format";
+import { formatBytes, formatDate, formatRelative, formatCount, formatSpan } from "./format";
 
 describe("formatBytes", () => {
   it("formats bytes below 1024 without decimals", () => {
@@ -22,13 +22,9 @@ describe("formatBytes", () => {
 });
 
 describe("formatDate", () => {
-  it("formats a valid ISO date", () => {
-    expect(formatDate("2026-01-02T00:00:00Z")).toBe(
-      new Date("2026-01-02T00:00:00Z").toLocaleString("en", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }),
-    );
+  it("formats a valid ISO date as YYYY-MM-DD HH:mm, in the local zone (RFC 0050 §6.7)", () => {
+    const local = new Date(2026, 0, 2, 3, 4, 5);
+    expect(formatDate(local.toISOString())).toBe("2026-01-02 03:04");
   });
 
   it("returns the fallback for null/undefined/invalid", () => {
@@ -49,9 +45,26 @@ describe("formatRelative", () => {
     expect(formatRelative(new Date(Date.now() - 2 * 86_400_000).toISOString())).toBe("2d ago");
   });
 
+  it("reads a future instant forward, never as 'Just now' (an exemption's end)", () => {
+    const ahead = (ms: number) => new Date(Date.now() + ms + 1_000).toISOString();
+    expect(formatRelative(ahead(5 * 86_400_000))).toBe("in 5d");
+    expect(formatRelative(ahead(3 * 3_600_000))).toBe("in 3h");
+    expect(formatRelative(ahead(0))).toBe("in 1m");
+  });
+
   it("returns the fallback for null/undefined", () => {
     expect(formatRelative(null)).toBe("Never");
     expect(formatRelative(undefined, { fallback: "n/a" })).toBe("n/a");
+  });
+});
+
+describe("formatSpan", () => {
+  it("keeps the exact unit instead of rounding", () => {
+    expect(formatSpan(600)).toBe("10 min");
+    expect(formatSpan(86_400)).toBe("1 d");
+    expect(formatSpan(5_400)).toBe("90 min");
+    expect(formatSpan(7_200)).toBe("2 h");
+    expect(formatSpan(45)).toBe("45 s");
   });
 });
 

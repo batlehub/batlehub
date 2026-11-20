@@ -68,7 +68,6 @@ async function mountPage() {
   const wrapper = mount(AdminUpstream, {
     global: {
       stubs: {
-        SectionTabs: true,
         // radix `Select`, stubbed native so a filter can be picked with `setValue`.
         Select: {
           props: ["modelValue", "options", "id"],

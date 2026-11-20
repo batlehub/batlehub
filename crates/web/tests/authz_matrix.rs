@@ -1023,10 +1023,12 @@ async fn publish_fixture(
             checksum,
             index_metadata,
             unlisted: false,
+            // The provider the test token's requests carry, so the owner row
+            // (`static-token:user-1`) names the same principal they do.
             publisher: Identity {
                 user_id: Some("user-1".to_owned()),
                 role: Role::User,
-                auth_provider: None,
+                auth_provider: Some("static-token".to_owned()),
                 groups: vec![],
             },
             signature_bytes: signature.map(|(_, b)| b.to_vec()),

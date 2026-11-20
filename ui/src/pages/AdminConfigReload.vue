@@ -13,11 +13,9 @@ import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
 import { API_BASE_URL } from "@/config";
 import ConfigWarningList from "@/components/admin/ConfigWarningList.vue";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
 import PendingReloadCard from "@/components/admin/PendingReloadCard.vue";
 import ConfigEditorCard from "@/components/admin/ConfigEditorCard.vue";
 import ConfigChangeHistory from "@/components/admin/ConfigChangeHistory.vue";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -151,6 +149,8 @@ const pendingSettled = ref(false);
  * storage — the TOML can hold secrets.
  */
 const savedContent = ref("");
+/** `content_hash` of the file as loaded: the editor's `base_hash`, so a save never overwrites a newer file. */
+const contentHash = ref<string | null>(null);
 const dirty = computed(() => !configReadonly.value && configContent.value !== savedContent.value);
 
 async function loadConfigContent() {
@@ -163,8 +163,13 @@ async function loadConfigContent() {
       configLoadError.value = body?.error ?? `HTTP ${res.status}`;
       return;
     }
-    const body = (await res.json()) as { content: string; is_readonly: boolean };
+    const body = (await res.json()) as {
+      content: string;
+      is_readonly: boolean;
+      content_hash?: string;
+    };
     configContent.value = body.content;
+    contentHash.value = body.content_hash ?? null;
     savedContent.value = body.content;
     configReadonly.value = body.is_readonly;
     hotReloadEnabled.value = !body.is_readonly;
@@ -244,8 +249,14 @@ async function applyPending() {
   errorMsg.value = null;
   successMsg.value = null;
   try {
-    const { data, error: apiErr } = await applyPendingReload();
-    if (apiErr) throw new Error(extractMessage(apiErr));
+    // The id of the change on screen: a 409 if another admin staged over it.
+    const { data, error: apiErr } = await applyPendingReload({
+      body: { pending_id: pendingReload.value?.id ?? null },
+    });
+    if (apiErr) {
+      await fetchPending();
+      throw new Error(extractMessage(apiErr));
+    }
     const diff = (data as { diff?: { added_registries: string[]; removed_registries: string[] } })
       ?.diff;
     successMsg.value = t("adminConfigReload.appliedDiff", {
@@ -254,7 +265,8 @@ async function applyPending() {
     });
     pendingReload.value = null;
     candidateWarnings.value = [];
-    await Promise.all([fetchHistory(), fetchWarnings()]);
+    // The file changed: re-read it, so the next save's `base_hash` is this one.
+    await Promise.all([fetchHistory(), fetchWarnings(), loadConfigContent()]);
   } catch (e: unknown) {
     errorMsg.value = extractMessage(e);
   } finally {
@@ -334,8 +346,7 @@ function settleLeave(leave: boolean) {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="successMsg ?? ''" />
-    <SectionTabs :tabs="SYSTEM_TABS" />
-    <PageHeader variant="display" :title="t('adminConfigReload.configReload')" />
+    <PageHeader variant="display" :title="t('adminNav.configReload')" />
 
     <!--
       The config could not be read: say so, say what it costs, offer a retry.
@@ -409,11 +420,13 @@ function settleLeave(leave: boolean) {
     <ConfigEditorCard
       v-model:content="configContent"
       v-model:candidate-warnings="candidateWarnings"
+      :active-warnings="visibleWarnings"
       :config-loading="configLoading"
       :config-load-error="configLoadError"
       :config-readonly="configReadonly"
       :hot-reload-enabled="hotReloadEnabled"
       :has-pending="!!pendingReload"
+      :base-hash="contentHash"
       :refresh-pending="fetchPending"
       :jump-to="pendingSettled ? jumpRegistry : null"
       @reload-from-disk="loadConfigContent"

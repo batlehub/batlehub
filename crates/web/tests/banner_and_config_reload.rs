@@ -66,6 +66,8 @@ struct ReloadAppOpts {
     config_overlays: Vec<String>,
     hot_reload_enabled: bool,
     builder: HotConfigBuilder,
+    /// Unioned onto the instance node, as a top-level `[grants]` block is.
+    instance_grants: Option<batlehub_core::entities::GrantMap>,
 }
 
 impl Default for ReloadAppOpts {
@@ -76,6 +78,7 @@ impl Default for ReloadAppOpts {
             config_overlays: Vec::new(),
             hot_reload_enabled: true,
             builder: Arc::new(|_| anyhow::bail!("not used in tests")),
+            instance_grants: None,
         }
     }
 }
@@ -122,6 +125,7 @@ async fn build_reload_app(
     Error = actix_web::Error,
 > {
     use std::collections::HashMap;
+    let instance_grants = opts.instance_grants.clone();
     let repo = InMemoryRepo::new();
     let repo_dyn: Arc<dyn batlehub_core::ports::PackageRepository> = repo.clone();
     let storage: Arc<dyn StorageBackend> = InMemoryStorage::new();
@@ -136,7 +140,7 @@ async fn build_reload_app(
             // suite is asserting about — a fixture that does not build the model
             // tests a server nobody runs (§13.5).
             instance: Some(std::sync::Arc::new(
-                batlehub_core::services::authz::translate::instance_node(None),
+                batlehub_core::services::authz::translate::instance_node(instance_grants.as_ref()),
             )),
             registries: HashMap::new(),
             policies: HashMap::new(),
@@ -197,7 +201,9 @@ async fn build_reload_app(
             batlehub_core::services::hot_config::new_hot_lock(
                 batlehub_core::services::hot_config::HotConfig {
                     instance: Some(std::sync::Arc::new(
-                        batlehub_core::services::authz::translate::instance_node(None),
+                        batlehub_core::services::authz::translate::instance_node(
+                            instance_grants.as_ref(),
+                        ),
                     )),
                     ..Default::default()
                 },
@@ -581,6 +587,41 @@ async fn config_content_reports_readonly_when_hot_reload_is_disabled() {
 #[actix_web::test]
 async fn validate_config_content_requires_admin() {
     let app = make_banner_app().await;
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri("/api/v1/admin/config/validate")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(serde_json::json!({ "content": MINIMAL_CONFIG }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+}
+
+/// `config:read` alone does not reach validate: the submitted file is expanded
+/// against the server's environment, so a refusal could quote a secret.
+#[actix_web::test]
+async fn validate_config_content_refuses_a_config_read_delegate() {
+    use batlehub_core::entities::{Action, GrantMap, Role, SubjectMatcher};
+    let app = build_reload_app(ReloadAppOpts {
+        builder: accepting_builder(),
+        instance_grants: Some(
+            GrantMap::new().grant(SubjectMatcher::Role(Role::User), [Action::ConfigRead]),
+        ),
+        ..Default::default()
+    })
+    .await;
+    // The grant is live: a `config:read` endpoint answers this caller.
+    let read = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/admin/config/pending")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_ne!(read.status(), 403, "the delegate holds config:read");
     let resp = call_service(
         &app,
         TestRequest::post()

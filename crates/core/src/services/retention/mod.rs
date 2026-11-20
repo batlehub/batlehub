@@ -122,8 +122,12 @@ pub struct RetentionService {
 /// conditions are asked.
 struct Candidate<'a> {
     pkg: &'a PublishedPackage,
-    /// Index from the newest by publish date: 0 is the newest.
+    /// Index from the newest by publish date among non-yanked versions: 0 is
+    /// the newest. Yanked versions get `usize::MAX` and never use up a slot.
     rank_from_newest: usize,
+    /// The highest stable, non-yanked version by version order. Kept whenever
+    /// `keep_versions` is set, so a backport published later can't push it out.
+    newest_stable: bool,
     last_download: Option<DateTime<Utc>>,
 }
 
@@ -261,13 +265,27 @@ impl RetentionService {
         report: &mut RetentionReport,
     ) -> Vec<&'a PublishedPackage> {
         // `get_versions` is `published_at ASC`; rank 0 must be the newest.
-        let total = versions.len();
+        // Yanked rows are not installable, so they don't count toward the N.
+        let live = versions.iter().filter(|p| !p.yanked).count();
+        let newest_stable = versions
+            .iter()
+            .filter(|p| !p.yanked && !crate::services::version_order::is_prerelease(&p.version))
+            .map(|p| p.version.as_str())
+            .min_by(|a, b| crate::services::version_order::newest_first(a, b));
         let mut doomed: Vec<&PublishedPackage> = Vec::new();
+        let mut live_seen = 0usize;
 
-        for (i, pkg) in versions.iter().enumerate() {
+        for pkg in versions {
+            let rank_from_newest = if pkg.yanked {
+                usize::MAX
+            } else {
+                live_seen += 1;
+                live - live_seen
+            };
             let candidate = Candidate {
                 pkg,
-                rank_from_newest: total - 1 - i,
+                rank_from_newest,
+                newest_stable: newest_stable == Some(pkg.version.as_str()),
                 last_download: downloads
                     .iter()
                     .find(|(v, _)| *v == pkg.version)
@@ -321,6 +339,34 @@ impl RetentionService {
                     .push(format!("{}@{}", pkg.name, pkg.version));
                 continue;
             }
+            // `judge` read a snapshot, and a live run can last minutes: a pin set
+            // since then must still win, so re-read the row right before deleting.
+            match self.local.backend.get_versions(registry, &pkg.name).await {
+                Ok(now)
+                    if now
+                        .iter()
+                        .any(|p| p.version == pkg.version && p.retention_keep) =>
+                {
+                    report.kept += 1;
+                    if let Some(d) = report
+                        .decisions
+                        .iter_mut()
+                        .find(|d| d.name == pkg.name && d.version == pkg.version)
+                    {
+                        d.kept_because = Some(KeepReason::Pinned);
+                    }
+                    continue;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    report.incomplete_because = Some(format!(
+                        "stopped at {}@{}: {e}. Everything listed above was reclaimed; \
+                         nothing after it was attempted.",
+                        pkg.name, pkg.version
+                    ));
+                    return ControlFlow::Break(());
+                }
+            }
             // The same call a human deletion goes through, so a reclaimed
             // version leaves the same tombstone and drops the same bytes — and
             // is audited as `retention_reclaim` rather than `delete`, which is
@@ -337,7 +383,9 @@ impl RetentionService {
                 )
                 .await
             {
-                Ok(_) => {
+                // Nothing tombstoned: someone else deleted it first. Not ours to count.
+                Ok(false) => {}
+                Ok(true) => {
                     report.reclaimed += 1;
                     report
                         .reclaimed_coordinates
@@ -390,10 +438,9 @@ impl RetentionService {
         // Each condition is one flat question. An unconfigured condition never
         // fires, so `is_some_and` reads exactly as the policy does: "keep it if
         // the operator asked for this and it holds".
-        if policy
-            .keep_versions
-            .is_some_and(|n| candidate.rank_from_newest < n as usize)
-        {
+        if policy.keep_versions.is_some_and(|n| {
+            n > 0 && (candidate.newest_stable || candidate.rank_from_newest < n as usize)
+        }) {
             return Some(KeepReason::KeepVersions);
         }
 

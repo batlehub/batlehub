@@ -22,6 +22,7 @@ vi.mock("@/client/client.gen", () => ({
 import { router, generateOidcState } from "./index";
 import { initAuth, useAuth } from "@/composables/useAuth";
 import { ADMIN_PAGE_VERBS } from "@/config/adminSections";
+import { SECURITY_PAGE_VERBS } from "@/config/securitySections";
 import { REVERSE_REDIRECTS } from "@/config/navigation";
 
 // `useAuth` no longer initializes itself at import time (see `initAuth`'s doc
@@ -62,7 +63,14 @@ const ADMIN: MeResponse = {
   role: "admin",
   groups: ["admins"],
   has_registry_access: true,
-  verbs: [...new Set(Object.values(ADMIN_PAGE_VERBS))],
+  // Every admin page's verb and every security page's (RFC 0050: the scans
+  // and findings pages left the admin table).
+  verbs: [
+    ...new Set([
+      ...Object.values(ADMIN_PAGE_VERBS),
+      ...Object.values(SECURITY_PAGE_VERBS).flatMap((v) => (typeof v === "string" ? [v] : v)),
+    ]),
+  ],
   registries: {},
 };
 /** RFC 0042: a non-admin delegated the audit trail and nothing else. */
@@ -188,10 +196,64 @@ describe("router navigation guards (integration)", () => {
 
   it("opens the security console to a security verb, and to nobody else", async () => {
     await setAuth(AUDITOR, "tok");
-    expect(await go("/security")).toBe("/security");
+    // RFC 0050 §4.2: audit:read alone reads Exposure only, where the space opens.
+    expect(await go("/security")).toBe("/security/exposure");
     await go("/setup"); // leave it first: a push to the current route is not a navigation
     await setAuth(USER, "tok");
     expect(await go("/security")).toBe("/");
+  });
+
+  // ── the security space, page by page (RFC 0050 §4.2, T9) ─────────────────
+
+  it("opens each /security page on its own verb, the refused one landing in its group", async () => {
+    await setAuth({ ...USER, verbs: ["flags:read"] }, "tok");
+    // Obs. 10: a flags-only viewer opening Holds lands on Flags, not on Holds.
+    expect(await go("/security/holds")).toBe("/security/flags");
+    expect(await go("/security")).toBe("/security");
+    expect(await go("/security/trends")).toBe("/security");
+    await setAuth({ ...USER, verbs: ["findings:read"] }, "tok");
+    // No overview without quarantine:read or flags:read: the space opens on Findings.
+    expect(await go("/security/coverage")).toBe("/security/findings");
+    await go("/setup");
+    expect(await go("/security")).toBe("/security/findings");
+    await setAuth({ ...USER, verbs: ["audit:read"] }, "tok");
+    expect(await go("/security/scanners")).toBe("/security/exposure");
+  });
+
+  it("refuses a /security route that carries no verb (T9)", async () => {
+    await setAuth(ADMIN, "tok");
+    const remove = router.addRoute({
+      path: "/security/unlisted",
+      component: { template: "<div />" },
+      meta: { securityArea: true },
+    });
+    try {
+      expect(await go("/security/unlisted")).toBe("/security");
+    } finally {
+      remove();
+    }
+  });
+
+  it("keeps query and lands on the anchor of a moved page (decision 34)", async () => {
+    await setAuth(ADMIN, "tok");
+    await router.push("/admin/security/scans?tab=failures");
+    expect(router.currentRoute.value.fullPath).toBe("/security/scanners?tab=failures");
+    // RFC 0050 §17.8: the old access check's query is read again unchanged,
+    // by the simulation panel, so it passes through as it came.
+    await router.push(
+      "/admin/access/check?registry=npm&name=lodash&user_id=alice&client_ip=10.0.0.1",
+    );
+    expect(router.currentRoute.value.fullPath).toBe(
+      "/admin/access/authorization?registry=npm&name=lodash&user_id=alice&client_ip=10.0.0.1#simulate",
+    );
+    await router.push("/admin/access-check?role=admin");
+    expect(router.currentRoute.value.fullPath).toBe(
+      "/admin/access/authorization?role=admin#simulate",
+    );
+    await router.push("/admin/access/blocks");
+    expect(router.currentRoute.value.path).toBe("/admin/instance-security/blocks");
+    await router.push("/admin/security/findings#x");
+    expect(router.currentRoute.value.fullPath).toBe("/security/findings#x");
   });
 
   it("lets a delegate reach the page of their verb, and only that page", async () => {
@@ -222,11 +284,11 @@ describe("router navigation guards (integration)", () => {
     ["/admin/packages", "/admin/packages/all"],
     ["/admin/bulk", "/admin/packages/bulk"],
     // RFC 0004 Phase 5 (*merge*): one route answers "who is blocked, and why".
-    ["/admin/users", "/admin/access/blocks"],
-    ["/admin/ip-blocks", "/admin/access/blocks"],
-    ["/admin/security/users", "/admin/access/blocks"],
-    ["/admin/security/ip-blocks", "/admin/access/blocks"],
-    ["/admin/access-check", "/admin/access/check"],
+    ["/admin/users", "/admin/instance-security/blocks"],
+    ["/admin/ip-blocks", "/admin/instance-security/blocks"],
+    ["/admin/security/users", "/admin/instance-security/blocks"],
+    ["/admin/security/ip-blocks", "/admin/instance-security/blocks"],
+    ["/admin/access-check", "/admin/access/authorization"],
     ["/admin/team-namespaces", "/admin/access/team-namespaces"],
     ["/admin/beta-channel", "/admin/access/beta-channel"],
     ["/admin/config-reload", "/admin/system/configuration"],
@@ -247,9 +309,9 @@ describe("router navigation guards (integration)", () => {
 
   it.each([
     ["/admin", "/admin/dashboard"],
-    // RFC 0046 §15 Q8: Security is the scans now; Blocks moved to Access.
-    ["/admin/security", "/admin/security/scans"],
-    ["/admin/access", "/admin/access/check"],
+    // RFC 0050 §6.6: the scans and findings left for the security space.
+    ["/admin/security", "/security"],
+    ["/admin/access", "/admin/access/authorization"],
     ["/admin/system", "/admin/system/health"],
     // Retired section roots (RFC 0046 phase 3) still land in their section.
     ["/admin/namespaces", "/admin/access/team-namespaces"],
@@ -388,11 +450,18 @@ describe("router navigation guards (integration)", () => {
       "/admin/packages/all",
       "/admin/packages/bulk",
       "/admin/packages/sbom",
-      "/admin/security/scans",
-      "/admin/security/findings",
-      "/admin/access/check",
       "/admin/access/authorization",
-      "/admin/access/blocks",
+      "/admin/instance-security",
+      "/admin/instance-security/blocks",
+      "/security",
+      "/security/holds",
+      "/security/findings",
+      "/security/flags",
+      "/security/exposure",
+      "/security/trends",
+      "/security/coverage",
+      "/security/coverage/npm",
+      "/security/scanners",
       "/admin/access/team-namespaces",
       "/admin/access/beta-channel",
       "/admin/system/configuration",
@@ -447,11 +516,11 @@ describe("information architecture", () => {
 
     const ADMIN_ALIASES: [string, string][] = [
       ["/admin/bulk", "/admin/packages/bulk"],
-      ["/admin/users", "/admin/access/blocks"],
-      ["/admin/ip-blocks", "/admin/access/blocks"],
-      ["/admin/security/users", "/admin/access/blocks"],
-      ["/admin/security/ip-blocks", "/admin/access/blocks"],
-      ["/admin/access-check", "/admin/access/check"],
+      ["/admin/users", "/admin/instance-security/blocks"],
+      ["/admin/ip-blocks", "/admin/instance-security/blocks"],
+      ["/admin/security/users", "/admin/instance-security/blocks"],
+      ["/admin/security/ip-blocks", "/admin/instance-security/blocks"],
+      ["/admin/access-check", "/admin/access/authorization"],
       ["/admin/team-namespaces", "/admin/access/team-namespaces"],
       ["/admin/beta-channel", "/admin/access/beta-channel"],
       ["/admin/config-reload", "/admin/system/configuration"],
@@ -523,8 +592,8 @@ describe("information architecture", () => {
       ["/admin", "/admin/dashboard"],
       ["/admin/packages", "/admin/packages/all"],
       // RFC 0046 §15 Q8: the section roots of the regrouped tree.
-      ["/admin/security", "/admin/security/scans"],
-      ["/admin/access", "/admin/access/check"],
+      ["/admin/security", "/security"],
+      ["/admin/access", "/admin/access/authorization"],
       ["/admin/system", "/admin/system/health"],
     ];
 
@@ -653,5 +722,19 @@ describe("information architecture", () => {
       await setAuth(ANON_NO_ACCESS, "");
       expect(await go("/")).toBe("/login");
     });
+  });
+});
+
+/** vue-router hands `to.hash` over decoded; decoding it again threw on a `%`. */
+describe("scrollBehavior", () => {
+  it("finds an anchor by its decoded hash without decoding it twice", () => {
+    const el = document.createElement("div");
+    el.id = "50%off";
+    document.body.appendChild(el);
+    const scroll = router.options.scrollBehavior!;
+    const to = { path: "/b", hash: "#50%off" } as never;
+    const from = { path: "/a", hash: "" } as never;
+    expect(scroll(to, from, null)).toEqual({ el, top: 64 });
+    el.remove();
   });
 });

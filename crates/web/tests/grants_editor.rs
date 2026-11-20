@@ -558,7 +558,7 @@ async fn until_a_version_grant_exists_the_index_is_unchanged() {
 #[actix_web::test]
 async fn a_version_grant_narrows_the_index_to_what_the_caller_may_read() {
     let app = gems_app().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
     assert_eq!(info_versions(&app, USER_TOKEN).await, ["2.0.0"]);
 }
 
@@ -568,7 +568,7 @@ async fn a_version_grant_narrows_the_index_to_what_the_caller_may_read() {
 #[actix_web::test]
 async fn two_callers_with_different_grants_get_different_documents() {
     let app = gems_app().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
 
     assert_eq!(info_versions(&app, USER_TOKEN).await, ["2.0.0"]);
     assert_eq!(
@@ -598,7 +598,7 @@ async fn two_callers_with_different_grants_get_different_documents() {
 #[actix_web::test]
 async fn the_registry_index_names_a_gem_the_caller_holds_one_version_of() {
     let app = gems_app().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
 
     let body = registry_index(&app, USER_TOKEN).await;
 
@@ -627,7 +627,7 @@ async fn the_registry_index_names_a_gem_the_caller_holds_one_version_of() {
 #[actix_web::test]
 async fn the_cached_registry_index_is_not_replayed_across_grant_sets() {
     let app = gems_app_cached().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
 
     let narrow = registry_index(&app, USER_TOKEN).await;
     let broad = registry_index(&app, ADMIN_TOKEN).await;
@@ -666,8 +666,8 @@ async fn the_cached_registry_index_is_not_replayed_across_grant_sets() {
 async fn the_cached_and_uncached_indexes_agree() {
     let cached = gems_app_cached().await;
     let uncached = gems_app().await;
-    grant_version(&cached, "2.0.0", "user:user-1").await;
-    grant_version(&uncached, "2.0.0", "user:user-1").await;
+    grant_version(&cached, "2.0.0", "user:static-token:user-1").await;
+    grant_version(&uncached, "2.0.0", "user:static-token:user-1").await;
 
     assert_eq!(
         registry_index(&cached, USER_TOKEN).await,
@@ -812,9 +812,9 @@ where
 #[actix_web::test]
 async fn explain_reports_a_version_tier_grant_s_provenance() {
     let app = gems_app().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
 
-    let body = explain(&app, GEM, Some("2.0.0"), "user:user-1").await;
+    let body = explain(&app, GEM, Some("2.0.0"), "user:static-token:user-1").await;
     assert_eq!(body["decision"], "allow");
 
     let from = body["resolved"]
@@ -849,15 +849,15 @@ async fn explain_reports_a_version_tier_grant_s_provenance() {
 #[actix_web::test]
 async fn explain_does_not_carry_a_version_grant_to_another_version() {
     let app = gems_app().await;
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
 
     assert_eq!(
-        explain(&app, GEM, Some("3.0.0"), "user:user-1").await["decision"],
+        explain(&app, GEM, Some("3.0.0"), "user:static-token:user-1").await["decision"],
         "deny",
         "a row on 2.0.0 resolves for 2.0.0"
     );
     assert_eq!(
-        explain(&app, GEM, None, "user:user-1").await["decision"],
+        explain(&app, GEM, None, "user:static-token:user-1").await["decision"],
         "deny",
         "and the package-tier question is not the version-tier one"
     );
@@ -873,14 +873,18 @@ async fn explain_reports_a_package_tier_grant_s_provenance() {
         TestRequest::put()
             .uri(&format!("/api/v1/admin/registries/{GEMS}/grants"))
             .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
-            .set_json(put_body(GEM, "user:user-1", &["releases:read"]))
+            .set_json(put_body(
+                GEM,
+                "user:static-token:user-1",
+                &["releases:read"],
+            ))
             .to_request(),
     )
     .await;
     assert_eq!(resp.status(), 200);
 
     for version in [None, Some("1.0.0"), Some("3.0.0")] {
-        let body = explain(&app, GEM, version, "user:user-1").await;
+        let body = explain(&app, GEM, version, "user:static-token:user-1").await;
         assert_eq!(body["decision"], "allow", "at {version:?}");
         assert!(
             body["resolved"]
@@ -924,6 +928,6 @@ async fn when_the_filter_removes_everything_the_document_is_absent() {
 
     // …and the grantee still sees theirs, so the filter narrowed rather than
     // broke the route.
-    grant_version(&app, "2.0.0", "user:user-1").await;
+    grant_version(&app, "2.0.0", "user:static-token:user-1").await;
     assert_eq!(info_versions(&app, USER_TOKEN).await, ["2.0.0"]);
 }

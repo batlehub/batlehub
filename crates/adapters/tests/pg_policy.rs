@@ -394,3 +394,47 @@ async fn absent_is_not_an_error() {
             .expect(name);
     }
 }
+
+/// An exemption is a rule whose `settings` say `exempt: true` — the shape the
+/// exemption endpoint writes. Both stores find it, and neither takes a mere
+/// override of the same gate for one. The Postgres query once looked for
+/// `exempt` at the top of the rule and found no exemption at all.
+#[tokio::test]
+async fn exemptions_in_registry_reads_the_flag_in_settings() {
+    let registry = "pg-policy-exemptions";
+    for (name, store) in stores(registry).await {
+        let rule = |exempt: bool| RuleOverride {
+            gate: "security_verdict".to_owned(),
+            settings: serde_json::json!({
+                "gate": "security_verdict",
+                "exempt": exempt,
+                "exempt_until": "2099-01-01T00:00:00Z",
+                "reason": "test",
+            }),
+        };
+        for (version, exempt) in [("1.0.0", true), ("2.0.0", false)] {
+            store
+                .put_policy(StoredPolicy {
+                    registry: registry.to_owned(),
+                    node_kind: NodeKind::Version,
+                    node_key: version_node_key("minimist", version),
+                    visibility: None,
+                    prerelease_visibility: None,
+                    versioning: None,
+                    quota: None,
+                    rules: vec![rule(exempt)],
+                    set_by: None,
+                })
+                .await
+                .unwrap();
+        }
+        let found: Vec<String> = store
+            .exemptions_in_registry(registry)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.node_key)
+            .collect();
+        assert_eq!(found, vec![version_node_key("minimist", "1.0.0")], "{name}");
+    }
+}

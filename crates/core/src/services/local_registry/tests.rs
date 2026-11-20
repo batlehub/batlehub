@@ -2566,6 +2566,22 @@ async fn publish_propagates_commit_failure_and_rolls_back() {
     );
 }
 
+/// The document generation is bumped after the commit, not before: a reader
+/// between the two would cache a listing without the new version under the new
+/// generation, and serve it as current until the TTL. A commit that fails never
+/// published anything, so nothing is invalidated.
+#[tokio::test]
+async fn a_failed_commit_does_not_invalidate_the_registry_documents() {
+    let s = svc(CommitFailBackend::arc(), None);
+    let cache = crate::services::document_cache::DocumentCache::new();
+    s.hot.write().await.document_cache = Some(Arc::clone(&cache));
+
+    s.publish(publish_req("npm", "pkg", "1.0.0", user()))
+        .await
+        .unwrap_err();
+    assert_eq!(cache.generation("npm").await, 0);
+}
+
 // ── get_artifact audit trail (local/hybrid reads must not skip access logging) ──
 
 #[tokio::test]
@@ -2815,6 +2831,59 @@ mod write_verbs {
             package_repo: None,
             readme: None,
         }
+    }
+
+    /// A deleted version gives its package slot back to the publisher: with
+    /// `max_packages_per_user = 2`, publish two, delete one, and a third fits.
+    #[tokio::test]
+    async fn deleting_a_version_refunds_the_publishers_quota() {
+        let mut s = svc_with(
+            InMemBackend::arc(),
+            registry_granting(&[Action::ReleasesPublish, Action::ReleasesDelete]),
+        );
+        let mut configs = HashMap::new();
+        configs.insert(
+            "npm".to_owned(),
+            RegistryQuotaConfig {
+                max_storage_bytes_per_user: None,
+                max_packages_per_user: Some(2),
+                warn_threshold: 0.8,
+                enforcement: QuotaEnforcement::Block,
+            },
+        );
+        s.quota = Some(Arc::new(QuotaService::new(MockQuotaRepo::arc(), configs)));
+
+        for v in ["1.0.0", "1.0.1"] {
+            s.publish(super::publish_req("npm", "pkg", v, user()))
+                .await
+                .unwrap();
+        }
+        let err = s
+            .publish(super::publish_req("npm", "pkg", "1.0.2", user()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::QuotaExceeded(_)), "{err:?}");
+
+        assert!(s
+            .delete_version("npm", "pkg", "1.0.0", &user())
+            .await
+            .unwrap());
+        // A second delete of the same version tombstones nothing and refunds nothing.
+        assert!(!s
+            .delete_version("npm", "pkg", "1.0.0", &user())
+            .await
+            .unwrap());
+        s.publish(super::publish_req("npm", "pkg", "1.0.2", user()))
+            .await
+            .expect("the deleted version's slot is free again");
+        let err = s
+            .publish(super::publish_req("npm", "pkg", "1.0.3", user()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::QuotaExceeded(_)),
+            "only one slot was refunded: {err:?}"
+        );
     }
 
     fn publish_req() -> PublishRequest {
@@ -4679,4 +4748,26 @@ fn url_delimiters_are_refused_except_where_a_kind_means_them() {
     assert!(r("sdkman", "java", "1.0#x", None).is_err());
     r("galaxy", "role#10923", "latest", None).unwrap();
     assert!(r("galaxy", "ns.coll?x", "1.0.0", None).is_err());
+}
+
+/// A first publisher becomes owner as `<provider>:<id>`, so the same id from
+/// another provider is not that owner.
+#[tokio::test]
+async fn a_claimed_package_is_owned_by_the_publishers_provider_scoped_principal() {
+    let backend = InMemBackend::arc();
+    let mut s = svc(backend, None);
+    let ownership = MockOwnership::arc();
+    s.ownership = Some(ownership.clone());
+    let alice_corp = Identity {
+        auth_provider: Some("corp".into()),
+        user_id: Some("alice".into()),
+        ..user()
+    };
+    s.claim_unowned_package("npm", "pkg", &alice_corp)
+        .await
+        .expect("claims an unowned package");
+    assert_eq!(
+        ownership.owners.lock().unwrap()[&("npm".to_owned(), "pkg".to_owned())],
+        vec!["corp:alice".to_owned()]
+    );
 }

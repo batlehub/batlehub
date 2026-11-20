@@ -137,19 +137,31 @@ pub struct SignatureArchive {
     pub has_p7s: bool,
 }
 
+/// Ceiling on one entry of a signature archive. Its entries are a signature
+/// and a JSON manifest; the upload cap bounds only the compressed bytes, so
+/// without this a deflate bomb inflates to gigabytes.
+const MAX_SIGNATURE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+
+fn read_signature_entry(f: impl Read, name: &str) -> Result<Vec<u8>, CoreError> {
+    let mut v = Vec::new();
+    f.take(MAX_SIGNATURE_ENTRY_BYTES + 1)
+        .read_to_end(&mut v)
+        .map_err(|e| CoreError::InvalidInput(format!("signature archive entry {name}: {e}")))?;
+    if v.len() as u64 > MAX_SIGNATURE_ENTRY_BYTES {
+        return Err(CoreError::PayloadTooLarge(format!(
+            "signature archive entry {name} exceeds the {MAX_SIGNATURE_ENTRY_BYTES}-byte limit"
+        )));
+    }
+    Ok(v)
+}
+
 pub fn read_signature_archive(bytes: &[u8]) -> Result<SignatureArchive, CoreError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| {
         CoreError::InvalidInput(format!("signature archive is not a zip archive: {e}"))
     })?;
     let mut read = |name: &str| -> Result<Option<Vec<u8>>, CoreError> {
         match archive.by_name(name) {
-            Ok(mut f) => {
-                let mut v = Vec::new();
-                f.read_to_end(&mut v).map_err(|e| {
-                    CoreError::InvalidInput(format!("signature archive entry {name}: {e}"))
-                })?;
-                Ok(Some(v))
-            }
+            Ok(f) => read_signature_entry(f, name).map(Some),
             Err(zip::result::ZipError::FileNotFound) => Ok(None),
             Err(e) => Err(CoreError::InvalidInput(format!(
                 "signature archive entry {name}: {e}"
@@ -189,10 +201,8 @@ pub fn read_provided_archive(bytes: &[u8]) -> Result<ProvidedArchive, CoreError>
         .collect::<Result<_, _>>()
         .map_err(|e| CoreError::InvalidInput(format!("signature archive entry name: {e}")))?;
     let manifest = match archive.by_name(ENTRY_MANIFEST) {
-        Ok(mut f) => {
-            let mut v = Vec::new();
-            f.read_to_end(&mut v)
-                .map_err(|e| CoreError::InvalidInput(format!("{ENTRY_MANIFEST}: {e}")))?;
+        Ok(f) => {
+            let v = read_signature_entry(f, ENTRY_MANIFEST)?;
             String::from_utf8(v)
                 .map_err(|_| CoreError::InvalidInput("signature manifest is not UTF-8".into()))?
         }
@@ -249,6 +259,29 @@ mod tests {
         zip.write_all(b"{\"name\":\"x\"}").unwrap();
         zip.finish().unwrap();
         out.into_inner()
+    }
+
+    #[test]
+    fn a_signature_archive_decompression_bomb_is_refused() {
+        let mut out = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(&mut out);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file(ENTRY_MANIFEST, opts).unwrap();
+        let chunk = vec![b' '; 1024 * 1024];
+        for _ in 0..=MAX_SIGNATURE_ENTRY_BYTES / (1024 * 1024) {
+            zip.write_all(&chunk).unwrap();
+        }
+        zip.start_file(ENTRY_SIG, opts).unwrap();
+        zip.write_all(b"sig").unwrap();
+        zip.finish().unwrap();
+        let bytes = out.into_inner();
+        assert!(bytes.len() < 1024 * 1024, "the fixture must be a bomb");
+        for err in [
+            read_provided_archive(&bytes).unwrap_err(),
+            read_signature_archive(&bytes).unwrap_err(),
+        ] {
+            assert!(matches!(err, CoreError::PayloadTooLarge(_)), "{err:?}");
+        }
     }
 
     #[test]

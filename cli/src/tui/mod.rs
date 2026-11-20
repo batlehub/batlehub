@@ -444,7 +444,9 @@ async fn show_why(app: &mut App, registry: &str, name: &str) {
     let mut text = match app.client.pullability(registry, name, Some(&version)).await {
         // shortcut: against a server older than RFC 0040, `render` warns on stderr and
         // smears the screen until the next full redraw; acceptable for a pre-0040 server.
-        Ok(answer) => crate::cli::why::render(registry, name, &answer),
+        Ok(answer) => {
+            crate::render::terminal_safe(&crate::cli::why::render(registry, name, &answer))
+        }
         Err(e) => format!("Error: {e:#}"),
     };
     if let Ok(rows) = app.client.my_refusals(20).await {

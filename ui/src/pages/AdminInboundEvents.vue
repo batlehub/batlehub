@@ -19,8 +19,6 @@ import type { InboundEventsResponse } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatDate as fmtTs } from "@/lib/format";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { SYSTEM_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { AsyncState } from "@/components/ui/async-state";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +52,6 @@ const events = computed(() => inboundResp.value?.events ?? []);
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="SYSTEM_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminNav.inboundEvents')"

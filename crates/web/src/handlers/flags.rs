@@ -3,10 +3,11 @@
 //!
 //! # Authentication
 //!
-//! No `Identity`: the credential is `X-Hub-Signature-256` over the raw body
-//! with the source's configured secret, verified before the body is parsed —
-//! the same scheme `[[notifications.inbound]]` uses, so an operator who has
-//! wired one has wired both. An unknown source name and a bad signature
+//! No `Identity`: the credential is `X-Hub-Signature-256` over
+//! `"{X-BatleHub-Timestamp}.{raw body}"` with the source's configured secret,
+//! the timestamp within 300 s of the server's clock, verified before the body
+//! is parsed — the same scheme `[[notifications.inbound]]` uses, so an
+//! operator who has wired one has wired both. An unknown source name and a bad signature
 //! answer the same `404`, so the endpoint does not enumerate the sources.
 //!
 //! # What an item can say
@@ -33,7 +34,10 @@ use batlehub_core::{
     services::{FlagPushError, FlagService, MAX_FLAG_BATCH},
 };
 
-use crate::{error::AppError, services::verify_inbound_hmac};
+use crate::{
+    error::AppError,
+    services::{signed_and_fresh, TIMESTAMP_HEADER},
+};
 
 /// The configured `[[flag_sources]]`, as app data.
 #[derive(Clone, Default)]
@@ -64,8 +68,9 @@ const MAX_PUSH_BYTES: u64 = 5 * 1024 * 1024;
 /// *every* flag that source had pushed, a `hard_block` on live malware
 /// included. Signing the method and path instead binds the proof to the one
 /// flag it was issued for, so a captured signature revokes only what it
-/// already revoked — a replay with no new effect, since a revoke is
-/// idempotent.
+/// already revoked. The signed timestamp (see [`authenticate`]) closes the
+/// rest: a revoke replayed after the source pushed the flag again would lift
+/// it again, so the signature is good for 300 s only.
 ///
 /// # This is the contract, and it has three other readers
 ///
@@ -116,12 +121,23 @@ async fn authenticate(
         }
     }
     let body = raw.freeze();
-    let header = req
-        .headers()
-        .get("X-Hub-Signature-256")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !verify_inbound_hmac(&source.secret, &body, header) {
+    let header = |name: &str| {
+        req.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    };
+    // `"{timestamp}.{body}"` — for a DELETE, the body is `revoke_canonical` —
+    // with the timestamp within 300 s, so a captured push or revoke cannot be
+    // replayed later: re-imposing a flag its source revoked, or lifting one it
+    // pushed again.
+    if !signed_and_fresh(
+        &source.secret,
+        header(TIMESTAMP_HEADER),
+        &body,
+        header("X-Hub-Signature-256"),
+        Utc::now().timestamp(),
+    ) {
         // The same answer as an unknown name: a bad signature must not
         // confirm the name was right.
         //

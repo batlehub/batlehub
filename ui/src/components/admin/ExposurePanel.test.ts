@@ -8,6 +8,11 @@ vi.mock("@/client/sdk.gen", () => ({
 vi.mock("@/composables/useAuthFetch", () => ({
   useAuthFetch: () => ({ authFetch: vi.fn() }),
 }));
+const { route, replace } = vi.hoisted(() => ({
+  route: { query: {} as Record<string, string> },
+  replace: vi.fn(),
+}));
+vi.mock("vue-router", () => ({ useRoute: () => route, useRouter: () => ({ replace }) }));
 
 import ExposurePanel from "./ExposurePanel.vue";
 
@@ -91,7 +96,7 @@ describe("ExposurePanel", () => {
     await flushPromises();
     expect(w.find('[data-testid="empty-state"]').text()).toContain("No pull of a flagged version");
     exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
-    await w.find('[data-testid="exposure-apply"]').trigger("click");
+    await w.find("#exposure-source").trigger("keyup.enter");
     await flushPromises();
     expect(w.text()).toMatch(/could not|impossible/i);
     // A failure is not an empty window: the two used to show side by side.
@@ -103,9 +108,32 @@ describe("ExposurePanel", () => {
     const w = mount(ExposurePanel);
     await flushPromises();
     exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
-    await w.find('[data-testid="exposure-apply"]').trigger("click");
+    await w.find("#exposure-source").trigger("keyup.enter");
     await flushPromises();
     expect(w.find('[data-testid="exposure-rows"]').exists()).toBe(false);
     expect(w.find('[data-testid="exposure-coverage"]').exists()).toBe(false);
+  });
+
+  /** The overview links here for one version's downloads after its flag. */
+  it("opens on the URL's version and after-flag filter, and can drop it", async () => {
+    route.query = { registry: "npm", package: "left-pad", when: "after_flag" };
+    exposureReport.mockResolvedValue(page([row()]));
+    const w = mount(ExposurePanel);
+    await flushPromises();
+    expect(exposureReport).toHaveBeenLastCalledWith({
+      query: expect.objectContaining({
+        registry: "npm",
+        package_name: "left-pad",
+        when: "after_flag",
+      }),
+    });
+    expect(w.get('[data-testid="exposure-scope"]').text()).toContain("npm/left-pad");
+    await w.get('[data-testid="exposure-scope"] button').trigger("click");
+    await flushPromises();
+    expect(exposureReport).toHaveBeenLastCalledWith({
+      query: expect.objectContaining({ registry: undefined, package_name: undefined }),
+    });
+    expect(w.find('[data-testid="exposure-scope"]').exists()).toBe(false);
+    route.query = {};
   });
 });

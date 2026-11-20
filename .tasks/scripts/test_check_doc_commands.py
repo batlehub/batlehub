@@ -30,6 +30,7 @@ class ArgsOf(unittest.TestCase):
         self.assertEqual(args_of("check --strict && npm ci"), [["check", "--strict"]])
         self.assertEqual(args_of("audit log | jq ."), [["audit", "log"]])
         self.assertEqual(args_of("package readme a/b > README.md"), [["package", "readme", "a/b"]])
+        self.assertEqual(args_of('security status; echo "exit $?"'), [["security", "status"]])
 
 
 class CodeOf(unittest.TestCase):

@@ -386,7 +386,8 @@ credentials:
 # ── Writable configuration ────────────────────────────────────────────────────
 # The first `--config` file is the one the config editor, `config/from-content`
 # and the pending-reload approval rewrite. Mounted from the chart's Secret it is
-# read-only, so all three fail; and on an emptyDir every rewrite would be lost
+# read-only, so all three fail — an editor apply answers 500 and changes
+# nothing, on any number of replicas; and on an emptyDir every rewrite would be lost
 # to the chart's copy at the next restart. With this on, the file lives on a
 # small volume of its own: an init container seeds it from the chart's config
 # (`config`, or the `externalManifest` entry with `mount.asConfig`) and the
@@ -418,7 +419,8 @@ writableConfig:
     # -- Storage class of the rendered claim. Empty uses the cluster default.
     storageClass: ""
     # -- Access mode of the rendered claim. With `ReadWriteOnce` and more than
-    # one replica, every replica must land on the same node.
+    # one replica, every replica must land on the same node. Replicas sharing
+    # the file follow an editor apply made on any one of them.
     accessMode: ReadWriteOnce
     # -- Size of the rendered claim: it holds one TOML file.
     size: 16Mi

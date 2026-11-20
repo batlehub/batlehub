@@ -44,6 +44,10 @@ const parts = (w: ConfigWarning) => leadSentence(capitalised(withoutDocRefs(w.me
         <div class="flex flex-wrap items-center gap-2">
           <code class="font-mono text-xs text-muted-foreground break-all">{{ w.path }}</code>
           <Badge variant="outline">{{ w.code }}</Badge>
+          <!-- Named in `[console].accepted`: read and kept by the operator. -->
+          <span v-if="w.accepted" class="text-xs text-muted-foreground" data-testid="accepted">{{
+            t("common.acceptedInConsole")
+          }}</span>
         </div>
         <details v-if="parts(w).rest" class="group">
           <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">

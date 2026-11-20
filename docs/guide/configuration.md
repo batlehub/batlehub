@@ -2210,7 +2210,7 @@ dry_run             = false
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `keep_versions` | int | *(unset)* | Keep the newest N versions of every package, by publish date |
+| `keep_versions` | int | *(unset)* | Keep the newest N non-yanked versions of every package, by publish date — plus the highest stable version, whenever it was published |
 | `keep_for_days` | int | *(unset)* | Keep anything **published** within this window |
 | `keep_if_pulled_days` | int | *(unset)* | Keep anything **downloaded** within this window |
 | `keep_yanked` | bool | `true` | Keep yanked versions |
@@ -2461,6 +2461,7 @@ even though the halves differ: `metrics_enabled` is about **exposure**,
 [stats]
 history_enabled        = true   # default
 history_retention_days = 30     # default; 0 disables pruning, not history
+security_history_retention_days = 90  # default: the console's security trends
 metrics_enabled        = true   # default: pre-RFC-0004 behaviour
 # Monitoring links (both absent by default: no button)
 dashboard_url          = "https://grafana.example.com/d/batlehub-production/batlehub"
@@ -2471,6 +2472,7 @@ registry_dashboard_url = "https://grafana.example.com/d/batlehub-production/batl
 |---|---|---|---|
 | `history_enabled` | bool | `true` | Record the hourly cache rollup behind the admin dashboard's trend. `false` restores the pre-RFC-0004 dashboard, which shows only counters since the current process started |
 | `history_retention_days` | u32 | `30` | Delete rollup rows older than this. `0` keeps every row — it disables *pruning*, not history |
+| `security_history_retention_days` | u32 | `90` | Days of the daily security rollup behind *Security → Trends* ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)). Follows `history_enabled`. `0` keeps every day; over `365` or `0` raises `stats.security-history-long`, since the rollup then outlives the audit rows it summarises. A release older than RFC 0050 refuses this key: remove it before rolling back |
 | `metrics_enabled` | bool | `true` | Install the Prometheus recorder and serve `/metrics`. `false` makes `/metrics` answer `503 metrics not configured` |
 | `dashboard_url` | string | — | The [Monitoring ↗] link on *Admin → Dashboard*. No placeholder |
 | `registry_dashboard_url` | string | — | The [Monitoring ↗] link on each registry page. `{registry}` is its only placeholder and is required; it is replaced percent-encoded, so the template should put it in the query |
@@ -2696,8 +2698,12 @@ of the URL is the whole of their authentication, so treat those URLs as
 credentials and inject them through `env` rather than writing them into the file.
 
 **Inbound webhooks.** Each `[[notifications.inbound]]` block accepts events from
-something else, verified against `X-Hub-Signature-256` when `secret` is set.
-Without a secret **any payload is accepted**, which is suitable only on a network
+something else, verified when `secret` is set: the request carries
+`X-BatleHub-Timestamp: <unix seconds>` and `X-Hub-Signature-256: sha256=<hex>`,
+an HMAC-SHA256 over `"{timestamp}.{body}"`. A timestamp more than 300 seconds
+from the server's clock is refused like a bad signature, so a captured request
+cannot be replayed later — for instance to re-impose a `hard_block` its source
+has since revoked. Without a secret **any payload is accepted**, which is suitable only on a network
 where nothing untrusted can reach the port. A registry with
 [`[registries.security]`](#registries-security) makes the secret mandatory: a
 `security.*` event on an unsigned webhook would let anyone on the network deny
@@ -2722,6 +2728,32 @@ share the verification scheme.
 The same three are `batlehub-cli notification channels|list|delete`; see
 [the CLI reference](/use/cli#notifications). Channels themselves are config, so
 adding one is a config change and a reload, not an API call.
+
+---
+
+### 3.8e `[console]` (optional) {#console}
+
+What the security console treats as known and kept, rather than as needing
+attention. Absent accepts nothing. The list lives in the config, not behind a
+button, so an acknowledgement is reviewed and versioned like any other change
+and is the same for every admin.
+
+```toml
+[console]
+accepted = [
+  "coverage:go-public",               # a registry left without [security] or a cve_gate on purpose
+  "warning:proxy-trust.unconfigured", # a config warning read and kept
+]
+```
+
+| Entry | Effect |
+| --- | --- |
+| `coverage:<registry>` | The *Coverage* line and page no longer count the registry as unprotected: the line reads *Every registry protected but go-public, left unprotected on purpose*, and its row *not protected, on purpose (config)*. |
+| `warning:<code>` | The warning is still listed on Instance security and on the Configuration page, marked *accepted in [console]*, and no longer turns the *Config* line to `ATTENTION`. It is logged at `INFO` instead of `WARN`. |
+
+An entry that is neither form, or a `coverage:` entry naming no registry, is
+refused at load: a typo would otherwise accept nothing, silently. Who may still
+see a consumer's downloads is unchanged — Exposure stays behind `audit:read`.
 
 ---
 
@@ -2972,7 +3004,7 @@ max_flags_per_minute = 600          # 0 disables the limit
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `name` | — | `[a-z0-9][a-z0-9_-]*`, at most 64 characters, unique — and distinct from every `[[notifications.inbound]]` name, because a `security.verdict` event stores its `hard_block` under the webhook's name and this source's secret is what revokes a flag under that name. The source pushes to `POST /api/v1/flags/{name}` and revokes with `DELETE /api/v1/flags/{name}/{external_id}`. |
-| `secret` | — | HMAC-SHA256 key. The push carries `X-Hub-Signature-256: sha256=<hex>` over the raw body (on a `DELETE`, which has none, over the canonical string `DELETE\n/api/v1/flags/{source}/{external_id}`, so a captured revoke signature lifts only the flag it names), the same scheme `[[notifications.inbound]]` verifies. An unknown name and a bad signature answer the same `404`. |
+| `secret` | — | HMAC-SHA256 key. The push carries `X-BatleHub-Timestamp: <unix seconds>` and `X-Hub-Signature-256: sha256=<hex>` over `"{timestamp}.{body}"` (on a `DELETE`, which has no body, the canonical string `DELETE\n/api/v1/flags/{source}/{external_id}` stands for it, so a captured revoke signature lifts only the flag it names), the scheme `[[notifications.inbound]]` verifies. A timestamp more than 300 s from the server's clock is refused, so a captured push or revoke cannot be replayed. An unknown name and a bad signature answer the same `404`. |
 | `max_effect` | `gate` | The strongest effect this source may set. A push asking for more is stored at the ceiling and told so (`effect_capped: true`). |
 | `registries` | `[]` | The registries the source may flag. An item naming another one is rejected, per item. |
 | `max_flags_per_minute` | `600` | Items per minute across pushes; over it the whole push is `429` with `Retry-After`. |

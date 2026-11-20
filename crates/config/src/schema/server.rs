@@ -200,8 +200,9 @@ pub struct DatabaseConfig {
     #[serde(default)]
     pub listen_url: Option<String>,
     /// The in-process read cache of blocks, flags, visibility, tokens, user
-    /// blocks and dedup mappings. `false` reads every one from the database
-    /// on every request, and no listener is started.
+    /// blocks and dedup mappings, and the security console's source cache
+    /// (RFC 0050 §4.4). `false` reads every one from the database on every
+    /// request, and no listener is started.
     #[serde(default = "super::registry::default_true")]
     pub read_cache: bool,
 }

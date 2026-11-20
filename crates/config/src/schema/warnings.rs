@@ -30,6 +30,9 @@ pub struct ConfigWarning {
     /// warning that must stay in view while it applies (RFC 0045
     /// `mise.overlay.forced-shadow`).
     pub dismissible: bool,
+    /// Named in `[console].accepted` as `warning:<code>`: the operator has read
+    /// it and keeps the state. Still listed; no longer counted as attention.
+    pub accepted: bool,
 }
 
 impl ConfigWarning {
@@ -43,6 +46,7 @@ impl ConfigWarning {
             message: message.into(),
             path: path.into(),
             dismissible: true,
+            accepted: false,
         }
     }
 
@@ -154,6 +158,13 @@ pub const RELEASE_IMPORT_NO_INTERVAL: &str = "release-import.no-interval";
 /// public mirror, rarely what an internal deployment wants — and since 1.1.0 it
 /// only happens when someone wrote it down, which is the point of the warning.
 pub const CORS_ANY_ORIGIN: &str = "cors.any-origin";
+
+/// A `[[auth.tokens]]` value without an `$argon2` prefix: accepted, and said
+/// by config path only — never the value, never the user id (RFC 0050 §4.3).
+pub const AUTH_PLAIN_STATIC_TOKEN: &str = "auth.plain-static-token";
+
+/// `[stats] security_history_retention_days` over 365, or `0` (RFC 0050 §4.3).
+pub const STATS_SECURITY_HISTORY_LONG: &str = "stats.security-history-long";
 
 /// A registry has `signed_downloads = true` *and* still grants the anonymous
 /// read that signing exists to remove. Legal — belt and braces — but almost

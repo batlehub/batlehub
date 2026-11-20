@@ -859,23 +859,39 @@ pub async fn list_pullers(
 
 // ── the admin surface (RFC 0018 phase 5) ─────────────────────────────────────
 
-/// `?registry=&state=&limit=` on the admin listing.
+/// `?registry=&state=&reason=&page=&per_page=` on the admin listing.
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 pub struct VerdictListQuery {
-    pub registry: String,
-    /// `allowed`, `warned`, `quarantined` or `denied`; absent lists every
-    /// state.
+    /// One protected registry; absent lists every protected registry the
+    /// caller may read (an incident spans registries).
+    pub registry: Option<String>,
+    /// `allowed`, `warned`, `quarantined`, `denied`, or `held` (denied and
+    /// quarantined); absent lists every state.
     pub state: Option<String>,
-    /// Per state; default 100, at most 1000.
+    /// Only verdicts carrying this reason code (`SOC_VERDICT`, …).
+    pub reason: Option<String>,
+    /// 1-based; default 1.
+    pub page: Option<u64>,
+    /// Default 100, at most 1000.
+    pub per_page: Option<u64>,
+    /// The former name of `per_page`, still read when `per_page` is absent.
     pub limit: Option<u64>,
 }
 
-/// The admin listing: the verdicts of one registry, newest evaluation
-/// first, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).
+/// The admin listing: denied first, then quarantined, warned, allowed, each
+/// newest evaluation first, one page at a time
+/// with the exact count of every match (RFC 0018 §4.2 *CLI*: `batlehub
+/// verdicts list`), so a mass compromise can be walked to its end.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct VerdictListResponse {
-    pub registry: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     pub items: Vec<Verdict>,
+    /// Every match, all pages, at registry level (as the *Holds* counts):
+    /// a row sealed at its namespace is counted, not listed.
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
 }
 
 fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
@@ -886,9 +902,11 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
             VerdictState::Warned,
             VerdictState::Allowed,
         ]),
+        // Every version kept from a client: what an incident is walked by.
+        Some("held") => Ok(vec![VerdictState::Denied, VerdictState::Quarantined]),
         Some(s) => s.parse::<VerdictState>().map(|st| vec![st]).map_err(|_| {
             AppError::bad_request(format!(
-                "state '{s}' is not one of: allowed, warned, quarantined, denied"
+                "state '{s}' is not one of: allowed, warned, quarantined, denied, held"
             ))
         }),
     }
@@ -906,7 +924,7 @@ fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
     tag = "security",
     params(VerdictListQuery),
     responses(
-        (status = 200, description = "The verdicts, newest first per state", body = VerdictListResponse),
+        (status = 200, description = "One page of verdicts, newest first, and the total", body = VerdictListResponse),
         (status = 400, description = "An unknown `state`"),
         (status = 403, description = "`quarantine:read` at the instance tier required"),
         (status = 404, description = "The registry has no security profile"),
@@ -924,35 +942,72 @@ pub async fn list_verdicts(
     let with_findings = authz::authorize_control(&svc.hot, None, &identity.0, Action::FindingsRead)
         .await
         .is_ok();
-    let verdicts = {
+    let (verdicts, policies, registries) = {
         let hot = svc.hot.read().await;
-        let Some(policy) = hot.security.get(&query.registry).cloned() else {
-            return Err(AppError::not_found(format!(
-                "registry '{}' has no security profile",
-                query.registry
-            )));
+        let registries: Vec<String> = match &query.registry {
+            Some(r) if !hot.security.contains_key(r) => {
+                return Err(AppError::not_found(format!(
+                    "registry '{r}' has no security profile"
+                )));
+            }
+            Some(r) => vec![r.clone()],
+            None => {
+                let mut v: Vec<String> = hot.security.keys().cloned().collect();
+                v.sort();
+                v
+            }
         };
-        hot.verdicts.clone().map(|v| (v, policy))
+        let Some(verdicts) = hot.verdicts.clone() else {
+            return Err(AppError::not_found("no verdict store in this process"));
+        };
+        (verdicts, hot.security.clone(), registries)
     };
-    let Some((verdicts, policy)) = verdicts else {
-        return Err(AppError::not_found("no verdict store in this process"));
+    // Across registries, only those the caller reads at the registry tier: a
+    // sealed one is as absent as an unknown one.
+    let registries: Vec<String> = if query.registry.is_some() {
+        registries
+    } else {
+        crate::handlers::security_console::visible(
+            &svc.hot,
+            &identity.0,
+            &registries,
+            Action::QuarantineRead,
+        )
+        .await
+        .into_iter()
+        .collect()
     };
-    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
-    let mut items = Vec::new();
-    for state in parse_states(query.state.as_deref())? {
-        items.extend(
-            verdicts
-                .list_by_state(&query.registry, state, limit)
-                .await
-                .map_err(AppError::from)?
-                .into_iter()
-                .map(|v| batlehub_core::services::verdict::with_judgement(v, &policy)),
-        );
-    }
+    let per_page = query.per_page.or(query.limit).unwrap_or(100).clamp(1, 1000);
+    let page = query.page.unwrap_or(1).max(1);
+    let (rows, total) = verdicts
+        .page_verdicts(&batlehub_core::ports::VerdictPage {
+            registries,
+            states: parse_states(query.state.as_deref())?,
+            reason: query
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_owned),
+            limit: per_page,
+            offset: (page - 1).saturating_mul(per_page),
+        })
+        .await
+        .map_err(AppError::from)?;
+    let items: Vec<Verdict> = rows
+        .into_iter()
+        .map(|v| match policies.get(&v.package.registry) {
+            Some(p) => batlehub_core::services::verdict::with_judgement(v, p),
+            None => v,
+        })
+        .collect();
     let items = sealed_out(&svc.hot, &identity.0, items, with_findings).await;
     Ok(HttpResponse::Ok().json(VerdictListResponse {
         registry: query.registry.clone(),
         items,
+        total,
+        page,
+        per_page,
     }))
 }
 

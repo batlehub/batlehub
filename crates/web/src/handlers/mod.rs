@@ -9,6 +9,7 @@ pub mod metrics;
 pub mod proxy;
 pub mod schemas;
 pub mod security;
+pub mod security_console;
 
 /// Clamp caller-supplied `page`/`per_page` query params before they're used to
 /// compute a SQL `offset = page * per_page`. `per_page=0` would make `LIMIT 0`

@@ -594,9 +594,10 @@ re-check runs next (its last run plus `[vulnerability_scan] interval_secs`;
 absent when the re-check is off or has never covered the registry). The
 package page's Security tab shows both as *Next rescan*.
 
-### The Scans page {#scans-page}
+### The Scanners & worker page {#scans-page}
 
-*Admin → Security → Scans* follows the scan queue
+*Security → Scanners & worker* (`/security/scanners`) opens on whether
+anything is scanning ([below](#worker)), then follows the scan queue
 (`GET /api/v1/admin/scans`):
 
 - **Queue**: every open job, the ones a worker holds first, with the trigger,
@@ -605,8 +606,6 @@ package page's Security tab shows both as *Next rescan*.
 - **Failures**: each version whose latest scan job ran out of attempts and that
   has no job open, with the worker's last error. [Rescan] queues a new job
   (`POST /api/v1/verdicts/…/rescan`) and the row moves to the queue.
-- **Verdicts by state**: the verdicts of one registry, from
-  `GET /api/v1/admin/verdicts`.
 
 Opening the page needs `quarantine:read` at the instance tier, the verb the
 security console reads with (RFC 0042); the registry-tier `quarantine:read`
@@ -619,11 +618,11 @@ most 200.
 
 A job closed before this release carries no failure marker, so a failure older
 than the upgrade does not appear under Failures; its verdict still reads
-`SCANNER_ERROR` under *Verdicts by state*.
+`SCANNER_ERROR` on *Security → Holds*.
 
 ### The Findings page {#findings-page}
 
-*Admin → Security → Findings* lists what the scanners found, across
+*Security → Findings* (`/security/findings`) lists what the scanners found, across
 registries (`GET /api/v1/admin/findings`). Each row names the version, the
 severity, the scanner, the advisory id and the state of the verdict the finding
 fed. The filters are the registry, a minimum severity, the scanner, the verdict
@@ -642,6 +641,63 @@ package away from you removes its rows, as it does for that version's verdict.
 verdict holds the version; the exemption endpoint checks it again. `per_page`
 is at most 200, and because of namespace seals a page can hold fewer rows than
 it asked for.
+
+### The security console {#console}
+
+`/security` is a space of its own, beside the admin, so a group delegated the
+security verbs ([RFC 0042](/rfc/0042-security-console-by-verb)) reaches it without any
+admin verb ([RFC 0050](/rfc/0050-security-console-completion-and-admin-navigation)).
+Each page appears only when its verb is held, and the space opens on the first
+one you may read:
+
+| Page | Verb |
+| --- | --- |
+| Overview | `quarantine:read` or `flags:read`; each line its own |
+| Holds, Trends, Coverage, Scanners & worker | `quarantine:read` |
+| Findings | `findings:read` |
+| Flags | `flags:read` |
+| Exposure | `audit:read` |
+
+The **overview** has one line per domain — *Holds*, *Flags*, *Scanners &
+worker*, *Coverage* — each `OK`, `ATTENTION` or `UNKNOWN`. `UNKNOWN` is a
+source that did not answer within 2 seconds; it is never drawn as `OK`. Below
+the lines, *Needs a decision* lists at most ten items: holds on a flag that
+blocks downloads, flagged versions downloaded after the flag, exemptions
+ending within 7 days, failed scans. The page refreshes every 30 seconds for 10
+minutes. `batlehub-cli security status` prints the same lines for a script.
+
+**Trends** draw a daily rollup per registry (`security_daily`), written hourly
+by one process: versions held, downloads refused, flags opened and revoked,
+scans done and failed. Days are UTC days. History is kept
+`[stats] security_history_retention_days` (90 by default, `0` forever) and
+follows `[stats] history_enabled`. Counts of held versions start the day of the
+upgrade; refusals, flags and scans are filled backwards as far as their own
+sources still hold rows, and a day beyond reads *no data*, never zero.
+
+**Coverage** lists every registry you may see, protected or not, with its
+mode, what it refuses, its gates and how far the scans have got; one
+registry's page details its `[security]` profile. A registry serving `proxy`
+or `hybrid` traffic with no `[security]` profile and no `cve_gate` is
+`ATTENTION` on the overview.
+
+#### Scanners and worker {#worker}
+
+A worker sends a heartbeat every 30 seconds from its own ticker, whether or
+not it is busy with a job, and counts as running while its last heartbeat is
+under two minutes old. It covers the registries its heartbeat lists — all of them when it lists none. With no live
+worker covering a protected registry, every new version of that registry stays
+held: start one with `--roles worker` (or `[server] roles`).
+
+#### Scanners {#scanners}
+
+Each scanner keeps one status row: its last success, its last error and the
+error's class (`timeout`, `http_<status>`, `parse`, `sandbox`, `other` — never
+the error's text), and, for OSV, until when its breaker keeps it paused. A
+scanner whose last error is newer than its last success, one that never ran,
+an open breaker, or a job deferred for more than a day is `ATTENTION`. The
+class is shown only with `findings:read`. With no scanner configured, a
+protected registry holds every new version: name one in
+`[registries.security] required_scanners`.
 
 ---
 
@@ -664,8 +720,11 @@ it asked for.
   - `batlehub-cli why <registry>:<name>@<version>` (see
     [the CLI](/use/cli#commands-security));
   - the verdict panel on the package page;
-  - the admin *Access Check* page, which runs the same
-    chain as a real download, namespace overrides and exemptions included.
+  - the *Simulate* panel of *Admin → Access → Authorization*
+    (`/admin/access/authorization#simulate`), which runs a whole download for
+    an identity — blocks, gates and groups, namespace overrides and exemptions
+    included. Its *Explain* panel (`#explain`) answers a narrower question:
+    which grants a subject holds on a coordinate, and from which tier.
 
 ---
 

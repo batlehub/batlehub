@@ -421,6 +421,22 @@ impl VerdictService {
         policy: &SecurityPolicy,
         now: DateTime<Utc>,
     ) -> Result<Verdict, CoreError> {
+        // A coordinate no read path should have let through (an empty name
+        // reached the gate from the console's warming page, 2026-11-17, by a
+        // route still unidentified): refused here, before a hold or a scan job
+        // is written under it. The gate turns the error into a refusal.
+        if let Err(e) =
+            crate::services::validate_coordinate(&package.id.name, &package.id.version, None)
+        {
+            tracing::warn!(
+                registry = %package.id.registry,
+                name = %package.id.name,
+                version = %package.id.version,
+                error = %e,
+                "security: invalid coordinate reached the verdict gate; refused"
+            );
+            return Err(e);
+        }
         let key = coordinate_key(&package.id);
         let stored = self.verdicts.get(&key).await?;
         let (scanner_findings, done, last_scanned) = match &stored {
@@ -1465,6 +1481,28 @@ mod record_scan_tests {
         ) -> Result<Vec<PackageId>, CoreError> {
             Ok(vec![])
         }
+    }
+
+    /// An empty name never becomes a stored hold or a queued scan: the gate
+    /// refuses it (the demo's `crates-io/@1.0.0`, 2026-11-17).
+    #[tokio::test]
+    async fn an_invalid_coordinate_is_refused_before_anything_is_written() {
+        let now = Utc::now();
+        let repo = Arc::new(OneVerdict::default());
+        let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+        for (name, version) in [("", "1.0.0"), ("evil", ""), ("../x", "1.0.0")] {
+            let mut pkg = mature_package(now);
+            pkg.id = PackageId::new("npm-public", name, version);
+            assert!(
+                svc.current(&pkg, &policy(), now).await.is_err(),
+                "{name:?}@{version:?}"
+            );
+        }
+        assert_eq!(
+            repo.1.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing saved"
+        );
     }
 
     #[derive(Default)]

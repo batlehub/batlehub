@@ -55,6 +55,19 @@ impl crate::ports::LocalRegistryBackend for InMemBackend {
         names.dedup();
         Ok(names)
     }
+    /// Drops the row: enough for "tombstoned once, then nothing to tombstone".
+    async fn tombstone_version(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        _: Option<&str>,
+    ) -> Result<bool, CoreError> {
+        let mut v = self.versions.lock().unwrap();
+        let before = v.len();
+        v.retain(|p| !(p.registry == registry && p.name == name && p.version == version));
+        Ok(v.len() < before)
+    }
     async fn yank(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
         Ok(())
     }

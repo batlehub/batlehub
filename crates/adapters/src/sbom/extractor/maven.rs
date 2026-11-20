@@ -2,7 +2,7 @@ use batlehub_core::ports::{ExtractedManifest, SbomDependency};
 use bytes::Bytes;
 
 pub(super) fn extract_maven_manifest(data: &Bytes) -> ExtractedManifest {
-    use std::io::{Cursor, Read};
+    use std::io::Cursor;
     use zip::ZipArchive;
 
     let cursor = Cursor::new(data.as_ref());
@@ -35,7 +35,7 @@ pub(super) fn extract_maven_manifest(data: &Bytes) -> ExtractedManifest {
         }
     };
     let mut content = String::new();
-    if file.read_to_string(&mut content).is_err() {
+    if super::read_manifest(&mut file, &mut content).is_err() {
         tracing::warn!("sbom: failed to parse maven manifest, treating as no dependencies");
         return ExtractedManifest::default();
     }

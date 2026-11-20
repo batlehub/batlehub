@@ -10,7 +10,7 @@ import {
 
 describe("variantFromMap", () => {
   it("returns the mapped variant", () => {
-    expect(variantFromMap("npm", REGISTRY_TYPE_VARIANTS)).toBe("default");
+    expect(variantFromMap("npm", REGISTRY_TYPE_VARIANTS)).toBe("secondary");
   });
 
   it("falls back when unmapped", () => {

@@ -33,7 +33,6 @@ async function mountPage() {
   const w = mount(AdminRegistries, {
     global: {
       stubs: {
-        SectionTabs: true,
         RouterLink: { props: ["to"], template: '<a :data-to="to"><slot /></a>' },
       },
     },

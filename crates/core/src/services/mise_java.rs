@@ -224,10 +224,13 @@ pub fn coordinate(row: &Row) -> String {
 pub fn host_path(url: &str) -> Option<&str> {
     let rest = url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/')?;
+    // No empty label: `.` and `..` as a host are dot segments of the key
+    // (fuzz_mise_java_filter, `https://./t7[`), and no vendor host has one.
     let host_ok = !host.is_empty()
         && host
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && !host.split('.').any(str::is_empty);
     let path_ok = !path.is_empty()
         && path.bytes().all(|b| b.is_ascii_graphic())
         && !path.starts_with('/')
@@ -567,6 +570,12 @@ mod tests {
             "https://cdn.azul.com:8443/a",
             "https://u@cdn.azul.com/a",
             "https://cdn.azul.com//a",
+            // A host with an empty label is a dot segment of the key
+            // (the nightly fuzz crash of 2026-11-18).
+            "https://./t7[",
+            "https://../a",
+            "https://.cdn.azul.com/a",
+            "https://cdn..azul.com/a",
         ] {
             assert_eq!(host_path(bad), None, "{bad}");
         }

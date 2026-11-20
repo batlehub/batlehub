@@ -255,12 +255,24 @@ pub(super) struct SecurityStores {
     pub verdicts: Option<Arc<dyn batlehub_core::ports::VerdictRepository>>,
     pub queue: Option<Arc<dyn batlehub_core::ports::ScanQueue>>,
     pub workers: Option<Arc<dyn batlehub_core::ports::WorkerRegistry>>,
+    /// RFC 0050: the worker's per-scanner outcomes and the daily rollup.
+    pub scanner_status: Option<Arc<dyn batlehub_core::ports::ScannerStatusRepository>>,
+    pub security_daily: Option<Arc<dyn batlehub_core::ports::SecurityDailyRepository>>,
     /// RFC 0014's rows, when `[upstream_audit]` is enabled: the
     /// `upstream-presence` scanner reads them on a `[security]` registry.
     pub upstream_status: Option<Arc<dyn batlehub_core::ports::UpstreamStatusPort>>,
     /// RFC 0002 (recast): the pushed flags — the `flags` scanner on a
     /// `[security]` registry, `FlagsRule` on every other.
     pub advisories: Option<Arc<dyn batlehub_core::ports::AdvisoryRepository>>,
+    /// RFC 0050 §4.3: the clear `[[auth.tokens]]` of the config the auth
+    /// providers were built from. Fixed at startup, as the providers are
+    /// (`[auth]` is restart-only): a reload must not hide a token that still
+    /// authenticates.
+    pub plain_static_tokens: Arc<Vec<(String, Option<String>)>>,
+    /// The kinds each `[scanners]` entry can scan, fixed at startup as the
+    /// worker's scanners are: the console does not count a scanner against a
+    /// registry it cannot scan.
+    pub scanner_kinds: Arc<HashMap<String, Vec<RegistryKind>>>,
 }
 
 impl SecurityStores {
@@ -766,6 +778,7 @@ pub(super) fn build_hot_bundle(
             })
             .collect(),
         grant_repo: grant_repo.clone(),
+        user_providers: cfg.user_id_providers(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
         ref_resolutions: forge_stores.ref_resolutions.clone(),
@@ -786,9 +799,15 @@ pub(super) fn build_hot_bundle(
             .unwrap_or_default(),
         miss_recorder: air_gap_stores.miss_recorder.clone(),
         security: reg_security,
+        accepted_unprotected: cfg.console.accepted_coverage().map(str::to_owned).collect(),
         internal_scanners: reg_internal_scanners,
         verdicts: security_stores.verdicts.clone(),
         scan_queue: security_stores.queue.clone(),
+        worker_registry: security_stores.workers.clone(),
+        scanner_status: security_stores.scanner_status.clone(),
+        security_daily: security_stores.security_daily.clone(),
+        plain_static_tokens: Arc::clone(&security_stores.plain_static_tokens),
+        scanner_kinds: Arc::clone(&security_stores.scanner_kinds),
         // A fresh cache per reload. Config that changes what a grant resolves to
         // must not be answered from documents built under the old one — and a
         // reload is rare enough that rebuilding a handful of documents costs
@@ -1849,5 +1868,50 @@ scanners = ["osv"]
                 "`{row}` changed and the reload builder did not see it"
             );
         }
+    }
+
+    /// `[auth]` is built once: a reload that drops a clear token from the
+    /// file leaves it authenticating, so the console still names it.
+    #[test]
+    fn a_reload_keeps_the_startup_plain_tokens() {
+        use batlehub_adapters::in_memory::{
+            InMemoryPackageRepository, InMemoryVulnerabilityRepository, NoopSbomRepository,
+        };
+        let base = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+[database]
+type = "postgresql"
+url = "postgresql://u:p@localhost/db"
+[storage]
+type = "filesystem"
+path = "./tmp"
+"#;
+        let startup = batlehub_config::load_from_str(&format!(
+            "{base}[[auth]]\ntype = \"token\"\n[[auth.tokens]]\nvalue = \"clear\"\nrole = \"admin\"\n"
+        ))
+        .unwrap();
+        let builder = make_hot_builder(
+            InMemoryBetaChannelStore::new(),
+            InMemoryPackageRepository::new(),
+            Arc::new(InMemoryVulnerabilityRepository::new()),
+            Arc::new(NoopSbomRepository),
+            None,
+            None,
+            None,
+            ForgeStores::default(),
+            SecurityStores {
+                plain_static_tokens: Arc::new(startup.plain_static_tokens()),
+                ..Default::default()
+            },
+            AirGapStores::default(),
+            settled("english", &["english"]),
+        );
+        let reloaded = builder(&batlehub_config::load_from_str(base).unwrap()).unwrap();
+        assert_eq!(
+            *reloaded.hot.plain_static_tokens,
+            vec![("auth[0].tokens[0]".to_owned(), None)]
+        );
     }
 }

@@ -17,6 +17,24 @@ mod readme;
 mod rubygems;
 mod terraform;
 
+/// Ceiling on one dependency manifest read out of an archive. A decompressor
+/// is unbounded by the compressed size, so a bomb would otherwise inflate to
+/// gigabytes here; real manifests are kilobytes.
+const MAX_MANIFEST_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Read one manifest, refusing (rather than truncating) one past the ceiling.
+fn read_manifest(reader: impl std::io::Read, out: &mut String) -> std::io::Result<()> {
+    use std::io::Read;
+    reader.take(MAX_MANIFEST_BYTES + 1).read_to_string(out)?;
+    if out.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "manifest exceeds the size ceiling",
+        ));
+    }
+    Ok(())
+}
+
 /// Archive-based SBOM manifest extractor.
 ///
 /// Parses dependency manifests embedded in package archives, and the licence
@@ -56,6 +74,26 @@ mod tests {
     use batlehub_core::ports::SbomExtractor;
 
     use super::*;
+
+    #[test]
+    fn a_manifest_decompression_bomb_is_refused_not_inflated() {
+        let mut gz = Vec::new();
+        {
+            use std::io::Write;
+            let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::best());
+            let chunk = vec![b' '; 1024 * 1024];
+            for _ in 0..=MAX_MANIFEST_BYTES / (1024 * 1024) {
+                enc.write_all(&chunk).unwrap();
+            }
+            enc.finish().unwrap();
+        }
+        let mut out = String::new();
+        let err = read_manifest(flate2::read::GzDecoder::new(&gz[..]), &mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let mut ok = String::new();
+        read_manifest(&b"{}"[..], &mut ok).unwrap();
+        assert_eq!(ok, "{}");
+    }
 
     #[test]
     fn extract_returns_empty_for_unknown_type() {

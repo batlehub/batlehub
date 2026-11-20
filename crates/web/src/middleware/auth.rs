@@ -22,6 +22,7 @@ use batlehub_core::{
 
 use crate::error::AppError;
 use crate::extractors::{caller_net, raw_auth_from_request};
+use batlehub_core::entities::CallerNet;
 
 /// Actix-web middleware that attempts each configured `AuthProvider` in order.
 ///
@@ -68,13 +69,60 @@ impl CredentialRejectionAudit {
             throttle: RejectionThrottle::default(),
         })
     }
+
+    /// Write the attempts held back for every IP whose window has elapsed
+    /// (every IP at all when `all`, at shutdown): without it a burst that
+    /// stops is never counted, since its count waits for a next attempt.
+    ///
+    /// The row stands for one of the held-back attempts, so it carries the
+    /// others as `throttled_count`: readers keep summing `1 + throttled_count`.
+    pub async fn flush_held(&self, now: Instant, all: bool) {
+        for (ip, held) in self.throttle.take_held(now, all) {
+            let mut event = AccessEvent::about_identity(
+                AccessAction::CredentialRejected,
+                None,
+                Identity::anonymous().role,
+                AccessResult::Denied {
+                    reason: "no authentication provider accepted the credential".to_owned(),
+                },
+                CallerNet {
+                    ip: Some(ip),
+                    user_agent: None,
+                },
+                Some(format!(
+                    "{held} attempt(s) held back by the throttle, written after their window"
+                )),
+            );
+            event.throttled_count = (held > 1).then_some(held - 1);
+            self.admin_svc.record_event(event).await;
+        }
+    }
+
+    /// Run [`Self::flush_held`] every [`Self::FLUSH_EVERY`] for as long as the
+    /// writer lives, so a burst is counted at most `WINDOW + FLUSH_EVERY`
+    /// after it ends. Call from inside a tokio runtime.
+    pub fn spawn_flusher(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Self::FLUSH_EVERY);
+            loop {
+                tick.tick().await;
+                let Some(audit) = weak.upgrade() else { return };
+                audit.flush_held(Instant::now(), false).await;
+            }
+        })
+    }
+
+    const FLUSH_EVERY: Duration = Duration::from_secs(10);
 }
 
 /// One `credential_rejected` row per source IP per [`Self::WINDOW`].
 ///
 /// A credential-stuffing burst costs one write a minute rather than one per
 /// attempt. The attempts suppressed in between are not lost: their count rides
-/// on the next row written for that IP, as its `throttled_count`.
+/// on the next row written for that IP, as its `throttled_count` — or, when
+/// no attempt follows, on the row [`CredentialRejectionAudit::flush_held`]
+/// writes once the window has elapsed.
 ///
 /// Per process, like the `last_used_at` throttle: *n* replicas write up to *n*
 /// rows a minute per IP, which the burst rule's threshold allows for.
@@ -110,11 +158,32 @@ impl RejectionThrottle {
         }
         // ponytail: an O(n) sweep when the map is large; a busy estate under a
         // distributed spray would want an LRU, which is not needed until then.
+        // An entry still holding attempts is kept for the flusher to write.
         if seen.len() >= Self::SWEEP_AT {
-            seen.retain(|_, (at, _)| now.duration_since(*at) < Self::WINDOW);
+            seen.retain(|_, (at, held)| *held > 0 || now.duration_since(*at) < Self::WINDOW);
         }
         seen.insert(ip.to_owned(), (now, 0));
         Some(0)
+    }
+
+    /// Forget every IP whose window has elapsed (every IP when `all`) and
+    /// return those that were holding attempts back, with their count.
+    pub(crate) fn take_held(&self, now: Instant, all: bool) -> Vec<(String, u32)> {
+        let mut seen = self
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = Vec::new();
+        seen.retain(|ip, (at, suppressed)| {
+            if !all && now.duration_since(*at) < Self::WINDOW {
+                return true;
+            }
+            if *suppressed > 0 {
+                held.push((ip.clone(), *suppressed));
+            }
+            false
+        });
+        held
     }
 }
 
@@ -225,10 +294,21 @@ where
             if challenge {
                 challenge_anonymous(res.response_mut());
             }
+            if presented && !accepted {
+                res.response_mut()
+                    .extensions_mut()
+                    .insert(CredentialRejected);
+            }
             Ok(res)
         })
     }
 }
+
+/// Marks a response to a request whose credential no provider accepted. The
+/// IP-ban counts a `401` only with it: the bare challenge git, NuGet and Maven
+/// need before they send their credential is not a failed login.
+#[derive(Clone, Copy, Debug)]
+pub struct CredentialRejected;
 
 /// Turn a refusal a credential could answer into `401` + `WWW-Authenticate:
 /// Basic`, for a caller known to have presented none a provider accepted.
@@ -281,6 +361,62 @@ mod tests {
             throttle.admit("10.0.0.1", t0 + RejectionThrottle::WINDOW),
             Some(20),
             "the next row carries the twenty held back"
+        );
+    }
+
+    /// A burst that stops is still counted: the flusher takes what an elapsed
+    /// window held back, and only that, exactly once.
+    #[test]
+    fn a_burst_that_stops_is_taken_once_its_window_elapses() {
+        let throttle = RejectionThrottle::default();
+        let t0 = Instant::now();
+        throttle.admit("10.0.0.1", t0);
+        for _ in 0..23 {
+            throttle.admit("10.0.0.1", t0 + Duration::from_secs(1));
+        }
+        throttle.admit("10.0.0.2", t0);
+        assert!(
+            throttle
+                .take_held(t0 + Duration::from_secs(30), false)
+                .is_empty(),
+            "a window still open is left alone"
+        );
+        assert_eq!(
+            throttle.take_held(t0 + RejectionThrottle::WINDOW, false),
+            vec![("10.0.0.1".to_owned(), 23)],
+            "the 23 held back, and no row for an IP that held nothing"
+        );
+        assert!(throttle
+            .take_held(t0 + RejectionThrottle::WINDOW, false)
+            .is_empty());
+        assert_eq!(
+            throttle.admit("10.0.0.1", t0 + RejectionThrottle::WINDOW),
+            Some(0),
+            "the next attempt opens a fresh window"
+        );
+        throttle.admit("10.0.0.1", t0 + RejectionThrottle::WINDOW);
+        assert_eq!(
+            throttle.take_held(t0 + RejectionThrottle::WINDOW, true),
+            vec![("10.0.0.1".to_owned(), 1)],
+            "at shutdown, an open window is taken too"
+        );
+    }
+
+    /// Past `SWEEP_AT`, the sweep drops elapsed entries but keeps one still
+    /// holding attempts for the flusher.
+    #[test]
+    fn the_sweep_keeps_held_attempts_for_the_flusher() {
+        let throttle = RejectionThrottle::default();
+        let t0 = Instant::now();
+        throttle.admit("held", t0);
+        throttle.admit("held", t0);
+        for i in 1..RejectionThrottle::SWEEP_AT {
+            throttle.admit(&format!("ip{i}"), t0);
+        }
+        throttle.admit("late", t0 + RejectionThrottle::WINDOW);
+        assert_eq!(
+            throttle.take_held(t0 + RejectionThrottle::WINDOW, false),
+            vec![("held".to_owned(), 1)]
         );
     }
     use actix_web::{

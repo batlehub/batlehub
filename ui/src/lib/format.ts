@@ -38,19 +38,20 @@ export function formatBytes(
 }
 
 /**
- * Formats an ISO date and time in the app's locale, e.g. `Jan 2, 2026, 3:04 PM`.
+ * Formats an ISO date string as `2026-11-16 17:44`, in the browser's zone.
  *
- * Month spelled, seconds dropped. The numeric default printed `1/2/2026`,
- * which reads as February in most of the world, beside date inputs that the
- * browser renders `dd/mm/yyyy`; a console read by distributed teams cannot
- * leave the day and the month to the reader's guess.
+ * RFC 0050 §6.7: one date format across the console. It was the locale's
+ * `toLocaleString`, which gave three spellings on three admin pages (and
+ * seconds nobody reads); this one sorts as text and reads the same in both
+ * catalogues.
  */
 export function formatDate(iso: string | null | undefined, opts?: { fallback?: string }): string {
   const fallback = opts?.fallback ?? "—";
   if (!iso) return fallback;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return fallback;
-  return date.toLocaleString(activeLocale(), { dateStyle: "medium", timeStyle: "short" });
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /**
@@ -90,12 +91,38 @@ export function formatRelative(
   const time = new Date(iso).getTime();
   if (Number.isNaN(time)) return fallback;
   const diff = Date.now() - time;
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return i18n.global.t("common.justNow");
-  if (minutes < 60) return i18n.global.t("common.minutesAgo", { n: minutes });
+  // A future instant (an exemption's end) reads "in 5 d", never "just now".
+  const future = diff < 0;
+  const minutes = Math.floor(Math.abs(diff) / 60_000);
+  if (minutes < 1 && !future) return i18n.global.t("common.justNow");
+  if (minutes < 60)
+    return i18n.global.t(future ? "common.inMinutes" : "common.minutesAgo", {
+      n: Math.max(1, minutes),
+    });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return i18n.global.t("common.hoursAgo", { n: hours });
-  return i18n.global.t("common.daysAgo", { n: Math.floor(hours / 24) });
+  if (hours < 24) return i18n.global.t(future ? "common.inHours" : "common.hoursAgo", { n: hours });
+  return i18n.global.t(future ? "common.inDays" : "common.daysAgo", { n: Math.floor(hours / 24) });
+}
+
+/**
+ * A duration in its exact largest unit, e.g. `2 d`, `36 h`, `10 min`: never
+ * rounded, so 600 s is `10 min` and not `0 h`.
+ */
+export function formatSpan(secs: number): string {
+  if (secs > 0 && secs % 86_400 === 0)
+    return i18n.global.t("common.spanDays", { n: secs / 86_400 });
+  if (secs > 0 && secs % 3600 === 0) return i18n.global.t("common.spanHours", { n: secs / 3600 });
+  if (secs > 0 && secs % 60 === 0) return i18n.global.t("common.spanMinutes", { n: secs / 60 });
+  return i18n.global.t("common.spanSeconds", { n: secs });
+}
+
+/** A rescan interval in its exact largest unit, e.g. `every 6 h`. */
+export function formatEvery(secs: number): string {
+  const t = i18n.global.t;
+  if (secs % 86_400 === 0) return t("verdictPanel.nextRescanEveryDays", { n: secs / 86_400 });
+  if (secs % 3600 === 0) return t("verdictPanel.nextRescanEveryHours", { n: secs / 3600 });
+  if (secs % 60 === 0) return t("verdictPanel.nextRescanEveryMinutes", { n: secs / 60 });
+  return t("verdictPanel.nextRescanEverySeconds", { n: secs });
 }
 
 /** Formats a count using the app locale's thousands separators, e.g. `1,234`. */

@@ -309,6 +309,13 @@ pub(super) async fn resolve_readme(input: ResolveInput<'_>) -> Result<Resolved, 
         );
         return Err(not_found(registry, name));
     }
+    if !crate::handlers::front_office::packages::coordinate_grant(
+        hot, registry, name, None, identity,
+    )
+    .await
+    {
+        return Err(not_found(registry, name));
+    }
 
     // A registry type with no README says so as a statement, before anything is
     // looked up: there is nothing to find, and "not found" would read as a gap

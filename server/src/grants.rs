@@ -167,7 +167,7 @@ pub(super) fn build_registry_grants(reg: &RegistryConfig) -> Result<RegistryGran
     for ns in &reg.namespaces {
         validate_namespace(reg, ns, kind, &mut seen)?;
         specs.push(NamespaceSpec {
-            match_prefix: ns.match_prefix.clone(),
+            match_prefix: canonical_prefix(kind, &ns.match_prefix),
             grants: namespace_grants(reg, ns, kind)?,
             shadow: shadow_for(
                 ns.grants_shadow.as_ref(),
@@ -175,6 +175,10 @@ pub(super) fn build_registry_grants(reg: &RegistryConfig) -> Result<RegistryGran
             )?,
         });
     }
+
+    // Shortest prefix first, so path order (and "the last match wins") means
+    // "the deepest namespace wins", whatever order the config lists them in.
+    specs.sort_by_key(|s| s.match_prefix.len());
 
     // An unparseable `registry_type` is already a config-validation failure;
     // `Generic` is the separator-neutral fallback (`/`) rather than a guess.
@@ -227,7 +231,7 @@ pub(super) fn build_policy_tiers(reg: &RegistryConfig) -> RegistryPolicyTiers {
     // unreachable and reads as "absent".
     registry.on_confirmed = reg.on_confirmed.as_deref().and_then(|s| s.parse().ok());
 
-    let namespaces = reg
+    let mut namespaces: Vec<_> = reg
         .namespaces
         .iter()
         .map(|ns| {
@@ -238,15 +242,27 @@ pub(super) fn build_policy_tiers(reg: &RegistryConfig) -> RegistryPolicyTiers {
             node.versioning = ns.versioning.as_ref().map(versioning_rules);
             node.quota = ns.quota.as_ref().map(quota_rules);
             node.rules = ns.rules.as_deref().map(rule_overrides).unwrap_or_default();
-            (ns.match_prefix.clone(), node)
+            (canonical_prefix(Some(kind), &ns.match_prefix), node)
         })
         .collect();
+    // Same order as `build_registry_grants`: deepest namespace last.
+    namespaces.sort_by_key(|(prefix, _)| prefix.len());
 
     RegistryPolicyTiers {
         kind,
         registry,
         namespaces,
     }
+}
+
+/// A namespace `match` in the spelling the read paths compare against: NuGet
+/// lower-cases ids and Go escapes upper case as `!x`, so a prefix written in
+/// display spelling would otherwise never match and its seal would not hold.
+fn canonical_prefix(kind: Option<RegistryKind>, prefix: &str) -> String {
+    kind.map_or_else(
+        || prefix.to_owned(),
+        |k| k.canonical_package_name(prefix).into_owned(),
+    )
 }
 
 fn versioning_rules(v: &VersioningPolicy) -> VersioningRules {
@@ -793,6 +809,49 @@ mod tests {
         assert!(resolved.holds(Action::OwnersWrite));
         assert!(resolved.holds(Action::AuditRead));
         assert!(!resolved.holds(Action::ReleasesRead));
+    }
+
+    /// NuGet ids are lower-cased before authorization, so a seal written in
+    /// display spelling must still hold.
+    #[test]
+    fn a_nuget_seal_in_display_spelling_holds() {
+        let reg = registry(
+            r#"type = "nuget"
+               name = "n1"
+               [registries.rbac]
+               anonymous = ["releases:read"]
+               user = []
+               admin = ["*"]
+               [[registries.namespaces]]
+               match = "Contoso"
+               grants = {}"#,
+        );
+        let grants = build_registry_grants(&reg).expect("builds");
+        let path = grants.path_for("contoso.secret");
+        assert!(!resolve(&path, &subject(Role::Anonymous, &[])).holds(Action::ReleasesRead));
+        assert_eq!(build_policy_tiers(&reg).namespaces[0].0, "contoso");
+    }
+
+    /// "The deepest namespace wins" whatever order the config lists them in.
+    #[test]
+    fn a_narrower_seal_listed_before_a_broader_namespace_still_holds() {
+        let reg = registry(
+            r#"type = "npm"
+               name = "n1"
+               [[registries.namespaces]]
+               match = "@acme/billing"
+               grants = {}
+               [[registries.namespaces]]
+               match = "@acme"
+               [registries.namespaces.grants]
+               "*" = ["releases:read"]"#,
+        );
+        let grants = build_registry_grants(&reg).expect("builds");
+        let anon = subject(Role::Anonymous, &[]);
+        assert!(!resolve(&grants.path_for("@acme/billing/x"), &anon).holds(Action::ReleasesRead));
+        assert!(resolve(&grants.path_for("@acme/other"), &anon).holds(Action::ReleasesRead));
+        let tiers = build_policy_tiers(&reg);
+        assert_eq!(tiers.namespaces.last().unwrap().0, "@acme/billing");
     }
 
     // ── validation ───────────────────────────────────────────────────────────

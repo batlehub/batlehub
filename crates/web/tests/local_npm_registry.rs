@@ -70,6 +70,32 @@ async fn npm_publish_user_can_publish() {
     assert_eq!(resp.status(), 200);
 }
 
+/// `npm publish --tag legacy` of a backport must not move `latest` off the
+/// newer release, and the internal marker must not reach the client.
+#[actix_web::test]
+async fn npm_publish_under_another_tag_does_not_move_latest() {
+    let app = make_local_npm_app(RegistryMode::Local).await;
+    for (version, tag) in [("2.0.0", "latest"), ("1.5.1", "legacy")] {
+        let mut body = make_npm_publish_payload("tagged-pkg", version);
+        body["dist-tags"] = serde_json::json!({ tag: version });
+        let req = TestRequest::put()
+            .uri("/proxy/local-npm/tagged-pkg")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(body)
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 200, "{version}");
+    }
+    let req = TestRequest::get()
+        .uri("/proxy/local-npm/tagged-pkg")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let doc: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(doc["dist-tags"]["latest"], "2.0.0", "{doc}");
+    assert!(!doc.to_string().contains("_batlehub_not_latest"), "{doc}");
+}
+
 #[actix_web::test]
 async fn npm_publish_duplicate_version_returns_409() {
     let app = make_local_npm_app(RegistryMode::Local).await;

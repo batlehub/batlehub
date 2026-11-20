@@ -71,6 +71,8 @@ async fn local_goproxy_file(
     Ok(resp)
 }
 
+const MAX_GO_MOD_BYTES: u64 = 16 << 20;
+
 /// Scan a Go module zip for a go.mod entry matching `mod_suffix` (exact) or
 /// any path ending with `/go.mod` (fallback). Returns `None` if not found.
 fn scan_zip_for_go_mod(zip_bytes: &[u8], mod_suffix: &str) -> Option<String> {
@@ -83,7 +85,15 @@ fn scan_zip_for_go_mod(zip_bytes: &[u8], mod_suffix: &str) -> Option<String> {
             };
             if name == mod_suffix || name.ends_with("/go.mod") {
                 let mut contents = String::new();
-                if file.read_to_string(&mut contents).is_ok() {
+                // Go's own `MaxGoMod`; an unbounded read would let a deflate bomb
+                // in a published module zip inflate to gigabytes.
+                if file
+                    .by_ref()
+                    .take(MAX_GO_MOD_BYTES + 1)
+                    .read_to_string(&mut contents)
+                    .is_ok()
+                    && contents.len() as u64 <= MAX_GO_MOD_BYTES
+                {
                     return Some(contents);
                 }
             }
@@ -401,6 +411,19 @@ mod tests {
         let result = extract_go_mod(&zip, "github.com/foo/bar", "v1.0.0");
         assert!(result.contains("module github.com/foo/bar"));
         assert!(result.contains("go 1.21"));
+    }
+
+    #[test]
+    fn a_go_mod_decompression_bomb_is_not_inflated() {
+        let bomb = " ".repeat((MAX_GO_MOD_BYTES + 1) as usize);
+        let zip = make_zip_with_go_mod("example.com/mod@v1.0.0/go.mod", &bomb);
+        assert!(zip.len() < 1024 * 1024, "the fixture must be a bomb");
+        let result = extract_go_mod(&zip, "example.com/mod", "v1.0.0");
+        assert!(
+            result.starts_with("module example.com/mod"),
+            "{}",
+            &result[..40]
+        );
     }
 
     #[test]

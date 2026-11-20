@@ -6,7 +6,7 @@ use jsonwebtoken::{decode, decode_header, Validation};
 
 use batlehub_core::ports::ActionsOidcAuthConfig;
 use batlehub_core::{
-    entities::Identity,
+    entities::{Identity, Role},
     error::CoreError,
     ports::{AuthProvider, RawAuthRequest},
 };
@@ -20,8 +20,6 @@ use evaluate::evaluate_auth_rules;
 use jwks::{fetch_jwks, find_key, JwksCache, OidcDiscovery, JWKS_MIN_REFRESH};
 use rules::CompiledRule;
 
-#[cfg(test)]
-use batlehub_core::entities::Role;
 #[cfg(test)]
 use batlehub_core::ports::{ConditionMatchType, RuleMatch};
 #[cfg(test)]
@@ -195,12 +193,16 @@ impl AuthProvider for ActionsOidcAuthProvider {
         };
 
         let claims = token_data.claims;
+        let (role, groups) = evaluate_auth_rules(&self.rules, &claims, &self.name);
+        // A token no rule matched is any workflow on the forge that asked for
+        // our audience: it gets no principal, so it cannot match a `user:`
+        // grant or claim its own rate-limit bucket by pushing branches.
+        let matched = role != Role::Anonymous || !groups.is_empty();
         let user_id = claims
             .get(&self.user_id_claim)
             .and_then(|v| v.as_str())
+            .filter(|_| matched)
             .map(str::to_owned);
-
-        let (role, groups) = evaluate_auth_rules(&self.rules, &claims, &self.name);
 
         Ok(Some(Identity {
             user_id,

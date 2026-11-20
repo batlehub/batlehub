@@ -231,8 +231,20 @@ impl GrantAdminService {
             .ok_or_else(|| CoreError::NotFound(format!("registry '{registry}' is not configured")))
     }
 
+    /// `target` with the package in the spelling the read paths authorize
+    /// against (NuGet lower-case, Go `!`-escaped); a row keyed on the display
+    /// spelling would resolve for nobody.
+    async fn canonical(&self, target: &GrantTarget) -> Result<GrantTarget, CoreError> {
+        let kind = self.registry_kind(&target.registry).await?;
+        Ok(GrantTarget {
+            package: kind.canonical_package_name(&target.package).into_owned(),
+            ..target.clone()
+        })
+    }
+
     /// Every grant on one node.
     pub async fn list(&self, target: &GrantTarget) -> Result<Vec<StoredGrant>, CoreError> {
+        let target = &self.canonical(target).await?;
         let repo = self.repo().await?;
         repo.grants_on_node(&target.registry, target.node_kind(), &target.node_key())
             .await
@@ -274,6 +286,9 @@ impl GrantAdminService {
         registry: &str,
         package: &str,
     ) -> Result<Vec<StoredGrant>, CoreError> {
+        let kind = self.registry_kind(registry).await?;
+        let package = kind.canonical_package_name(package);
+        let package = package.as_ref();
         let repo = self.repo().await?;
         let mut out = repo
             .grants_on_node(registry, NodeKind::Package, package)
@@ -292,6 +307,20 @@ impl GrantAdminService {
     /// that the most specific complaint wins: an operator who misspells both a
     /// subject and a verb is told about the subject first, because the verb list
     /// they meant depends on which subject they meant.
+    /// Parse a subject from the API, scoping a bare `user:<id>` to the one
+    /// provider that yields user ids, or refusing it when there are several.
+    async fn parse_subject(&self, subject: &str) -> Result<SubjectMatcher, CoreError> {
+        let matcher = SubjectMatcher::parse(subject)
+            .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
+        let SubjectMatcher::User(principal) = matcher else {
+            return Ok(matcher);
+        };
+        let providers = self.hot.read().await.user_providers.clone();
+        crate::entities::scope_user_principal(&principal, &providers)
+            .map(SubjectMatcher::User)
+            .map_err(CoreError::InvalidInput)
+    }
+
     pub async fn set(
         &self,
         target: &GrantTarget,
@@ -299,11 +328,11 @@ impl GrantAdminService {
         action_patterns: &[String],
         granted_by: &Identity,
     ) -> Result<Vec<GrantWarning>, CoreError> {
+        let target = &self.canonical(target).await?;
         let repo = self.repo().await?;
         let kind = self.registry_kind(&target.registry).await?;
 
-        let matcher = SubjectMatcher::parse(subject)
-            .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
+        let matcher = self.parse_subject(subject).await?;
 
         if action_patterns.is_empty() {
             return Err(CoreError::InvalidInput(
@@ -358,9 +387,10 @@ impl GrantAdminService {
     /// from "nothing to remove" — the audit event is worth writing either way,
     /// but the operator deserves to know which happened.
     pub async fn remove(&self, target: &GrantTarget, subject: &str) -> Result<bool, CoreError> {
+        let raw = target;
+        let target = &self.canonical(raw).await?;
         let repo = self.repo().await?;
-        let matcher = SubjectMatcher::parse(subject)
-            .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
+        let matcher = self.parse_subject(subject).await?;
 
         // Ownership rows are the projection's to remove. Letting this delete one
         // would make `owner remove` the only way to restore it, and the next
@@ -381,6 +411,12 @@ impl GrantAdminService {
             &matcher,
         )
         .await?;
+        // A row written before writes were canonicalised is keyed on the
+        // display spelling; let the same command remove it.
+        if raw.package != target.package {
+            repo.delete_grant(&raw.registry, raw.node_kind(), &raw.node_key(), &matcher)
+                .await?;
+        }
         Ok(existed)
     }
 
@@ -590,12 +626,20 @@ fn synthetic_subject(matcher: &SubjectMatcher) -> Option<Subject> {
     const SYNTHETIC_PROVIDER: &str = "grants-editor-any-provider";
 
     let identity = match matcher {
-        SubjectMatcher::User(id) => Identity {
-            user_id: Some(id.clone()),
-            role: Role::User,
-            auth_provider: None,
-            groups: Vec::new(),
-        },
+        SubjectMatcher::User(principal) => {
+            // `<provider>:<id>`; a bare legacy principal matches nobody, and the
+            // synthetic identity says so by carrying no provider.
+            let (provider, id) = match principal.split_once(':') {
+                Some((p, id)) => (Some(p.to_owned()), id.to_owned()),
+                None => (None, principal.clone()),
+            };
+            Identity {
+                user_id: Some(id),
+                role: Role::User,
+                auth_provider: provider,
+                groups: Vec::new(),
+            }
+        }
         SubjectMatcher::Group { provider, name } => Identity {
             user_id: None,
             role: Role::User,
@@ -1370,6 +1414,40 @@ mod tests {
         let left = svc.list(&pkg()).await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].subject, SubjectMatcher::User("bob".to_owned()));
+    }
+
+    /// A NuGet grant written in display spelling lands on the lower-cased id
+    /// the read paths authorize against, and the same spelling removes it.
+    #[tokio::test]
+    async fn a_nuget_package_grant_is_keyed_on_the_canonical_id() {
+        let rows = Arc::new(Rows::default());
+        let hot = new_hot_lock(HotConfig {
+            grants: HashMap::from([(
+                "nuget1".to_owned(),
+                Arc::new(crate::entities::RegistryGrants {
+                    kind: RegistryKind::Nuget,
+                    registry: Node::new(Tier::Registry, "registry:nuget1", None),
+                    namespaces: Vec::new(),
+                }),
+            )]),
+            grant_repo: Some(Arc::clone(&rows) as Arc<dyn GrantRepository>),
+            ..Default::default()
+        });
+        let svc = GrantAdminService::new(hot, None, None);
+        let target = GrantTarget::package("nuget1", "Contoso.Lib");
+        svc.set(
+            &target,
+            "user:alice",
+            &["releases:read".to_owned()],
+            &admin(),
+        )
+        .await
+        .unwrap();
+        let rows_now = svc.list_for_package("nuget1", "contoso.lib").await.unwrap();
+        assert_eq!(rows_now.len(), 1);
+        assert_eq!(rows_now[0].node_key, "contoso.lib");
+        assert!(svc.remove(&target, "user:alice").await.unwrap());
+        assert!(svc.list(&target).await.unwrap().is_empty());
     }
 
     // ── both tiers, for the admin listing ────────────────────────────────────

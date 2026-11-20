@@ -48,11 +48,12 @@ pub use forge::{
     FORGE_RESOLVED_COMMIT, SCRIPT_EXTENSIONS, UNKNOWN_TAG,
 };
 pub use grant::{
-    namespace_matches, namespace_separator, pat_is_within_owner, resolve, snapshot_pat_groups,
-    DryRun, GrantMap, GrantSet, GroupProvider, Node, Provenance, RegistryGrants, SubjectMatcher,
-    SubjectParseError, ADMINISTRATIVE_FLOOR, RESERVED_GRANT_KEYS,
+    namespace_matches, namespace_separator, pat_is_within_owner, resolve, scope_user_principal,
+    snapshot_pat_groups, user_principal_is_scoped, DryRun, GrantMap, GrantSet, GroupProvider, Node,
+    Provenance, RegistryGrants, SubjectMatcher, SubjectParseError, ADMINISTRATIVE_FLOOR,
+    RESERVED_GRANT_KEYS,
 };
-pub use identity::{Identity, Role};
+pub use identity::{is_argon2_hash, Identity, Role};
 pub use links::{normalize_url, MetadataLinks};
 pub use local_package::{
     CargoDep, CargoIndexEntry, CompactionReport, PublishedPackage, Tombstone, Visibility,

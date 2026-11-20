@@ -31,6 +31,13 @@ describe("leadSentence", () => {
     expect(leadSentence("Nothing to add.")).toEqual({ lead: "Nothing to add.", rest: "" });
   });
 
+  it("does not split after an abbreviation", () => {
+    expect(leadSentence("Use a mirror, e.g. Nexus or Artifactory. Then reload.")).toEqual({
+      lead: "Use a mirror, e.g. Nexus or Artifactory.",
+      rest: "Then reload.",
+    });
+  });
+
   it("does not split inside a dotted key", () => {
     expect(leadSentence("server.trusted_proxies is unset. Set it.")).toEqual({
       lead: "server.trusted_proxies is unset.",

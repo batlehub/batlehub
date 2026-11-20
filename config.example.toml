@@ -983,7 +983,9 @@ anonymous = ["releases:read"]
 # --- Inbound webhooks: POST /api/v1/webhooks/inbound/{name} ---
 # The endpoint is public (no admin auth). Without a secret any payload is
 # accepted, which is only safe on an internal network; with one, the request
-# must carry X-Hub-Signature-256: sha256=<hmac-hex> over the raw body.
+# must carry X-BatleHub-Timestamp: <unix seconds> and
+# X-Hub-Signature-256: sha256=<hmac-hex> over "<timestamp>.<raw body>",
+# and the timestamp must be within 300 s of the server's clock.
 # Received events are listed at GET /api/v1/admin/notifications/inbound.
 #
 # [[notifications.inbound]]

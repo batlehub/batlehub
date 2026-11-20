@@ -1825,6 +1825,75 @@ fn two_oidc_providers_may_not_share_a_name_either() {
     assert!(cfg.validate().is_err());
 }
 
+const TWO_PROVIDERS: &str = r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub"
+
+        [[auth]]
+        type = "oidc"
+        name = "signup"
+        issuer_url = "https://other.example.com"
+        client_id = "batlehub"
+"#;
+
+/// With two providers a bare `user:alice` names nobody in particular: the
+/// same id from each is a different person. (`scope_user_subjects` +
+/// `validate` is what `load_from_str` runs.)
+#[test]
+fn a_bare_user_grant_with_two_providers_is_refused() {
+    let mut cfg = parse_config(&format!(
+        "{TWO_PROVIDERS}\n[grants]\n\"user:alice\" = [\"config:read\"]"
+    ));
+    cfg.scope_user_subjects();
+    let msg = cfg.validate().unwrap_err().to_string();
+    assert!(msg.contains("user:<provider>:alice"), "{msg}");
+
+    let mut cfg = parse_config(&format!(
+        "{TWO_PROVIDERS}\n[grants]\n\"user:corp:alice\" = [\"config:read\"]"
+    ));
+    cfg.scope_user_subjects();
+    cfg.validate().expect("a scoped user grant loads");
+}
+
+/// With one provider the bare form always meant that provider, and loading
+/// says so in the key.
+#[test]
+fn a_bare_user_grant_with_one_provider_is_scoped_at_load() {
+    let mut cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub"
+
+        [grants]
+        "user:alice" = ["config:read"]
+"#,
+    );
+    cfg.scope_user_subjects();
+    cfg.validate().expect("validates");
+    let grants = cfg.grants.expect("grants");
+    assert!(grants.contains_key("user:corp:alice"), "{grants:?}");
+    assert!(!grants.contains_key("user:alice"));
+}
+
+#[test]
+fn an_auth_name_with_a_colon_is_refused() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "oidc"
+        name = "corp:eu"
+        issuer_url = "https://idp.example.com"
+        client_id = "batlehub""#,
+    );
+    assert!(cfg.validate().is_err());
+}
+
 /// Distinct names are the normal case and must still start, static tokens
 /// included — that provider has no name of its own to collide with.
 #[test]
@@ -1846,6 +1915,23 @@ fn distinct_auth_names_start() {
     )
     .validate()
     .expect("distinct names are fine");
+}
+
+/// An unset `${ADMIN_TOKEN}` expands to "" — that token would accept the empty
+/// secret of any `Basic user:` header, so it must not load.
+#[test]
+fn an_empty_static_token_is_refused_at_load() {
+    let err = validation_error(
+        r#"
+        [[auth]]
+        type = "token"
+
+        [[auth.tokens]]
+        value = "  "
+        role = "admin""#,
+        "an empty token value must not load",
+    );
+    assert!(err.contains("auth[0].tokens[0].value is empty"), "{err}");
 }
 
 // ── Signed download URLs (RFC 0012 §4.1) ──────────────────────────────────────
@@ -5535,4 +5621,123 @@ fn mise_java_age_gate_names_its_missing_timestamp_posture() {
         "#,
         "deny_missing_timestamp must be explicit",
     );
+}
+
+// ── RFC 0050 §4.3: a plain static token, a long security history ─────────────
+
+#[test]
+fn a_plain_static_token_is_warned_by_path_never_by_value() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "token"
+        [[auth.tokens]]
+        value = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"
+        role = "admin"
+        [[auth.tokens]]
+        value = "s3cr3t-in-clear"
+        role = "user"
+        user_id = "ci-bot""#,
+    );
+    let plain: Vec<ConfigWarning> = cfg
+        .warnings()
+        .into_iter()
+        .filter(|w| w.code == "auth.plain-static-token")
+        .collect();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].path, "auth[0].tokens[1]");
+    let text = format!("{plain:?}");
+    assert!(
+        !text.contains("s3cr3t-in-clear") && !text.contains("ci-bot"),
+        "{text}"
+    );
+    assert_eq!(
+        cfg.plain_static_tokens(),
+        vec![("auth[0].tokens[1]".to_owned(), Some("ci-bot".to_owned()))]
+    );
+}
+
+/// The verifier compares a value it does not read as an Argon2 PHC string in
+/// clear: such a value is a plain token, even when it starts with `$argon2`.
+#[test]
+fn an_argon2_lookalike_is_a_plain_token() {
+    let cfg = parse_config(
+        r#"
+        [[auth]]
+        type = "token"
+        [[auth.tokens]]
+        value = "$argon2-not-a-hash"
+        role = "admin"
+        [[auth.tokens]]
+        value = "$argon2i$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"
+        role = "admin""#,
+    );
+    assert_eq!(
+        cfg.plain_static_tokens(),
+        vec![("auth[0].tokens[0]".to_owned(), None)]
+    );
+}
+
+#[test]
+fn a_security_history_over_a_year_or_forever_is_warned() {
+    for (days, warned) in [(90, false), (365, false), (366, true), (0, true)] {
+        let cfg = parse_config(&format!(
+            "\n        [stats]\n        security_history_retention_days = {days}"
+        ));
+        assert_eq!(
+            warning_codes(&cfg).contains(&"stats.security-history-long".to_owned()),
+            warned,
+            "{days}"
+        );
+    }
+    assert_eq!(parse_config("").stats.security_history_retention_days, 90);
+}
+
+// ── [console] ─────────────────────────────────────────────────────────────────
+
+/// A warning named in `[console].accepted` is still reported, marked
+/// accepted; the others are not.
+#[test]
+fn an_accepted_warning_is_still_listed_and_marked_accepted() {
+    let cfg = parse_config(
+        r#"
+        [console]
+        accepted = ["warning:proxy-trust.unconfigured"]
+"#,
+    );
+    cfg.validate().unwrap();
+    let w = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::PROXY_TRUST_UNCONFIGURED)
+        .expect("still listed");
+    assert!(w.accepted);
+    assert!(parse_config("").warnings().iter().all(|w| !w.accepted));
+}
+
+/// A typo would accept nothing in silence: refused at load instead.
+#[test]
+fn a_console_entry_must_name_a_registry_or_a_warning() {
+    let registry = r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "proxy"
+"#;
+    for (accepted, ok) in [
+        (r#"["coverage:npm"]"#, true),
+        (r#"["warning:audit.no-retention"]"#, true),
+        (r#"["coverage:nope"]"#, false),
+        (r#"["warning:"]"#, false),
+        (r#"["npm"]"#, false),
+    ] {
+        let cfg = parse_config(&format!(
+            "{registry}\n        [console]\n        accepted = {accepted}"
+        ));
+        assert_eq!(cfg.validate().is_ok(), ok, "{accepted}");
+    }
+    let cfg = parse_config(&format!(
+        "{registry}\n        [console]\n        accepted = [\"coverage:npm\"]"
+    ));
+    assert_eq!(cfg.console.accepted_coverage().collect::<Vec<_>>(), ["npm"]);
 }

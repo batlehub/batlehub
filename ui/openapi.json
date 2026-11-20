@@ -964,6 +964,9 @@
           "403": {
             "description": "`config:write` required"
           },
+          "409": {
+            "description": "The config file changed since `base_hash` was read"
+          },
           "503": {
             "description": "Hot reload disabled"
           }
@@ -1043,6 +1046,23 @@
         ],
         "summary": "Apply the current pending reload.",
         "operationId": "apply_pending_reload",
+        "requestBody": {
+          "description": "Optional: the id of the pending change being applied",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ApplyPendingRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Pending reload applied",
@@ -1061,7 +1081,10 @@
             "description": "No pending reload"
           },
           "409": {
-            "description": "Pending reload expired"
+            "description": "Pending reload expired, replaced by another one, or the config file changed since the editor loaded it"
+          },
+          "500": {
+            "description": "The config file could not be written; nothing was applied"
           },
           "503": {
             "description": "Hot reload disabled"
@@ -1142,7 +1165,7 @@
             "description": "Validation failure"
           },
           "403": {
-            "description": "`config:read` required"
+            "description": "`config:write` required"
           },
           "503": {
             "description": "Hot reload disabled"
@@ -1857,6 +1880,46 @@
           },
           "403": {
             "description": "`cache:warm` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/instance-security": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The security of the instance itself (RFC 0050 §4.5).",
+        "operationId": "instance_security",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "description": "`24h` or `7d`; anything else reads as `24h`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sign-ins, bans, token sources, static tokens, exemptions and warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceSecurity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
           }
         },
         "security": [
@@ -2990,7 +3053,7 @@
             "description": "Member added"
           },
           "400": {
-            "description": "Invalid principal_type"
+            "description": "Invalid principal_type, or a bare user id while several identity providers are configured"
           },
           "403": {
             "description": "`owners:write` required"
@@ -4059,7 +4122,7 @@
           {
             "name": "principal_id",
             "in": "path",
-            "description": "User ID or group name",
+            "description": "`<provider>:<user id>` or group name",
             "required": true,
             "schema": {
               "type": "string"
@@ -5377,6 +5440,194 @@
         ]
       }
     },
+    "/api/v1/admin/security/coverage": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Every registry the caller may see, protected or not, and how (RFC 0050\n§4.2 *Coverage*). Scanner names need `config:read`.",
+        "operationId": "security_coverage",
+        "responses": {
+          "200": {
+            "description": "One row per visible registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/security/coverage/{registry}": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "One registry's protection. A registry sealed for the caller answers as an\nunknown one: `404`.",
+        "operationId": "security_coverage_registry",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The registry's protection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageRow"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          },
+          "404": {
+            "description": "An unknown registry, or one sealed for the caller"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/security/overview": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The security console's overview: one line per domain the caller may\nread, and *needs a decision* (RFC 0050 §4.2).",
+        "operationId": "security_overview",
+        "responses": {
+          "200": {
+            "description": "The status strip and the items that need a decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityOverview"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Neither `quarantine:read` nor `flags:read` at the instance tier"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/security/scanners": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Live workers, the remaining queue and each scanner's last outcome (RFC\n0050 §4.2 *Scanners & worker*). The error class needs `findings:read`.",
+        "operationId": "security_scanners",
+        "responses": {
+          "200": {
+            "description": "Workers, queue and scanners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerHealth"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          },
+          "503": {
+            "description": "The scan queue did not answer"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/security/trends": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Daily holds, findings, refusals, flags and scans, summed over the\nregistries the caller may see (RFC 0050 §4.2 *Trends*).",
+        "operationId": "security_trends",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "description": "`7d`, `30d` or `90d`; anything else reads as `30d`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "One registry; absent sums every registry the caller may see.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per UTC day of the window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityTrends"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`quarantine:read` at the instance tier required"
+          },
+          "404": {
+            "description": "An unknown registry, or one sealed for the caller"
+          },
+          "503": {
+            "description": "The history store did not answer"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/stats": {
       "get": {
         "tags": [
@@ -5806,15 +6057,7 @@
           {
             "name": "registry",
             "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "description": "`allowed`, `warned`, `quarantined` or `denied`; absent lists every\nstate.",
+            "description": "One protected registry; absent lists every protected registry the\ncaller may read (an incident spans registries).",
             "required": false,
             "schema": {
               "type": [
@@ -5824,9 +6067,61 @@
             }
           },
           {
+            "name": "state",
+            "in": "query",
+            "description": "`allowed`, `warned`, `quarantined`, `denied`, or `held` (denied and\nquarantined); absent lists every state.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "Only verdicts carrying this reason code (`SOC_VERDICT`, …).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based; default 1.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Default 100, at most 1000.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
-            "description": "Per state; default 100, at most 1000.",
+            "description": "The former name of `per_page`, still read when `per_page` is absent.",
             "required": false,
             "schema": {
               "type": [
@@ -5840,7 +6135,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The verdicts, newest first per state",
+            "description": "One page of verdicts, newest first, and the total",
             "content": {
               "application/json": {
                 "schema": {
@@ -6120,11 +6415,101 @@
         "description": "The returned `state` must match an entry this server created and has not yet\nconsumed, or nothing is exchanged. The caller then compares the echoed\n`oidc_state` against the value it kept locally — see `oidc_login` for why\nboth checks exist.",
         "operationId": "oidc_callback",
         "responses": {
+          "200": {
+            "description": "A CLI sign-in: the page asking the signed-in user to authorize the command line",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
           "302": {
             "description": "Redirect to SPA with tokens or error"
           },
           "503": {
             "description": "OIDC not configured"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/cli/confirm": {
+      "post": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "Answer the confirmation page of a loopback sign-in.",
+        "description": "`authorize` issues the one-time code and sends the browser to the CLI's\nloopback with it; anything else drops the sign-in. Either way the page's\ntoken is consumed, so a second answer finds nothing.",
+        "operationId": "oidc_cli_confirm",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/CliConfirmForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sign-in was cancelled",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Authorized: to the CLI's loopback with a one-time `oidc_code`"
+          },
+          "400": {
+            "description": "Unknown, expired or already-answered confirmation",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/cli/exchange": {
+      "post": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "Redeem the one-time code a loopback sign-in handed the CLI.",
+        "description": "The code is consumed by the first attempt whatever its outcome, and every\nrefusal — unknown, expired, already used, wrong verifier — is the same 400,\nso the endpoint says nothing about which part was wrong.",
+        "operationId": "oidc_cli_exchange",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The tokens of the sign-in this CLI started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliExchangeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, expired or already-used code, or a verifier that does not match"
           }
         }
       }
@@ -6159,7 +6544,16 @@
           {
             "name": "return_to",
             "in": "query",
-            "description": "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with the tokens in the query string",
+            "description": "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with a one-time `oidc_code`, never the tokens",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "description": "Required with `return_to`: `BASE64URL(SHA256(verifier))`; the CLI presents the verifier to `/api/v1/auth/oidc/cli/exchange`",
             "required": false,
             "schema": {
               "type": "string"
@@ -6181,7 +6575,7 @@
             "description": "Redirect to OIDC authorization endpoint"
           },
           "400": {
-            "description": "`state` too long, or a `return_to` other than the loopback callback"
+            "description": "`state` too long, a `return_to` other than the loopback callback, or a `return_to` without a `code_challenge`"
           },
           "404": {
             "description": "Named provider not found"
@@ -8008,7 +8402,7 @@
           "notifications"
         ],
         "summary": "Receive an event from an external system.",
-        "description": "If a `secret` is configured for this webhook, the request must include a\n`X-Hub-Signature-256: sha256=<hmac-hex>` header computed over the raw body.",
+        "description": "If a `secret` is configured for this webhook, the request must include\n`X-BatleHub-Timestamp: <unix seconds>` and\n`X-Hub-Signature-256: sha256=<hmac-hex>` computed over `\"{timestamp}.{body}\"`.\nA timestamp more than 300 s from the server's clock is refused like a bad\nsignature, so a captured request cannot be replayed later.",
         "operationId": "receive_inbound_webhook",
         "parameters": [
           {
@@ -23275,6 +23669,24 @@
           }
         }
       },
+      "AddressCount": {
+        "type": "object",
+        "description": "An address and how many rejected credentials came from it.",
+        "required": [
+          "ip",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ip": {
+            "type": "string"
+          }
+        }
+      },
       "AdminPackageListResponse": {
         "type": "object",
         "description": "Paginated envelope for `GET /api/v1/admin/packages`, matching the shape of\nits sibling list endpoints (`PackageListResponse`/`ExplorePackageListResponse`)\ninstead of returning a bare array with no way to tell if more pages exist.",
@@ -23390,6 +23802,20 @@
             "items": {
               "$ref": "#/components/schemas/RegistryImports"
             }
+          }
+        }
+      },
+      "ApplyPendingRequest": {
+        "type": "object",
+        "description": "Which staged change `pending/apply` is meant to apply.",
+        "properties": {
+          "pending_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The `id` of the pending change the caller reviewed (from `from-content`\nor `GET pending`). When given and no longer the staged one, `409`."
           }
         }
       },
@@ -23531,6 +23957,33 @@
           "warning",
           "error"
         ]
+      },
+      "BansBlock": {
+        "type": "object",
+        "description": "Active IP bans. Only with `blocks:read`.",
+        "required": [
+          "active",
+          "automatic"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "automatic": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the ban store did not answer: the counts are then zero and\nmean nothing."
+          }
+        }
       },
       "BatchNotFound": {
         "type": "string",
@@ -24284,6 +24737,71 @@
           }
         }
       },
+      "CliConfirmForm": {
+        "type": "object",
+        "description": "The \"Authorize batlehub-cli?\" form, posted by the page the callback serves.",
+        "required": [
+          "token",
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "`authorize`, or anything else to cancel."
+          },
+          "token": {
+            "type": "string",
+            "description": "The page's one-time token; not the code, which does not exist yet."
+          }
+        }
+      },
+      "CliExchangeRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "verifier"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The one-time `oidc_code` the callback sent to the CLI's loopback."
+          },
+          "verifier": {
+            "type": "string",
+            "description": "The verifier whose `BASE64URL(SHA256(..))` the CLI sent as `code_challenge`."
+          }
+        }
+      },
+      "CliExchangeResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "provider"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "provider": {
+            "type": "string",
+            "description": "The provider that signed the user in; sent back with every refresh."
+          },
+          "refresh_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CoherenceResponse": {
         "type": "object",
         "required": [
@@ -24475,11 +24993,16 @@
         "type": "object",
         "required": [
           "content",
-          "is_readonly"
+          "is_readonly",
+          "content_hash"
         ],
         "properties": {
           "content": {
             "type": "string"
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "SHA-256 of `content`, hex: send it back as `from-content`'s `base_hash`\nso a save never overwrites a file that changed since it was loaded."
           },
           "is_readonly": {
             "type": "boolean",
@@ -24493,6 +25016,13 @@
           "content"
         ],
         "properties": {
+          "base_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`content_hash` of the file the editor loaded. Given, `from-content`\n(and the apply after it) answers `409` if the file changed since."
+          },
           "content": {
             "type": "string"
           }
@@ -24505,9 +25035,14 @@
           "code",
           "message",
           "path",
-          "dismissible"
+          "dismissible",
+          "accepted"
         ],
         "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Named in `[console].accepted` as `warning:<code>`: the operator has read\nit and keeps the state. Still listed; no longer counted as attention."
+          },
           "code": {
             "type": "string",
             "description": "Stable slug identifying the *kind* of problem, e.g.\n`\"subdomain.invalid-dns-label\"`. Safe to match on; the `message` is not."
@@ -24569,6 +25104,202 @@
           "repo": {
             "type": "string",
             "description": "The source repository, `owner/name`."
+          }
+        }
+      },
+      "CoverageBlock": {
+        "type": "object",
+        "description": "The *Coverage* line.",
+        "required": [
+          "state",
+          "registries",
+          "upstream",
+          "protected",
+          "unprotected",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Unprotected on purpose: `coverage:<registry>` in `[console].accepted`.\nNot attention; still named, so the choice stays visible."
+          },
+          "protected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "registries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/LineState"
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unprotected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`proxy`/`hybrid` registries with no `[security]` and no `cve_gate`,\nless those `[console].accepted` names."
+          },
+          "upstream": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Visible registries that serve upstream (`mode` other than `local`).",
+            "minimum": 0
+          }
+        }
+      },
+      "CoverageList": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/security/coverage`.",
+        "required": [
+          "computed_at",
+          "registries"
+        ],
+        "properties": {
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "registries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageRow"
+            }
+          }
+        }
+      },
+      "CoverageRow": {
+        "type": "object",
+        "description": "One registry's protection (RFC 0050 §4.2 *Coverage*).",
+        "required": [
+          "registry",
+          "kind",
+          "mode",
+          "protected",
+          "cve_gate",
+          "license_gate",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Left unprotected on purpose (`[console].accepted`)."
+          },
+          "cve_gate": {
+            "type": "boolean"
+          },
+          "deny_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile's `max_severity`: refused at and above."
+          },
+          "failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Failed scan jobs; `null` when the scan queue did not answer.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "The registry type (`npm`, `pypi`, …)."
+          },
+          "license_gate": {
+            "type": "boolean"
+          },
+          "min_age_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mode": {
+            "type": "string",
+            "description": "`proxy`, `local` or `hybrid`."
+          },
+          "protected": {
+            "type": "boolean",
+            "description": "Has a `[security]` profile."
+          },
+          "registry": {
+            "type": "string"
+          },
+          "rescan_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "scanned": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Allowed + warned + denied verdicts. `null` when the verdict store did\nnot answer: unknown, never a zero (§4.2).",
+            "minimum": 0
+          },
+          "scanners": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ScannerRef"
+            },
+            "description": "Only with `config:read`."
+          },
+          "security_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile's `mode`: `block` or `warn`."
+          },
+          "serve_unscanned_after_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`mature_age_secs`: unscanned versions served after this; `0` never.",
+            "minimum": 0
+          },
+          "unrated_as": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an unrated finding counts as."
+          },
+          "waiting": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Quarantined verdicts; `null` as `scanned`.",
+            "minimum": 0
           }
         }
       },
@@ -24716,6 +25447,99 @@
           "token": {
             "type": "string",
             "description": "Raw token — displayed exactly once. Store it securely."
+          }
+        }
+      },
+      "DecisionItem": {
+        "type": "object",
+        "description": "One item of *Needs a decision*.",
+        "required": [
+          "kind",
+          "registry",
+          "name",
+          "version",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`hold_on_hard_block`, `pulled_after_flag`, `exemption_expiring` or\n`failed_scan`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "pulls_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registry": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionList": {
+        "type": "object",
+        "description": "*Needs a decision*: at most ten, most urgent first, and how many there are.",
+        "required": [
+          "total",
+          "by_kind",
+          "items"
+        ],
+        "properties": {
+          "by_kind": {
+            "type": "object",
+            "description": "`total` per kind (`hold_on_hard_block`, `pulled_after_flag`,\n`exemption_expiring`, `failed_scan`): what each \"→ all N\" link says.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionItem"
+            },
+            "description": "At most [`DECISIONS_SHOWN`] packages, every reason of each one kept\ntogether: a version is never cut between two of its reasons."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sources (`holds`, `scanners`, `exemptions`, `flags`) that could\nnot be read: the list is known to be incomplete."
           }
         }
       },
@@ -25016,6 +25840,31 @@
           }
         }
       },
+      "ExemptionItem": {
+        "type": "object",
+        "description": "An exemption ending within seven days.",
+        "required": [
+          "registry",
+          "name",
+          "version",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "ExemptionListEntry": {
         "type": "object",
         "description": "One live exemption, with everything the panel filters on.",
@@ -25058,6 +25907,41 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ExemptionsBlock": {
+        "type": "object",
+        "description": "Gate exemptions. Only with `quarantine:read`, each through its seal.",
+        "required": [
+          "expiring_7d",
+          "self_approved",
+          "items"
+        ],
+        "properties": {
+          "expiring_7d": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExemptionItem"
+            }
+          },
+          "self_approved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live exemptions approved by the publisher of the version.",
+            "minimum": 0
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the policy store did not answer (the other lines still do)."
           }
         }
       },
@@ -26276,6 +27160,44 @@
           }
         }
       },
+      "FlagsBlock": {
+        "type": "object",
+        "description": "The *Flags* line.",
+        "required": [
+          "state",
+          "live",
+          "blocking",
+          "pulled_after_flag"
+        ],
+        "properties": {
+          "blocking": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live flags that can block downloads: `hard_block` always, `gate`\nabove the registry's threshold.",
+            "minimum": 0
+          },
+          "live": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pulled_after_flag": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Flagged versions downloaded after the flag (last 30 days).",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/LineState"
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "FlagsResponse": {
         "type": "object",
         "required": [
@@ -26708,6 +27630,70 @@
           }
         }
       },
+      "HoldsBlock": {
+        "type": "object",
+        "description": "The *Holds* line.",
+        "required": [
+          "state",
+          "held",
+          "denied",
+          "quarantined",
+          "malware",
+          "waiting",
+          "pending_over_hour",
+          "soc_verdict"
+        ],
+        "properties": {
+          "denied": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "held": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Denied + quarantined.",
+            "minimum": 0
+          },
+          "malware": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held for `KNOWN_MALICIOUS`, `MALWARE_SIGNAL` or `SOC_VERDICT`.",
+            "minimum": 0
+          },
+          "pending_over_hour": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "quarantined": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "soc_verdict": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held for `SOC_VERDICT`, exact at any volume: the figure a SOC reads\nin a mass compromise, before paging the full list (`/admin/verdicts`).",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/LineState"
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Quarantined only for `MIN_AGE_NOT_MET` or `SCAN_PENDING`.",
+            "minimum": 0
+          }
+        }
+      },
       "Immutable": {
         "type": "string",
         "description": "Whether published bytes may be replaced — RFC 0015 §4.5.\n\n# Why this is not a verb\n\n**Immutability is a property of the resource, the verb is a property of the\nsubject, and a replace needs both.** That split is what lets a namespace be\nappend-only for *everyone, including admins*, which no role-based model can\nsay. Adding a `releases:overwrite`-style exception here would make it a rule\nan admin can step over, and a rule an admin can step over is not an\ninvariant.",
@@ -26903,6 +27889,66 @@
           }
         }
       },
+      "InstanceSecurity": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/instance-security`.",
+        "required": [
+          "window_hours",
+          "computed_at",
+          "sign_ins",
+          "token_sources",
+          "static_tokens"
+        ],
+        "properties": {
+          "bans": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BansBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "exemptions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExemptionsBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sign_ins": {
+            "$ref": "#/components/schemas/SignInBlock"
+          },
+          "static_tokens": {
+            "$ref": "#/components/schemas/StaticTokensBlock"
+          },
+          "token_sources": {
+            "$ref": "#/components/schemas/TokenSourcesBlock"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SecurityWarning"
+            }
+          },
+          "window_hours": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "InvalidateRequest": {
         "type": "object",
         "required": [
@@ -26927,6 +27973,15 @@
             "type": "string"
           }
         }
+      },
+      "LineState": {
+        "type": "string",
+        "description": "One line of the status strip. `Unknown` is a source that failed or timed\nout: never drawn as `Ok`.",
+        "enum": [
+          "ok",
+          "attention",
+          "unknown"
+        ]
       },
       "LiveView": {
         "type": "object",
@@ -28643,6 +29698,38 @@
           }
         }
       },
+      "QueueSummary": {
+        "type": "object",
+        "description": "The remaining scan queue, over the caller's registries.",
+        "required": [
+          "queued",
+          "deferred",
+          "deferred_over_day",
+          "failed"
+        ],
+        "properties": {
+          "deferred": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deferred_over_day": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "QuotaDto": {
         "type": "object",
         "properties": {
@@ -29621,6 +30708,14 @@
             "type": "boolean",
             "description": "Whether this call left a pending reload staged for approval.\n\nOnly `from-content` can set it: `reload` and `apply` consume the pending\nrather than leave one, and `validate` is a dry run. It exists because\n`from-content` returns `200` with an empty diff in two very different\nsituations — a pending was staged, or the submitted content was identical\nto the last load attempt so there was nothing to stage. Without this flag\nthe caller only discovers the difference when the subsequent apply fails\nwith `404 No pending reload`."
           },
+          "pending_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The staged change's id, when `from-content` staged one: send it back to\n`pending/apply` so it applies this change and not one staged since."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -30114,6 +31209,270 @@
           }
         }
       },
+      "ScannerHealth": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/security/scanners`.",
+        "required": [
+          "computed_at",
+          "workers",
+          "queue",
+          "scanners"
+        ],
+        "properties": {
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueSummary"
+          },
+          "scanners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerRow"
+            }
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerRow"
+            }
+          }
+        }
+      },
+      "ScannerRef": {
+        "type": "object",
+        "description": "A scanner of a registry's profile.",
+        "required": [
+          "name",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ScannerRow": {
+        "type": "object",
+        "description": "One configured scanner.",
+        "required": [
+          "name",
+          "state"
+        ],
+        "properties": {
+          "last_error_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only with `findings:read`."
+          },
+          "last_ok_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScannerState"
+          },
+          "unavailable_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ScannerState": {
+        "type": "string",
+        "description": "A scanner's own state on the *Scanners & worker* page.",
+        "enum": [
+          "ok",
+          "attention",
+          "never_ran"
+        ]
+      },
+      "ScannersBlock": {
+        "type": "object",
+        "description": "The *Scanners & worker* line.",
+        "required": [
+          "state",
+          "live_workers",
+          "uncovered",
+          "queued",
+          "deferred",
+          "deferred_over_day",
+          "failed",
+          "scanners_attention",
+          "never_ran",
+          "breaker_open"
+        ],
+        "properties": {
+          "breaker_open": {
+            "type": "boolean"
+          },
+          "deferred": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deferred_over_day": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "live_workers": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "never_ran": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "scanners_attention": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/LineState"
+          },
+          "uncovered": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Protected registries no live worker covers."
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SecurityOverview": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/security/overview`. A block is absent when its verb is\nnot held; present with `state = \"unknown\"` when its source failed.",
+        "required": [
+          "computed_at",
+          "decisions"
+        ],
+        "properties": {
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "coverage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CoverageBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decisions": {
+            "$ref": "#/components/schemas/DecisionList"
+          },
+          "flags": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FlagsBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "holds": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HoldsBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scanners": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScannersBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SecurityTrends": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/security/trends`.",
+        "required": [
+          "window_days",
+          "history_enabled",
+          "days"
+        ],
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendDay"
+            },
+            "description": "Every day of the window, oldest first."
+          },
+          "history_enabled": {
+            "type": "boolean",
+            "description": "`[stats] history_enabled`: `false` records nothing."
+          },
+          "history_starts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The oldest day with a figure (an all-`null` row is not one), if any."
+          },
+          "window_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "SecurityView": {
         "type": "object",
         "description": "`[registries.security]`, the keys the page shows.",
@@ -30144,6 +31503,31 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SecurityWarning": {
+        "type": "object",
+        "description": "A security config warning. Only with `config:read`.",
+        "required": [
+          "code",
+          "path",
+          "message",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Named in `[console].accepted`: listed, not attention."
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
           }
         }
       },
@@ -30342,6 +31726,65 @@
           }
         }
       },
+      "SignInBlock": {
+        "type": "object",
+        "description": "Rejected credentials in the window.",
+        "required": [
+          "state",
+          "rejected",
+          "by_kind"
+        ],
+        "properties": {
+          "addresses": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AddressCount"
+            },
+            "description": "Only with `audit:read`."
+          },
+          "by_kind": {
+            "type": "object",
+            "description": "`sign_in_failed` (single sign-on) and `credential_rejected` (token).",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "distinct_addresses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The window held more events than one read takes: every count above is\na floor (\"at least\"), never the exact figure."
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/LineState"
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "SigningKeyDto": {
         "type": "object",
         "description": "One key, in Terraform's own field names.",
@@ -30412,6 +31855,37 @@
           "rules": {
             "type": "boolean",
             "description": "Always true — the registry's rule chain is evaluated in full."
+          }
+        }
+      },
+      "StaticTokensBlock": {
+        "type": "object",
+        "description": "`[[auth.tokens]]` values stored in clear: config paths, never the value.",
+        "required": [
+          "plain",
+          "paths"
+        ],
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "plain": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "user_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Only with `audit:read`."
           }
         }
       },
@@ -30704,6 +32178,65 @@
           }
         }
       },
+      "TokenSourceItem": {
+        "type": "object",
+        "description": "A token used from an address it had not been used from.",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TokenSourcesBlock": {
+        "type": "object",
+        "required": [
+          "new_source"
+        ],
+        "properties": {
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TokenSourceItem"
+            },
+            "description": "Only with `audit:read`."
+          },
+          "new_source": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The window held more events than one read takes (a rejection burst\nshares the read): `new_source` is a floor, not the exact figure."
+          },
+          "unknown_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the audit log did not answer: `new_source` is then zero and\nmeans nothing."
+          }
+        }
+      },
       "TombstoneDto": {
         "type": "object",
         "description": "One deleted coordinate.\n\nMirrors [`Tombstone`] rather than re-exporting it, so the API shape is a\ndecision this crate makes: the entity is what the store holds, and the two\nare free to diverge when the store gains a column the API should not carry.",
@@ -30779,6 +32312,146 @@
           },
           "total": {
             "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "TrendDay": {
+        "type": "object",
+        "description": "One UTC day. `null` is a gap — no data for that day — never a zero.",
+        "required": [
+          "day"
+        ],
+        "properties": {
+          "allowed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "denied": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings_critical": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings_high": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings_low": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings_medium": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings_unknown": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "flags_opened": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Only with `flags:read`.",
+            "minimum": 0
+          },
+          "flags_revoked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "jobs_done": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "jobs_failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "quarantined": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "refusals": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "refusals_by_code": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "warned": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
             "minimum": 0
           }
         }
@@ -31293,10 +32966,12 @@
       },
       "VerdictListResponse": {
         "type": "object",
-        "description": "The admin listing: the verdicts of one registry, newest evaluation\nfirst, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).",
+        "description": "The admin listing: denied first, then quarantined, warned, allowed, each\nnewest evaluation first, one page at a time\nwith the exact count of every match (RFC 0018 §4.2 *CLI*: `batlehub\nverdicts list`), so a mass compromise can be walked to its end.",
         "required": [
-          "registry",
-          "items"
+          "items",
+          "total",
+          "page",
+          "per_page"
         ],
         "properties": {
           "items": {
@@ -31305,8 +32980,27 @@
               "$ref": "#/components/schemas/Verdict"
             }
           },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "registry": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every match, all pages, at registry level (as the *Holds* counts):\na row sealed at its namespace is counted, not listed.",
+            "minimum": 0
           }
         }
       },
@@ -31764,6 +33458,35 @@
             "items": {
               "$ref": "#/components/schemas/WarmableRegistry"
             }
+          }
+        }
+      },
+      "WorkerRow": {
+        "type": "object",
+        "description": "A worker as its last heartbeat recorded it.",
+        "required": [
+          "worker_id",
+          "last_seen",
+          "registries",
+          "live"
+        ],
+        "properties": {
+          "last_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "registries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty = every registry."
+          },
+          "worker_id": {
+            "type": "string"
           }
         }
       }

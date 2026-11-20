@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 011b848b5aba682e
+sourceHash: dfa35e4b9d9da863
 ---
 
 # Contrôle d'accès
@@ -144,7 +144,7 @@ Cinq formes de sujet :
 | `group:<provider>:<name>` | les membres de ce groupe chez ce fournisseur d'authentification |
 | `group:*:<name>` | ce nom de groupe chez **n'importe quel** fournisseur |
 | `group::<name>` | ce nom de groupe sans préfixe de fournisseur |
-| `user:<id>` | un principal unique |
+| `user:<provider>:<id>` | un principal de ce fournisseur d'authentification |
 
 Répéter un sujet est une **union**, pas un second avis : deux blocs qui accordent
 des verbes différents à `role:user` lui donnent les deux.
@@ -166,8 +166,36 @@ que vous écrivez :
   départ s'accompagne donc d'une révocation de tokens, et l'expiration d'un token
   (obligatoire, 90 jours au plus) est la borne extérieure.
 
-`user:<id>` correspond à un token comme à une session : un token se résout vers
-l'identifiant de son créateur.
+`user:<provider>:<id>` correspond à un token ou à une URL signée comme à une
+session : tous deux se résolvent vers l'identifiant de leur créateur **sur le
+fournisseur de leur créateur**.
+
+**Un sujet utilisateur nomme son fournisseur.** Un identifiant utilisateur est
+une chaîne que chaque fournisseur choisit pour lui-même : `alice` sur l'IdP de
+l'entreprise et `alice` sur un second IdP sont deux personnes, et une
+autorisation accordée à l'une ne doit pas atteindre l'autre. `<provider>` est le
+`name` de l'`[[auth]]` (`static-token` pour une entrée `[[auth.tokens]]`
+statique dotée d'un `user_id`) ; l'identifiant peut lui-même contenir `:` — le
+sujet se coupe au premier. Pour la même raison, un `name` d'`[[auth]]` ne peut
+pas contenir `:`.
+
+La forme nue `user:<id>`, écrite avant ce changement, est encore lue, à une
+condition :
+
+- **Un seul fournisseur produit des identifiants utilisateur** — la forme nue
+  désignait toujours ce fournisseur. Le chargeur de configuration la réécrit en
+  `user:<provider>:<id>`, et au démarrage les autorisations et propriétaires de
+  paquets stockés sont réécrits de la même façon.
+- **Plusieurs en produisent** — un `user:` nu dans le fichier de configuration
+  est refusé au chargement, avec le correctif à appliquer. Les autorisations et
+  propriétaires stockés encore nus ne correspondent à personne (la lecture
+  fermée d'un identifiant ambigu) et le serveur journalise leur nombre au
+  démarrage : accordez-les de nouveau en `user:<provider>:<id>`, et les
+  propriétaires en `<provider>:<id>`.
+
+Un propriétaire utilisateur (`batlehub-cli owner add`, `cargo owner --add`) est
+stocké de la même façon, en `<provider>:<id>` ; un identifiant nu est rattaché
+selon la même règle.
 
 ### Où vous les écrivez {#tiers}
 
@@ -466,6 +494,11 @@ Un nœud en mode fantôme résout ses autorisations, enregistre ce qu'il **aurai
 refusé, et ne refuse rien. C'est ce qui rend l'adoption du modèle survivable :
 activez-le, observez une semaine de trafic réel, puis appliquez.
 
+Un mode fantôme couvre les nœuds placés sous lui **jusqu'à un scellé appliqué,
+pas au-delà** : un fantôme à l'échelle du registre ne rouvre pas un espace de
+noms scellé par `grants = {}`. Pour mettre un espace de noms scellé à l'essai,
+donnez-lui son propre `grants_shadow`.
+
 ::: danger Le mode fantôme sur les autorisations laisse passer
 Une requête qui serait refusée est **servie**. Oublié, c'est un contournement
 d'autorisation configuré exprès.
@@ -486,7 +519,7 @@ mais rien ne fuit — ce pourquoi il n'a pas besoin d'expiration.
 
 ### La surveiller {#watching}
 
-**`/admin/access/authorization`** rassemble les cinq choses qui sont sinon
+**`/admin/access/authorization`** rassemble les six choses qui sont sinon
 éparpillées :
 
 | Panneau | Répond à |
@@ -494,10 +527,11 @@ mais rien ne fuit — ce pourquoi il n'a pas besoin d'expiration.
 | **Fantôme** | ce qui est servi et que les autorisations refuseraient, par nœud, avec chaque expiration |
 | **Exemptions** | les exemptions de garde-fou vivantes, leur expiration et leur motif, filtrables sur les auto-approuvées |
 | **Explain** | résoudre n'importe quel sujet contre n'importe quelle coordonnée, avec la provenance |
+| **Simuler** | exécuter un téléchargement entier pour une identité — blocages, garde-fous et groupes — et dire s'il est servi (`#simulate` ; les anciens favoris de la vérification d'accès y mènent) |
 | **Refus récents** | ce qui a été réellement refusé |
 | **Rétention** | où examiner ce qu'une passe réelle reprendrait |
 
-Trois de ces cinq sont les directions « laisser passer » ou destructives de
+Trois de ces six sont les directions « laisser passer » ou destructives de
 fonctionnalités décidées ailleurs. Elles sont sur une même page à dessein :
 individuellement, chacune est facile à oublier, et collectivement elles forment
 la liste de tout ce qui compte actuellement sur votre mémoire.
@@ -653,7 +687,7 @@ curl -H "Authorization: Bearer <admin-token>" \
 
 ```json
 [
-  { "principal_type": "user",  "principal_id": "alice",   "granted_by": "admin" },
+  { "principal_type": "user",  "principal_id": "oidc1:alice", "granted_by": "admin" },
   { "principal_type": "group", "principal_id": "qa-team", "granted_by": null }
 ]
 ```
@@ -664,12 +698,21 @@ curl -H "Authorization: Bearer <admin-token>" \
 à tout utilisateur portant ce claim de groupe (par OIDC ou par l'authentification
 Kubernetes).
 
+Une entrée `"user"` s'écrit `<provider>:<id>`, la même forme qu'une autorisation
+`user:` ([À qui vous accordez](#subjects)) : `oidc1:alice` n'est pas l'`alice` dont se porte
+garant un autre fournisseur d'identité. Un identifiant nu est rattaché au
+fournisseur quand un seul fournisseur produit des identifiants utilisateur, et
+refusé en `400` quand plusieurs le font. Les membres ajoutés avant cette règle
+sont réécrits au démarrage sur un déploiement à un seul fournisseur ; avec
+plusieurs fournisseurs, ils ne correspondent à personne tant qu'ils ne sont pas
+ajoutés de nouveau avec leur fournisseur.
+
 ```sh
 # Ajouter un utilisateur précis
 curl -s -X POST \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
-  -d '{"principal_type":"user","principal_id":"alice","granted_by":"admin"}' \
+  -d '{"principal_type":"user","principal_id":"oidc1:alice","granted_by":"admin"}' \
   https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel
 
 # Ajouter un groupe entier
@@ -688,7 +731,7 @@ déjà membre.
 ```sh
 curl -s -X DELETE \
   -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel/user/alice
+  https://batlehub.example.com/api/v1/admin/registries/my-npm/beta-channel/user/oidc1:alice
 
 curl -s -X DELETE \
   -H "Authorization: Bearer <admin-token>" \

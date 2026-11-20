@@ -47,6 +47,8 @@ pub mod scan_worker;
 pub mod scanners;
 pub mod sdkman;
 pub mod search;
+pub mod security_overview;
+pub mod security_rollup;
 pub mod shadow;
 pub mod signature;
 pub mod signed_url;
@@ -89,8 +91,9 @@ pub use local_registry::{
     terraform_provider_shasums_storage_key, validate_coordinate, validate_package_name,
     validate_path_safe, validate_path_segment, validate_publish_coordinate,
     validate_terraform_platform, JetbrainsPluginVersion, LocalRegistryService, NixPublishRequest,
-    OpenVsxExtensionVersion, PublishPolicyRequest, PublishRequest, TerraformPlatform,
-    TerraformShasumsFile, COMPOSER_DIST_SHA1, SIGNATURE_SUFFIX, VERSION_SIBLING_SUFFIXES,
+    OpenVsxExtensionVersion, PublishPolicyRequest, PublishRequest, PypiFileUpload, PypiLocalFile,
+    TerraformPlatform, TerraformShasumsFile, COMPOSER_DIST_SHA1, SIGNATURE_SUFFIX,
+    VERSION_SIBLING_SUFFIXES,
 };
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};
@@ -119,6 +122,7 @@ pub use scanners::{
     UPSTREAM_PRESENCE_SCANNER, WRAPPED_GATES,
 };
 pub use search::{SearchHit, SearchMode, SearchResults};
+pub use security_rollup::{RollupOutcome, SecurityRollupService, SECURITY_ROLLUP_LEADER_KEY};
 pub use signed_url::{
     Coordinate as SignedUrlCoordinate, SignedUrlError, SignedUrlService,
     DEFAULT_TTL_SECONDS as SIGNED_URL_DEFAULT_TTL_SECONDS,

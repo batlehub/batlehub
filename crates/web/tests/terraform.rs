@@ -318,6 +318,48 @@ async fn terraform_provider_binary_upload_returns_200() {
     assert_eq!(resp.status(), 200);
 }
 
+/// `immutable = "released"` refuses a *replaced* platform binary, not the first
+/// one: the manifest has already created the version row, so the gate must
+/// decide from the binary's own key, as Maven's jar path does.
+#[actix_web::test]
+async fn terraform_provider_binary_under_immutable_released_is_stored_once() {
+    use batlehub_core::entities::{Immutable, RegistryKind, VersioningRules};
+    let parts = local_only_app_parts("local-tf", "terraform", RegistryMode::Local, false);
+    let rules = VersioningRules {
+        enforce_semver: false,
+        allow_prerelease: true,
+        version_pattern: None,
+        immutable: Immutable::Released,
+        monotonic: false,
+        dry_run: false,
+    };
+    with_policy_tiers(
+        &parts,
+        "local-tf",
+        versioning_tiers("local-tf", RegistryKind::Terraform, rules),
+    )
+    .await;
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(PROVIDER_MANIFEST)
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 201);
+
+    let put = |body: &'static [u8]| {
+        TestRequest::put()
+            .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/artifact/linux/amd64")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_payload(body)
+            .to_request()
+    };
+    assert_eq!(call_service(&app, put(b"first")).await.status(), 200);
+    assert_eq!(call_service(&app, put(b"second")).await.status(), 409);
+}
+
 /// The binary key joins OS and arch with `-`, so `(linux-amd64, x)` and
 /// `(linux, amd64-x)` were one key and either upload replaced the other.
 #[actix_web::test]

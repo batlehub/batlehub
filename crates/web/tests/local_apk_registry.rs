@@ -630,62 +630,6 @@ fn gzip_member_plaintexts(file: &[u8]) -> Vec<Vec<u8>> {
 
 // ── Ownership (path-addressed publishers bypass `publish()`) ─────────────────
 
-/// `apk_app` with an ownership store and two distinct `User` identities.
-///
-/// The ownership port is the fixture: with it absent the gate is a no-op and
-/// the overwrite test below would pass without checking anything.
-async fn apk_ownership_app(
-    registry: &str,
-) -> impl actix_web::dev::Service<
-    actix_http::Request,
-    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
-    Error = actix_web::Error,
-> {
-    let parts = local_registry_app_parts(registry, "apk", RegistryMode::Local, None);
-    let LocalRegistryAppParts {
-        proxy_svc,
-        admin_svc,
-        token_repo,
-        access_config,
-        registry_map,
-        local_svc: cur,
-        mode_map,
-    } = parts;
-    let ownership = batlehub_adapters::in_memory::InMemoryOwnershipStore::new();
-    let grant_repo = batlehub_adapters::in_memory::InMemoryGrantRepository::new();
-    let owner_port = batlehub_core::services::ownership_grants::OwnershipGrants::wrap(
-        ownership as Arc<dyn batlehub_core::ports::OwnershipPort>,
-        grant_repo as Arc<dyn batlehub_core::ports::GrantRepository>,
-    );
-    let local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
-        backend: cur.backend.clone(),
-        storage: cur.storage.clone(),
-        hot: cur.hot.clone(),
-        quota: cur.quota.clone(),
-        ownership: Some(owner_port),
-        team_namespace: cur.team_namespace.clone(),
-        sbom: cur.sbom.clone(),
-        explore_cache: cur.explore_cache.clone(),
-        package_repo: cur.package_repo.clone(),
-        readme: cur.readme.clone(),
-    });
-
-    finish_test_app_with_extra(
-        proxy_svc,
-        admin_svc,
-        token_repo,
-        access_config,
-        registry_map,
-        local_svc,
-        mode_map,
-        batlehub_web::CargoIndexMap::default(),
-        ConfigureAppDefaults::default(),
-        ApkSignerMap::default(),
-        team_ns_auth_providers(),
-    )
-    .await
-}
-
 async fn publish_as(
     app: &impl actix_web::dev::Service<
         actix_http::Request,
@@ -714,7 +658,7 @@ async fn publish_as(
 /// package byte for byte and the server re-signed the index over it.
 #[actix_web::test]
 async fn apk_publish_cannot_replace_another_users_package() {
-    let app = apk_ownership_app("alpine").await;
+    let app = local_ownership_app("alpine", "apk").await;
     let original = make_test_apk(PKGINFO);
     assert_eq!(
         publish_as(&app, "alpine", NS_PLAIN_USER_TOKEN, original.clone()).await,

@@ -20,6 +20,9 @@
 // `page.on("request")`, the "requests made" source of obs. 2 and 4.
 // `--bookmarks 1` loads each old path of RFC 0046 §15 Q8 with a query string
 // and records where it lands (obs. 6).
+//
+// RFC 0050 obs. 11 (`--nav 1`): on an admin page, no tab strip is left in the
+// DOM, and a sidebar group opened by the reader is still open after a reload.
 import { args, emit, need, openPage, poll, sleep } from "./browser.mjs";
 
 const BASE = need("base");
@@ -61,7 +64,8 @@ async function cancelConfirm() {
 try {
   // Seeded before the app's first script, for the reason console_fetch.mjs gives.
   await page.evaluateOnNewDocument((value) => {
-    localStorage.clear();
+    // A reload that measures what the store kept (obs. 11) must not wipe it.
+    if (!sessionStorage.getItem("keep-nav")) localStorage.clear();
     if (value) localStorage.setItem("batlehub_access_token", value);
   }, TOKEN);
 
@@ -71,10 +75,34 @@ try {
   const links = await poll(nav, (l) => l.includes("/packages"));
 
   await page.goto(`${BASE}/security`, { waitUntil: "networkidle2", timeout: 60000 });
-  const panels = await page.$$eval("[data-testid$='-panel']", (els) =>
-    els.map((e) => e.getAttribute("data-testid")),
-  );
   const securityLanded = new URL(page.url()).pathname;
+  // RFC 0050 obs. 10: the overview's status strip, line by line, with its state.
+  const status = await page
+    .waitForSelector("[data-testid^='status-']", { timeout: 15000 })
+    .then(() =>
+      page.$$eval("[data-testid^='status-']", (els) =>
+        els.map((e) => ({
+          line: e.dataset.testid,
+          state: e.querySelector("[data-state]")?.dataset.state ?? null,
+        })),
+      ),
+    )
+    .catch(() => []);
+  // The panels now live one per page (RFC 0050 §6.6).
+  const panels = [];
+  for (const sub of ["holds", "flags", "exposure"]) {
+    await page.goto(`${BASE}/security/${sub}`, { waitUntil: "networkidle2", timeout: 60000 });
+    if (new URL(page.url()).pathname !== `/security/${sub}`) continue;
+    panels.push(
+      ...(await page.$$eval("[data-testid$='-panel']", (els) =>
+        els.map((e) => e.getAttribute("data-testid")),
+      )),
+    );
+  }
+  // Obs. 10: a refused sub-page lands on the first page of its group the
+  // caller may read.
+  await page.goto(`${BASE}/security/holds`, { waitUntil: "networkidle2", timeout: 60000 });
+  const holdsLanded = new URL(page.url()).pathname;
 
   await page.goto(`${BASE}/admin/system/configuration`, {
     waitUntil: "networkidle2",
@@ -116,9 +144,9 @@ try {
       "/admin/operations/imports": "/admin/registries/imports",
       "/admin/operations/air-gap": "/admin/registries/air-gap",
       "/admin/operations/sbom": "/admin/packages/sbom",
-      "/admin/security/access-check": "/admin/access/check",
+      "/admin/security/access-check": "/admin/access/authorization",
       "/admin/security/authorization": "/admin/access/authorization",
-      "/admin/security/blocks": "/admin/access/blocks",
+      "/admin/security/blocks": "/admin/instance-security/blocks",
       "/admin/namespaces/team-namespaces": "/admin/access/team-namespaces",
       "/admin/namespaces/beta-channel": "/admin/access/beta-channel",
       "/admin/operations/config-reload": "/admin/system/configuration",
@@ -127,6 +155,10 @@ try {
       "/admin/observability/audit-log": "/admin/system/audit-log",
       "/admin/notifications/subscriptions": "/admin/system/notifications",
       "/admin/notifications/inbound": "/admin/system/inbound-events",
+      // RFC 0050 §6.6.
+      "/admin/security/scans": "/security/scanners",
+      "/admin/security/findings": "/security/findings",
+      "/admin/access/blocks": "/admin/instance-security/blocks",
     };
     bookmarks = [];
     for (const [from, want] of Object.entries(OLD)) {
@@ -134,6 +166,27 @@ try {
       const u = new URL(page.url());
       bookmarks.push({ from, want: `${want}?bookmark=1`, landed: u.pathname + u.search });
     }
+  }
+
+  // ── RFC 0050 obs. 11: no tab strip; a group's state survives a reload ─────
+  let sidebar = null;
+  if (args.nav) {
+    const health = `${BASE}/admin/system/health`;
+    await page.goto(health, { waitUntil: "networkidle2", timeout: 60000 });
+    const tabStrips = await page.$$eval(
+      '[data-testid="section-tabs"], #section-tab-select',
+      (els) => els.length,
+    );
+    const access = 'button[aria-controls="admin-group-admin-access-pages"]';
+    const expanded = () => page.$eval(access, (b) => b.getAttribute("aria-expanded"));
+    const before = await expanded();
+    await page.click(access);
+    const afterClick = await expanded();
+    // evaluateOnNewDocument clears the store on every load; this reload must keep it.
+    await page.evaluate(() => sessionStorage.setItem("keep-nav", "1"));
+    await page.reload({ waitUntil: "networkidle2", timeout: 60000 });
+    const afterReload = await expanded();
+    sidebar = { tabStrips, before, afterClick, afterReload };
   }
 
   // ── RFC 0046 obs. 5 and 7: the configuration editor ────────────────────────
@@ -184,12 +237,15 @@ try {
     phase: "security",
     links,
     securityLanded,
+    status,
     panels,
+    holdsLanded,
     adminLanded,
     adminRequests,
     palette,
     bookmarks,
     editor,
+    sidebar,
   });
 } finally {
   await close();

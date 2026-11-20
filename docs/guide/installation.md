@@ -17,6 +17,7 @@ The others are for when your environment has already decided for you.
 | [Pre-built binary](/guide/install/binary) | you do not run containers |
 | [From source](/guide/install/source) | you are changing the code, or need a build for a platform no release covers |
 | [Helm chart](/guide/install/helm) | you are deploying to Kubernetes — three complete values files, from one replica to production |
+| [The demo](/guide/install/demo) | you want to see every page of the console with data in it, from a checkout, in one command — not for a server you keep |
 
 ---
 

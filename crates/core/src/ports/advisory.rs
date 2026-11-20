@@ -53,6 +53,20 @@ pub trait AdvisoryRepository: Send + Sync {
     /// coordinate × flag, `last_pull DESC`.
     async fn list_exposure(&self, query: &ExposureQuery) -> Result<ExposurePage, CoreError>;
 
+    /// Per version, the allowed downloads since `from` made after a flag
+    /// still live at `now` covered it (RFC 0050 §4.2 *Needs a decision*):
+    /// every consumer summed, a pull counted once however many flags cover
+    /// it. A revoked or expired flag no longer asks for a decision.
+    async fn pulls_after_live_flags(
+        &self,
+        _from: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> Result<Vec<FlagPulls>, CoreError> {
+        Err(CoreError::NotSupported(
+            "this flag store cannot count pulls after a flag".to_owned(),
+        ))
+    }
+
     /// Live-flag count and last push per source.
     async fn source_coverage(
         &self,
@@ -63,4 +77,14 @@ pub trait AdvisoryRepository: Send + Sync {
     async fn record_scan_state(&self, state: &RegistryScanState) -> Result<(), CoreError>;
 
     async fn list_scan_state(&self) -> Result<Vec<RegistryScanState>, CoreError>;
+}
+
+/// One flagged version downloaded after its flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlagPulls {
+    pub registry: String,
+    pub package_name: String,
+    pub version: String,
+    pub pulls_after: u64,
+    pub last_pull: DateTime<Utc>,
 }

@@ -761,8 +761,9 @@ async fn a_pat_carries_the_groups_it_was_minted_with() {
         "the snapshot is what the token resolves to"
     );
     assert_eq!(
-        me["auth_provider"], "user-token",
-        "still a PAT session, so it cannot mint or revoke tokens of its own"
+        me["auth_provider"], "user-token:authentik",
+        "still a PAT session, so it cannot mint or revoke tokens of its own; the \
+         minting provider rides behind the prefix for `user:` grants"
     );
 }
 
@@ -1099,6 +1100,71 @@ async fn a_rejected_credential_is_one_throttled_row_per_source() {
     );
 }
 
+/// A burst that stops is counted in full: the flusher writes what the
+/// throttle held back, and every reader's `1 + throttled_count` sums to the
+/// attempts made (24 here, the demo's burst), not to one.
+#[actix_web::test]
+async fn a_burst_that_stops_is_counted_in_full_once_flushed() {
+    use actix_web::{web, App, HttpResponse};
+    use batlehub_core::entities::AccessAction;
+    use batlehub_core::services::AdminService;
+    let repo = InMemoryRepo::new();
+    let audit = batlehub_web::CredentialRejectionAudit::new(Arc::new(AdminService::new(
+        Arc::clone(&repo) as Arc<dyn batlehub_core::ports::PackageRepository>,
+    )));
+    let app = actix_web::test::init_service(
+        App::new()
+            .route("/", web::get().to(HttpResponse::Ok))
+            .wrap(batlehub_web::AuthMiddlewareFactory::new(vec![]).with_audit(Arc::clone(&audit))),
+    )
+    .await;
+    for _ in 0..24 {
+        let req = TestRequest::get()
+            .uri("/")
+            .peer_addr("203.0.113.9:4000".parse().unwrap())
+            .insert_header(("Authorization", bearer("bh_pat_not-a-real-token")))
+            .to_request();
+        call_service(&app, req).await;
+    }
+    let total = |rows: &[AccessEvent]| -> u64 {
+        rows.iter()
+            .map(|e| 1 + u64::from(e.throttled_count.unwrap_or(0)))
+            .sum()
+    };
+    assert_eq!(
+        total(&rows_for(&repo, AccessAction::CredentialRejected).await),
+        1
+    );
+
+    // Nothing follows the burst; the window elapses.
+    audit
+        .flush_held(
+            std::time::Instant::now() + std::time::Duration::from_secs(61),
+            false,
+        )
+        .await;
+    let rows = rows_for(&repo, AccessAction::CredentialRejected).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(total(&rows), 24);
+    assert!(rows
+        .iter()
+        .all(|e| e.ip_address.as_deref() == Some("203.0.113.9")));
+
+    // Taken once: a second pass writes nothing.
+    audit
+        .flush_held(
+            std::time::Instant::now() + std::time::Duration::from_secs(61),
+            false,
+        )
+        .await;
+    assert_eq!(
+        rows_for(&repo, AccessAction::CredentialRejected)
+            .await
+            .len(),
+        2
+    );
+}
+
 /// pip and mise (reading `~/.netrc` for a forge) send HTTP Basic only, the
 /// token in the password. A PAT carried that way used to resolve to
 /// anonymous, while a static token in the same place worked: reported on a
@@ -1125,6 +1191,6 @@ async fn a_pat_sent_in_a_basic_header_is_its_owner() {
             .to_request();
         let me: Value = read_body_json(call_service(&app, req).await).await;
         assert_eq!(me["user_id"], "oidc-user", "Basic user name {user:?}");
-        assert_eq!(me["auth_provider"], "user-token");
+        assert_eq!(me["auth_provider"], "user-token:authentik");
     }
 }

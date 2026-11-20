@@ -19,7 +19,7 @@ use batlehub_core::{
         ExposureWhen, FlagFilter, FlagSourceCoverage, PackageFlag, RegistryScanState,
     },
     error::CoreError,
-    ports::{AdvisoryRepository, PackageRepository},
+    ports::{AdvisoryRepository, FlagPulls, PackageRepository},
 };
 
 #[derive(Default)]
@@ -279,6 +279,66 @@ impl AdvisoryRepository for InMemoryAdvisoryRepository {
         let next = (rows.len() > limit).then(|| rows[limit - 1].cursor().encode());
         rows.truncate(limit);
         Ok(ExposurePage { rows, next })
+    }
+
+    async fn pulls_after_live_flags(
+        &self,
+        from: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FlagPulls>, CoreError> {
+        let Some(events) = &self.events else {
+            return Ok(Vec::new());
+        };
+        let flags: Vec<PackageFlag> = self
+            .flags
+            .read()
+            .await
+            .iter()
+            .filter(|f| f.is_live(now))
+            .cloned()
+            .collect();
+        let pulls = events
+            .list_events(EventFilter {
+                registry: None,
+                package_name: None,
+                user_id: None,
+                actions: vec![AccessAction::Download],
+                from: Some(from),
+                to: None,
+                denied_only: false,
+                limit: 1_000_000,
+                offset: 0,
+            })
+            .await?;
+        let mut out: BTreeMap<(String, String, String), FlagPulls> = BTreeMap::new();
+        for e in pulls
+            .iter()
+            .filter(|e| matches!(e.result, AccessResult::Allowed))
+        {
+            let Some(pkg) = &e.package_id else { continue };
+            // Counted once however many live flags cover the pull.
+            let flagged = flags.iter().any(|f| {
+                f.registry == pkg.registry
+                    && f.package_name == pkg.name
+                    && f.covers(&pkg.version)
+                    && f.first_seen <= e.timestamp
+            });
+            if !flagged {
+                continue;
+            }
+            let row = out
+                .entry((pkg.registry.clone(), pkg.name.clone(), pkg.version.clone()))
+                .or_insert_with(|| FlagPulls {
+                    registry: pkg.registry.clone(),
+                    package_name: pkg.name.clone(),
+                    version: pkg.version.clone(),
+                    pulls_after: 0,
+                    last_pull: e.timestamp,
+                });
+            row.pulls_after += 1;
+            row.last_pull = row.last_pull.max(e.timestamp);
+        }
+        Ok(out.into_values().collect())
     }
 
     async fn source_coverage(

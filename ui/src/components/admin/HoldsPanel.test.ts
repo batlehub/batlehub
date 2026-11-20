@@ -8,12 +8,17 @@ vi.mock("@/client/sdk.gen", () => ({
 
 import HoldsPanel from "./HoldsPanel.vue";
 
-const stubs = { RouterLink: { props: ["to"], template: "<a :href='to'><slot/></a>" } };
+const stubs = {
+  RouterLink: {
+    props: ["to"],
+    template: "<a :href='to' :data-to='JSON.stringify(to)'><slot/></a>",
+  },
+};
 
 describe("HoldsPanel", () => {
   beforeEach(() => verdictSummary.mockReset());
 
-  it("shows the counts and links each recent hold to its package", async () => {
+  it("shows the counts per registry, and no second list of the held versions", async () => {
     verdictSummary.mockResolvedValue({
       data: {
         registries: [
@@ -37,11 +42,8 @@ describe("HoldsPanel", () => {
     const w = mount(HoldsPanel, { global: { stubs } });
     await flushPromises();
     expect(w.find('[data-testid="holds-counts"]').text()).toContain("npm1");
-    const recent = w.find('[data-testid="holds-recent"]');
-    expect(recent.text()).toContain("npm1/left-pad@1.1.0");
-    expect(recent.text()).toContain("cve_gate");
-    expect(recent.find("a").attributes("href")).toBe("/packages/npm1/left-pad");
-    expect(recent.find('[data-state="blocked"]').exists()).toBe(true);
+    // HeldVersions lists them, once (critique 2026-11-18: the page drew them twice).
+    expect(w.find('[data-testid="holds-recent"]').exists()).toBe(false);
     expect(w.find('[data-testid="open-findings-npm1"]').exists()).toBe(false);
   });
 
@@ -59,8 +61,14 @@ describe("HoldsPanel", () => {
     });
     const w = mount(HoldsPanel, { props: { canOpenFindings: true }, global: { stubs } });
     await flushPromises();
-    await w.find('[data-testid="open-findings-npm1"]').trigger("click");
-    expect(w.emitted("openFindings")).toEqual([["npm1"]]);
+    // RFC 0050 §6.6: a link to the findings page, filtered — no inline drawer.
+    const link = w.get('[data-testid="open-findings-npm1"]');
+    expect(JSON.parse(link.attributes("data-to") ?? "{}")).toEqual({
+      path: "/security/findings",
+      // The held state travels too, as the old inline drawer opened on it.
+      query: { registry: "npm1", verdict: "denied" },
+    });
+    expect(link.text()).toBe("Findings");
   });
 
   it("says so when the summary cannot be read", async () => {

@@ -36,7 +36,7 @@ const pending = () => new Promise(() => {});
 
 async function mountPage() {
   const wrapper = mount(AdminTeamNamespaces, {
-    global: { stubs: { SectionTabs: true, RouterLink: true } },
+    global: { stubs: { RouterLink: true } },
   });
   await flushPromises();
   return wrapper;

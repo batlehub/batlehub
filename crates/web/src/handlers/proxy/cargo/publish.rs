@@ -1,7 +1,9 @@
-use super::helpers::{metadata_to_index_entry, parse_publish_body};
+use super::helpers::{
+    crate_names_collide, local_crate_name, metadata_to_index_entry, parse_publish_body,
+};
 use super::{
     collect_payload, delete, extract_signature_headers, put, require_cargo, require_local_mode,
-    web, AppError, Arc, ArtifactSignature, AuthIdentity, Digest, HttpResponse,
+    web, AppError, Arc, ArtifactSignature, AuthIdentity, CoreError, Digest, HttpResponse,
     LocalRegistryService, NotificationEventType, NotificationService, PublishRequest, RegistryMap,
     RegistryModeMap, Responder, Sha256,
 };
@@ -62,11 +64,26 @@ pub async fn cargo_publish(
 
     let (meta_json, crate_bytes) = parse_publish_body(body).map_err(AppError::bad_request)?;
 
-    let name = meta_json
+    let declared = meta_json
         .get("name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::bad_request("missing 'name' in publish metadata"))?
-        .to_owned();
+        .ok_or_else(|| AppError::bad_request("missing 'name' in publish metadata"))?;
+    let name = local_crate_name(declared);
+    // A new crate must not shadow an existing one under crates.io's rule:
+    // `foo_bar` beside `foo-bar` is two crates cargo cannot tell apart.
+    let existing = local_svc
+        .backend
+        .list_package_names(&registry)
+        .await
+        .map_err(AppError::from)?;
+    if let Some(other) = existing
+        .iter()
+        .find(|n| **n != name && crate_names_collide(n, &name))
+    {
+        return Err(AppError::from(CoreError::Conflict(format!(
+            "crate name '{declared}' collides with the existing crate '{other}'"
+        ))));
+    }
     let version = meta_json
         .get("vers")
         .and_then(|v| v.as_str())
@@ -180,6 +197,7 @@ pub async fn cargo_yank(
     notification_svc: web::Data<Option<Arc<NotificationService>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
+    let name = local_crate_name(&name);
     require_cargo(&registry, &map)?;
     require_local_mode(&registry, &mode_map)?;
     let actor = identity.0.user_id.clone().unwrap_or_default();
@@ -224,6 +242,7 @@ pub async fn cargo_unyank(
     notification_svc: web::Data<Option<Arc<NotificationService>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
+    let name = local_crate_name(&name);
     require_cargo(&registry, &map)?;
     require_local_mode(&registry, &mode_map)?;
     let actor = identity.0.user_id.clone().unwrap_or_default();

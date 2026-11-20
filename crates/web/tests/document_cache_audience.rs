@@ -249,7 +249,8 @@ async fn a_beta_members_index_is_not_replayed_to_a_non_member() {
         REGISTRY,
         BetaChannelEntry {
             principal_type: "user".to_owned(),
-            principal_id: "beta-user".to_owned(),
+            // `<provider>:<id>`: the static-token provider vouches for her.
+            principal_id: "static-token:beta-user".to_owned(),
             granted_by: None,
         },
     )

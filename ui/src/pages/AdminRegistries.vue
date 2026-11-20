@@ -9,8 +9,6 @@ import { RouterLink, useRouter } from "vue-router";
 
 import { adminStats, registryHealth } from "@/client/sdk.gen";
 import type { RegistryHealthDto, StatsResponse } from "@/client/types.gen";
-import SectionTabs from "@/components/admin/SectionTabs.vue";
-import { REGISTRIES_TABS } from "@/config/adminSections";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { PageHeader } from "@/components/ui/page-header";
@@ -41,9 +39,14 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
  * and hit rates left an operator opening each registry to learn which one was
  * the npm proxy and which the private gems. Joined by name; a registry the
  * probe does not return keeps its stats row with dashes, never disappears.
+ * The probe asks `system:read` and this page only `stats:read`: without it the
+ * probe is not called — a 403 on every load — and the columns stay dashes.
  */
 const { data: health } = useApi<RegistryHealthDto[]>(
-  () => registryHealth() as Promise<{ data?: unknown; error?: unknown }>,
+  () =>
+    can("system:read")
+      ? (registryHealth() as Promise<{ data?: unknown; error?: unknown }>)
+      : Promise.resolve({ data: null }),
   [token],
 );
 const healthByName = computed(
@@ -62,7 +65,6 @@ function openRow(name: string, event: MouseEvent) {
 
 <template>
   <div class="space-y-6">
-    <SectionTabs :tabs="REGISTRIES_TABS" />
     <PageHeader
       variant="display"
       :title="t('adminRegistries.title')"

@@ -474,6 +474,40 @@ pub(super) struct BuiltScanners {
 }
 
 pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Result<BuiltScanners> {
+    build_scanners_with(config, true)
+}
+
+/// The kinds each `[scanners]` entry can scan, for the console (RFC 0050
+/// §4.2). Built without the worker's command checks: a proxy-only process
+/// has no scanner binaries, and `supports` reads none of them.
+pub(super) fn scanner_kinds(
+    config: &batlehub_config::schema::AppConfig,
+) -> HashMap<String, Vec<RegistryKind>> {
+    let built = match build_scanners_with(config, false) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not list the scanners' kinds; the console counts every profile scanner");
+            return HashMap::new();
+        }
+    };
+    built
+        .scanners
+        .into_iter()
+        .map(|(name, s)| {
+            let kinds = RegistryKind::ALL
+                .iter()
+                .copied()
+                .filter(|k| s.supports(*k))
+                .collect();
+            (name, kinds)
+        })
+        .collect()
+}
+
+fn build_scanners_with(
+    config: &batlehub_config::schema::AppConfig,
+    check: bool,
+) -> Result<BuiltScanners> {
     use batlehub_adapters::scanners::OsvArtifactScanner;
     use batlehub_adapters::vulnerability::OsvScanner;
     use batlehub_config::schema::ScannerConfig;
@@ -518,7 +552,7 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
     let job_timeout = std::time::Duration::from_secs(config.worker.job_timeout_secs);
     let require_command = |name: &str, command: &str| -> Result<std::path::PathBuf> {
         let path = std::path::PathBuf::from(command);
-        if !batlehub_adapters::scanners::subprocess::command_exists(&path) {
+        if check && !batlehub_adapters::scanners::subprocess::command_exists(&path) {
             anyhow::bail!(
                 "[scanners.{name}] command '{command}' is not an executable file (or on PATH); \
                  the worker image is where the scanner toolchains live (RFC 0018 §5.4), \
@@ -576,7 +610,7 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
                 let rules_dir = std::path::PathBuf::from(rules_dir);
                 // An empty directory compiles to no rules and every scan is
                 // clean: a typo in the path would read as "nothing found".
-                if !batlehub_adapters::scanners::YaraScanner::has_rules(&rules_dir) {
+                if check && !batlehub_adapters::scanners::YaraScanner::has_rules(&rules_dir) {
                     anyhow::bail!(
                         "[scanners.{name}] rules_dir '{}' holds no .yar or .yara file; \
                          a YARA scanner with no rules answers clean for every artifact",
@@ -692,7 +726,9 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
             (name, named)
         })
         .collect();
-    warn_uncovered_required(config, &out);
+    if check {
+        warn_uncovered_required(config, &out);
+    }
     Ok(BuiltScanners {
         scanners: out,
         enrichers,

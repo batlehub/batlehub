@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
+import { watchDebounced } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 
 import { exposureReport } from "@/client/sdk.gen";
 import type { ExposureCoverage, ExposureRow } from "@/client/types.gen";
@@ -22,6 +24,9 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { formatDate } from "@/lib/format";
+import CodeLabel from "@/components/admin/CodeLabel.vue";
+import { FLAG_EFFECT_LABEL_KEYS } from "@/config/codeLabels";
+import { DateTime } from "@/components/ui/date-time";
 
 /**
  * The exposure report (RFC 0002 §4.6): who pulled a flagged version, one
@@ -33,9 +38,22 @@ import { formatDate } from "@/lib/format";
 const { t } = useI18n();
 const { authFetch } = useAuthFetch();
 
+const route = useRoute();
+const router = useRouter();
+const one = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const WHENS = ["any", "before_flag", "after_flag"];
+
 const source = ref("");
 const minEffect = ref("");
-const when = ref("any");
+// A link from the overview opens on one version's downloads after its flag.
+const when = ref(WHENS.includes(one(route.query.when) ?? "") ? one(route.query.when)! : "any");
+const scope = ref({ registry: one(route.query.registry), package: one(route.query.package) });
+
+function clearScope() {
+  scope.value = { registry: undefined, package: undefined };
+  void router.replace({ query: { ...route.query, registry: undefined, package: undefined } });
+  void load();
+}
 
 const rows = ref<ExposureRow[]>([]);
 const next = ref<string | null>(null);
@@ -62,6 +80,8 @@ function query(after?: string) {
   return {
     source: source.value.trim() || undefined,
     min_effect: minEffect.value || undefined,
+    registry: scope.value.registry,
+    package_name: scope.value.package,
     when: when.value,
     after,
     limit: 50,
@@ -77,13 +97,17 @@ function fail(append: boolean) {
   coverage.value = null;
 }
 
+// A later filter wins: an answer to an earlier one is dropped.
+let latest = 0;
 async function load(append = false) {
+  const mine = ++latest;
   loading.value = true;
   error.value = null;
   try {
     const { data, error: err } = await exposureReport({
       query: query(append ? (next.value ?? undefined) : undefined),
     });
+    if (mine !== latest) return;
     if (err || !data) {
       fail(append);
       return;
@@ -92,9 +116,9 @@ async function load(append = false) {
     next.value = data.next ?? null;
     coverage.value = data.coverage;
   } catch {
-    fail(append);
+    if (mine === latest) fail(append);
   } finally {
-    loading.value = false;
+    if (mine === latest) loading.value = false;
   }
 }
 
@@ -103,6 +127,8 @@ async function exportCsv() {
   const params = new URLSearchParams({ format: "csv", when: when.value });
   if (source.value.trim()) params.set("source", source.value.trim());
   if (minEffect.value) params.set("min_effect", minEffect.value);
+  if (scope.value.registry) params.set("registry", scope.value.registry);
+  if (scope.value.package) params.set("package_name", scope.value.package);
   const resp = await authFetch(`${API_BASE_URL}/api/v1/admin/exposure/export?${params}`);
   if (!resp.ok) {
     exportError.value = t("exposurePanel.exportFailed");
@@ -141,6 +167,10 @@ const lastScanLine = computed(() => {
 });
 
 onMounted(() => load());
+// Filters apply as they change, as on every other console page; the source
+// field waits for typing to pause (Enter applies it at once).
+watch([minEffect, when], () => void load());
+watchDebounced(source, () => void load(), { debounce: 300 });
 </script>
 
 <template>
@@ -149,7 +179,27 @@ onMounted(() => load());
       <CardTitle>{{ t("exposurePanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground">{{ t("exposurePanel.intro") }}</p>
+      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("exposurePanel.intro") }}</p>
+
+      <p
+        v-if="scope.registry || scope.package"
+        class="flex flex-wrap items-baseline gap-x-3 text-sm"
+        data-testid="exposure-scope"
+      >
+        <span
+          >{{ t("exposurePanel.scoped") }}
+          <span class="font-mono">{{
+            [scope.registry, scope.package].filter(Boolean).join("/")
+          }}</span></span
+        >
+        <button
+          type="button"
+          class="text-primary underline underline-offset-[3px]"
+          @click="clearScope"
+        >
+          {{ t("exposurePanel.clearScope") }}
+        </button>
+      </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl">
         <div class="space-y-2">
@@ -172,9 +222,6 @@ onMounted(() => load());
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <Button size="sm" :disabled="loading" data-testid="exposure-apply" @click="load()">
-          {{ t("exposurePanel.apply") }}
-        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -220,9 +267,9 @@ onMounted(() => load());
                 {{ r.registry }}/{{ r.package_name }}@{{ r.version }}
               </TableCell>
               <TableCell class="text-sm">
-                <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">{{
-                  r.effect
-                }}</Badge>
+                <Badge :variant="effectVariant(r.effect)" class="text-xs mr-1">
+                  <CodeLabel :code="r.effect" :labels="FLAG_EFFECT_LABEL_KEYS" />
+                </Badge>
                 <span class="font-mono text-xs text-muted-foreground">
                   {{ r.source }}:{{ r.external_id }}
                 </span>
@@ -230,7 +277,7 @@ onMounted(() => load());
               <TableCell class="tabular-nums">{{ r.pulls }}</TableCell>
               <TableCell class="tabular-nums">{{ r.pulls_before_flag }}</TableCell>
               <TableCell class="whitespace-nowrap text-xs tabular-nums">
-                {{ formatDate(r.last_pull) }}
+                <DateTime :iso="r.last_pull" />
               </TableCell>
             </TableRow>
           </TableBody>

@@ -679,7 +679,10 @@ async fn unknown_registry(
 fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     use handlers::{
         auth::{
-            oidc::{list_oidc_providers, oidc_callback, oidc_login, oidc_refresh},
+            oidc::{
+                list_oidc_providers, oidc_callback, oidc_cli_confirm, oidc_cli_exchange,
+                oidc_login, oidc_refresh,
+            },
             tokens::{create_token, list_tokens, revoke_token},
         },
         back_office::{
@@ -890,6 +893,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(oidc_login);
     cfg.service(oidc_callback);
     cfg.service(oidc_refresh);
+    cfg.service(oidc_cli_exchange);
+    cfg.service(oidc_cli_confirm);
     cfg.service(create_token);
     cfg.service(list_tokens);
     cfg.service(revoke_token);
@@ -962,6 +967,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::security::list_findings); // GET  /api/v1/admin/findings
     cfg.service(crate::handlers::security::bulk_rescan); // POST /api/v1/admin/verdicts/rescan
     cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
+                                                               // RFC 0050: the security console's summary, and the instance's own security.
+    cfg.service(crate::handlers::security_console::security_overview); // GET /api/v1/admin/security/overview
+    cfg.service(crate::handlers::security_console::security_trends); // GET /api/v1/admin/security/trends
+    cfg.service(crate::handlers::security_console::security_coverage); // GET /api/v1/admin/security/coverage
+    cfg.service(crate::handlers::security_console::security_coverage_registry); // GET /api/v1/admin/security/coverage/{registry}
+    cfg.service(crate::handlers::security_console::security_scanners); // GET /api/v1/admin/security/scanners
+    cfg.service(crate::handlers::back_office::instance_security::instance_security); // GET /api/v1/admin/instance-security
     cfg.service(download_cli);
     cfg.service(list_registries);
     cfg.service(crate::handlers::front_office::mise_auto_wire::mise_auto_wire); // GET /api/v1/mise/auto-wire (RFC 0045)

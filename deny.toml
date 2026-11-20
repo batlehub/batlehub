@@ -19,8 +19,18 @@ all-features = true
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Yanked crates are treated as a failure — a yank usually means "do not use".
 yanked = "deny"
-# Mirror the "no suppressions" stance of .cargo/audit.toml: nothing ignored.
-ignore = []
+# Mirror the "no suppressions" stance of .cargo/audit.toml — with one exception.
+#
+# RUSTSEC-2026-0543 says chrono is *unmaintained*: no vulnerability, and no
+# version to move to. Moving off it is not free: an audit seal hashes each
+# `access_events` row's JSON, timestamp included, and verify re-serialises the
+# stored rows, so the timestamp text is frozen. jiff writes `.12Z` where chrono
+# wrote `.120Z`, which would fail every window already sealed (sqlx 0.9 cannot
+# decode jiff either). Re-open this the day chrono carries a vulnerability: the
+# way out is a v2 seal format that verifies old windows as v1.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no fix; the audit-seal format pins its timestamp text — migrate with a v2 seal if chrono gets a vulnerability" },
+]
 
 # ── Bans ──────────────────────────────────────────────────────────────────────
 # These crates were deliberately removed from the dependency tree for security

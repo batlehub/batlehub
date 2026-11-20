@@ -568,14 +568,25 @@ impl ProxyService {
         artifact_key: &str,
         timing: &RequestTiming,
     ) -> Result<(), CoreError> {
-        if !(integrity.enabled && metadata.checksum.is_none()) {
+        if !integrity.enabled {
             return Ok(());
+        }
+        match metadata.checksum.as_deref() {
+            // An unparseable checksum verifies nothing, so `require_metadata`
+            // treats it as absent; otherwise the verifier logs and counts it.
+            Some(c)
+                if crate::services::integrity::parse_expected(c).is_some()
+                    || !integrity.require_metadata =>
+            {
+                return Ok(())
+            }
+            _ => {}
         }
         let registry_name = req.package_id.registry.as_str();
         metrics::counter!("batlehub_integrity_checks_total", "registry" => timing.registry_label.clone(), "outcome" => "missing").increment(1);
         if integrity.require_metadata && !req.identity.role.clears_bypass(&integrity.bypass_roles) {
             let reason = format!(
-                "integrity policy requires checksum metadata, but upstream provided none for {}",
+                "integrity policy requires checksum metadata, but upstream provided none usable for {}",
                 req.package_id,
             );
             self.audit_integrity_failure(req, &reason, "integrity missing metadata", timing)

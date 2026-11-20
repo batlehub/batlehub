@@ -1066,6 +1066,66 @@ if not {"scans:run", "quarantine:read", "findings:read"} <= verbs or "gates:exem
   authz_allowed flags:read "secops lists pushed flags" \
     GET "$T_SECOPS" "/api/v1/admin/flags"
 
+  # Case 6 (RFC 0050 §6.P obs. 1–3): the overview, per verb. secops holds
+  # quarantine:read and flags:read, so every block is there; the developer is
+  # refused before any source is read.
+  authz_allowed quarantine:read "secops reads the security overview" \
+    GET "$T_SECOPS" /api/v1/admin/security/overview
+  authz_body GET "$T_SECOPS" /api/v1/admin/security/overview | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+missing = [k for k in ("holds", "flags", "scanners", "coverage", "decisions") if k not in body]
+if missing:
+    sys.exit(f"the overview for secops lacks {missing}: {body}")
+' || heavy_fail "the security overview does not carry every block secops may read (obs. 1)"
+  authz_denied quarantine:read "$WHO_DENIED reads the security overview" \
+    GET "$T_DENIED" /api/v1/admin/security/overview
+  authz_body GET "$T_DENIED" /api/v1/admin/security/overview | grep -q "quarantine:read" \
+    || heavy_fail "a refused overview does not name quarantine:read (obs. 3)"
+  authz_allowed quarantine:read "secops reads the trends" \
+    GET "$T_SECOPS" "/api/v1/admin/security/trends?window=7d"
+  authz_allowed quarantine:read "secops reads the coverage" \
+    GET "$T_SECOPS" /api/v1/admin/security/coverage
+  authz_allowed quarantine:read "secops reads the scanners" \
+    GET "$T_SECOPS" /api/v1/admin/security/scanners
+
+  # Obs. 7: `security status` exits 1 on an ATTENTION line (the proxies here
+  # have no [security] profile: coverage is ATTENTION), 4 on a refusal.
+  heavy_cli "$T_SECOPS" security status
+  [[ "$HEAVY_CLI_CODE" == 1 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status as secops exited $HEAVY_CLI_CODE, expected 1"; }
+  grep -q "^COVERAGE *ATTENTION" "$HEAVY_CLI_OUT" \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status printed no COVERAGE ATTENTION line"; }
+  heavy_cli "$T_DENIED" security status
+  [[ "$HEAVY_CLI_CODE" == 4 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "security status as $WHO_DENIED exited $HEAVY_CLI_CODE, expected 4"; }
+
+  # Obs. 9: instance security. Every static token in this config is in clear,
+  # so each is an `auth.plain-static-token`; the SRE (system:read only) gets
+  # paths, the administrator user ids too, and no body carries a token value.
+  authz_denied system:read "secops reads instance security" \
+    GET "$T_SECOPS" /api/v1/admin/instance-security
+  authz_allowed system:read "the SRE reads instance security" \
+    GET "$T_SRE" /api/v1/admin/instance-security
+  authz_body GET "$T_SRE" /api/v1/admin/instance-security >"$HEAVY_WORK/instance-sre.json"
+  authz_body GET "$T_ADMIN" /api/v1/admin/instance-security >"$HEAVY_WORK/instance-admin.json"
+  python3 - "$HEAVY_WORK/instance-sre.json" "$HEAVY_WORK/instance-admin.json" tests/heavy/config.authz.toml <<'PY' \
+    || heavy_fail "instance security leaks what its verbs withhold (obs. 9)"
+import json, re, sys
+sre, admin = (json.load(open(p)) for p in sys.argv[1:3])
+values = re.findall(r'^value\s*=\s*"([^"]+)"', open(sys.argv[3]).read(), re.M)
+for name, body in (("sre", sre), ("admin", admin)):
+    text = json.dumps(body)
+    leaked = [v for v in values if v in text]
+    assert not leaked, f"{name}: token values in the body: {len(leaked)}"
+assert sre["static_tokens"]["plain"] >= 1 and sre["static_tokens"]["paths"], sre
+assert "user_ids" not in sre["static_tokens"], sre
+assert "addresses" not in sre["sign_ins"], sre
+assert admin["static_tokens"]["user_ids"], admin
+PY
+  grep -q "auth.plain-static-token" "$HEAVY_WORK/server.log" \
+    || heavy_fail "the startup log carries no auth.plain-static-token warning (obs. 9)"
+
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
   # All three shipped **unreachable**: no §10 rule produces a verb no legacy
@@ -2862,7 +2922,8 @@ phase_cargo_owner_yank() {
   local owners="/api/v1/admin/registries/$CARGO_R/packages/$AUTHZ_CARGO_CRATE/owners"
   authz_body POST "$T_ADMIN" "$owners" -H "$HDR_JSON" \
     --data '{"principal_type":"user","principal_id":"authz-reader"}' >/dev/null
-  grep -q '"authz-reader"' <<<"$(authz_body GET "$T_ADMIN" "$owners")" \
+  # A bare id is scoped to the one provider that yields user ids, and listed so.
+  grep -q '"static-token:authz-reader"' <<<"$(authz_body GET "$T_ADMIN" "$owners")" \
     || heavy_fail "cargo: could not make authz-reader an owner of $AUTHZ_CARGO_CRATE"
 
   # A resolve from scratch in the reader's consumer: what a new user gets.
@@ -4408,20 +4469,24 @@ assert reasons and all(reasons), f"a denied line with no reason: {reasons}"
   heavy_log "waiting out the throttle window"
   sleep $(( 62 - ($(date +%s) - first_at) ))
   curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  # Two rows or three: the held-back twenty ride the next attempt's row, unless
+  # the 10 s flusher (`CredentialRejectionAudit::flush_held`) wrote them first
+  # on a row of their own. Which one wins depends on where its tick falls, so
+  # the invariant is the sum: every attempt is counted once, as 1 + throttled.
   n="$(audit_count credential_rejected)"
-  [[ "$n" == 2 ]] || heavy_fail "after the window the next attempt should write the second row, found $n rows"
+  [[ "$n" == 2 || "$n" == 3 ]] || heavy_fail "after the window the next attempt should write one more row (two with the flusher's), found $n rows"
   audit_lines | python3 -c '
 import json, sys
 rows = [json.loads(l) for l in sys.stdin if "\"event.action\":\"credential_rejected\"" in l]
-held = rows[-1]["batlehub.audit.throttled_count"]
-assert held >= 20, f"the row after the window carries {held}, not the twenty (and more) held back"
-' || heavy_fail "the attempts the throttle held back are not counted on the next row"
+total = sum(1 + (r.get("batlehub.audit.throttled_count") or 0) for r in rows)
+assert total >= 22, f"the rows count {total} attempts, not the twenty-two (and more) made"
+' || heavy_fail "the attempts the throttle held back are not counted"
 
   # The table says the same as the stream.
   local table
   table="$(curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=credential_rejected&per_page=10" \
     -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
-  [[ "$table" == 2 ]] || heavy_fail "the stream has two credential_rejected rows and the table has $table"
+  [[ "$table" == "$n" ]] || heavy_fail "the stream has $n credential_rejected rows and the table has $table"
 
   # ── 4. the sealed trail verifies, and an altered row breaks its window ──
   heavy_mark "audit-verify"
@@ -4480,7 +4545,7 @@ assert hit, f"no failure names the window holding {at}: {fails}"
     return $?
   }
   [[ "$(audit_rows download)" == 0 ]] || heavy_fail "download rows survived a purge past them"
-  [[ "$(audit_rows credential_rejected)" == 2 ]] \
+  [[ "$(audit_rows credential_rejected)" == "$n" ]] \
     || heavy_fail "the purge removed credential_rejected rows — security rows are not the purge's to remove"
   [[ "$(audit_rows audit_purge)" -ge 1 ]] || heavy_fail "the purge left no row of itself"
   local purges
