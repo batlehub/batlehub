@@ -206,6 +206,7 @@ dependencies = [
  "futures",
  "glob",
  "hex",
+ "http",
  "libc",
  "lzma-rs",
  "metrics",

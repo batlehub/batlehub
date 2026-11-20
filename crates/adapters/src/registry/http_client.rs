@@ -129,35 +129,57 @@ pub fn new_http_client(
 }
 
 /// [`new_http_client`] for an adapter with its own builder (user agent, extra
-/// default headers). `builder` is called twice: once for the credentialed
-/// client, once for the credential-free one a cross-origin hop is sent with.
+/// default headers). `builder` is called once per client: the credentialed
+/// ones, and the credential-free one a cross-origin hop is sent with.
 pub fn upstream_client(
     builder: impl Fn() -> reqwest::ClientBuilder,
     redirect_limit: usize,
     opts: &UpstreamHttpOptions,
 ) -> anyhow::Result<UpstreamClient> {
-    let custom_header = opts.custom_header.as_ref().map(|(name, _)| name.clone());
-    let http = apply_upstream_options(
-        builder().redirect(guarded_redirect_policy(
-            redirect_limit,
-            custom_header.is_some(),
-        )),
-        opts,
-    )?;
-    let plain = match custom_header {
-        Some(_) => Some(
-            apply_upstream_tls(
+    upstream_client_stripping(builder, redirect_limit, opts, &[])
+}
+
+/// [`upstream_client`] for an adapter that adds a credential header of its own
+/// per request (NuGet's `X-NuGet-ApiKey`): `secret_headers` are stripped on a
+/// cross-origin hop like the configured `custom_header`.
+pub fn upstream_client_stripping(
+    builder: impl Fn() -> reqwest::ClientBuilder,
+    redirect_limit: usize,
+    opts: &UpstreamHttpOptions,
+    secret_headers: &[&str],
+) -> anyhow::Result<UpstreamClient> {
+    let secret_headers: Vec<String> = opts
+        .custom_header
+        .iter()
+        .map(|(name, _)| name.clone())
+        .chain(secret_headers.iter().map(|h| (*h).to_owned()))
+        .collect();
+    let keyed = !secret_headers.is_empty();
+    let credentialed = |carries_body| {
+        apply_upstream_options(
+            builder().redirect(redirect_policy(redirect_limit, keyed, carries_body)),
+            opts,
+        )
+    };
+    let http = credentialed(false)?;
+    let (http_body, plain) = if keyed {
+        let plain = apply_upstream_tls(
+            super::ssrf::public_only_dns(
                 builder().redirect(guarded_redirect_policy(redirect_limit, false)),
                 opts,
-            )?
-            .build()?,
-        ),
-        None => None,
+            ),
+            opts,
+        )?
+        .build()?;
+        (Some(credentialed(true)?), Some(plain))
+    } else {
+        (None, None)
     };
     Ok(UpstreamClient {
         http,
+        http_body,
         plain,
-        custom_header,
+        secret_headers,
     })
 }
 
@@ -170,15 +192,32 @@ pub fn upstream_client(
 ///   handed back, and [`UpstreamRequest::send`] follows it with a client that
 ///   carries no credential (an Artifactory redirecting a download to S3);
 /// - an IP-literal target in a blocked range (`169.254.169.254`, `[::1]`, …) is
-///   refused before it is dialled.
+///   refused before it is dialled, unless the first URL is itself one: an
+///   operator who configured `http://10.20.0.5/` chose an on-prem upstream, and
+///   its redirect to a sibling (`http://10.20.0.6:9000/…`) is part of it.
+///
+/// A same-host `http` → `https` upgrade on default ports counts as same-origin.
 ///
 /// shortcut: a cross-origin hop to a *hostname* that resolves privately is not
-/// checked here (a sync policy cannot resolve); the full guard is
+/// checked here (a sync policy cannot resolve), and a hostname upstream
+/// redirecting to a private literal is refused; the full guard is
 /// [`super::ssrf::fetch_following_redirects`], move a client to it when its
 /// artifact URLs come from upstream data.
 pub fn guarded_redirect_policy(
     limit: usize,
     forwards_credential: bool,
+) -> reqwest::redirect::Policy {
+    redirect_policy(limit, forwards_credential, false)
+}
+
+/// [`guarded_redirect_policy`]; `carries_body` is the client a non-GET/HEAD
+/// request is sent with, whose cross-origin hop after an earlier one is an
+/// error: reqwest may have turned it into a GET on the way, and `send` cannot
+/// tell, so it could only replay the wrong method or body.
+fn redirect_policy(
+    limit: usize,
+    forwards_credential: bool,
+    carries_body: bool,
 ) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() > limit {
@@ -187,18 +226,36 @@ pub fn guarded_redirect_policy(
         let Some(first) = attempt.previous().first() else {
             return attempt.follow();
         };
-        if same_origin(attempt.url(), first) {
+        let next = attempt.url();
+        if same_site(next, first) {
             return attempt.follow();
         }
-        if forwards_credential {
-            return attempt.stop();
+        if !matches!(next.scheme(), "http" | "https") {
+            return attempt.error("refusing a redirect to a non-HTTP URL");
         }
-        if is_blocked_literal(attempt.url()) {
+        if is_blocked_literal(next) && !is_blocked_literal(first) {
             return attempt
                 .error("refusing a redirect to a private or reserved address (SSRF guard)");
         }
-        attempt.follow()
+        if !forwards_credential {
+            return attempt.follow();
+        }
+        if carries_body && attempt.previous().len() > 1 {
+            return attempt.error("refusing to replay a request body on a cross-origin redirect");
+        }
+        attempt.stop()
     })
+}
+
+/// [`same_origin`], plus a same-host `http` → `https` upgrade on default
+/// ports: an on-prem mirror moving its clients to TLS is still that mirror.
+fn same_site(next: &reqwest::Url, from: &reqwest::Url) -> bool {
+    same_origin(next, from)
+        || (from.scheme() == "http"
+            && next.scheme() == "https"
+            && from.port().is_none()
+            && next.port().is_none()
+            && from.host_str() == next.host_str())
 }
 
 /// A URL whose host is an IP literal in a blocked range.
@@ -213,16 +270,19 @@ fn is_blocked_literal(url: &reqwest::Url) -> bool {
 /// `custom_header`: reqwest strips only `Authorization`/`Cookie` on such a hop
 /// and its redirect policy cannot touch headers, so a hop that leaves the
 /// origin is handed back by [`guarded_redirect_policy`] and re-sent here with
-/// `plain`, which has the same TLS and proxy settings and no credential.
+/// `plain`, which has the same TLS and proxy settings, no credential, and a
+/// resolver that refuses private addresses.
 ///
 /// It mirrors the slice of `reqwest`'s API the adapters use, so `send` cannot
 /// be bypassed by a call site that forgets it.
 #[derive(Clone, Debug)]
 pub struct UpstreamClient {
     http: reqwest::Client,
-    /// `Some` only when a `custom_header` is configured.
+    /// `http` for a non-GET/HEAD request; `Some` only with `plain`.
+    http_body: Option<reqwest::Client>,
+    /// `Some` only when a credential header has to be stripped.
     plain: Option<reqwest::Client>,
-    custom_header: Option<String>,
+    secret_headers: Vec<String>,
 }
 
 impl UpstreamClient {
@@ -252,8 +312,12 @@ impl UpstreamClient {
     }
 
     pub fn request<U: reqwest::IntoUrl>(&self, method: reqwest::Method, url: U) -> UpstreamRequest {
+        let http = match (&self.http_body, &method) {
+            (_, &reqwest::Method::GET | &reqwest::Method::HEAD) | (None, _) => &self.http,
+            (Some(http_body), _) => http_body,
+        };
         UpstreamRequest {
-            rb: self.http.request(method, url),
+            rb: http.request(method, url),
             client: self.clone(),
         }
     }
@@ -301,10 +365,6 @@ impl UpstreamRequest {
         self.map(|rb| rb.header(key, value))
     }
 
-    pub fn headers(self, headers: HeaderMap) -> Self {
-        self.map(|rb| rb.headers(headers))
-    }
-
     pub fn basic_auth<U: std::fmt::Display, P: std::fmt::Display>(
         self,
         username: U,
@@ -313,20 +373,9 @@ impl UpstreamRequest {
         self.map(|rb| rb.basic_auth(username, password))
     }
 
-    pub fn bearer_auth<T: std::fmt::Display>(self, token: T) -> Self {
-        self.map(|rb| rb.bearer_auth(token))
-    }
-
+    /// The body is always buffered (no streaming setter), so a hop can replay it.
     pub fn json<T: serde::Serialize + ?Sized>(self, json: &T) -> Self {
         self.map(|rb| rb.json(json))
-    }
-
-    pub fn body<T: Into<reqwest::Body>>(self, body: T) -> Self {
-        self.map(|rb| rb.body(body))
-    }
-
-    pub fn timeout(self, timeout: std::time::Duration) -> Self {
-        self.map(|rb| rb.timeout(timeout))
     }
 
     /// Sends the request; a cross-origin `3xx` the credentialed client handed
@@ -338,7 +387,7 @@ impl UpstreamRequest {
         };
         let (http, req) = self.rb.build_split();
         let req = req?;
-        // `None` for a streamed body, which a redirect could not replay anyway.
+        // Always `Some`: `UpstreamRequest` has no streamed-body setter.
         let replay = req.try_clone();
         let resp = http.execute(req).await?;
         let Some(mut next) = replay else {
@@ -347,20 +396,26 @@ impl UpstreamRequest {
         let Some(location) = cross_origin_location(&resp) else {
             return Ok(resp);
         };
-        // What reqwest does itself: 303, and 301/302 after a POST, become a GET.
-        match resp.status().as_u16() {
-            307 | 308 => {}
-            303 => *next.method_mut() = reqwest::Method::GET,
-            _ if next.method() == reqwest::Method::POST => {
-                *next.method_mut() = reqwest::Method::GET;
-            }
-            _ => {}
-        }
-        if next.method() == reqwest::Method::GET {
-            *next.body_mut() = None;
-        }
-        *next.url_mut() = location;
+        // What tower-http's follow-redirect (reqwest's own) does: 303 makes
+        // anything but HEAD a GET, 301/302 make a POST one. The policy already
+        // refused a body after an earlier hop, so `next` is still the request
+        // that reached this one.
+        let to_get = match resp.status().as_u16() {
+            303 => next.method() != reqwest::Method::HEAD,
+            301 | 302 => next.method() == reqwest::Method::POST,
+            _ => false,
+        };
         let headers = next.headers_mut();
+        if to_get {
+            for name in [
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::CONTENT_LENGTH,
+                reqwest::header::CONTENT_ENCODING,
+                reqwest::header::TRANSFER_ENCODING,
+            ] {
+                headers.remove(name);
+            }
+        }
         for name in [
             reqwest::header::AUTHORIZATION,
             reqwest::header::COOKIE,
@@ -368,18 +423,23 @@ impl UpstreamRequest {
         ] {
             headers.remove(name);
         }
-        if let Some(name) = &self.client.custom_header {
+        for name in &self.client.secret_headers {
             headers.remove(name.as_str());
         }
+        if to_get {
+            *next.method_mut() = reqwest::Method::GET;
+            *next.body_mut() = None;
+        }
+        *next.url_mut() = location;
         plain.execute(next).await
     }
 }
 
-/// The `Location` of a redirect that leaves the response's origin to a target
-/// [`guarded_redirect_policy`] would dial: the hop it stopped instead of
-/// forwarding the credential. `None` for anything else, which is returned as is.
+/// The `Location` of a redirect [`guarded_redirect_policy`] stopped instead of
+/// forwarding the credential: one it would follow, off the response's origin.
+/// It already refused the rest (private literal, non-HTTP scheme) as errors.
 fn cross_origin_location(resp: &reqwest::Response) -> Option<reqwest::Url> {
-    if !resp.status().is_redirection() {
+    if !matches!(resp.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
         return None;
     }
     let location = resp
@@ -388,10 +448,7 @@ fn cross_origin_location(resp: &reqwest::Response) -> Option<reqwest::Url> {
         .to_str()
         .ok()?;
     let next = resp.url().join(location).ok()?;
-    let followable = matches!(next.scheme(), "http" | "https")
-        && !same_origin(&next, resp.url())
-        && !is_blocked_literal(&next);
-    followable.then_some(next)
+    (!same_site(&next, resp.url())).then_some(next)
 }
 
 /// The client pair a manually-followed redirect chain needs.
@@ -1875,16 +1932,44 @@ mod tests {
         assert!(result.unwrap().build().is_ok());
     }
 
+    /// A keyed client whose upstream and "S3" are hostnames (`up.test`,
+    /// `s3.test`) pinned to the mock servers: a 127.0.0.1 literal upstream is
+    /// the on-prem case, and `localhost` is refused by the public-only resolver.
+    fn keyed_via_hosts(
+        up: &mockito::Server,
+        s3: &mockito::Server,
+    ) -> (UpstreamClient, String, String) {
+        let (up_addr, s3_addr) = (up.socket_address(), s3.socket_address());
+        let client = upstream_client(
+            || {
+                reqwest::Client::builder()
+                    .resolve("up.test", up_addr)
+                    .resolve("s3.test", s3_addr)
+            },
+            10,
+            &UpstreamHttpOptions {
+                custom_header: Some(("X-Api-Key".to_owned(), "secret".to_owned())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        (
+            client,
+            format!("http://up.test:{}", up_addr.port()),
+            format!("http://s3.test:{}", s3_addr.port()),
+        )
+    }
+
     /// An upstream `302` to another host is followed without the configured
     /// `custom_header` (reqwest strips only `Authorization`): an Artifactory
-    /// handing a download to S3. A same-origin hop keeps it, and an IP-literal
-    /// private target is never dialled.
+    /// handing a download to S3. A same-origin hop keeps it, and a private
+    /// literal or a non-HTTP target is an error, never a `3xx` an adapter
+    /// would serve as the artifact.
     #[tokio::test]
     async fn guarded_redirects_keep_credentials_and_private_targets_out() {
         let mut other = mockito::Server::new_async().await;
-        // `localhost`, not the literal: a hostname is the S3 case, and a
-        // 127.0.0.1 literal is the private target the guard refuses.
-        let other_host = format!("http://localhost:{}", other.socket_address().port());
+        let mut upstream = mockito::Server::new_async().await;
+        let (keyed, up, s3_host) = keyed_via_hosts(&upstream, &other);
         let s3 = other
             .mock("GET", "/x")
             .match_header("x-api-key", mockito::Matcher::Missing)
@@ -1894,18 +1979,23 @@ mod tests {
             .create_async()
             .await;
         let literal = other.mock("GET", "/literal").expect(0).create_async().await;
-        let mut upstream = mockito::Server::new_async().await;
         let _hop = upstream
             .mock("GET", "/a.tgz")
             .match_header("x-api-key", "secret")
             .with_status(302)
-            .with_header("location", &format!("{other_host}/x"))
+            .with_header("location", &format!("{s3_host}/x"))
             .create_async()
             .await;
         let _private = upstream
             .mock("GET", "/private")
             .with_status(302)
             .with_header("location", &format!("{}/literal", other.url()))
+            .create_async()
+            .await;
+        let _ftp = upstream
+            .mock("GET", "/ftp")
+            .with_status(302)
+            .with_header("location", "ftp://files.example.com/a.tgz")
             .create_async()
             .await;
         let _same = upstream
@@ -1922,6 +2012,79 @@ mod tests {
             .create_async()
             .await;
 
+        let moved = keyed
+            .get(format!("{up}/a.tgz"))
+            .header("accept", "application/octet-stream")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(moved.status(), 200);
+        assert_eq!(moved.text().await.unwrap(), "bytes");
+        // Same-origin hops are still followed with the credential.
+        let ok = keyed.get(format!("{up}/same")).send().await.unwrap();
+        assert_eq!(ok.text().await.unwrap(), "ok");
+        // A private literal, and a scheme `send` would not follow, are errors.
+        assert!(keyed.get(format!("{up}/private")).send().await.is_err());
+        assert!(keyed.get(format!("{up}/ftp")).send().await.is_err());
+
+        // No credential: the hop is cross-origin to 127.0.0.1, a blocked literal.
+        let plain = upstream_client(
+            || reqwest::Client::builder().resolve("up.test", upstream.socket_address()),
+            10,
+            &UpstreamHttpOptions::default(),
+        )
+        .unwrap();
+        assert!(plain.get(format!("{up}/private")).send().await.is_err());
+
+        s3.assert_async().await;
+        literal.assert_async().await;
+    }
+
+    /// The credential-free hop resolves through the public-only resolver: a
+    /// hostname that resolves to loopback (`localhost`, an `*.internal` metadata
+    /// name) is never dialled.
+    #[tokio::test]
+    async fn a_keyed_hop_to_a_privately_resolving_host_is_refused() {
+        let mut other = mockito::Server::new_async().await;
+        let mut upstream = mockito::Server::new_async().await;
+        let (keyed, up, _) = keyed_via_hosts(&upstream, &other);
+        let target = other.mock("GET", "/x").expect(0).create_async().await;
+        let _hop = upstream
+            .mock("GET", "/a.tgz")
+            .with_status(302)
+            .with_header(
+                "location",
+                &format!("http://localhost:{}/x", other.socket_address().port()),
+            )
+            .create_async()
+            .await;
+        assert!(keyed.get(format!("{up}/a.tgz")).send().await.is_err());
+        target.assert_async().await;
+    }
+
+    /// An on-prem upstream configured as a private literal may redirect to a
+    /// private sibling (a Nexus handing a blob to its MinIO); keyed, the hop
+    /// goes without the key.
+    #[tokio::test]
+    async fn a_private_literal_upstream_may_redirect_to_a_private_sibling() {
+        let mut other = mockito::Server::new_async().await;
+        let mut upstream = mockito::Server::new_async().await;
+        let blob = other
+            .mock("GET", "/blob")
+            .match_header("x-api-key", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_body("bytes")
+            .expect(2)
+            .create_async()
+            .await;
+        let _hop = upstream
+            .mock("GET", "/a.tgz")
+            .with_status(302)
+            .with_header("location", &format!("{}/blob", other.url()))
+            .create_async()
+            .await;
+        let url = format!("{}/a.tgz", upstream.url());
+        let plain = new_http_client(None, &UpstreamHttpOptions::default()).unwrap();
         let keyed = new_http_client(
             None,
             &UpstreamHttpOptions {
@@ -1930,38 +2093,129 @@ mod tests {
             },
         )
         .unwrap();
-        let moved = keyed
-            .get(format!("{}/a.tgz", upstream.url()))
-            .header("accept", "application/octet-stream")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(moved.status(), 200);
-        assert_eq!(moved.text().await.unwrap(), "bytes");
-        // Same-origin hops are still followed with the credential.
-        let ok = keyed
-            .get(format!("{}/same", upstream.url()))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ok.text().await.unwrap(), "ok");
-        // A private literal is handed back as the redirect, never dialled.
-        let private = keyed
-            .get(format!("{}/private", upstream.url()))
-            .send()
-            .await
-            .unwrap();
-        assert!(private.status().is_redirection());
+        for client in [plain, keyed] {
+            let resp = client.get(&url).send().await.unwrap();
+            assert_eq!(resp.text().await.unwrap(), "bytes");
+        }
+        blob.assert_async().await;
+    }
 
-        // No credential: the hop is cross-origin to 127.0.0.1, a blocked literal.
-        let plain = new_http_client(None, &UpstreamHttpOptions::default()).unwrap();
-        assert!(plain
-            .get(format!("{}/private", upstream.url()))
+    #[test]
+    fn an_https_upgrade_on_the_same_host_is_same_site() {
+        let u = |s: &str| reqwest::Url::parse(s).unwrap();
+        assert!(same_site(
+            &u("https://10.0.0.5/debian/x"),
+            &u("http://10.0.0.5/debian")
+        ));
+        assert!(!same_site(
+            &u("http://10.0.0.5/x"),
+            &u("https://10.0.0.5/x")
+        ));
+        assert!(!same_site(
+            &u("https://10.0.0.5:8443/x"),
+            &u("http://10.0.0.5/x")
+        ));
+        assert!(!same_site(
+            &u("https://10.0.0.6/x"),
+            &u("http://10.0.0.5/x")
+        ));
+    }
+
+    /// The keyless replay rewrites the request the way reqwest's own following
+    /// does: 303 keeps a HEAD, turns a POST into a body-less GET without its
+    /// payload headers; 307 keeps a POST and its body; a 300 is not followed.
+    #[tokio::test]
+    async fn a_keyed_cross_origin_hop_rewrites_the_method_like_reqwest() {
+        let mut other = mockito::Server::new_async().await;
+        let mut upstream = mockito::Server::new_async().await;
+        let (keyed, up, s3_host) = keyed_via_hosts(&upstream, &other);
+        for (method, path, status) in [
+            ("HEAD", "/see", 303),
+            ("POST", "/see", 303),
+            ("POST", "/temp", 307),
+            ("GET", "/multi", 300),
+        ] {
+            upstream
+                .mock(method, path)
+                .with_status(status)
+                .with_header("location", &format!("{s3_host}/x"))
+                .create_async()
+                .await;
+        }
+        let head = other
+            .mock("HEAD", "/x")
+            .with_status(200)
+            .create_async()
+            .await;
+        let get = other
+            .mock("GET", "/x")
+            .match_header("content-type", mockito::Matcher::Missing)
+            .match_header("content-length", mockito::Matcher::Missing)
+            .match_body("")
+            .with_status(200)
+            .create_async()
+            .await;
+        let post = other
+            .mock("POST", "/x")
+            .match_header("content-type", "application/json")
+            .match_body(r#"{"q":1}"#)
+            .with_status(200)
+            .create_async()
+            .await;
+        let body = serde_json::json!({"q": 1});
+
+        let r = keyed.head(format!("{up}/see")).send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let r = keyed
+            .post(format!("{up}/see"))
+            .json(&body)
             .send()
             .await
-            .is_err());
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let r = keyed
+            .post(format!("{up}/temp"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let r = keyed.get(format!("{up}/multi")).send().await.unwrap();
+        assert_eq!(r.status(), 300);
 
-        s3.assert_async().await;
-        literal.assert_async().await;
+        head.assert_async().await;
+        get.assert_async().await;
+        post.assert_async().await;
+    }
+
+    /// A POST that reqwest already followed one hop with (and may have turned
+    /// into a GET) is not replayed on a cross-origin hop: it is an error.
+    #[tokio::test]
+    async fn a_keyed_post_is_not_replayed_after_an_earlier_hop() {
+        let mut other = mockito::Server::new_async().await;
+        let mut upstream = mockito::Server::new_async().await;
+        let (keyed, up, s3_host) = keyed_via_hosts(&upstream, &other);
+        upstream
+            .mock("POST", "/q")
+            .with_status(302)
+            .with_header("location", "/moved")
+            .create_async()
+            .await;
+        upstream
+            .mock("GET", "/moved")
+            .with_status(307)
+            .with_header("location", &format!("{s3_host}/x"))
+            .create_async()
+            .await;
+        let target_get = other.mock("GET", "/x").expect(0).create_async().await;
+        let target_post = other.mock("POST", "/x").expect(0).create_async().await;
+        let sent = keyed
+            .post(format!("{up}/q"))
+            .json(&serde_json::json!({"q": 1}))
+            .send()
+            .await;
+        assert!(sent.is_err());
+        target_get.assert_async().await;
+        target_post.assert_async().await;
     }
 }
