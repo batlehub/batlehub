@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 0e8b14d806c800e0
+sourceHash: 2e277f646c7c6a65
 ---
 
 # Rechargement à chaud et configuration dynamique
