@@ -612,6 +612,9 @@ Ce sont des compromis assumés, consignés dans
   quinze secondes une empreinte de sa configuration fusionnée à PostgreSQL
   (`system_kv`), si bien qu'un fichier reformaté mais identique ne compte pas
   comme une différence.
+  L'accepter avec `[console] accepted = ["warning:config.replica-drift"]` ne
+  prend effet que lorsque la configuration de chaque réplica signalé le dit :
+  la réponse ne dépend donc pas du réplica qui sert la page.
 
 - **Le catalogue suit en quinze secondes** — un paquet qu'un réplica publie,
   supprime ou met en cache pour la première fois vide les listes en cache de ce

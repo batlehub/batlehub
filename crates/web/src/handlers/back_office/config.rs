@@ -524,7 +524,11 @@ pub async fn get_config_warnings(
     // `[console].accepted` covers the rows raised outside `AppConfig::warnings` too.
     let accepted = hot.read().await.accepted_warnings.clone();
     for w in &mut warnings {
-        w.accepted |= accepted.contains(&w.code);
+        // The drift row's acceptance is the replicas' joint answer (drift.rs),
+        // not the answering replica's own list.
+        if w.code != batlehub_config::schema::warnings::CONFIG_REPLICA_DRIFT {
+            w.accepted |= accepted.contains(&w.code);
+        }
     }
     Ok(web::Json(ConfigWarningsResponse { warnings }))
 }

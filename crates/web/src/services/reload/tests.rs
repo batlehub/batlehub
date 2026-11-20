@@ -1340,6 +1340,27 @@ async fn replicas_serving_different_configs_raise_a_drift_warning() {
     assert!(warning.message.contains("pod-b"), "{}", warning.message);
 }
 
+/// Accepting the drift is the replicas' joint answer: one replica accepting it
+/// does not make the row accepted, whichever replica is asked.
+#[tokio::test]
+async fn the_drift_is_accepted_only_when_every_replica_accepts_it() {
+    let accepting =
+        |c: &str| format!("{c}\n[console]\naccepted = [\"warning:config.replica-drift\"]\n");
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", &accepting(MINIMAL_CONFIG), &cluster).await;
+    let (b, _fb) = replica_named("pod-b", OTHER_PORT_CONFIG, &cluster).await;
+    assert!(!a.replica_drift().await.expect("drift").accepted);
+    assert!(!b.replica_drift().await.expect("drift").accepted);
+
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", &accepting(MINIMAL_CONFIG), &cluster).await;
+    let (b, _fb) = replica_named("pod-b", &accepting(OTHER_PORT_CONFIG), &cluster).await;
+    assert!(a.replica_drift().await.expect("drift").accepted);
+    assert!(b.replica_drift().await.expect("drift").accepted);
+}
+
 #[tokio::test]
 async fn replicas_serving_the_same_config_raise_nothing_however_it_is_formatted() {
     let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =

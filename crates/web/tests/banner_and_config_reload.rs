@@ -441,18 +441,31 @@ async fn config_warnings_endpoint_returns_the_active_warnings() {
     assert_eq!(warnings[0]["path"], "server.trusted_proxies");
 }
 
-/// `config.replica-drift` and the mise rows are raised outside
-/// `AppConfig::warnings`, so the endpoint applies `[console].accepted` itself.
+/// The mise rows are raised outside `AppConfig::warnings`, so the endpoint
+/// applies `[console].accepted` itself. `config.replica-drift` is the
+/// exception: its acceptance is every replica's (drift.rs), never the local
+/// list of whichever replica answers.
 #[actix_web::test]
 async fn config_warnings_endpoint_marks_a_warning_raised_outside_the_config_accepted() {
     use batlehub_config::schema::{warnings as codes, ConfigWarning};
     let app = build_reload_app(ReloadAppOpts {
-        warnings: vec![ConfigWarning::new(
-            codes::CONFIG_REPLICA_DRIFT,
-            "replicas",
-            "the replicas serve 2 different configurations",
-        )],
-        accepted_warnings: [codes::CONFIG_REPLICA_DRIFT.to_owned()].into(),
+        warnings: vec![
+            ConfigWarning::new(
+                codes::MISE_WIRE_PREFIX_CLAIMED,
+                "registries",
+                "a wire prefix is claimed twice",
+            ),
+            ConfigWarning::new(
+                codes::CONFIG_REPLICA_DRIFT,
+                "replicas",
+                "the replicas serve 2 different configurations",
+            ),
+        ],
+        accepted_warnings: [
+            codes::MISE_WIRE_PREFIX_CLAIMED.to_owned(),
+            codes::CONFIG_REPLICA_DRIFT.to_owned(),
+        ]
+        .into(),
         ..Default::default()
     })
     .await;
@@ -467,6 +480,7 @@ async fn config_warnings_endpoint_marks_a_warning_raised_outside_the_config_acce
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
     assert_eq!(body["warnings"][0]["accepted"], true);
+    assert_eq!(body["warnings"][1]["accepted"], false);
 }
 
 #[actix_web::test]

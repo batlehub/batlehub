@@ -431,6 +431,9 @@ impl UpstreamRequest {
             *next.body_mut() = None;
         }
         *next.url_mut() = location;
+        // shortcut: `plain` counts its own hops from zero, so a chain may take up
+        // to twice the limit (still bounded); thread the count through if a real
+        // upstream ever needs the exact limit.
         plain.execute(next).await
     }
 }
