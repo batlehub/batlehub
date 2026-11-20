@@ -341,6 +341,47 @@ pub(super) fn local_crate_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
+/// The stored spelling of `name` among `existing`: a crate published as
+/// `MyCrate` before names were folded keeps its row, so it is matched
+/// case-insensitively; anything else gets the folded name.
+pub(super) fn stored_crate_name(existing: &[String], name: &str) -> String {
+    let folded = local_crate_name(name);
+    if existing.contains(&folded) {
+        return folded;
+    }
+    existing
+        .iter()
+        .find(|n| n.eq_ignore_ascii_case(name))
+        .cloned()
+        .unwrap_or(folded)
+}
+
+/// [`stored_crate_name`] against the registry, listing names only when no
+/// row answers to the folded name and the client sent another spelling. The row's own `name` is taken because a
+/// backend may match names case-insensitively while storage keys do not.
+pub(super) async fn local_crate_key(
+    local_svc: &batlehub_core::services::LocalRegistryService,
+    registry: &str,
+    name: &str,
+) -> Result<String, crate::error::AppError> {
+    let folded = local_crate_name(name);
+    if let Some(row) = local_svc
+        .backend
+        .get_versions(registry, &folded)
+        .await?
+        .first()
+    {
+        return Ok(row.name.clone());
+    }
+    // A lowercase request (every sparse-index path) never listed a mixed-case
+    // crate before folding either; skipping it keeps a hybrid miss to one read.
+    if folded == name {
+        return Ok(folded);
+    }
+    let existing = local_svc.backend.list_package_names(registry).await?;
+    Ok(stored_crate_name(&existing, name))
+}
+
 /// crates.io's uniqueness rule: case-insensitive, with `-` and `_` equal.
 pub(super) fn crate_names_collide(a: &str, b: &str) -> bool {
     let fold = |n: &str| n.to_ascii_lowercase().replace('_', "-");
@@ -356,5 +397,15 @@ mod name_tests {
         assert_eq!(local_crate_name("MyCrate"), "mycrate");
         assert!(crate_names_collide("foo-bar", "Foo_Bar"));
         assert!(!crate_names_collide("foo-bar", "foobar"));
+    }
+
+    #[test]
+    fn a_crate_stored_before_folding_keeps_its_spelling() {
+        let existing = vec!["MyCrate".to_owned(), "other".to_owned()];
+        assert_eq!(stored_crate_name(&existing, "mycrate"), "MyCrate");
+        assert_eq!(stored_crate_name(&existing, "MYCRATE"), "MyCrate");
+        assert_eq!(stored_crate_name(&existing, "New"), "new");
+        let both = vec!["MyCrate".to_owned(), "mycrate".to_owned()];
+        assert_eq!(stored_crate_name(&both, "MyCrate"), "mycrate");
     }
 }

@@ -1,5 +1,6 @@
 use super::helpers::{
-    crate_names_collide, local_crate_name, metadata_to_index_entry, parse_publish_body,
+    crate_names_collide, local_crate_key, metadata_to_index_entry, parse_publish_body,
+    stored_crate_name,
 };
 use super::{
     collect_payload, delete, extract_signature_headers, put, require_cargo, require_local_mode,
@@ -68,7 +69,6 @@ pub async fn cargo_publish(
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::bad_request("missing 'name' in publish metadata"))?;
-    let name = local_crate_name(declared);
     // A new crate must not shadow an existing one under crates.io's rule:
     // `foo_bar` beside `foo-bar` is two crates cargo cannot tell apart.
     let existing = local_svc
@@ -76,6 +76,7 @@ pub async fn cargo_publish(
         .list_package_names(&registry)
         .await
         .map_err(AppError::from)?;
+    let name = stored_crate_name(&existing, declared);
     if let Some(other) = existing
         .iter()
         .find(|n| **n != name && crate_names_collide(n, &name))
@@ -197,8 +198,8 @@ pub async fn cargo_yank(
     notification_svc: web::Data<Option<Arc<NotificationService>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
-    let name = local_crate_name(&name);
     require_cargo(&registry, &map)?;
+    let name = local_crate_key(&local_svc, &registry, &name).await?;
     require_local_mode(&registry, &mode_map)?;
     let actor = identity.0.user_id.clone().unwrap_or_default();
     local_svc
@@ -242,8 +243,8 @@ pub async fn cargo_unyank(
     notification_svc: web::Data<Option<Arc<NotificationService>>>,
 ) -> Result<impl Responder, AppError> {
     let (registry, name, version) = path.into_inner();
-    let name = local_crate_name(&name);
     require_cargo(&registry, &map)?;
+    let name = local_crate_key(&local_svc, &registry, &name).await?;
     require_local_mode(&registry, &mode_map)?;
     let actor = identity.0.user_id.clone().unwrap_or_default();
     local_svc

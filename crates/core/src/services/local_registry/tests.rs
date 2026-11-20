@@ -2886,6 +2886,54 @@ mod write_verbs {
         );
     }
 
+    /// A PyPI version's extra file takes a slot of its own, so deleting the
+    /// version gives every one of them back, not only the primary's.
+    #[tokio::test]
+    async fn deleting_a_pypi_version_refunds_every_file() {
+        let mut s = svc_with(
+            InMemBackend::arc(),
+            registry_granting(&[Action::ReleasesPublish, Action::ReleasesDelete]),
+        );
+        let mut configs = HashMap::new();
+        configs.insert(
+            "npm".to_owned(),
+            RegistryQuotaConfig {
+                max_storage_bytes_per_user: None,
+                max_packages_per_user: Some(2),
+                warn_threshold: 0.8,
+                enforcement: QuotaEnforcement::Block,
+            },
+        );
+        s.quota = Some(Arc::new(QuotaService::new(MockQuotaRepo::arc(), configs)));
+
+        s.publish(super::publish_req("npm", "pkg", "1.0.0", user()))
+            .await
+            .unwrap();
+        s.add_pypi_file(
+            crate::services::PypiFileUpload {
+                registry: "npm",
+                name: "pkg",
+                version: "1.0.0",
+                filename: "pkg-1.0.0-py3-none-any.whl",
+                bytes: Bytes::from_static(b"wheel"),
+                sha256: "ab",
+                requires_python: None,
+            },
+            &user(),
+        )
+        .await
+        .unwrap();
+        assert!(s
+            .delete_version("npm", "pkg", "1.0.0", &user())
+            .await
+            .unwrap());
+        for v in ["2.0.0", "2.0.1"] {
+            s.publish(super::publish_req("npm", "pkg", v, user()))
+                .await
+                .expect("both slots are free again");
+        }
+    }
+
     fn publish_req() -> PublishRequest {
         PublishRequest {
             unlisted: false,

@@ -390,7 +390,18 @@ impl GrantAdminService {
         let raw = target;
         let target = &self.canonical(raw).await?;
         let repo = self.repo().await?;
-        let matcher = self.parse_subject(subject).await?;
+        let rows = repo
+            .grants_on_node(&target.registry, target.node_kind(), &target.node_key())
+            .await?;
+        let exact = SubjectMatcher::parse(subject)
+            .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
+        // A stored subject is removed as written: a legacy bare `user:<id>`
+        // cannot be scoped once several providers are configured.
+        let matcher = if rows.iter().any(|g| g.subject == exact) {
+            exact
+        } else {
+            self.parse_subject(subject).await?
+        };
 
         // Ownership rows are the projection's to remove. Letting this delete one
         // would make `owner remove` the only way to restore it, and the next
@@ -398,11 +409,7 @@ impl GrantAdminService {
         // on the write side, arriving through the delete.
         self.refuse_ownership_removal(target, &matcher).await?;
 
-        let existed = repo
-            .grants_on_node(&target.registry, target.node_kind(), &target.node_key())
-            .await?
-            .into_iter()
-            .any(|g| g.subject == matcher);
+        let existed = rows.iter().any(|g| g.subject == matcher);
 
         repo.delete_grant(
             &target.registry,
@@ -1414,6 +1421,32 @@ mod tests {
         let left = svc.list(&pkg()).await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].subject, SubjectMatcher::User("bob".to_owned()));
+    }
+
+    /// A bare `user:<id>` stored before principals were scoped is still
+    /// removable once several providers make a new bare subject ambiguous.
+    #[tokio::test]
+    async fn a_legacy_bare_user_grant_is_removable_with_several_providers() {
+        let rows = Arc::new(Rows::default());
+        let svc = service(rows, &[], None, None);
+        svc.set(
+            &pkg(),
+            "user:alice",
+            &["releases:read".to_owned()],
+            &admin(),
+        )
+        .await
+        .unwrap();
+        svc.hot.write().await.user_providers = vec!["gh".to_owned(), "oidc".to_owned()];
+
+        assert!(
+            svc.set(&pkg(), "user:bob", &["releases:read".to_owned()], &admin())
+                .await
+                .is_err(),
+            "a new bare subject is still refused"
+        );
+        assert!(svc.remove(&pkg(), "user:alice").await.unwrap());
+        assert!(svc.list(&pkg()).await.unwrap().is_empty());
     }
 
     /// A NuGet grant written in display spelling lands on the lower-cased id

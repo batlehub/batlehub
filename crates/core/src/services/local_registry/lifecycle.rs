@@ -238,7 +238,7 @@ impl LocalRegistryService {
         }
 
         // Only after *this* call tombstoned the row, so a version is refunded once.
-        if let Some((publisher, bytes)) = refund {
+        for (publisher, bytes) in refund {
             self.revoke_quota(&publisher, registry, bytes).await;
         }
         self.drop_version_bytes(registry, name, version).await;
@@ -691,25 +691,52 @@ impl LocalRegistryService {
     }
 
     /// Whom a deleted version's quota goes back to, and how many bytes: its
-    /// original publisher (not the deleter) and the stored artifact's size.
-    /// `None` when no quota is configured or nobody is recorded as publisher.
+    /// original publisher (not the deleter) and the stored artifact's size,
+    /// then one entry per extra PyPI file, each charged a slot of its own by
+    /// `add_pypi_file`. Empty when no quota is configured.
     async fn quota_refund(
         &self,
         registry: &str,
         name: &str,
         version: &str,
-    ) -> Option<(Identity, u64)> {
-        self.quota.as_ref()?;
-        let row = self
+    ) -> Vec<(Identity, u64)> {
+        if self.quota.is_none() {
+            return Vec::new();
+        }
+        let Some(row) = self
             .backend
             .get_versions(registry, name)
             .await
-            .ok()?
-            .into_iter()
-            .find(|p| p.version == version)?;
-        let publisher = Identity {
-            user_id: Some(row.published_by?),
+            .ok()
+            .and_then(|v| v.into_iter().find(|p| p.version == version))
+        else {
+            return Vec::new();
+        };
+        let who = |user_id: String| Identity {
+            user_id: Some(user_id),
             ..Identity::anonymous()
+        };
+        let mut refund = Vec::new();
+        for f in row
+            .index_metadata
+            .get("files")
+            .and_then(|f| f.as_array())
+            .into_iter()
+            .flatten()
+        {
+            // An entry from before `published_by` was recorded goes to the version's publisher.
+            let by = f
+                .get("published_by")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .or_else(|| row.published_by.clone());
+            if let Some(by) = by {
+                let size = f.get("size").and_then(serde_json::Value::as_u64);
+                refund.push((who(by), size.unwrap_or(0)));
+            }
+        }
+        let Some(publisher) = row.published_by else {
+            return refund;
         };
         // shortcut: a multi-file version (Maven) refunds the main key's size only;
         // the version still counts as one package back, which is what the cap limits.
@@ -721,7 +748,8 @@ impl LocalRegistryService {
             Ok(Some(stored)) => stored.meta.size.unwrap_or(0),
             _ => 0,
         };
-        Some((publisher, bytes))
+        refund.push((who(publisher), bytes));
+        refund
     }
 
     pub(super) async fn revoke_quota(&self, identity: &Identity, registry: &str, bytes: u64) {

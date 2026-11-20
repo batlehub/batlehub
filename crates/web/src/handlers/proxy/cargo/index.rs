@@ -184,7 +184,12 @@ async fn serve_local_index(
     index_path: &str,
     identity: &batlehub_core::entities::Identity,
 ) -> Result<HttpResponse, AppError> {
-    let name = super::helpers::local_crate_name(crate_name_from_index_path(index_path));
+    let name = super::helpers::local_crate_key(
+        local_svc,
+        registry,
+        crate_name_from_index_path(index_path),
+    )
+    .await?;
     let name = name.as_str();
     match local_svc.get_index(registry, name, identity).await {
         Ok(content) => Ok(HttpResponse::Ok()
@@ -265,7 +270,7 @@ pub async fn download_crate(
     let key_name = if mode_map.get(&registry) == RegistryMode::Proxy {
         name.clone()
     } else {
-        super::helpers::local_crate_name(&name)
+        super::helpers::local_crate_key(&local_svc, &registry, &name).await?
     };
 
     let mut resp = serve_local_or_proxy_artifact(

@@ -760,6 +760,10 @@ async fn apply_refuses_when_the_config_file_cannot_be_written() {
         "{err:#}"
     );
     assert_eq!(svc.hot.read().await.max_artifact_size_bytes, None);
+    assert!(
+        svc.pending_snapshot().is_some(),
+        "a refused apply keeps the change staged for a retry"
+    );
 }
 
 /// Two admins: the one who reviewed the first staged change cannot apply the
@@ -814,6 +818,10 @@ async fn an_editor_save_never_overwrites_a_file_that_changed_since() {
         "{err:#}"
     );
     assert_eq!(std::fs::read_to_string(file.path()).unwrap(), newer);
+    assert!(
+        svc.pending_snapshot().is_some(),
+        "a refused apply keeps the change staged for a rebase"
+    );
     // And staging against the old version is refused up front.
     assert!(svc
         .load_pending_from_editor(OTHER_PORT_CONFIG, "alice", Some(&base))
