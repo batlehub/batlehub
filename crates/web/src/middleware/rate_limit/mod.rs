@@ -27,7 +27,7 @@ mod middleware;
 mod store;
 
 pub use middleware::{extract_registry_from_path, RateLimitMiddlewareFactory};
-pub use store::RateLimitService;
+pub use store::{RateLimitScope, RateLimitService, RateLimitUsage};
 
 #[cfg(test)]
 mod tests;

@@ -74,6 +74,21 @@ impl RateLimitStore for RedisRateLimitStore {
 
         Ok((count, window_reset))
     }
+
+    async fn peek(&self, key: &str, window_secs: u32) -> Result<(u64, u64), CoreError> {
+        if window_secs == 0 {
+            return Err(CoreError::Cache("window_secs must be > 0".into()));
+        }
+        let ws = window_secs as u64;
+        let window_start = (Self::now_unix() / ws) * ws;
+        let redis_key = format!("batlehub:rl:{key}:{window_start}");
+        let mut conn = self.conn.clone();
+        let count: Option<u64> = conn
+            .get(&redis_key)
+            .await
+            .map_err(|e| CoreError::Cache(format!("Redis GET rate_limit: {e}")))?;
+        Ok((count.unwrap_or(0), window_start + ws))
+    }
 }
 
 #[cfg(test)]

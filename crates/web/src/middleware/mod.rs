@@ -38,7 +38,7 @@ pub use host_routing::{HostRoutedRegistry, HostRoutingMiddlewareFactory};
 pub use ip_block::IpBlockMiddlewareFactory;
 pub use proxy_trust::{PeerTrust, ProxyTrust};
 pub use rate_limit::RateLimitMiddlewareFactory;
-pub use rate_limit::RateLimitService;
+pub use rate_limit::{RateLimitScope, RateLimitService, RateLimitUsage};
 pub use security_headers::{
     protocol_document_csp, security_headers, API_DOCS_AI_CSP, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
 };

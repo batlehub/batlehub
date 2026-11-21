@@ -54,6 +54,8 @@ struct MeApp {
     ownership: Arc<InMemoryOwnershipStore>,
     quota_repo: Arc<InMemoryQuotaRepository>,
     local: Arc<LocalRegistryService>,
+    /// The `[registries.rate_limit]` limiter, when a test needs one.
+    rate_limit: Option<Arc<batlehub_web::RateLimitService>>,
 }
 
 fn quota_configs() -> HashMap<String, RegistryQuotaConfig> {
@@ -153,6 +155,10 @@ async fn make_me_app(
         .app_data(actix_web::web::Data::new(parts.local.clone()))
         .app_data(actix_web::web::Data::new(RegistryModeMap::default()))
         .app_data(actix_web::web::Data::new(quota_svc));
+    let app = match &parts.rate_limit {
+        Some(rl) => app.app_data(actix_web::web::Data::new(Arc::clone(rl))),
+        None => app,
+    };
 
     actix_web::test::init_service(app.wrap(AuthMiddlewareFactory::new(me_auth_providers()))).await
 }
@@ -178,6 +184,7 @@ fn me_app_parts() -> MeApp {
         ownership,
         quota_repo: InMemoryQuotaRepository::new(),
         local,
+        rate_limit: None,
     }
 }
 
@@ -857,6 +864,92 @@ async fn my_advisories_requires_authentication() {
     let resp = call_service(
         &app,
         TestRequest::get().uri("/api/v1/me/advisories").to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 401);
+}
+
+// ── /api/v1/me/limits ─────────────────────────────────────────────────────────
+
+/// npm limited to 10 requests an hour; cargo has no rate limit.
+fn me_app_with_rate_limit() -> MeApp {
+    use batlehub_config::schema::{RateLimitConfig, RateLimitEnforcement};
+    let configs = HashMap::from([(
+        "npm".to_owned(),
+        RateLimitConfig {
+            requests_per_window: 10,
+            window_secs: 3600,
+            enforcement: RateLimitEnforcement::Block,
+            groups: vec![],
+        },
+    )]);
+    MeApp {
+        rate_limit: Some(Arc::new(batlehub_web::RateLimitService::new(
+            &configs,
+            Arc::new(batlehub_adapters::rate_limit::InMemoryRateLimitStore::new()),
+        ))),
+        ..me_app_parts()
+    }
+}
+
+async fn get_limits(parts: &MeApp, token: &str) -> Value {
+    let app = make_me_app(parts).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/me/limits")
+            .insert_header(("Authorization", bearer(token)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    read_body_json(resp).await
+}
+
+#[actix_web::test]
+async fn my_limits_reports_the_callers_own_counter() {
+    let parts = me_app_with_rate_limit();
+    let rl = parts.rate_limit.clone().unwrap();
+    for _ in 0..9 {
+        rl.check("npm", "alice", &[]).await.unwrap().unwrap();
+    }
+    for _ in 0..3 {
+        rl.check("npm", "bob", &[]).await.unwrap().unwrap();
+    }
+
+    let body = get_limits(&parts, ALICE_TOKEN).await;
+    let rows = body.as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "cargo has no rate limit, so only npm: {body}"
+    );
+    assert_eq!(rows[0]["registry"], "npm");
+    assert_eq!(rows[0]["scope"], "user");
+    assert_eq!(rows[0]["used"], 9, "alice's own count, not bob's");
+    assert_eq!(rows[0]["limit"], 10);
+    assert_eq!(rows[0]["window_secs"], 3600);
+    assert_eq!(rows[0]["enforcement"], "block");
+    assert_eq!(rows[0]["state"], "warning", "9 of 10 is past 80 %");
+    assert!(rows[0]["resets_at"].as_str().unwrap().contains('T'));
+}
+
+#[actix_web::test]
+async fn my_limits_spends_no_request() {
+    let parts = me_app_with_rate_limit();
+    get_limits(&parts, ALICE_TOKEN).await;
+    let body = get_limits(&parts, ALICE_TOKEN).await;
+    assert_eq!(body[0]["used"], 0, "reading the counter must not count");
+    assert_eq!(body[0]["state"], "ok");
+}
+
+#[actix_web::test]
+async fn my_limits_requires_authentication() {
+    let parts = me_app_with_rate_limit();
+    let app = make_me_app(&parts).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get().uri("/api/v1/me/limits").to_request(),
     )
     .await;
     assert_eq!(resp.status(), 401);

@@ -274,3 +274,25 @@ async fn different_window_secs_produce_independent_windows() {
         "3600-window resets later than 60-window"
     );
 }
+
+#[tokio::test]
+async fn peek_reads_the_count_without_spending_one() {
+    let Some(url) = db_url() else { return };
+    let s = make_store(&url).await;
+    let key = s.key("peek");
+    // A one-hour window: the test does not straddle a rollover in practice.
+    let (empty, reset0) = s.store.peek(&key, 3600).await.unwrap();
+    assert_eq!(empty, 0, "nothing counted yet");
+    s.store.increment(&key, 3600).await.unwrap();
+    let (_, reset) = s.store.increment(&key, 3600).await.unwrap();
+    let (seen, peek_reset) = s.store.peek(&key, 3600).await.unwrap();
+    assert_eq!(seen, 2);
+    assert_eq!(peek_reset, reset, "peek and increment agree on the window");
+    assert_eq!(reset0, reset);
+    assert_eq!(
+        s.store.peek(&key, 3600).await.unwrap().0,
+        2,
+        "a peek spends nothing"
+    );
+    assert!(s.store.peek(&key, 0).await.is_err());
+}

@@ -122,6 +122,78 @@ impl RateLimitService {
     }
 }
 
+/// Who a counter belongs to: the caller alone, or a group they are in (a group
+/// bucket is shared by every member, so its count is not the caller's alone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLimitScope {
+    User,
+    Group(String),
+}
+
+/// One counter as it stands in the current window, read without spending a request.
+#[derive(Debug, Clone)]
+pub struct RateLimitUsage {
+    pub scope: RateLimitScope,
+    pub used: u64,
+    pub limit: u32,
+    pub window_secs: u32,
+    pub reset_unix: u64,
+    pub enforcement: RateLimitEnforcement,
+}
+
+impl RateLimitService {
+    /// The caller's counters in `registry`, read-only: the user bucket, then one
+    /// per group of theirs that the registry gives its own ceiling — the same
+    /// buckets, keyed the same way, that [`check`](Self::check) increments.
+    ///
+    /// `None` when the registry has no rate limit. Unlike `check`, a store error
+    /// is returned rather than failed open: a usage figure the store could not
+    /// read is unknown, and reporting it as zero would say the opposite.
+    pub async fn usage(
+        &self,
+        registry: &str,
+        user_key: &str,
+        user_groups: &[String],
+    ) -> Option<Result<Vec<RateLimitUsage>, batlehub_core::error::CoreError>> {
+        let cfg = self.configs.get(registry)?;
+        let mut buckets = vec![(
+            RateLimitScope::User,
+            format!("rl:{registry}:user:{user_key}"),
+            cfg.requests_per_window,
+            cfg.window_secs,
+            cfg.enforcement.clone(),
+        )];
+        for group in user_groups {
+            if let Some(grp) = cfg.groups.iter().find(|g| &g.name == group) {
+                buckets.push((
+                    RateLimitScope::Group(group.clone()),
+                    format!("rl:{registry}:group:{group}"),
+                    grp.requests_per_window,
+                    grp.window_secs,
+                    grp.enforcement
+                        .clone()
+                        .unwrap_or_else(|| cfg.enforcement.clone()),
+                ));
+            }
+        }
+        let mut out = Vec::with_capacity(buckets.len());
+        for (scope, key, limit, window_secs, enforcement) in buckets {
+            match self.store.peek(&key, window_secs).await {
+                Ok((used, reset_unix)) => out.push(RateLimitUsage {
+                    scope,
+                    used,
+                    limit,
+                    window_secs,
+                    reset_unix,
+                    enforcement,
+                }),
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        Some(Ok(out))
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Compute the wait duration from a window-reset Unix timestamp.
