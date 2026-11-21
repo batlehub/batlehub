@@ -86,6 +86,8 @@ impl InMemoryPackageRepository {
                     source: PackageSource::Proxied,
                     has_blocked: false,
                     has_yanked: false,
+                    newest_blocked: false,
+                    newest_yanked: false,
                     cached_versions: 0,
                     cached_bytes: None,
                     last_fetched_at: None,
@@ -99,6 +101,7 @@ impl InMemoryPackageRepository {
             // cache time.
             if summary.last_accessed > entry.last_accessed || entry.newest_version.is_none() {
                 entry.newest_version = Some(summary.package_id.version.clone());
+                entry.newest_blocked = summary.status.is_blocked();
             }
             if summary.last_accessed > entry.last_accessed {
                 entry.last_accessed = summary.last_accessed;

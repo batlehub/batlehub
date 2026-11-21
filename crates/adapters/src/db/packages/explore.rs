@@ -222,15 +222,27 @@ fn explore_sql(order: &str, visibility: &str) -> String {
             SELECT
                 ps.registry,
                 ps.package_name,
-                COUNT(DISTINCT ps.package_version)::bigint AS version_count,
+                -- A version published here is counted by `local_pkgs`. Blocking
+                -- or pulling one writes a `package_statuses` row too, and
+                -- counting it again made a two-version local package read four
+                -- versions with a source of "both".
+                COUNT(DISTINCT ps.package_version) FILTER (WHERE NOT lv.is_local)::bigint
+                    AS version_count,
                 BOOL_OR(ps.status = 'blocked') AS has_blocked,
                 -- Only a local publish can be yanked; a proxied artifact is
                 -- withdrawn upstream, which this instance learns about as an
                 -- absent version rather than as a flag.
                 false AS has_yanked,
-                true AS has_proxied,
+                BOOL_OR(NOT lv.is_local) AS has_proxied,
                 false AS has_local
             FROM package_statuses ps
+            CROSS JOIN LATERAL (
+                SELECT EXISTS (
+                    SELECT 1 FROM local_packages l
+                    WHERE l.registry = ps.registry AND l.name = ps.package_name
+                      AND l.version = ps.package_version AND l.status = 'published'
+                ) AS is_local
+            ) lv
             WHERE ($1::text IS NULL OR ps.registry = $1)
               AND ($2::text IS NULL OR ps.package_name ILIKE '%' || $2 || '%')
               AND ($3::text[] IS NULL OR ps.registry = ANY($3::text[]))
@@ -299,7 +311,26 @@ fn explore_sql(order: &str, visibility: &str) -> String {
             cm.cached_bytes,
             cm.last_fetched_at,
             nv.newest_version,
-            nv.newest_published_at
+            nv.newest_published_at,
+            -- Nothing held yet (a version blocked before anyone fetched it):
+            -- there is no newest version to ask about, so the package is
+            -- blocked when every version it is known by is.
+            CASE WHEN nv.newest_version IS NULL THEN
+                agg.has_blocked AND NOT EXISTS (
+                    SELECT 1 FROM package_statuses ps
+                    WHERE ps.registry = agg.registry AND ps.package_name = agg.package_name
+                      AND ps.status <> 'blocked'
+                )
+            ELSE EXISTS (
+                SELECT 1 FROM package_statuses ps
+                WHERE ps.registry = agg.registry AND ps.package_name = agg.package_name
+                  AND ps.package_version = nv.newest_version AND ps.status = 'blocked'
+            ) END AS newest_blocked,
+            EXISTS (
+                SELECT 1 FROM local_packages lp
+                WHERE lp.registry = agg.registry AND lp.name = agg.package_name
+                  AND lp.version = nv.newest_version AND lp.status = 'published' AND lp.yanked
+            ) AS newest_yanked
         FROM agg
         LEFT JOIN LATERAL (
             SELECT COUNT(*)::bigint AS total_downloads, MAX(created_at) AS last_accessed
@@ -328,6 +359,24 @@ fn explore_sql(order: &str, visibility: &str) -> String {
                    MAX(acm.cached_at) AS last_fetched_at
             FROM artifact_cache_meta acm
             WHERE acm.registry = agg.registry AND acm.package_name = agg.package_name
+        ) cm0 ON true
+        -- A version published here is held by definition, and it never writes
+        -- `artifact_cache_meta` (that table is the proxy cache's). Counting only
+        -- that table graded every private package Pending — "nothing held" —
+        -- in the catalogue, while its own page said cached.
+        LEFT JOIN LATERAL (
+            SELECT cm0.cached_versions + COUNT(DISTINCT lp.version) FILTER (
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM artifact_cache_meta a
+                           WHERE a.registry = lp.registry AND a.package_name = lp.name
+                             AND a.version = lp.version
+                       )
+                   )::bigint AS cached_versions,
+                   cm0.cached_bytes,
+                   cm0.last_fetched_at
+            FROM local_packages lp
+            WHERE lp.registry = agg.registry AND lp.name = agg.package_name
+              AND lp.status = 'published'
         ) cm ON true
         -- The version we most recently obtained, from either source, ordered by
         -- the timestamp that means "we got it": `cached_at` for a proxied

@@ -50,6 +50,15 @@ pub struct ExploreEntry {
     /// different remedies — a block is lifted by an operator, a yank is not —
     /// and [`ResolutionState`] has to tell them apart.
     pub has_yanked: bool,
+    /// `newest_version` itself is blocked: what the row's state is about.
+    ///
+    /// `has_blocked` alone made a package with one blocked old release read
+    /// "blocked" in the catalogue while its newest version installed, and its
+    /// own page said otherwise. The row answers for what an install gets;
+    /// `has_blocked` stays as the secondary "a version is blocked" fact.
+    pub newest_blocked: bool,
+    /// `newest_version` itself is yanked, for the same reason.
+    pub newest_yanked: bool,
     /// How many versions of this package we currently hold bytes for.
     pub cached_versions: u64,
     /// Bytes held, summed across those versions.
@@ -154,9 +163,11 @@ pub struct ResolutionPolicy {
 /// actually decides what a reader sees. It runs from "you cannot have this, and
 /// here is who decided" down to "you can have this":
 ///
-/// 1. **Blocked** — an operator's refusal. Loudest, and actionable by an
-///    operator, so it outranks everything.
-/// 2. **Yanked** — the owner withdrew it. Above `Held` because a yank is
+/// 1. **Blocked** — an operator refused the newest version. Loudest, and
+///    actionable by an operator, so it outranks everything. An older blocked
+///    version does not make the package blocked: the row answers for what an
+///    install gets, and `has_blocked` carries the rest.
+/// 2. **Yanked** — the owner withdrew the newest version. Above `Held` because a yank is
 ///    permanent and about the artifact itself, whereas a quarantine is a clock
 ///    that will run out on its own.
 /// 3. **Held** — inside the release-age window *for this viewer*. Above
@@ -175,10 +186,10 @@ pub fn resolve_state(
     viewer: &Role,
     now: DateTime<Utc>,
 ) -> ResolutionState {
-    if entry.has_blocked {
+    if entry.newest_blocked {
         return ResolutionState::Blocked;
     }
-    if entry.has_yanked {
+    if entry.newest_yanked {
         return ResolutionState::Yanked;
     }
     if let Some(gate) = &policy.release_age {
@@ -541,6 +552,8 @@ mod tests {
         let everything = ExploreEntry {
             has_blocked: true,
             has_yanked: true,
+            newest_blocked: true,
+            newest_yanked: true,
             last_fetched_at: Some(now() - CDuration::hours(9)),
             newest_published_at: Some(now() - CDuration::minutes(1)),
             ..cached_entry()
@@ -552,6 +565,7 @@ mod tests {
 
         let yanked = ExploreEntry {
             has_blocked: false,
+            newest_blocked: false,
             ..everything.clone()
         };
         assert_eq!(
@@ -561,6 +575,7 @@ mod tests {
 
         let held = ExploreEntry {
             has_yanked: false,
+            newest_yanked: false,
             ..yanked.clone()
         };
         assert_eq!(
@@ -586,6 +601,25 @@ mod tests {
         assert_eq!(
             resolve_state(&stale, &policy, &Role::User, now()),
             ResolutionState::Stale
+        );
+    }
+
+    /// One blocked or yanked old release does not make the package so: the
+    /// newest version installs, and the row says what an install gets.
+    #[test]
+    fn an_older_blocked_or_yanked_version_leaves_the_row_on_the_newest() {
+        let policy = ResolutionPolicy {
+            artifact_ttl: None,
+            release_age: None,
+        };
+        let older_refused = ExploreEntry {
+            has_blocked: true,
+            has_yanked: true,
+            ..cached_entry()
+        };
+        assert_eq!(
+            resolve_state(&older_refused, &policy, &Role::User, now()),
+            ResolutionState::Cached
         );
     }
 

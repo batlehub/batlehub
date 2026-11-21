@@ -275,6 +275,8 @@ pub(super) fn map_explore_entry(r: PgRow) -> ExploreEntry {
         source,
         has_blocked: r.get("has_blocked"),
         has_yanked: r.get("has_yanked"),
+        newest_blocked: r.get("newest_blocked"),
+        newest_yanked: r.get("newest_yanked"),
         cached_versions: r.get::<i64, _>("cached_versions").max(0) as u64,
         cached_bytes: cached_bytes.map(|b| b.max(0) as u64),
         last_fetched_at: r.get("last_fetched_at"),
