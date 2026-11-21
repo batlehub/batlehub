@@ -746,7 +746,9 @@ fn valid_host(host: &str) -> bool {
         Some((n, p)) => (n, Some(p)),
         None => (host, None),
     };
+    // Every label non-empty: `.` and `..` would land as a segment of the sink path.
     (1..=253).contains(&name.len())
+        && name.split('.').all(|l| !l.is_empty())
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
@@ -1239,6 +1241,10 @@ mod tests {
             "a b",
             "",
             "github.com/x",
+            ".",
+            "..",
+            "a..b",
+            ".github.com",
         ] {
             assert_eq!(
                 t.target(host, "o/r", false),

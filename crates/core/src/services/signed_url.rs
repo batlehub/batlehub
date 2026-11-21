@@ -325,9 +325,15 @@ impl SignedUrlService {
         let groups = identity.groups.clone();
         // `<provider>:<id>`, so the bearer keeps the `user:` grants of the
         // signer and no other provider's user of the same id.
-        let sub = identity
-            .user_principal()
-            .or_else(|| identity.user_id.clone());
+        // A bare id (no provider vouches for it) is written `:<id>`, so an id
+        // holding a `:` is never read back as `<provider>:<id>`.
+        let sub = identity.user_principal().map(|p| {
+            if identity.principal_provider().is_some() {
+                p
+            } else {
+                format!(":{p}")
+            }
+        });
 
         let payload = Payload {
             v: TOKEN_VERSION,
@@ -448,6 +454,7 @@ impl SignedUrlService {
         // the bearer is never mistaken for an interactive session.
         let (user_id, auth_provider) = match payload.sub {
             Some(sub) => match sub.split_once(':') {
+                Some(("", id)) => (Some(id.to_owned()), "signed-url".to_owned()),
                 Some((p, id)) => (
                     Some(id.to_owned()),
                     format!("{}{p}", Identity::SIGNED_URL_PROVIDER_PREFIX),
@@ -544,6 +551,26 @@ mod tests {
         assert!(got.user_id.is_none());
         assert_eq!(got.role, Role::Anonymous);
         assert!(got.groups.is_empty());
+    }
+
+    /// Found by `fuzz_signed_url`: a bare id `":"` came back as id `""` from
+    /// provider `""`, because the verifier split it as `<provider>:<id>`.
+    #[test]
+    fn a_bare_id_holding_a_colon_round_trips() {
+        let s = svc();
+        for uid in [":", "a:b", "alice"] {
+            let id = Identity {
+                user_id: Some(uid.to_owned()),
+                role: Role::Admin,
+                auth_provider: None,
+                groups: vec![],
+            };
+            let got = s
+                .verify_at(&s.mint_at(&coord(), &id, now()), &coord(), now())
+                .unwrap();
+            assert_eq!(got.user_id.as_deref(), Some(uid));
+            assert_eq!(got.auth_provider.as_deref(), Some("signed-url"));
+        }
     }
 
     #[test]
