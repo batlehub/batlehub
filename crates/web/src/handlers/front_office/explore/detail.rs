@@ -849,11 +849,30 @@ fn held_version_rows(
         });
     }
 
+    // An operator's block on a version published here lives on its proxied
+    // summary, which the loop above skips for a local version. Dropping it with
+    // the row drew a blocked version — one the download path refuses with a
+    // 403 — as clear on its own page, while the catalogue said blocked.
+    let blocked_local: std::collections::HashMap<&str, &PackageStatus> = proxied_summaries
+        .iter()
+        .filter(|s| s.status.is_blocked())
+        .map(|s| (s.package_id.version.as_str(), &s.status))
+        .collect();
+
     for pkg in local_versions {
-        let firewall = if pkg.yanked {
-            FirewallDto::Yanked
-        } else {
-            FirewallDto::Clear
+        // Blocked before yanked: the block is what refuses the download.
+        let firewall = match blocked_local.get(pkg.version.as_str()) {
+            Some(PackageStatus::Blocked {
+                reason,
+                blocked_by,
+                blocked_at,
+            }) => FirewallDto::Blocked {
+                reason: reason.clone(),
+                blocked_by: blocked_by.clone(),
+                blocked_at: blocked_at.to_rfc3339(),
+            },
+            _ if pkg.yanked => FirewallDto::Yanked,
+            _ => FirewallDto::Clear,
         };
         versions.push(ExploreVersionDto {
             readme: readme_state(&pkg.version),

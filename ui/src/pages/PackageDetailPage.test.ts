@@ -639,6 +639,32 @@ describe("PackageDetailPage default selection", () => {
     expect(selectedRow(wrapper)).toBeUndefined();
   });
 
+  /** A typo is not a package with no releases: one panel, no masthead, no tabs. */
+  it("says nothing is known about a name with no version anywhere", async () => {
+    explorePackageDetailMock.mockResolvedValue(respond([], { default_version: null }));
+
+    const wrapper = await mountPage();
+
+    const panel = wrapper.find('[data-testid="unknown-package"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.text()).toContain("Nothing is known about express in npm1");
+    expect(panel.text()).toContain("the upstream does not have it either");
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false);
+  });
+
+  /** An upstream that could not be read is a gap, not an answer: the page stays. */
+  it("keeps the full page when the upstream read failed", async () => {
+    explorePackageDetailMock.mockResolvedValue(
+      respond([], {
+        upstream: { attempted: true, freshness: null, truncated: false, error: "timeout" },
+      }),
+    );
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.find('[data-testid="unknown-package"]').exists()).toBe(false);
+  });
+
   /**
    * A `?version=` that arrives *after* the page loaded, naming a version the
    * rendered answer does not carry.

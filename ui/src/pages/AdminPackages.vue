@@ -482,7 +482,11 @@ async function runPending(): Promise<void> {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="bulkResultMsg ?? ''" />
-    <PageHeader :title="t('adminNav.allPackages')" :count="packages?.length" />
+    <PageHeader
+      :title="t('adminNav.allPackages')"
+      :count="packages?.length"
+      :description="t('adminPackages.pageDescription')"
+    />
     <!-- The form that used to sit here is `/admin/packages/bulk`, one tab
          away and better at the job. A link, not a second implementation. -->
     <p class="text-sm text-muted-foreground">

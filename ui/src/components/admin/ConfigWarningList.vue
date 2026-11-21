@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Config warnings: one bordered list, one row each, the same in every place the
+ * Config warnings: one ruled list, one row each, the same in every place the
  * config console lists them (active, staged, candidate).
  *
  * Each row leads with the warning's first sentence — the claim — and keeps the
@@ -10,7 +10,7 @@
  * (`withoutDocRefs`); the stable `code` stays beside the key.
  */
 import { useI18n } from "vue-i18n";
-import { TriangleAlert } from "@lucide/vue";
+import StateMark from "@/components/admin/StateMark.vue";
 import type { ConfigWarning } from "@/client/types.gen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,16 +25,18 @@ const parts = (w: ConfigWarning) => leadSentence(sentenceStart(withoutDocRefs(w.
 </script>
 
 <template>
-  <!-- Opaque copper edge on the list: the one boundary that carries "this
-       needs looking at", and rows divided by the soft rule inside it. -->
-  <ul class="border border-copper divide-y divide-rule-soft">
+  <!-- Ruled rows with the state's glyph and word, the way every status list in
+       the console reads (Instance security, the dashboard's security lines):
+       no box around the list — DESIGN.md's No-Container Rule — and the
+       attention carried by "▲ ATTENTION" in copper rather than by a border. -->
+  <ul class="divide-y divide-dashed divide-rule-soft border-y border-rule-soft">
     <li
       v-for="w in warnings"
       :key="`${w.code}@${w.path}`"
-      class="flex items-start gap-3 px-4 py-3 text-sm"
+      class="flex flex-col gap-2 py-3 text-sm lg:flex-row lg:items-start lg:gap-3"
       data-testid="config-warning"
     >
-      <TriangleAlert class="mt-px h-4 w-4 shrink-0 text-copper" aria-hidden="true" />
+      <StateMark state="attention" class="mt-px" />
       <!-- `min-w-0` so a long config path can shrink, and the code/badge pair
          wraps: a warning names a TOML key, and TOML keys are long enough to
          push the page sideways on a phone. -->
@@ -62,6 +64,7 @@ const parts = (w: ConfigWarning) => leadSentence(sentenceStart(withoutDocRefs(w.
         v-if="dismissible && w.dismissible !== false"
         variant="ghost"
         size="sm"
+        class="self-start"
         @click="emit('dismiss', w)"
         >{{ t("common.dismiss") }}</Button
       >

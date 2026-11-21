@@ -12,7 +12,9 @@ const html = ref("");
 
 function update() {
   const h = highlight(props.code, props.lang);
-  if (h) html.value = h;
+  // A long line scrolls the `<pre>` sideways, and a keyboard reaches that only
+  // if the region itself takes focus (axe `scrollable-region-focusable`).
+  if (h) html.value = h.replace("<pre ", '<pre tabindex="0" ');
 }
 
 watch([() => props.code, () => props.lang, ready], update, { immediate: true });
@@ -21,9 +23,11 @@ watch([() => props.code, () => props.lang, ready], update, { immediate: true });
 <template>
   <div class="relative">
     <div v-if="html" class="shiki-wrapper" v-html="html" />
-    <pre v-else class="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto leading-relaxed">{{
-      code
-    }}</pre>
+    <pre
+      v-else
+      tabindex="0"
+      class="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto leading-relaxed"
+      >{{ code }}</pre>
     <CopyButton
       v-if="copy !== undefined"
       :text="copy"

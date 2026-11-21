@@ -757,7 +757,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 explore_packages, explore_readme_image, explore_registry_stats,
                 explore_upstream_search,
             },
-            me::{me, my_advisories, my_downloads, my_quota},
+            me::{me, my_advisories, my_downloads, my_limits, my_quota},
             packages::{check_access, check_access_batch, list_packages},
             registries::list_registries,
         },
@@ -955,6 +955,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // `me` would matter only if it were a prefix route; it is exact, but the
     // grouping keeps them together.
     cfg.service(my_quota);
+    cfg.service(my_limits);
     cfg.service(my_downloads);
     cfg.service(my_advisories);
     // RFC 0018 phase 2: the verdict endpoint.

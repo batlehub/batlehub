@@ -77,4 +77,21 @@ impl RateLimitStore for PgRateLimitStore {
 
         Ok((count as u64, window_reset))
     }
+
+    async fn peek(&self, key: &str, window_secs: u32) -> Result<(u64, u64), CoreError> {
+        if window_secs == 0 {
+            return Err(CoreError::Database("window_secs must be > 0".into()));
+        }
+        let ws = window_secs as i64;
+        let window_start = ((Self::now_unix() as i64) / ws) * ws;
+        let count: Option<i64> = sqlx::query_scalar(
+            "SELECT count FROM rate_limit_counters WHERE key = $1 AND window_start = $2",
+        )
+        .bind(key)
+        .bind(window_start)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| CoreError::Database(format!("rate_limit peek: {e}")))?;
+        Ok((count.unwrap_or(0).max(0) as u64, (window_start + ws) as u64))
+    }
 }

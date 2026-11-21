@@ -391,12 +391,12 @@ describe("AdminConfigReload", () => {
     routes(null);
     const wrapper = await mountPage();
 
-    await button(wrapper, "Reload Now")!.trigger("click");
-    const dialog = dialogFor(wrapper, "Force Reload Now");
+    await button(wrapper, "Reload now")!.trigger("click");
+    const dialog = dialogFor(wrapper, "Force reload now");
     expect(dialog.props("reversible")).toBeFalsy();
     expect(dialog.props("confirmName")).toBe("reload");
 
-    await confirmDialog(wrapper, "Force Reload Now");
+    await confirmDialog(wrapper, "Force reload now");
 
     expect(sdk.reloadConfigMock).toHaveBeenCalled();
     expect(wrapper.text()).toContain("Reloaded: +0 -1 registries");
@@ -407,8 +407,8 @@ describe("AdminConfigReload", () => {
     sdk.reloadConfigMock.mockResolvedValue({ error: { message: "config.toml is malformed" } });
     const wrapper = await mountPage();
 
-    await button(wrapper, "Reload Now")!.trigger("click");
-    await confirmDialog(wrapper, "Force Reload Now");
+    await button(wrapper, "Reload now")!.trigger("click");
+    await confirmDialog(wrapper, "Force reload now");
 
     expect(wrapper.text()).toContain("config.toml is malformed");
   });
@@ -419,14 +419,14 @@ describe("AdminConfigReload", () => {
     routes(null);
     const wrapper = await mountPage();
 
-    expect(button(wrapper, "Create Pending Reload")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Create pending reload")?.attributes("disabled")).toBeDefined();
 
     await button(wrapper, "Validate")!.trigger("click");
     await flushPromises();
 
-    expect(wrapper.text()).toContain('Config is valid. Click "Create Pending Reload"');
-    const create = button(wrapper, "Create Pending Reload");
-    expect(create, "Create Pending Reload is not rendered at all").toBeDefined();
+    expect(wrapper.text()).toContain('Config is valid. Click "Create pending reload"');
+    const create = button(wrapper, "Create pending reload");
+    expect(create, "Create pending reload is not rendered at all").toBeDefined();
     expect(create!.attributes("disabled")).toBeUndefined();
   });
 
@@ -438,7 +438,7 @@ describe("AdminConfigReload", () => {
     await flushPromises();
     await wrapper.get("textarea").setValue("[server]\nport = 9090\n");
 
-    expect(button(wrapper, "Create Pending Reload")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Create pending reload")?.attributes("disabled")).toBeDefined();
   });
 
   it("shows what a valid candidate would warn about before it is staged", async () => {
@@ -499,7 +499,7 @@ describe("AdminConfigReload", () => {
 
     await button(wrapper, "Validate")!.trigger("click");
     await flushPromises();
-    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await button(wrapper, "Create pending reload")!.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("Pending reload created.");
@@ -516,7 +516,7 @@ describe("AdminConfigReload", () => {
 
     await button(wrapper, "Validate")!.trigger("click");
     await flushPromises();
-    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await button(wrapper, "Create pending reload")!.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("Nothing to stage");
@@ -529,7 +529,7 @@ describe("AdminConfigReload", () => {
 
     await button(wrapper, "Validate")!.trigger("click");
     await flushPromises();
-    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await button(wrapper, "Create pending reload")!.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("disk full");
@@ -545,7 +545,7 @@ describe("AdminConfigReload", () => {
 
     await button(wrapper, "Validate")!.trigger("click");
     await flushPromises();
-    await button(wrapper, "Create Pending Reload")!.trigger("click");
+    await button(wrapper, "Create pending reload")!.trigger("click");
     await flushPromises();
 
     const call = authFetchMock.mock.calls.find(([url]) => String(url).includes("/from-content"));
@@ -584,7 +584,7 @@ describe("AdminConfigReload", () => {
 
     expect(wrapper.text()).toContain("Hot reload is disabled on this instance");
     expect(wrapper.text()).toContain("BATLEHUB_DISABLE_HOT_RELOAD=1");
-    expect(button(wrapper, "Reload Now")).toBeUndefined();
+    expect(button(wrapper, "Reload now")).toBeUndefined();
     expect(button(wrapper, "Validate")).toBeUndefined();
   });
 
@@ -601,7 +601,7 @@ describe("AdminConfigReload", () => {
     expect(wrapper.text()).toContain("The pending reload could not be checked.");
     expect(wrapper.text()).toContain("upstream unavailable");
     expect(button(wrapper, "Try again")).toBeDefined();
-    expect(button(wrapper, "Reload Now")?.attributes("disabled")).toBeUndefined();
+    expect(button(wrapper, "Reload now")?.attributes("disabled")).toBeUndefined();
   });
 
   it("keeps the reload controls visible but disabled while the config cannot be read", async () => {
@@ -612,7 +612,7 @@ describe("AdminConfigReload", () => {
     expect(wrapper.text()).toContain("database unavailable");
     expect(wrapper.text()).not.toContain("BATLEHUB_DISABLE_HOT_RELOAD=1");
     expect(wrapper.find("textarea").exists()).toBe(false);
-    expect(button(wrapper, "Reload Now")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Reload now")?.attributes("disabled")).toBeDefined();
   });
 
   it("retries the reads it could not make", async () => {
@@ -666,8 +666,8 @@ describe("AdminConfigReload", () => {
 
     // Re-read with the same warning still raised: the dismissal must survive,
     // or every reload resurrects everything the operator has already read.
-    await button(wrapper, "Reload Now")!.trigger("click");
-    await confirmDialog(wrapper, "Force Reload Now");
+    await button(wrapper, "Reload now")!.trigger("click");
+    await confirmDialog(wrapper, "Force reload now");
     expect(wrapper.text()).not.toContain("Configuration warnings");
   });
 
@@ -680,14 +680,14 @@ describe("AdminConfigReload", () => {
 
     // It clears — the dismissal has nothing left to apply to.
     routes(null, { "/config/warnings": { json: { warnings: [] } } });
-    await button(wrapper, "Reload Now")!.trigger("click");
-    await confirmDialog(wrapper, "Force Reload Now");
+    await button(wrapper, "Reload now")!.trigger("click");
+    await confirmDialog(wrapper, "Force reload now");
     expect(wrapper.text()).not.toContain("Configuration warnings");
 
     // And it comes back, so it must be visible rather than still dismissed.
     routes(null, { "/config/warnings": { json: { warnings: [warning()] } } });
-    await button(wrapper, "Reload Now")!.trigger("click");
-    await confirmDialog(wrapper, "Force Reload Now");
+    await button(wrapper, "Reload now")!.trigger("click");
+    await confirmDialog(wrapper, "Force reload now");
     expect(wrapper.text()).toContain("Configuration warnings (1)");
   });
 
@@ -815,6 +815,38 @@ describe("AdminConfigReload", () => {
       expect(await decision).toBe(true);
     });
 
+    const contentReads = () =>
+      authFetchMock.mock.calls.filter(([url]) => String(url).endsWith("/admin/config/content"))
+        .length;
+    const rereadDialog = (w: Page) =>
+      w
+        .findAllComponents(DestructiveConfirm)
+        .find((d) => String(d.props("consequence")).includes("re-reading the file"))!;
+
+    it("re-reads the file at once when nothing is edited", async () => {
+      routes(null);
+      const w = await mountPage();
+      const before = contentReads();
+      await button(w, "Re-read from disk")!.trigger("click");
+      await flushPromises();
+      expect(contentReads()).toBe(before + 1);
+      expect(rereadDialog(w).props("open")).toBe(false);
+    });
+
+    it("asks before re-reading the file over an edit, and keeps the edit on cancel", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+      const before = contentReads();
+      await button(w, "Re-read from disk")!.trigger("click");
+      await flushPromises();
+      expect(rereadDialog(w).props("open")).toBe(true);
+      rereadDialog(w).vm.$emit("update:open", false);
+      await flushPromises();
+      expect(contentReads()).toBe(before);
+      expect((w.get("textarea").element as HTMLTextAreaElement).value).toContain("9090");
+    });
+
     it("is clean again once the edit is reverted", async () => {
       routes(null);
       const w = await mountPage();
@@ -831,7 +863,7 @@ describe("AdminConfigReload", () => {
       await edit(w, "[server]\nport = 9090\n");
       await button(w, "Validate")!.trigger("click");
       await flushPromises();
-      await button(w, "Create Pending Reload")!.trigger("click");
+      await button(w, "Create pending reload")!.trigger("click");
       await flushPromises();
       expect(await leave()).toBe(true);
       expect(unloadPrevented()).toBe(false);

@@ -413,6 +413,20 @@ impl ConfigReloadService {
             return Err(e);
         }
 
+        // The operator's own banner, put back once the swap is done. Clearing
+        // on success used to erase it: every reload took down a maintenance
+        // notice an admin had set. A leftover "system" banner — a reload that
+        // never finished — is not worth restoring.
+        let operator_banner = match self.banner {
+            Some(ref banner) => banner
+                .get()
+                .await
+                .ok()
+                .flatten()
+                .filter(|b| b.set_by != "system"),
+            None => None,
+        };
+
         // Set "reload in progress" banner while swapping.
         if let Some(ref banner) = self.banner {
             let _ = banner
@@ -507,11 +521,13 @@ impl ConfigReloadService {
         // Upstream absences were observed under the old upstreams and credentials.
         self.discovery.clear_absent();
 
-        // Clear the in-progress banner on success.
+        // Clear the in-progress banner on success, or put the operator's back.
         if let Some(ref banner) = self.banner {
-            let _ = banner
-                .clear()
-                .await
+            let restored = match operator_banner {
+                Some(previous) => banner.set(previous).await,
+                None => banner.clear().await,
+            };
+            let _ = restored
                 .inspect_err(|e| tracing::warn!(error = %e, "failed to clear reload banner"));
         }
 

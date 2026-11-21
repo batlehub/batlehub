@@ -68,7 +68,13 @@ export function rowState(row: ExploreRow): ResolutionState {
 }
 
 export function noteKey(row: ExploreRow): string | undefined {
-  return NOTE_KEYS[rowState(row)];
+  const own = NOTE_KEYS[rowState(row)];
+  if (own || row.kind !== "cached") return own;
+  // The row is about the newest version; an older one refused is still said.
+  const entry = row as ExploreEntryDto;
+  if (entry.has_blocked) return "resolution.noteSomeBlocked";
+  if (entry.has_yanked) return "resolution.noteSomeYanked";
+  return undefined;
 }
 
 /**

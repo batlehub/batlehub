@@ -268,3 +268,56 @@ summary:focus-visible,
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }
+
+/* ── The halftone plate ───────────────────────────────────────────────────────
+   DESIGN.md: the system's only image. An authored 45° screen at 60 lpi running
+   99.7% ink to 6.1% across its width, applied as a CSS mask so the ink stays a
+   token rather than being baked into the raster.
+
+   Ported from `ui/design-proof/index.html`, which is runnable source rather
+   than a screenshot — the reason RFC 0004-bis §14.6 could stop treating this as
+   an interpretive redesign.
+
+   The `@supports` flip is load-bearing, not defensive boilerplate: without it,
+   an engine or minifier that drops the mask paints a solid copper block over
+   half the specimen, and `--ink-dim` on that composite falls to 3.21:1. The
+   background stays transparent until masking is known to work. */
+.plate {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: min(52%, 620px);
+  pointer-events: none;
+  background: transparent;
+  opacity: 0.34;
+  -webkit-mask: url("/halftone-plate.png") right center / cover no-repeat;
+  mask: url("/halftone-plate.png") right center / cover no-repeat;
+  /* The dense end is the raster's left edge; mirrored so the ink bleeds off the
+     outer margin instead of facing the caption. */
+  transform: scaleX(-1);
+}
+
+/* Ink on paper, glow on black — the same screen inked with its own ground's
+   colour. Lower on paper because dark dots on light carry further. */
+:root[data-theme="light"] .plate {
+  opacity: 0.2;
+}
+
+@supports (
+  (mask-image: url("/halftone-plate.png")) or (-webkit-mask-image: url("/halftone-plate.png"))
+) {
+  .plate {
+    background: var(--copper);
+  }
+
+  :root[data-theme="light"] .plate {
+    background: var(--ink);
+  }
+}
+
+/* The plate behind a console page title (PageHeader, xl and up). Narrower than
+   the catalog's so a 64ch description, set in dim ink, ends before it begins:
+   measured at 1280px (the narrowest xl column), the longest descriptions
+   reached a 44%-wide plate; at 38% they clear it. */
+.plate--header {
+  width: min(38%, 520px);
+}

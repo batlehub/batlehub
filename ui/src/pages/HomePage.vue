@@ -28,7 +28,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AsyncState } from "@/components/ui/async-state";
 import AdvisoriesWidget from "@/components/home/AdvisoriesWidget.vue";
-import QuotaWidget from "@/components/home/QuotaWidget.vue";
+import LimitsWidget from "@/components/home/LimitsWidget.vue";
 import RecentPullsWidget from "@/components/home/RecentPullsWidget.vue";
 
 const { t } = useI18n();
@@ -175,12 +175,18 @@ const displayFits = computed(() => greeting.value.length <= 24);
       <!-- Not after the registry list failed: that is the API itself not
            answering, and three more panels saying so added nothing but noise. -->
       <template v-if="isAuthenticated && !error">
-        <QuotaWidget />
-        <!-- Before advisories: "what did I pull" is the ordinary question and
-             is always answerable, where "is any of it known-bad" is silent
-             most of the time. A widget that says nothing most days should not
-             be the one above the one that always says something. -->
-        <RecentPullsWidget />
+        <!-- Limits in a narrow column beside the pulls on a wide screen: rings
+             are read at a glance and a full-width row per registry spent the
+             width on nothing. When the limits render nothing, the pulls take
+             the whole row; on a narrow screen they stack. -->
+        <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
+          <LimitsWidget class="lg:w-[460px] lg:shrink-0" />
+          <!-- Before advisories: "what did I pull" is the ordinary question and
+               is always answerable, where "is any of it known-bad" is silent
+               most of the time. A widget that says nothing most days should not
+               be the one above the one that always says something. -->
+          <RecentPullsWidget class="min-w-0 flex-1" />
+        </div>
         <AdvisoriesWidget />
       </template>
     </template>

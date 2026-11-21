@@ -111,8 +111,6 @@ onMounted(load);
       <CardTitle :count="total">{{ t("flagsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("flagsPanel.intro") }}</p>
-
       <div class="flex items-center gap-2">
         <Switch
           id="flags-include-dead"

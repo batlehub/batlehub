@@ -131,7 +131,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <PageHeader :title="t('airGap.title')" />
+    <PageHeader :title="t('airGap.title')" :description="t('airGap.pageDescription')" />
 
     <!-- Every panel below reads the one load: a failed load says so in place of
          all of them, rather than above a page of empty tables. -->

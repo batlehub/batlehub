@@ -177,6 +177,37 @@ describe("the Undependable Fill Rule", () => {
       "a row tint is not a state",
     ).toEqual([]);
   });
+
+  it("sets no dim ink over the halftone plate", () => {
+    /* The specimen section is the one surface in the product with an image
+       under its text. `--ink` clears 4.5:1 on the plate with room (9.60:1 in
+       dark, 7.70:1 in light); `--ink-dim` measures 3.20:1 and 3.35:1.
+
+       Graded wherever a plate is placed rather than on the one file that holds
+       it, so a plate placed anywhere next is held to the same floor. */
+    const offenders: string[] = [];
+    for (const [file, source] of Object.entries(SOURCES)) {
+      let at = source.indexOf('<div class="plate"');
+      while (at !== -1) {
+        const section = source.slice(at, source.indexOf("</section>", at));
+        if (section.includes("text-muted-foreground")) offenders.push(file);
+        at = source.indexOf('<div class="plate"', at + 1);
+      }
+    }
+    expect(offenders, "dim ink measures 3.20/3.35:1 on the plate").toEqual([]);
+  });
+
+  /* PageHeader's plate sits beside dim ink (the description) rather than under
+     it, and only by geometry: narrower than the catalog's and only from xl.
+     Both halves of that are pinned, so neither can drift on its own. */
+  it("keeps the page-title plate beside its description, not under it", () => {
+    const header = SOURCES["src/components/ui/page-header/PageHeader.vue"];
+    expect(header, "PageHeader is in the scan").toBeDefined();
+    expect(header).toContain('class="plate plate--header hidden xl:block"');
+    expect(header).toContain("max-w-[64ch]");
+    const css = readFileSync(resolve(process.cwd(), "src/assets/index.css"), "utf8");
+    expect(css).toMatch(/\.plate--header\s*\{\s*width:\s*min\(38%,\s*520px\);/);
+  });
 });
 
 /**
@@ -283,11 +314,11 @@ describe("the destructive contract", () => {
  * now.
  *
  * Whether a thrown message reaches a screen is not decidable from the source,
- * so this does the next best thing: it freezes the two that exist. Both are
- * control-flow throws whose text is never read — `LoginPage` discards the
- * error and shows `loginPage.invalidToken`, `useAuth` hands it to
- * `console.error` — and a third one appearing is the moment to check which
- * kind it is, rather than a year later.
+ * so this does the next best thing: it freezes the one that exists, a
+ * control-flow throw whose text is never read — `useAuth` hands it to
+ * `console.error` — and another one appearing is the moment to check which
+ * kind it is, rather than a year later. (`LoginPage` had the second; its
+ * sign-in now reads the answer's status instead of throwing.)
  *
  * Only *bare literals* count. Everything else in the tree throws `t(…)`,
  * `extractMessage(…)` or protocol data (`HTTP ${status}`, a response body),
@@ -298,7 +329,6 @@ describe("thrown text", () => {
 
   const FROZEN_LITERAL_THROWS: Record<string, number> = {
     "src/composables/useAuth.ts": 1,
-    "src/pages/LoginPage.vue": 1,
   };
 
   it("throws a bare English sentence only where nothing displays it", () => {

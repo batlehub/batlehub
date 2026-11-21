@@ -272,3 +272,50 @@ fn merge_failure_longer_wait_wins() {
     let (wait, _, _, _) = merge_failure(Some(short), long);
     assert_eq!(wait, Duration::from_secs(30));
 }
+
+// ── usage(): the caller's counters, read without spending a request ──────────
+
+#[tokio::test]
+async fn usage_reads_the_buckets_check_counts_without_spending_one() {
+    use super::store::RateLimitScope;
+    let svc = svc_from(
+        "r",
+        RateLimitConfig {
+            requests_per_window: 10,
+            window_secs: 3600,
+            enforcement: RateLimitEnforcement::Block,
+            groups: vec![GroupRateLimitConfig {
+                name: "ci".into(),
+                requests_per_window: 100,
+                window_secs: 3600,
+                enforcement: Some(RateLimitEnforcement::Warn),
+            }],
+        },
+    );
+    let groups = vec!["ci".to_owned(), "no-ceiling".to_owned()];
+    for _ in 0..3 {
+        svc.check("r", "u1", &groups).await.unwrap().unwrap();
+    }
+
+    let usage = svc.usage("r", "u1", &groups).await.unwrap().unwrap();
+    assert_eq!(
+        usage.len(),
+        2,
+        "the user bucket and the one group with a ceiling"
+    );
+    assert_eq!(usage[0].scope, RateLimitScope::User);
+    assert_eq!((usage[0].used, usage[0].limit), (3, 10));
+    assert!(matches!(usage[0].enforcement, RateLimitEnforcement::Block));
+    assert_eq!(usage[1].scope, RateLimitScope::Group("ci".into()));
+    assert_eq!((usage[1].used, usage[1].limit), (3, 100));
+    assert!(matches!(usage[1].enforcement, RateLimitEnforcement::Warn));
+
+    let again = svc.usage("r", "u1", &groups).await.unwrap().unwrap();
+    assert_eq!(again[0].used, 3, "reading the usage spends nothing");
+}
+
+#[tokio::test]
+async fn usage_is_none_for_a_registry_without_a_limit() {
+    let svc = RateLimitService::new(&HashMap::new(), Arc::new(InMemoryRateLimitStore::new()));
+    assert!(svc.usage("r", "u1", &[]).await.is_none());
+}
