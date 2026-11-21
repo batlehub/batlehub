@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **A signed download URL minted for a user id holding a `:` came back as
+  another identity** when no provider vouched for the id: the verifier read
+  `a:b` as user `b` of provider `a`. A bare id is now written `:<id>`, and
+  tokens minted before keep verifying. Found by `fuzz_signed_url`.
+- **The mise wire accepted `.` and `..` as a host**, which then landed as a
+  segment of the air-gap sink path (`/_air-gap/unmirrored/./…`). A host with
+  an empty label is now refused as malformed. Found by
+  `fuzz_mise_wire_target`.
 - **A `?` or `#` in a package name, version or file name reached the
   upstream URL of 22 registry kinds** — the same defect as the forge one
   below, everywhere else. `%3F` / `%23` arrive decoded, and the npm, PyPI,
