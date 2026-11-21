@@ -56,6 +56,9 @@ ADMIN = "demo-admin-token"
 USER = "demo-user-token"
 SOC_SECRET = "demo-soc-secret"
 INBOUND_SECRET = "demo-inbound-secret"
+DESCRIPTION = "Demo greeter"
+OCTET_STREAM = "application/octet-stream"
+README_MD = "README.md"
 
 NPM = {
     "npm-public": [
@@ -217,7 +220,7 @@ def _multipart(fields: dict, file_field: str, filename: str, payload: bytes):
 
 
 def publish_npm(registry, name, version, tag="latest", token=None):
-    pkg = {"name": name, "version": version, "description": "Demo greeter", "license": "MIT", "main": "index.js"}
+    pkg = {"name": name, "version": version, "description": DESCRIPTION, "license": "MIT", "main": "index.js"}
     tgz = _tar({
         "package/package.json": json.dumps(pkg),
         "package/README.md": README.format(name=name),
@@ -230,10 +233,10 @@ def publish_npm(registry, name, version, tag="latest", token=None):
         "readme": README.format(name=name),
         "dist-tags": {tag: version},
         "versions": {version: {**pkg, "readme": README.format(name=name), "dist": {
-            "shasum": hashlib.sha1(tgz).hexdigest(),
+            "integrity": "sha512-" + base64.b64encode(hashlib.sha512(tgz).digest()).decode(),
             "tarball": f"{BASE}/proxy/{registry}/{name}/-/{file}",
         }}},
-        "_attachments": {file: {"content_type": "application/octet-stream",
+        "_attachments": {file: {"content_type": OCTET_STREAM,
                                 "data": base64.b64encode(tgz).decode(), "length": len(tgz)}},
     }
     path = f"/proxy/{registry}/{urllib.parse.quote(name, safe='@')}"
@@ -249,14 +252,14 @@ def publish_cargo(name, version):
     })
     meta = json.dumps({
         "name": name, "vers": version, "deps": [], "features": {}, "authors": ["demo"],
-        "description": "Demo greeter", "documentation": None, "homepage": None,
-        "readme": README.format(name=name), "readme_file": "README.md", "keywords": ["demo"],
+        "description": DESCRIPTION, "documentation": None, "homepage": None,
+        "readme": README.format(name=name), "readme_file": README_MD, "keywords": ["demo"],
         "categories": [], "license": "MIT", "license_file": None, "repository": None,
         "badges": {}, "links": None,
     }).encode()
     body = len(meta).to_bytes(4, "little") + meta + len(crate).to_bytes(4, "little") + crate
     return req("PUT", "/proxy/cargo-local/api/v1/crates/new", USER, body,
-               {"Content-Type": "application/octet-stream"})[0]
+               {"Content-Type": OCTET_STREAM})[0]
 
 
 def publish_pypi(name, version):
@@ -266,7 +269,7 @@ def publish_pypi(name, version):
     sdist = _tar({f"{stem}/PKG-INFO": pkg_info, f"{stem}/README.md": README.format(name=name),
                   f"{stem}/{name.replace('-', '_')}/__init__.py": "def greet(w):\n    return f'Hello, {w}!'\n"})
     body, ct = _multipart({":action": "file_upload", "name": name, "version": version,
-                           "summary": "Demo greeter", "license": "MIT",
+                           "summary": DESCRIPTION, "license": "MIT",
                            "description": README.format(name=name),
                            "description_content_type": "text/markdown",
                            "sha256_digest": hashlib.sha256(sdist).hexdigest()},
@@ -283,7 +286,7 @@ def publish_nuget(pid, version):
     <readme>README.md</readme><tags>demo</tags>
   </metadata>
 </package>"""
-    nupkg = _zip({f"{pid}.nuspec": nuspec, "README.md": README.format(name=pid), "lib/netstandard2.0/_._": ""})
+    nupkg = _zip({f"{pid}.nuspec": nuspec, README_MD: README.format(name=pid), "lib/netstandard2.0/_._": ""})
     body, ct = _multipart({}, "package", f"{pid}.{version}.nupkg", nupkg)
     return req("PUT", "/proxy/nuget-local/nuget/api/v2/package", USER, body, {"Content-Type": ct})[0]
 
@@ -297,16 +300,16 @@ def publish_maven(group, artifact, version):
   <description>Demo greeter</description>
   <licenses><license><name>MIT</name></license></licenses>
 </project>"""
-    jar = _zip({"META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n", "README.md": README.format(name=artifact)})
+    jar = _zip({"META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n", README_MD: README.format(name=artifact)})
     a = req("PUT", base + ".pom", USER, pom.encode(), {"Content-Type": "application/xml"})[0]
     b = req("PUT", base + ".jar", USER, jar, {"Content-Type": "application/java-archive"})[0]
     return max(a, b)
 
 
 def publish_composer(name, version):
-    zp = _zip({"composer.json": json.dumps({"name": name, "version": version, "description": "Demo greeter",
+    zp = _zip({"composer.json": json.dumps({"name": name, "version": version, "description": DESCRIPTION,
                                             "type": "library", "license": "MIT"}),
-               "README.md": README.format(name=name)})
+               README_MD: README.format(name=name)})
     return req("POST", "/proxy/composer-local/api/upload", USER, zp, {"Content-Type": "application/zip"})[0]
 
 
@@ -314,9 +317,9 @@ def publish_gem(name, version):
     yaml = (f"--- !ruby/object:Gem::Specification\nname: {name}\nversion: !ruby/object:Gem::Version\n"
             f"  version: '{version}'\nplatform: ruby\nsummary: Demo greeter\nlicenses:\n- MIT\n")
     gem = _tar({"metadata.gz": gzip.compress(yaml.encode(), mtime=0),
-                "data.tar.gz": _tar({"README.md": README.format(name=name), "lib/greeter.rb": "# demo\n"})},
+                "data.tar.gz": _tar({README_MD: README.format(name=name), "lib/greeter.rb": "# demo\n"})},
                gz=False)
-    return req("POST", "/proxy/gems-local/api/v1/gems", USER, gem, {"Content-Type": "application/octet-stream"})[0]
+    return req("POST", "/proxy/gems-local/api/v1/gems", USER, gem, {"Content-Type": OCTET_STREAM})[0]
 
 
 def check(what, status, ok=(200, 201, 202, 204)):

@@ -77,12 +77,9 @@ async function submit() {
       // Every one of those was reported as a bad token, which sent an operator
       // on a dev front to check a token that was fine.
       const status = result.response?.status;
-      error.value =
-        status === undefined
-          ? unreachable()
-          : status === 401 || status === 403
-            ? t("loginPage.invalidToken")
-            : t("loginPage.serverError", { status });
+      if (status === undefined) error.value = unreachable();
+      else if (status === 401 || status === 403) error.value = t("loginPage.invalidToken");
+      else error.value = t("loginPage.serverError", { status });
       client.setConfig({ auth: undefined });
       return;
     }

@@ -41,9 +41,21 @@ const limits = useApi<MyRateLimitDto[]>(
 );
 
 type WireState = MyQuotaDto["state"];
-const meterState = (s: WireState | null | undefined): MeterState =>
-  s === "at_limit" ? "at-limit" : s === "warning" ? "warning" : "ok";
+const WIRE_STATE: Record<WireState, MeterState> = {
+  at_limit: "at-limit",
+  warning: "warning",
+  ok: "ok",
+};
+const meterState = (s: WireState | null | undefined): MeterState => (s ? WIRE_STATE[s] : "ok");
 const RANK: Record<MeterState, number> = { "at-limit": 2, warning: 1, ok: 0 };
+const DOWNLOAD_ADVICE = {
+  "at-limit": "limitsWidget.downloadsAtLimit",
+  warning: "limitsWidget.downloadsNear",
+} as const;
+const publishAdvice = (state: "at-limit" | "warning", warnPct: number) =>
+  state === "at-limit"
+    ? t("limitsWidget.publishAtLimit")
+    : t("limitsWidget.publishNear", { pct: warnPct });
 const pct = (used: number, limit: number) => (limit > 0 ? Math.round((used / limit) * 100) : 0);
 
 /** `/min`, `/h`… — the window is per registry, so every row says its own. */
@@ -96,17 +108,12 @@ const downloads = computed<Gauge[]>(() =>
         advice:
           state === "ok"
             ? null
-            : t(
-                state === "at-limit"
-                  ? "limitsWidget.downloadsAtLimit"
-                  : "limitsWidget.downloadsNear",
-                {
-                  used: formatCount(r.used),
-                  limit: formatCount(r.limit),
-                  window,
-                  resets: resetsIn(r.resets_at),
-                },
-              ),
+            : t(DOWNLOAD_ADVICE[state], {
+                used: formatCount(r.used),
+                limit: formatCount(r.limit),
+                window,
+                resets: resetsIn(r.resets_at),
+              }),
       };
     })
     .sort((a, b) => RANK[b.state] - RANK[a.state] || pct(b.value, b.max) - pct(a.value, a.max)),
@@ -153,12 +160,7 @@ const publishing = computed<Gauge[]>(() =>
           sub: t(d.kind === "versions" ? "limitsWidget.versions" : "limitsWidget.storage"),
           valueText: `${of} ${t(d.kind === "versions" ? "limitsWidget.versions" : "limitsWidget.storage")}`,
           state: d.state,
-          advice:
-            d.state === "ok"
-              ? null
-              : d.state === "at-limit"
-                ? t("limitsWidget.publishAtLimit")
-                : t("limitsWidget.publishNear", { pct: r.warn_threshold_pct }),
+          advice: d.state === "ok" ? null : publishAdvice(d.state, r.warn_threshold_pct),
         },
       ];
     })
