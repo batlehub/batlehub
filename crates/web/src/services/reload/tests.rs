@@ -1511,3 +1511,38 @@ async fn a_replica_applies_what_another_applied_once_its_file_has_it() {
     a.follow_applied(&a.heartbeat("").await.unwrap()).await;
     assert_eq!(a.config_fingerprint(), before);
 }
+
+/// A reload sets its own "in progress" banner while it swaps; on success it
+/// must put the operator's banner back, not clear it.
+#[tokio::test]
+async fn apply_keeps_the_operators_banner() {
+    use batlehub_core::entities::{BannerLevel, GlobalBanner};
+    let banner = Arc::new(crate::services::banner::BannerService::new(Arc::new(
+        batlehub_adapters::cache::banner_memory::InMemoryBannerStore::new(),
+    )));
+    let builder: HotConfigBuilder = Arc::new(|_| anyhow::bail!("builder not used in unit tests"));
+    let svc = Arc::new(ConfigReloadService::new(ConfigReloadParams {
+        banner: Some(Arc::clone(&banner)),
+        ..reload_params("config.toml".to_owned(), true, builder)
+    }));
+    banner
+        .set(GlobalBanner {
+            message: "Maintenance tonight".to_owned(),
+            level: BannerLevel::Warning,
+            set_at: chrono::Utc::now(),
+            set_by: "admin".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    *svc.pending.lock().unwrap() = Some(empty_pending());
+    svc.apply("test-user").await.unwrap();
+
+    let after = banner
+        .get()
+        .await
+        .unwrap()
+        .expect("the operator's banner survives");
+    assert_eq!(after.message, "Maintenance tonight");
+    assert_eq!(after.set_by, "admin");
+}

@@ -220,6 +220,7 @@
     "jumpStaged": "Un rechargement est en attente : examinez-le ou abandonnez-le avant de modifier. Le curseur n'a pas été placé sur le registre « {name} ».",
     "jumpedTo": "Curseur placé sur le registre « {name} ».",
     "leaveConsequence": "La modification n'est enregistrée nulle part : quitter cette page l'abandonne.",
+    "rereadConsequence": "La modification n'est enregistrée nulle part : relire le fichier la remplace par le contenu du disque.",
     "leaveDiscard": "Abandonner",
     "leaveItemNoun": "modification non enregistrée",
     "leaveScope": "l'éditeur de configuration",
@@ -235,7 +236,7 @@
     "reReadsTheConfig": "Relit le fichier de configuration, le valide et applique ce qui est sur le disque. Une confirmation est demandée d'abord, car ce fichier ne vous a pas été montré ici.",
     "reloadApplied": "Appliqué partout",
     "reloadConfirmWord": "reload",
-    "reloadFromDisk": "Recharger depuis le disque",
+    "reloadFromDisk": "Relire depuis le disque",
     "reloadNow": "Recharger maintenant",
     "reloadPartiallyApplied": "Appliqué aux requêtes — les tâches de fond (préchauffage, imports, analyses) gardent l’ancienne valeur jusqu’au redémarrage",
     "reloadRestartRequired": "Redémarrage nécessaire",
@@ -251,7 +252,8 @@
     "thisInstance": "cette instance",
     "validWithWarnings": "Cette configuration est valide mais soulève {count} avertissement(s) :",
     "validate": "Valider",
-    "validating": "Validation…"
+    "validating": "Validation…",
+    "pageDescription": "Le fichier sur lequel tourne ce serveur : ce qu'il signale, la modification en attente de revue, et l'éditeur qui en prépare une."
   },
   "adminDashboard": {
     "hitRate": "Taux de hit",
@@ -260,7 +262,7 @@
     "openConfig": "Ouvrir la configuration",
     "openHealth": "Ouvrir l'état de santé",
     "perRegistry": "Par registre",
-    "registryErrors": "Erreurs — voir la santé",
+    "registryErrors": "Dégradé — voir la santé",
     "registryServing": "En service",
     "statsCouldNotLoad": "Les statistiques du cache n'ont pas pu être chargées.",
     "trendDown": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements — {points} points de moins que les {days} jours précédents.",
@@ -276,7 +278,7 @@
     "kpiHitRate": "Taux de cache",
     "kpiRegistries": "Registres",
     "kpiSince": "depuis le redémarrage, {date}",
-    "kpiWithErrors": "{count} en erreur | {count} en erreur"
+    "kpiWithErrors": "{count} dégradé | {count} dégradés"
   },
   "adminHealth": {
     "allCachedArtifactsFor": "Tous les artefacts en cache de ce registre seront définitivement supprimés. Les paquets seront de nouveau récupérés depuis l'upstream à la prochaine requête.",
@@ -486,7 +488,8 @@
     "selectPackage": "Sélectionner {name}",
     "selectedCount": "{count} sélectionné | {count} sélectionnés",
     "tryClearingTheFilter": "Essayez d'effacer le filtre.",
-    "unblockSelected": "Débloquer la sélection"
+    "unblockSelected": "Débloquer la sélection",
+    "pageDescription": "Tous les paquets que connaît cette instance, relayés ou publiés ici, avec les versions bloquées par un opérateur."
   },
   "adminSbom": {
     "aboutSbomFormats": "À propos des formats SBOM",
@@ -503,7 +506,8 @@
     "rangeInverted": "La date de début est postérieure à la date de fin : la sélection serait vide.",
     "spdx23": "SPDX 2.3",
     "spdxBlurb": "{name} — norme ISO/IEC largement utilisée pour la conformité et le suivi des licences. À privilégier pour la revue juridique et les processus conformes à OpenChain.",
-    "flagsLink": "Ce que les sources de signalement disent de ces versions → Sécurité › Signalements"
+    "flagsLink": "Ce que les sources de signalement disent de ces versions → Sécurité › Signalements",
+    "pageDescription": "Un SBOM pour toute l'organisation, fusionné à partir de ce que cette instance a servi sur une période."
   },
   "adminTeamNamespaces": {
     "assignPackageNamePrefixesTo": "Attribuer des préfixes de nom de paquet aux groupes du fournisseur d'authentification pour contrôler qui peut y publier.",
@@ -624,7 +628,8 @@
     "noMissesConnected": "Rien d'enregistré — les manques ne sont consignés que lorsque le mode isolé est actif.",
     "rejected": "Rejetés",
     "signer": "Signataire",
-    "title": "Réseau isolé"
+    "title": "Réseau isolé",
+    "pageDescription": "Ce que cette instance peut servir sans réseau : les bundles importés, et ce qui a été demandé sans qu'aucun bundle ne le contienne."
   },
   "appFooter": {
     "reportABug": "Signaler un bug",
@@ -660,7 +665,8 @@
     "purged": "{count} événement purgé. | {count} événements purgés.",
     "retention": "Rétention",
     "retentionHelp": "Supprime les événements d'audit antérieurs à une date de coupure. Cette action supprime des preuves définitivement et est irréversible.",
-    "exposureLink": "Qui a tiré une version signalée depuis → Sécurité › Exposition"
+    "exposureLink": "Qui a tiré une version signalée depuis → Sécurité › Exposition",
+    "pageDescription": "Qui a fait quoi sur cette instance : téléchargements, publications, blocages, connexions et refus, avec la règle derrière chacun."
   },
   "catalog": {
     "emptyBody": "Les paquets apparaissent ici dès qu'ils transitent par cette instance, ou dès qu'ils y sont publiés.",
@@ -819,8 +825,9 @@
   "dashboard": {
     "allAnswering": "Les {count} registres répondent.",
     "healthUnknown": "Impossible de lire l'état de santé.",
-    "someDegraded": "{failing} registres sur {total} ont signalé des erreurs : {names}.",
-    "title": "Tableau de bord"
+    "someDegraded": "{failing} registres sur {total} sont dégradés ou ont signalé des erreurs : {names}.",
+    "title": "Tableau de bord",
+    "pageDescription": "Si cette instance va bien, ce que la couche de sécurité retient, et ce que le cache fait gagner."
   },
   "destructive": {
     "canUndo": "Cette action pourra être annulée.",
@@ -843,7 +850,7 @@
     "empty": "Aucun téléchargement d'une version signalée sur cette période.",
     "exportCsv": "Exporter en CSV",
     "flag": "Signalement",
-    "intro": "Qui a téléchargé une version signalée par une source, et combien de ces téléchargements précèdent le signalement — le cas rétroactif, où le développeur n'a rien fait de mal et détient pourtant l'artefact.",
+    "intro": "Qui a téléchargé une version signalée depuis par une source, et combien de ces téléchargements précèdent le signalement.",
     "lastPull": "Dernier téléchargement",
     "lastScan": "dernier passage sur {registry} le {when}",
     "exportFailed": "L'export CSV a échoué.",
@@ -905,7 +912,7 @@
     "system": "Système"
   },
   "loginPage": {
-    "anonymousOnly": "Le token est valide mais n'accorde qu'un accès anonyme.",
+    "anonymousOnly": "Le serveur ne reconnaît pas ce token : il a répondu comme à un visiteur anonyme. Vérifiez la valeur et réessayez.",
     "authenticateToAccessProtected": "Authentifiez-vous pour accéder aux ressources protégées.",
     "bearerToken": "Token Bearer",
     "continueWithoutSigningIn": "Continuer sans se connecter",
@@ -916,6 +923,8 @@
     "orUseAToken": "ou utiliser un token",
     "pasteYourTokenHere": "Collez votre token ici",
     "redirecting": "Redirection…",
+    "serverError": "Le serveur a répondu {status}, le token n'a donc pas été vérifié. Réessayez dans un instant.",
+    "serverUnreachable": "Aucune réponse de {server}. Le token n'a pas été vérifié. Si le serveur fonctionne, il n'accepte peut-être pas les requêtes de l'adresse de cette page ({origin}) : ajoutez-la à [server] cors_allowed_origins.",
     "signIn": "Se connecter",
     "signInWithOidc": "Se connecter avec OIDC",
     "signInWithProvider": "Se connecter avec {provider}",
@@ -1079,6 +1088,8 @@
     "noVersionsMatch": "Aucune version ne correspond",
     "noVersionsMatchHint": "Ce paquet a des versions ; aucune ne contient ce que vous avez saisi.",
     "noVersionsYet": "Aucune version",
+    "unknownPackage": "Rien n'est connu de {name} dans {registry}",
+    "searchCatalog": "Chercher dans le catalogue",
     "notHeldHere": "non conservée ici",
     "notHeldHereHelp": "Aucun octet de cette version n'est conservé sur cette instance ; elle existe en amont.",
     "notScanned": "non analysée",
@@ -1196,13 +1207,32 @@
     "registryType": "Type de registre",
     "urlMapper": "Mappage d'URL"
   },
-  "quotaWidget": {
-    "approaching": "Au-delà de {pct} % d'une limite. La publication fonctionne toujours.",
-    "atLimit": "Limite atteinte. La prochaine publication peut être refusée.",
+  "limitsWidget": {
+    "allClear": "Aucune limite en vue.",
+    "atLimit": "Limite atteinte",
+    "downloads": "Téléchargements",
+    "downloadsAtLimit": "{used} requêtes sur {limit} {window} : refusées jusqu'à la remise à zéro, {resets}.",
+    "downloadsNear": "{used} requêtes sur {limit} {window}, remise à zéro {resets}. Une boucle de CI tire peut-être trop souvent.",
+    "downloadsWhat": "Les requêtes que vous pouvez faire à chaque registre, sur la fenêtre propre à ce registre. Au-delà de la limite, les requêtes sont refusées jusqu'à la remise à zéro.",
+    "inHours": "dans {n} h",
+    "inMinutes": "dans {n} min",
+    "inSeconds": "dans {n} s",
+    "near": "Proche de la limite",
+    "needAttention": "{count} limite demande votre attention. | {count} limites demandent votre attention.",
     "ofLimit": "{used} sur {limit}",
-    "storage": "Stockage",
-    "title": "Votre quota",
-    "versions": "Versions"
+    "perDay": "/jour",
+    "perHour": "/h",
+    "perMinute": "/min",
+    "perSecond": "/s",
+    "perSeconds": "/{n} s",
+    "publishAtLimit": "votre prochaine publication peut y être refusée. Retirez ou supprimez une version, ou demandez à un administrateur.",
+    "publishNear": "au-delà de {pct} % d'une limite. La publication fonctionne toujours.",
+    "publishing": "Publication",
+    "publishingWhat": "Ce que vous avez publié dans chaque registre : les versions et le stockage qu'elles occupent. Les téléchargements ne comptent pas.",
+    "requestsText": "{used} requêtes sur {limit} {window}",
+    "storage": "stockage",
+    "title": "Vos limites",
+    "versions": "versions"
   },
   "readmePanel": {
     "blocked": "Cette version est bloquée : son README n'est pas servi. Le motif du blocage figure sur sa ligne.",
@@ -1237,6 +1267,8 @@
     "held": "Retenu",
     "noteBlocked": "Bloqué par un administrateur — refusé à tous tant que le blocage n'est pas levé.",
     "noteHeld": "Fenêtre de quarantaine — cette version est encore dans son délai de rétention.",
+    "noteSomeBlocked": "Certaines versions sont bloquées par un administrateur — cette ligne montre la plus récente.",
+    "noteSomeYanked": "Certaines versions ont été retirées par leur propriétaire — cette ligne montre la plus récente.",
     "noteYanked": "Retiré par son propriétaire — résolvable uniquement par version exacte.",
     "pending": "En cours",
     "stale": "Périmé",
@@ -1248,15 +1280,27 @@
   "setupGuide": {
     "configurationGuide": "Guide de configuration",
     "configureYourToolsToRoute": "Configurez vos outils pour router les téléchargements de paquets via ce proxy. Les extraits sont pré-remplis avec l'adresse de ce serveur et vos registres configurés.",
+    "credentialsTitle": "Vos identifiants",
     "filterTools": "Filtrer les outils",
     "filterTools2": "Filtrer les outils…",
+    "groups": {
+      "languages": "Langages",
+      "toolchains": "Versions",
+      "system": "Systèmes",
+      "ide": "Éditeurs",
+      "infra": "Infrastructure",
+      "forges": "Forges"
+    },
     "hideToken": "Masquer le jeton",
+    "manualTitle": "À la main, outil par outil",
     "netrcHelp": "Identifiants pour les outils utilisant l'authentification HTTP Basic (curl, wget, …). À placer dans {file} et à protéger avec {chmod}.",
+    "netrcSummary": "pour curl, wget et les autres clients HTTP Basic",
     "noRegistriesAreConfiguredOn": "Aucun registre n'est configuré sur cette instance, ou aucun accessible à votre compte. Tant qu'il n'en existe pas, aucun outil n'a d'URL vers laquelle pointer.",
     "nothingToConnectTo": "Rien à connecter pour l'instant",
     "oidcTokenNote": "Votre token actuel est un token de session OIDC de courte durée. Pour de l'automatisation durable, créez un {link} et utilisez-le comme mot de passe.",
     "openConfig": "Ouvrir la configuration",
     "personalApiToken": "token d'API personnel",
+    "quickTitle": "Voie rapide : une seule commande",
     "registriesCouldNotLoad": "La liste des registres n'a pas pu être chargée : aucun extrait ne peut en nommer un.",
     "setupApplyLink": "Référence de la commande",
     "setupApplyNote": "Plutôt que de coller chaque extrait, lancez {apply} sur la machine : la commande trouve les clients installés et affiche la modification de la configuration de chacun ; {yes} l'écrit. {status} la vérifie, {remove} l'annule. {link}.",
@@ -1781,7 +1825,8 @@
     "scanCounts": "{scanned} analysées · {waiting} en attente · {failed} en échec",
     "notProtectedHint": "Ni profil [security] ni contrôle CVE : chaque version est servie sans analyse.",
     "warnsOnly": "avertit, refuse toujours un malware connu",
-    "unscannedNever": "jamais : une version non analysée attend la fin de son analyse"
+    "unscannedNever": "jamais : une version non analysée attend la fin de son analyse",
+    "registryDescription": "Comment ce registre est protégé : ses scanners, ses barrières, et l'âge qu'une version doit avoir avant d'être servie."
   },
   "securityScanners": {
     "workers": "Workers",

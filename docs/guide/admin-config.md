@@ -800,7 +800,7 @@ The banner is automatically set to "Configuration reload in progress…" when a 
 
 ### Set the banner
 
-From the **Global banner** admin page (`/admin/system/banner`), fill in the message and select a level (info / warning / error), then click **Set Banner**.
+From the **Global banner** admin page (`/admin/system/banner`), fill in the message and select a level (info / warning / error), then click **Set banner**.
 
 ```sh
 # Set via API

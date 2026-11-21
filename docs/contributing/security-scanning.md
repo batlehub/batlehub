@@ -306,9 +306,11 @@ run on GitHub remains the primary gate for that layer.
 ## Run the gate locally
 
 ```bash
-task security        # cargo audit + cargo deny + ui/website pnpm audit + postmortem + Rust SBOM
+task security        # audit + docs pnpm audit + postmortem + VEX + Rust SBOM + OpenAPI lint
+task audit           # cargo audit + cargo deny + ui pnpm audit + Trivy on IMAGE=… (skipped when unset)
+task audit:rust      # just cargo audit
+task audit:image IMAGE=batlehub:scan  # just Trivy, same flags as image-scan.yaml
 task deny            # just the cargo-deny supply-chain gate
-task audit           # just cargo audit
 task ui:audit        # just the frontend audit
 task postmortem      # dependency supply chain, all three roots (Rust, UI, Website)
 task postmortem:rust # just one root — also postmortem:ui / postmortem:docs

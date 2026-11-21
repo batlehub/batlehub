@@ -320,3 +320,58 @@ async fn a_local_publish_carries_a_publish_date_and_a_proxied_fetch_does_not() {
         "the upstream publish date is not persisted for proxied artifacts"
     );
 }
+
+/// The row answers for the newest version: one blocked old release of a local
+/// package does not make it blocked, and blocking a version published here does
+/// not count it twice or make the package "both".
+#[tokio::test]
+async fn an_older_blocked_local_version_leaves_the_newest_in_charge() {
+    let url = require_db!();
+    let fx = fixture(&url).await;
+
+    fx.publish("two-local", "0.1.0", false).await;
+    fx.publish("two-local", "0.2.0", false).await;
+    // An admin block of a local version writes its `package_statuses` row;
+    // the fixture's `block` updates one, so the row is made first.
+    fx.proxied("two-local", "0.1.0").await;
+    fx.block("two-local", "0.1.0").await;
+
+    let e = fx.entry("two-local").await;
+    assert_eq!(e.cached_versions, 2, "a version published here is held");
+    assert!(e.has_blocked, "a version is blocked: the secondary fact");
+    assert!(!e.newest_blocked, "0.2.0, the newest, is not");
+    assert_eq!(
+        e.version_count, 2,
+        "a local version blocked is still one version"
+    );
+    assert!(
+        matches!(e.source, batlehub_core::entities::PackageSource::Local),
+        "only published here: not both, {:?}",
+        e.source
+    );
+
+    fx.proxied("two-local", "0.2.0").await;
+    fx.block("two-local", "0.2.0").await;
+    assert!(
+        fx.entry("two-local").await.newest_blocked,
+        "now the newest is"
+    );
+}
+
+/// A proxied version blocked before anything was fetched has no newest version
+/// to grade: the package is blocked when every version it is known by is.
+#[tokio::test]
+async fn a_blocked_version_never_fetched_still_blocks_the_package() {
+    let url = require_db!();
+    let fx = fixture(&url).await;
+
+    fx.proxied("never-fetched", "1.0.0").await;
+    fx.block("never-fetched", "1.0.0").await;
+    assert!(fx.entry("never-fetched").await.newest_blocked);
+
+    fx.proxied("never-fetched", "1.1.0").await;
+    assert!(
+        !fx.entry("never-fetched").await.newest_blocked,
+        "1.1.0 is not blocked"
+    );
+}

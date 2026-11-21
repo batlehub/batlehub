@@ -152,18 +152,50 @@ describe("LoginPage (integration)", () => {
     await wrapper.find("#token").setValue("anon-token");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-    expect(wrapper.text()).toContain("anonymous access");
+    expect(wrapper.text()).toContain("does not recognise this token");
     expect(localStorage.getItem("batlehub_access_token")).toBeNull();
   });
 
-  it("rejects an invalid token when the probe call fails", async () => {
-    meMock.mockRejectedValue(new Error("401 Unauthorized"));
+  /* The generated client answers `{ error, response }` rather than throwing;
+     these mock that shape, not a rejection, for an HTTP failure. */
+  async function submitWith(answer: () => void) {
+    answer();
     const { wrapper } = await mountLogin();
-    await wrapper.find("#token").setValue("bad-token");
+    await wrapper.find("#token").setValue("some-token");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-    expect(wrapper.text()).toContain("Invalid token");
     expect(localStorage.getItem("batlehub_access_token")).toBeNull();
+    return wrapper.text();
+  }
+
+  it("rejects an invalid token on a 401", async () => {
+    const text = await submitWith(() =>
+      meMock.mockResolvedValue({ error: {}, response: { status: 401 } }),
+    );
+    expect(text).toContain("Invalid token");
+  });
+
+  // A CORS refusal or an unreachable server is not a bad token.
+  it("says the server did not answer when no response came back", async () => {
+    const text = await submitWith(() =>
+      meMock.mockResolvedValue({ error: new TypeError("Failed to fetch"), response: undefined }),
+    );
+    expect(text).toContain("No answer from");
+    expect(text).toContain("cors_allowed_origins");
+    expect(text).not.toContain("Invalid token");
+  });
+
+  it("says the same when the call rejects", async () => {
+    const text = await submitWith(() => meMock.mockRejectedValue(new TypeError("Failed to fetch")));
+    expect(text).toContain("No answer from");
+  });
+
+  it("names a server error instead of blaming the token", async () => {
+    const text = await submitWith(() =>
+      meMock.mockResolvedValue({ error: {}, response: { status: 502 } }),
+    );
+    expect(text).toContain("answered 502");
+    expect(text).not.toContain("Invalid token");
   });
 
   it("lets the user continue anonymously to /packages", async () => {

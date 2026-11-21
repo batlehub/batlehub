@@ -159,6 +159,7 @@ DELETE /api/v1/flags/{source}/{external_id}	skip: no arm yet
 GET /api/v1/me	skip: no arm yet
 GET /api/v1/me/advisories	skip: no arm yet
 GET /api/v1/me/downloads	skip: no arm yet
+GET /api/v1/me/limits	skip: no arm yet
 GET /api/v1/me/namespaces	skip: no arm yet
 GET /api/v1/me/namespaces/{registry}/{prefix}/packages	skip: no arm yet
 GET /api/v1/me/quota	skip: no arm yet

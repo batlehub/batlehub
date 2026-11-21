@@ -301,3 +301,41 @@ async fn hybrid_packument_falls_through_when_only_a_proxied_version_is_blocked()
         "the allowed versions must survive: {versions:?}"
     );
 }
+
+/// The package page draws a blocked local version as blocked.
+///
+/// The block is stored on the version's admin summary, which the detail merge
+/// skipped for a version also published here: the page called the version
+/// clear while its download answered `403` and the catalogue said blocked.
+#[actix_web::test]
+async fn explore_detail_shows_a_blocked_local_version_as_blocked() {
+    let app = app(RegistryMode::Local).await;
+    for v in ["1.0.0", "1.1.0"] {
+        let req = TestRequest::put()
+            .uri("/proxy/local-npm/inhouse")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(npm_publish_payload("inhouse", v))
+            .to_request();
+        assert!(call_service(&app, req).await.status().is_success());
+    }
+    block_version(&app, "local-npm", "inhouse", "1.0.0").await;
+
+    let req = TestRequest::get()
+        .uri("/api/v1/explore/packages/local-npm/inhouse")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let detail: Value = read_body_json(resp).await;
+    let status = |v: &str| {
+        detail["versions"]
+            .as_array()
+            .expect("versions")
+            .iter()
+            .find(|row| row["version"] == v)
+            .unwrap_or_else(|| panic!("no row for {v}: {detail}"))["firewall"]["status"]
+            .clone()
+    };
+    assert_eq!(status("1.0.0"), "blocked");
+    assert_eq!(status("1.1.0"), "clear");
+}

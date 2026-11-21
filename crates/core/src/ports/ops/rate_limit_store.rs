@@ -29,4 +29,16 @@ pub trait RateLimitStore: Send + Sync {
     /// # Panics
     /// Implementations must not panic; `window_secs == 0` must return an error.
     async fn increment(&self, key: &str, window_secs: u32) -> Result<(u64, u64), CoreError>;
+
+    /// Read `key`'s counter in the current window **without** incrementing it.
+    ///
+    /// Returns `(count, window_reset_unix_secs)`: `count` is `0` when nothing
+    /// has been counted in this window. Same window alignment as
+    /// [`increment`](Self::increment), so the two agree on which window is
+    /// current. Used to show a caller their own usage (`GET /api/v1/me/limits`),
+    /// which must not itself spend a request.
+    ///
+    /// # Errors
+    /// Returns `CoreError` if the backend is unavailable or `window_secs` is zero.
+    async fn peek(&self, key: &str, window_secs: u32) -> Result<(u64, u64), CoreError>;
 }

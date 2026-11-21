@@ -2,9 +2,30 @@ version: "3"
 
 tasks:
   audit:
-    desc: Check Rust dependencies for security vulnerabilities (non-actionable advisories suppressed via .cargo/audit.toml)
+    desc: "The mandatory audit: Rust advisories + bans, frontend advisories, image CVEs (IMAGE=…)"
+    cmds:
+      - task: audit:rust
+      - task: deny
+      - task: ui:audit
+      - task: audit:image
+
+  audit:rust:
+    desc: Check Rust dependencies for security vulnerabilities (the one dated exception lives in .cargo/audit.toml)
     cmds:
       - cargo audit
+
+  audit:image:
+    desc: "Trivy gate on a built image, same flags as image-scan.yaml — IMAGE=batlehub:scan (skipped, loudly, when unset)"
+    cmds:
+      # No container engine in the CDE, so the image is usually built elsewhere
+      # and scanned by reference. Fixable HIGH/CRITICAL only, like CI.
+      - |
+        if [ -z "{{.IMAGE}}" ]; then
+          echo "SKIPPED: audit:image — IMAGE unset; image-scan.yaml gates it in CI" >&2
+          exit 0
+        fi
+        trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          --ignorefile .trivyignore.yaml "{{.IMAGE}}"
 
   deny:
     desc: "Supply-chain gate — advisories, banned crates (rsa/legacy-rustls), licenses and sources (see deny.toml)"
@@ -182,8 +203,6 @@ tasks:
     desc: "Run the full local security gate — Rust advisories + bans, frontend audits, dependency supply chain, and Rust SBOM. Trivy/gitleaks/semgrep run in CI (see .github/workflows)"
     cmds:
       - task: audit
-      - task: deny
-      - task: ui:audit
       - task: docs:audit
       # Needs network (reputation + vuln lookups); the advisory-only audits above
       # can't see an upstream that went archived or got taken over.

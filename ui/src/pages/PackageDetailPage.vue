@@ -79,6 +79,20 @@ const {
   pollDetail,
 } = usePackageVersions(registry, name);
 
+/**
+ * Nothing at all is known: no version held, none upstream, and no read that
+ * failed. The masthead and four tabs drew such a name as a real, empty package
+ * — a typo looked like a package with no releases — so the page says so instead.
+ * An upstream error or outage keeps the full page: there, the gap is the answer.
+ */
+const unknownPackage = computed(
+  () =>
+    !!data.value &&
+    unfilteredTotal.value === 0 &&
+    !data.value.upstream?.error &&
+    !data.value.upstream_unavailable,
+);
+
 // ── Per-artifact SBOM download ─────────────────────────────────────────────
 
 const sbomLoading = ref<string | null>(null); // "registry/name/version:format"
@@ -337,6 +351,28 @@ const { stopped: pollStopped, restart: restartPoll } = usePoll(
         <template #action>
           <Button variant="outline" size="sm" @click="fetchDetail()">
             {{ t("common.retry") }}
+          </Button>
+        </template>
+      </EmptyState>
+    </template>
+
+    <template v-else-if="unknownPackage">
+      <EmptyState
+        class="mx-auto max-w-[64ch]"
+        role="status"
+        :title="t('packageDetailPage.unknownPackage', { registry, name })"
+        :description="
+          data?.upstream?.attempted
+            ? t('packageDetailPage.upstreamHasNoneEither')
+            : t('packageDetailPage.nothingHasBeenPulledThrough')
+        "
+        data-testid="unknown-package"
+      >
+        <template #action>
+          <Button as-child variant="outline" size="sm">
+            <RouterLink :to="{ path: '/packages', query: { registry, q: name } }">{{
+              t("packageDetailPage.searchCatalog")
+            }}</RouterLink>
           </Button>
         </template>
       </EmptyState>

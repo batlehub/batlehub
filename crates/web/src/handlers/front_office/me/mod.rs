@@ -14,11 +14,13 @@
 pub mod advisories;
 pub mod downloads;
 pub mod identity;
+pub mod limits;
 pub mod quota;
 
 pub use advisories::my_advisories;
 pub use downloads::my_downloads;
 pub use identity::{me, MeResponse};
+pub use limits::my_limits;
 pub use quota::my_quota;
 
 use crate::{error::AppError, extractors::AuthIdentity};

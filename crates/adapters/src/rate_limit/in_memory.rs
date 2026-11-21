@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::RateLimitStore;
 
-use super::{windowed_increment, WindowEntry};
+use super::{now_unix, violation_window, windowed_increment, WindowEntry};
 
 /// In-process rate-limit counter store backed by a `Mutex<HashMap>`.
 ///
@@ -42,6 +42,23 @@ impl RateLimitStore for InMemoryRateLimitStore {
             .map_err(|_| CoreError::Cache("rate_limit lock poisoned".into()))?;
         Ok(windowed_increment(&mut map, map_key, window_secs))
     }
+
+    async fn peek(&self, key: &str, window_secs: u32) -> Result<(u64, u64), CoreError> {
+        if window_secs == 0 {
+            return Err(CoreError::Cache("window_secs must be > 0".into()));
+        }
+        let (window_start, window_reset) = violation_window(now_unix(), window_secs);
+        let map = self
+            .inner
+            .lock()
+            .map_err(|_| CoreError::Cache("rate_limit lock poisoned".into()))?;
+        // An entry from an earlier window is a stale count: nothing in this one yet.
+        let count = map
+            .get(&format!("{key}@{window_secs}"))
+            .filter(|e| e.window_start == window_start)
+            .map_or(0, |e| e.count);
+        Ok((count, window_reset))
+    }
 }
 
 #[cfg(test)]
@@ -65,6 +82,29 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn peek_reads_without_counting() {
+        let store = InMemoryRateLimitStore::new();
+        assert_eq!(store.peek("k", 60).await.unwrap().0, 0);
+        store.increment("k", 60).await.unwrap();
+        store.increment("k", 60).await.unwrap();
+        assert_eq!(store.peek("k", 60).await.unwrap().0, 2);
+        assert_eq!(
+            store.peek("k", 60).await.unwrap().0,
+            2,
+            "a peek spends nothing"
+        );
+        assert_eq!(store.increment("k", 60).await.unwrap().0, 3);
+    }
+
+    #[tokio::test]
+    async fn peek_ignores_a_stale_window() {
+        let store = InMemoryRateLimitStore::new();
+        store.force_old_window("k", 60, 0, 50);
+        assert_eq!(store.peek("k", 60).await.unwrap().0, 0);
+        assert!(store.peek("k", 0).await.is_err());
+    }
 
     #[tokio::test]
     async fn increments_within_window() {
