@@ -6,7 +6,7 @@
 # un plafond, une phrase que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-config.md
-sourceHash: 961ac9733413f8e4
+sourceHash: 45370a3d3f16b8b8
 ---
 
 # Configuration du serveur
@@ -885,7 +885,7 @@ un rechargement à chaud démarre, et vidé à sa fin.
 
 Depuis la page d'administration **Bandeau global** (`/admin/system/banner`),
 remplissez le message, choisissez un niveau (info, warning ou error), puis
-cliquez sur **Set Banner**.
+cliquez sur **Définir la bannière**.
 
 ```sh
 # Par l'API
