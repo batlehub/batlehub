@@ -43,9 +43,22 @@ export interface SnippetDef {
   showWhen?: (ctx: SnippetContext) => boolean;
 }
 
+/** Setup-page families, in the order the page lists them. */
+export const REGISTRY_GROUPS = [
+  "languages",
+  "toolchains",
+  "system",
+  "ide",
+  "infra",
+  "forges",
+] as const;
+export type RegistryGroup = (typeof REGISTRY_GROUPS)[number];
+
 export interface RegistryTypeDef {
   id: string;
   label: string;
+  /** The family the setup page lists it under. */
+  group: RegistryGroup;
   fileHint?: string;
   /** Trusted internal HTML for the card description. */
   description: string;
@@ -213,6 +226,7 @@ anonymous = ["releases:read", "releases:list"]
 
 const GODIST: RegistryTypeDef = {
   id: "godist",
+  group: "toolchains",
   label: "Go toolchain (mise)",
   fileHint: "go.mod",
   description:
@@ -293,6 +307,7 @@ anonymous = ["releases:read", "releases:list"]`;
 
 const MISE_JAVA: RegistryTypeDef = {
   id: "mise-java",
+  group: "toolchains",
   label: "Java (mise)",
   fileHint: "mise.toml",
   description:
@@ -328,6 +343,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── mise (composite: github + npm + cargo) ─────────────────────────────────
   {
     id: "mise",
+    group: "toolchains",
     label: "mise",
     fileHint: "mise.toml",
     description:
@@ -402,6 +418,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── npm ────────────────────────────────────────────────────────────────────
   {
     id: "npm",
+    group: "languages",
     label: "npm",
     fileHint: ".npmrc",
     description:
@@ -449,6 +466,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Cargo ──────────────────────────────────────────────────────────────────
   {
     id: "cargo",
+    group: "languages",
     label: "Cargo",
     fileHint: ".cargo/config.toml",
     description:
@@ -493,6 +511,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── OpenVSX ────────────────────────────────────────────────────────────────
   {
     id: "openvsx",
+    group: "ide",
     label: "OpenVSX",
     fileHint: "OpenVSX",
     description:
@@ -596,6 +615,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── VS Code Marketplace ────────────────────────────────────────────────────
   {
     id: "vscode-marketplace",
+    group: "ide",
     label: "VS Code Marketplace",
     fileHint: "marketplace.visualstudio.com",
     description:
@@ -700,6 +720,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── JetBrains Marketplace ──────────────────────────────────────────────────
   {
     id: "jetbrains-marketplace",
+    group: "ide",
     label: "JetBrains Marketplace",
     fileHint: "plugins.jetbrains.com",
     description:
@@ -757,6 +778,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Go ─────────────────────────────────────────────────────────────────────
   {
     id: "goproxy",
+    group: "languages",
     label: "Go",
     fileHint: "Go",
     description:
@@ -826,6 +848,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Maven ──────────────────────────────────────────────────────────────────
   {
     id: "maven",
+    group: "languages",
     label: "Maven",
     fileHint: "Maven",
     description:
@@ -913,6 +936,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Terraform ──────────────────────────────────────────────────────────────
   {
     id: "terraform",
+    group: "infra",
     label: "Terraform",
     fileHint: "Terraform",
     description:
@@ -994,6 +1018,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── RubyGems ───────────────────────────────────────────────────────────────
   {
     id: "rubygems",
+    group: "languages",
     label: "RubyGems",
     fileHint: "RubyGems",
     description:
@@ -1056,6 +1081,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Composer ───────────────────────────────────────────────────────────────
   {
     id: "composer",
+    group: "languages",
     label: "Composer",
     fileHint: "Composer",
     description:
@@ -1175,6 +1201,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── PyPI ───────────────────────────────────────────────────────────────────
   {
     id: "pypi",
+    group: "languages",
     label: "PyPI",
     fileHint: "PyPI",
     description:
@@ -1274,6 +1301,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Conda ──────────────────────────────────────────────────────────────────
   {
     id: "conda",
+    group: "languages",
     label: "Conda",
     fileHint: "Conda",
     description:
@@ -1363,6 +1391,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── NuGet ──────────────────────────────────────────────────────────────────
   {
     id: "nuget",
+    group: "languages",
     label: "NuGet",
     description:
       `Configure <code>dotnet</code> or ` +
@@ -1467,6 +1496,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Forgejo / Gitea (releases) ───────────────────────────────────────────────
   {
     id: "forgejo",
+    group: "forges",
     label: "Forgejo",
     fileHint: "Releases",
     description:
@@ -1515,6 +1545,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── GitLab (releases) ────────────────────────────────────────────────────────
   {
     id: "gitlab",
+    group: "forges",
     label: "GitLab",
     fileHint: "Releases",
     description:
@@ -1562,6 +1593,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Debian APT (deb) ─────────────────────────────────────────────────────────
   {
     id: "deb",
+    group: "system",
     label: "Debian (APT)",
     fileHint: "/etc/apt/sources.list.d/",
     description:
@@ -1674,6 +1706,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── RPM / YUM (rpm) ──────────────────────────────────────────────────────────
   {
     id: "rpm",
+    group: "system",
     label: "RPM (YUM/DNF)",
     fileHint: "/etc/yum.repos.d/",
     description:
@@ -1741,6 +1774,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Arch Linux (pacman) ──────────────────────────────────────────────────────
   {
     id: "pacman",
+    group: "system",
     label: "Arch Linux (pacman)",
     fileHint: "/etc/pacman.conf",
     description:
@@ -1819,6 +1853,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Alpine (apk) ────────────────────────────────────────────────────────────
   {
     id: "apk",
+    group: "system",
     label: "Alpine (apk)",
     fileHint: "/etc/apk/repositories",
     description:
@@ -1900,6 +1935,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── JetBrains IDE archives (proxy-only cache) ──────────────────────────────
   {
     id: "jetbrains",
+    group: "ide",
     label: "JetBrains IDE",
     fileHint: "download.jetbrains.com",
     description:
@@ -1960,6 +1996,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── Generic file mirror (proxy-only, path-addressed) ───────────────────────
   {
     id: "generic",
+    group: "forges",
     label: "Generic mirror",
     fileHint: "any HTTP file tree",
     description:
@@ -2128,6 +2165,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "devfile",
+    group: "ide",
     label: "Devfile registry (Che, odo)",
     fileHint: "devfile.yaml",
     description:
@@ -2197,6 +2235,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "mise-versions",
+    group: "toolchains",
     label: "mise versions host",
     fileHint: "mise.toml",
     description:
@@ -2288,6 +2327,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   MISE_JAVA,
   {
     id: "nodedist",
+    group: "toolchains",
     label: "Node (nvm, fnm, n, mise)",
     fileHint: ".nvmrc",
     description:
@@ -2376,6 +2416,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "rustup",
+    group: "toolchains",
     label: "Rust toolchain (rustup)",
     fileHint: "rust-toolchain.toml",
     description:
@@ -2457,6 +2498,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "galaxy",
+    group: "infra",
     label: "Ansible Galaxy",
     fileHint: "requirements.yml",
     description:
@@ -2570,6 +2612,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "helm",
+    group: "infra",
     label: "Helm charts (classic repository)",
     fileHint: "Chart.yaml",
     description:
@@ -2634,6 +2677,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "nix",
+    group: "system",
     label: "Nix binary cache",
     fileHint: "flake.nix",
     description:
@@ -2751,6 +2795,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   },
   {
     id: "sdkman",
+    group: "toolchains",
     label: "SDKMAN",
     fileHint: ".sdkmanrc",
     description:

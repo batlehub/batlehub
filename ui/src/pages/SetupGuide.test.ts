@@ -35,8 +35,9 @@ async function mountPage(registries: Registry[]) {
   return w;
 }
 
-const tabLabels = (w: Awaited<ReturnType<typeof mountPage>>) =>
-  w.findAll('[role="tab"]').map((t) => t.text());
+/** The tools the rail offers, every family together. */
+const toolLabels = (w: Awaited<ReturnType<typeof mountPage>>) =>
+  w.findAll("aside button").map((b) => b.text());
 
 const snippets = (w: Awaited<ReturnType<typeof mountPage>>) =>
   w.findAllComponents({ name: "CodeBlock" }).map((c) => c.props("code") as string);
@@ -48,6 +49,7 @@ beforeEach(() => {
   auth.isAuthenticated.value = true;
   auth.isAdmin.value = false;
   auth.expiresAt.value = 0;
+  globalThis.history.replaceState(null, "", "/");
 });
 
 /**
@@ -59,9 +61,9 @@ beforeEach(() => {
  * and which host the credentials are filed under.
  */
 describe("SetupGuide", () => {
-  it("offers a tab only for registry types this server actually serves", async () => {
+  it("offers a tool only for registry types this server actually serves", async () => {
     const w = await mountPage([{ name: "py", type: "pypi" }]);
-    const labels = tabLabels(w);
+    const labels = toolLabels(w);
     expect(labels).toContain("PyPI");
     expect(labels).not.toContain("Cargo");
   });
@@ -97,7 +99,7 @@ describe("SetupGuide", () => {
     expect(two.find("#setup-registry-pypi").exists()).toBe(true);
   });
 
-  // ── The .netrc tab ──────────────────────────────────────────────────────────
+  // ── The .netrc block ────────────────────────────────────────────────────────
 
   it("files the credentials under the host the client talks to", async () => {
     const w = await mountPage([]);
@@ -132,22 +134,52 @@ describe("SetupGuide", () => {
       { name: "py", type: "pypi", public_url: "https://pypi.hub.test" },
       { name: "npmjs", type: "npm", public_url: "https://npm.hub.test" },
     ]);
-    // Radix switches on mousedown, not click: jsdom dispatches no pointer
-    // sequence of its own, so the click alone leaves the first tab open.
-    const tab = w.findAll('[role="tab"]').find((t) => t.text() === ".netrc")!;
-    await tab.trigger("mousedown");
-    await flushPromises();
-
     const stanzas = snippets(w).find((s) => s.startsWith("machine"))!;
     expect(stanzas).toContain("machine pypi.hub.test");
     expect(stanzas).toContain("machine npm.hub.test");
     expect(stanzas.match(/machine /g)).toHaveLength(3); // and this origin
   });
 
-  it("hides the .netrc tab from a visitor who has no credentials", async () => {
+  it("hides the credentials block from a visitor who has none", async () => {
     auth.isAuthenticated.value = false;
     const w = await mountPage([{ name: "py", type: "pypi" }]);
-    expect(tabLabels(w)).not.toContain(".netrc");
+    expect(snippets(w).some((s) => s.startsWith("machine"))).toBe(false);
+  });
+
+  // ── The rail and the fast path ──────────────────────────────────────────────
+
+  it("groups the tools by family and switches the recipe on a click", async () => {
+    const w = await mountPage([
+      { name: "py", type: "pypi" },
+      { name: "alpine", type: "apk" },
+    ]);
+    expect(w.text()).toContain("Languages");
+    expect(w.text()).toContain("Systems");
+    expect(w.get("h3").text()).toBe("PyPI");
+
+    await w
+      .findAll("aside button")
+      .find((b) => b.text() === "Alpine (apk)")!
+      .trigger("click");
+    expect(w.get("h3").text()).toBe("Alpine (apk)");
+    // The choice lands in the fragment, so the recipe can be linked to.
+    expect(globalThis.location.hash).toBe("#apk");
+  });
+
+  it("opens the tool the URL fragment names", async () => {
+    globalThis.history.replaceState(null, "", "#apk");
+    const w = await mountPage([
+      { name: "py", type: "pypi" },
+      { name: "alpine", type: "apk" },
+    ]);
+    expect(w.get("h3").text()).toBe("Alpine (apk)");
+  });
+
+  it("leads with the one-command setup, aimed at this server", async () => {
+    const w = await mountPage([{ name: "py", type: "pypi" }]);
+    const first = snippets(w)[0];
+    expect(first).toMatch(/^export BATLEHUB_SERVER=http/);
+    expect(first).toContain("batlehub-cli setup apply");
   });
 
   it("points an OIDC session at a personal token instead of its session token", async () => {
@@ -184,10 +216,10 @@ describe("SetupGuide", () => {
     // Past six tools the strip stops being a chooser, so a filter appears.
     const filter = w.get("#tool-filter");
     await filter.setValue("cargo");
-    expect(tabLabels(w).filter((l) => l !== ".netrc")).toEqual(["Cargo"]);
+    expect(toolLabels(w)).toEqual(["Cargo"]);
 
     await filter.setValue("nothing-like-this");
-    expect(tabLabels(w).filter((l) => l !== ".netrc")).toHaveLength(0);
+    expect(toolLabels(w)).toHaveLength(0);
     expect(w.text()).toContain("nothing-like-this");
   });
 

@@ -15,12 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { CodeBlock } from "@/components/ui/code-block";
-import { Card, CardHeader, CardDescription, CardContent } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Facet } from "@/components/ui/facet";
 import {
+  REGISTRY_GROUPS,
   REGISTRY_TYPE_DEFS,
   hostOf,
   netrcHostsFor,
+  type RegistryGroup,
   type RegistryTypeDef,
   type SnippetContext,
 } from "@/config/registryTypes";
@@ -137,8 +138,56 @@ const visibleDefs = computed(() => {
   );
 });
 
-const defaultTab = computed(
-  () => activeDefs.value[0]?.id ?? (isAuthenticated.value ? "netrc" : ""),
+/**
+ * The tool on screen, mirrored in the URL fragment (`/setup#npm`) so a link to
+ * one recipe can be sent to a colleague. `replaceState` keeps the router's own
+ * history state; a fragment that names no served tool falls back to the first.
+ */
+const selectedTool = ref(globalThis.location?.hash.slice(1) ?? "");
+function selectTool(id: string | null) {
+  if (!id) return;
+  selectedTool.value = id;
+  globalThis.history?.replaceState(globalThis.history.state, "", `#${id}`);
+}
+const currentDef = computed(
+  () =>
+    activeDefs.value.find((d) => d.id === selectedTool.value) ??
+    visibleDefs.value[0] ??
+    activeDefs.value[0],
+);
+
+/** Spelled out, not built from the group id, so the catalogue check sees every key. */
+const groupLabel = computed<Record<RegistryGroup, string>>(() => ({
+  languages: t("setupGuide.groups.languages"),
+  toolchains: t("setupGuide.groups.toolchains"),
+  system: t("setupGuide.groups.system"),
+  ide: t("setupGuide.groups.ide"),
+  infra: t("setupGuide.groups.infra"),
+  forges: t("setupGuide.groups.forges"),
+}));
+
+/** The visible tools folded into their families, empty families dropped. */
+const groupedDefs = computed(() =>
+  REGISTRY_GROUPS.map((group) => ({
+    group,
+    options: visibleDefs.value
+      .filter((d) => d.group === group)
+      .map((d) => ({ value: d.id, label: d.label, count: registryCount(d) })),
+  })).filter((g) => g.options.length > 0),
+);
+
+/** How many registries a tool can point at; shown only when there is a choice. */
+function registryCount(def: RegistryTypeDef): number | undefined {
+  const pt = primaryType(def);
+  const n = pt ? (registriesByType.value[pt]?.length ?? 0) : 0;
+  return n > 1 ? n : undefined;
+}
+
+const quickCommands = computed(
+  () =>
+    `export BATLEHUB_SERVER=${base.value}\n` +
+    (isAuthenticated.value ? "batlehub-cli auth login\n" : "") +
+    "# preview the changes; add --yes to write them\nbatlehub-cli setup apply",
 );
 
 // The primary API type for a tab (null for composite tabs with multiple types)
@@ -188,15 +237,15 @@ function showSelector(def: RegistryTypeDef): boolean {
 </script>
 
 <template>
-  <div class="max-w-7xl space-y-6">
+  <div class="space-y-10 pt-2">
     <PageHeader
       :title="t('setupGuide.setupGuide')"
       :description="t('setupGuide.configureYourToolsToRoute')"
       variant="poster"
     />
 
-    <!-- A failed list said nothing at all: the page fell through to its
-         tabs with no registry in them and left a lone `.netrc` tab. -->
+    <!-- A failed list said nothing at all: the page fell through with no
+         registry in it and left a lone `.netrc` block. -->
     <AsyncState
       v-if="loading || error"
       :loading="loading"
@@ -226,14 +275,18 @@ function showSelector(def: RegistryTypeDef): boolean {
       </EmptyState>
     </div>
 
-    <!-- Tabs -->
-    <Tabs v-else :default-value="defaultTab">
-      <!-- One command writes every snippet below for the clients on PATH
-           (RFC 0038); the tabs stay for the client it does not cover. -->
-      <p class="mb-4 rounded-lg border p-4 text-sm text-muted-foreground">
-        <!-- The box spans the page; its text keeps a reading measure
-             (the rendered gate's line-length rule, ~80 characters). -->
-        <i18n-t keypath="setupGuide.setupApplyNote" tag="span" class="block max-w-[60ch]">
+    <template v-else>
+      <!-- ① The fast path first: one command writes every snippet below for
+           the clients on PATH (RFC 0038); the manual recipes are the fallback. -->
+      <section aria-labelledby="setup-quick" class="space-y-3">
+        <h2 id="setup-quick" class="text-lg font-semibold">{{ t("setupGuide.quickTitle") }}</h2>
+        <CodeBlock :code="quickCommands" lang="sh" :copy="quickCommands" />
+        <!-- The text keeps a reading measure (the rendered gate's ~80 characters). -->
+        <i18n-t
+          keypath="setupGuide.setupApplyNote"
+          tag="p"
+          class="max-w-[60ch] text-sm text-muted-foreground"
+        >
           <template #apply
             ><code class="font-mono text-foreground">batlehub-cli setup apply</code></template
           >
@@ -250,148 +303,151 @@ function showSelector(def: RegistryTypeDef): boolean {
             ></template
           >
         </i18n-t>
-      </p>
-      <!-- The token on screen: masked unless asked for. Not offered to an
-           OIDC session, whose snippets carry the placeholder instead. -->
-      <div
-        v-if="isAuthenticated && !isOidc"
-        class="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"
-      >
-        <span>{{ t("setupGuide.tokenHidden") }}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          :aria-pressed="tokenRevealed"
-          @click="tokenRevealed = !tokenRevealed"
-        >
-          {{ tokenRevealed ? t("setupGuide.hideToken") : t("setupGuide.showToken") }}
-        </Button>
-      </div>
-      <p v-else-if="isOidc" class="mb-3 text-xs text-muted-foreground">
-        <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
-          <template #link
-            ><RouterLink to="/me/tokens" class="text-primary underline underline-offset-[3px]">{{
-              t("setupGuide.personalApiToken")
-            }}</RouterLink></template
+      </section>
+
+      <!-- ② Credentials: the token every snippet below carries, and the
+           `.netrc` that is shared by several tools rather than being one. -->
+      <section v-if="isAuthenticated" aria-labelledby="setup-creds" class="space-y-3">
+        <h2 id="setup-creds" class="text-lg font-semibold">
+          {{ t("setupGuide.credentialsTitle") }}
+        </h2>
+        <!-- Masked unless asked for. Not offered to an OIDC session, whose
+             snippets carry the placeholder instead. -->
+        <div v-if="!isOidc" class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+          <span>{{ t("setupGuide.tokenHidden") }}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            :aria-pressed="tokenRevealed"
+            @click="tokenRevealed = !tokenRevealed"
           >
-        </i18n-t>
-      </p>
-      <div v-if="activeDefs.length > 6" class="mb-3 max-w-xs">
-        <label class="sr-only" for="tool-filter">{{ t("setupGuide.filterTools") }}</label>
-        <Input
-          id="tool-filter"
-          v-model="toolFilter"
-          type="search"
-          :placeholder="t('setupGuide.filterTools2')"
-        />
-      </div>
-      <p v-if="toolFilter && visibleDefs.length === 0" class="mb-3 text-sm text-muted-foreground">
-        {{ t("setup.noToolMatch", { query: toolFilter }) }}
-      </p>
+            {{ tokenRevealed ? t("setupGuide.hideToken") : t("setupGuide.showToken") }}
+          </Button>
+        </div>
+        <p v-else class="max-w-[60ch] text-sm text-muted-foreground">
+          <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
+            <template #link
+              ><RouterLink to="/me/tokens" class="text-primary underline underline-offset-[3px]">{{
+                t("setupGuide.personalApiToken")
+              }}</RouterLink></template
+            >
+          </i18n-t>
+        </p>
+        <details class="group border-t border-rule-soft pt-3">
+          <summary class="cursor-pointer text-sm font-medium">
+            <code class="font-mono">~/.netrc</code> — {{ t("setupGuide.netrcSummary") }}
+          </summary>
+          <div class="mt-3 space-y-3">
+            <p class="max-w-[60ch] text-sm text-muted-foreground">
+              <i18n-t keypath="setupGuide.netrcHelp" tag="span">
+                <template #file
+                  ><code class="text-xs font-mono bg-muted px-1 rounded-sm"
+                    >~/.netrc</code
+                  ></template
+                >
+                <template #chmod
+                  ><code class="text-xs font-mono bg-muted px-1 rounded-sm"
+                    >chmod 600 ~/.netrc</code
+                  ></template
+                >
+              </i18n-t>
+            </p>
+            <CodeBlock :code="netrcSnippetFor(false)" lang="ini" :copy="netrcSnippetFor(true)" />
+          </div>
+        </details>
+      </section>
 
-      <TabsList class="mb-2">
-        <TabsTrigger v-for="def in visibleDefs" :key="def.id" :value="def.id">
-          {{ def.label }}
-        </TabsTrigger>
-        <TabsTrigger v-if="isAuthenticated" value="netrc"> .netrc </TabsTrigger>
-      </TabsList>
-
-      <!-- Dynamic registry tabs -->
-      <TabsContent v-for="def in activeDefs" :key="def.id" :value="def.id">
-        <Card>
-          <CardHeader>
-            <div class="flex items-start justify-between gap-4">
-              <div class="flex-1 space-y-3">
-                <CardDescription>
-                  <RichText
-                    :markup="def.description"
-                    code-class="text-xs font-mono bg-muted px-1 rounded-sm"
-                  />
-                </CardDescription>
-                <!-- Registry selector (shown when multiple registries of same type) -->
-                <div v-if="showSelector(def)" class="flex items-center gap-2">
-                  <label
-                    :for="`setup-registry-${def.id}`"
-                    class="text-xs text-muted-foreground shrink-0"
-                    >{{ t("common.registryLabel") }}</label
-                  >
-                  <Select
-                    :id="`setup-registry-${def.id}`"
-                    :model-value="getSelected(primaryType(def)!)"
-                    :options="selectorOptions(def)"
-                    class="h-7 text-xs w-48"
-                    @update:model-value="selectedByType[primaryType(def)!] = $event"
-                  />
-                </div>
-              </div>
-              <Badge v-if="def.fileHint" variant="outline" class="shrink-0 font-mono text-xs mt-1">
-                {{ def.fileHint }}
-              </Badge>
+      <!-- ③ By hand, one tool at a time: a rail grouped by family instead of
+           a strip of thirty tabs, the recipe beside it. -->
+      <section v-if="activeDefs.length > 0" aria-labelledby="setup-manual" class="space-y-3">
+        <h2 id="setup-manual" class="text-lg font-semibold">{{ t("setupGuide.manualTitle") }}</h2>
+        <div class="grid items-start gap-6 md:grid-cols-[14rem_1fr]">
+          <!-- `min-w-0`: below `md` each family is a nowrap scrolling row,
+               which must scroll inside itself, not widen the page. -->
+          <aside class="min-w-0 space-y-4 md:border-r md:border-rule-soft md:pr-4">
+            <div v-if="activeDefs.length > 6">
+              <label class="sr-only" for="tool-filter">{{ t("setupGuide.filterTools") }}</label>
+              <Input
+                id="tool-filter"
+                v-model="toolFilter"
+                type="search"
+                :placeholder="t('setupGuide.filterTools2')"
+              />
             </div>
-          </CardHeader>
+            <p
+              v-if="toolFilter && visibleDefs.length === 0"
+              class="px-3 text-sm text-muted-foreground"
+            >
+              {{ t("setup.noToolMatch", { query: toolFilter }) }}
+            </p>
+            <Facet
+              v-for="g in groupedDefs"
+              :key="g.group"
+              :model-value="currentDef?.id ?? null"
+              :options="g.options"
+              :label="groupLabel[g.group]"
+              @update:model-value="selectTool"
+            />
+          </aside>
 
-          <CardContent class="space-y-4">
-            <template v-for="snippet in def.snippets" :key="snippet.key">
-              <div v-if="!snippet.showWhen || snippet.showWhen(ctxFor(def))">
-                <p v-if="snippet.label" class="text-xs text-muted-foreground mb-2">
-                  {{ snippet.label }}
-                </p>
-                <CodeBlock
-                  :code="snippet.template(ctxFor(def))"
-                  :lang="snippet.lang"
-                  :copy="snippet.template(ctxFor(def, true))"
+          <div v-if="currentDef" class="min-w-0 space-y-4">
+            <header class="space-y-3">
+              <div class="flex flex-wrap items-baseline justify-between gap-3">
+                <h3 class="text-base font-semibold">{{ currentDef.label }}</h3>
+                <Badge v-if="currentDef.fileHint" variant="outline" class="font-mono text-xs">
+                  {{ currentDef.fileHint }}
+                </Badge>
+              </div>
+              <p class="max-w-[72ch] text-sm text-muted-foreground">
+                <RichText
+                  :markup="currentDef.description"
+                  code-class="text-xs font-mono bg-muted px-1 rounded-sm"
                 />
-                <p v-if="snippet.note" class="text-xs text-muted-foreground mt-2">
+              </p>
+              <!-- Registry selector (shown when multiple registries of same type) -->
+              <div v-if="showSelector(currentDef)" class="flex items-center gap-2">
+                <label
+                  :for="`setup-registry-${currentDef.id}`"
+                  class="text-xs text-muted-foreground shrink-0"
+                  >{{ t("common.registryLabel") }}</label
+                >
+                <Select
+                  :id="`setup-registry-${currentDef.id}`"
+                  :model-value="getSelected(primaryType(currentDef)!)"
+                  :options="selectorOptions(currentDef)"
+                  class="h-7 text-xs w-48"
+                  @update:model-value="selectedByType[primaryType(currentDef)!] = $event"
+                />
+              </div>
+            </header>
+
+            <!-- The snippets are alternatives as often as steps (npm, Yarn,
+                 pnpm), so they are titled, not numbered. -->
+            <template v-for="snippet in currentDef.snippets" :key="snippet.key">
+              <div
+                v-if="!snippet.showWhen || snippet.showWhen(ctxFor(currentDef))"
+                class="space-y-2 border-t border-rule-soft pt-4"
+              >
+                <h4 v-if="snippet.label" class="text-sm font-medium">{{ snippet.label }}</h4>
+                <CodeBlock
+                  :code="snippet.template(ctxFor(currentDef))"
+                  :lang="snippet.lang"
+                  :copy="snippet.template(ctxFor(currentDef, true))"
+                />
+                <p v-if="snippet.note" class="max-w-[72ch] text-xs text-muted-foreground">
                   <RichText
                     :markup="
-                      typeof snippet.note === 'function' ? snippet.note(ctxFor(def)) : snippet.note
+                      typeof snippet.note === 'function'
+                        ? snippet.note(ctxFor(currentDef))
+                        : snippet.note
                     "
                   />
                 </p>
               </div>
             </template>
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      <!-- .netrc tab (authenticated users only) -->
-      <TabsContent v-if="isAuthenticated" value="netrc">
-        <Card>
-          <CardHeader>
-            <div class="flex items-center justify-between">
-              <CardDescription>
-                <i18n-t keypath="setupGuide.netrcHelp" tag="span">
-                  <template #file
-                    ><code class="text-xs font-mono bg-muted px-1 rounded-sm"
-                      >~/.netrc</code
-                    ></template
-                  >
-                  <template #chmod
-                    ><code class="text-xs font-mono bg-muted px-1 rounded-sm"
-                      >chmod 600 ~/.netrc</code
-                    ></template
-                  >
-                </i18n-t>
-              </CardDescription>
-              <Badge variant="outline" class="shrink-0 font-mono text-xs ml-4"> ~/.netrc </Badge>
-            </div>
-          </CardHeader>
-          <CardContent class="space-y-3">
-            <CodeBlock :code="netrcSnippetFor(false)" lang="ini" :copy="netrcSnippetFor(true)" />
-            <p v-if="isOidc" class="text-xs text-muted-foreground">
-              <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
-                <template #link
-                  ><RouterLink
-                    to="/me/tokens"
-                    class="text-primary underline underline-offset-[3px]"
-                    >{{ t("setupGuide.personalApiToken") }}</RouterLink
-                  ></template
-                >
-              </i18n-t>
-            </p>
-          </CardContent>
-        </Card>
-      </TabsContent>
-    </Tabs>
+          </div>
+        </div>
+      </section>
+    </template>
   </div>
 </template>
