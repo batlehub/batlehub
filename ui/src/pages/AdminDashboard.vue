@@ -260,7 +260,7 @@ const trendText = computed(() => {
 
 <template>
   <div class="space-y-6">
-    <PageHeader :title="t('dashboard.title')">
+    <PageHeader :title="t('dashboard.title')" :description="t('dashboard.pageDescription')">
       <template v-if="monitoring" #actions>
         <Button as-child size="sm" variant="outline">
           <a :href="monitoring" target="_blank" rel="noopener noreferrer" data-testid="monitoring">
@@ -454,7 +454,7 @@ const trendText = computed(() => {
 
            Copper on `down` is the degradation job DESIGN.md's Secondary entry
            authorises — a measured value moving the wrong way but not refused.
-           This page and QuotaWidget reached for it before the world had it;
+           This page and LimitsWidget (then QuotaWidget) reached for it before the world had it;
            RFC 0004-bis §11/O1 gave copper the job rather than a sixth hue. -->
       <p
         v-if="trendText"

@@ -12,7 +12,7 @@ const { can } = useAuth();
 
 <template>
   <div class="space-y-6">
-    <PageHeader :title="t('securityNav.holds')" />
+    <PageHeader :title="t('securityNav.holds')" :description="t('holdsPanel.intro')" />
     <HoldsPanel :can-open-findings="can('findings:read')" />
     <HeldVersions />
   </div>

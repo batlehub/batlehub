@@ -26,8 +26,24 @@ withDefaults(
     scrolled sideways for this reason alone, after the layout row above them
     was fixed.
   -->
-  <div class="flex flex-wrap items-start justify-between gap-4">
-    <div class="min-w-0">
+  <!-- One header height across the console: room for the title and two lines
+       of description, reserved even when a page says less, so content starts
+       at the same place on every page and the plate is never a thin band. -->
+  <div
+    :class="
+      cn(
+        'relative flex flex-wrap items-start justify-between gap-4',
+        variant === 'poster' ? 'min-h-22' : 'min-h-19',
+      )
+    "
+  >
+    <!-- The halftone plate behind a page title (DESIGN.md, The material layer).
+         Only on a page's own h1 — a hub's h2 sits under a header that has one —
+         and only from xl: `plate--header` is narrower than the catalog's, so the
+         description (64ch, in dim ink that would fall to 3.2:1 on the plate)
+         ends before the plate begins. Below xl the column is too narrow for that. -->
+    <div v-if="as === 'h1'" class="plate plate--header hidden xl:block" aria-hidden="true"></div>
+    <div class="relative z-10 min-w-0">
       <component
         :is="as"
         :class="
@@ -58,7 +74,10 @@ withDefaults(
     <!-- `max-w-full` + `flex-wrap`: two actions wider than a phone (one
          registry's Edit configuration + Monitoring, at 390px) wrap onto a
          second row instead of pushing the document 14px sideways. -->
-    <div v-if="$slots.actions" class="flex max-w-full flex-wrap items-center gap-2 shrink-0">
+    <div
+      v-if="$slots.actions"
+      class="relative z-10 flex max-w-full flex-wrap items-center gap-2 shrink-0"
+    >
       <slot name="actions" />
     </div>
   </div>

@@ -214,11 +214,9 @@ components:
 
 # Design System: BatleHub
 
-Recorded from the built proving surface at `ui/design-proof/index.html` (plus its self-hosted
-faces). That build is the ground truth for every value below; where it diverges from the RFC's
-earlier intent, the build wins and the divergence is noted. One divergence runs the other way: the
-proof still carries its halftone plate, and the application no longer renders one (see The material
-layer).
+Recorded from the built proving surface at `ui/design-proof/index.html` (plus its authored
+`halftone-plate.png` and self-hosted faces). That build is the ground truth for every value below;
+where it diverges from the RFC's earlier intent, the build wins and the divergence is noted.
 `ui/src` has not been migrated yet — Phase 2 derives `ui/src/design/tokens.css` from this file, **now
 for two renditions.**
 
@@ -226,7 +224,7 @@ for two renditions.**
 automatically verified. The human author has since opened the built surface in a real browser and
 confirmed **both renditions**, and that viewing produced one real defect, since fixed: horizontal
 overflow of the whole page at small widths, caused by fixed table column widths. Still unverified:
-reflow at 320–480px under the longer French labels, focus rings as painted,
+the plate as composited, reflow at 320–480px under the longer French labels, focus rings as painted,
 whether the `woff2` files decode, and whether `filter: blur()` on `<tr>` animates cleanly. The
 pager's Next control remains drawn but unwired. Contrast ratios below were computed, not sampled.
 
@@ -241,8 +239,9 @@ the `:root[data-theme="light"]` overrides. There is no third set and no per-comp
 
 A press proof. One form is set at poster scale and captioned by its facts; everything under it is
 ruled rows, hairlines and ink. The world is an Emigre bitmap type specimen: a square-pixel display
-face carrying identity and scale, a mono text face carrying every fact, and no image on the page.
-There is no photography, no illustration, no card, no tile, and no glow.
+face carrying identity and scale, a mono text face carrying every fact, and an authored halftone
+plate as the only image on the page. There is no photography, no illustration, no card, no tile, and
+no glow.
 
 The organising idea is **resolution as state**. What BatleHub holds and has verified renders at full
 resolution — a fine 3×3 dot matrix, ink-white; what it does not renders coarse — a 2×2 matrix at
@@ -272,8 +271,8 @@ it was also the right palette for this world.
 - State reads as resolution — fine dots for held-and-verified, coarse dots for not — and the state
   grammar is identical in both renditions.
 - Every denial states its own rule, in its own row, tied to the artifact it refused.
-- No raster image anywhere in the interface; the one texture is a dot field drawn in CSS, on the
-  home page only.
+- One authored raster (a 60 lpi halftone plate) is the only image in the system; it is the ink of
+  whichever ground it sits on.
 - Theme and locale are stored as *preferences*, never as resolved values, and share one control.
 
 ## Colors
@@ -282,9 +281,9 @@ One palette, two grounds. Each rendition carries a ground, warm ink, one synthet
 sparingly, and a copper second voice for anything that is *waiting* rather than *refused*.
 
 **The renditions are the same system, not two systems.** The evidence is in the build: apart from the
-token block itself and the code highlighter's switch between its two Shiki themes, the stylesheet
-contains no rendition-specific rule. No component, no state, no border and no type step is
-re-specified for light. That is possible because the state grammar never depended on fill in the first place (see The
+token block itself, the entire stylesheet contains exactly **one** rendition-specific rule — the
+plate's opacity and fill. No component, no state, no border and no type step is re-specified for
+light. That is possible because the state grammar never depended on fill in the first place (see The
 Undependable Fill Rule), so nothing had to be re-invented when the ground flipped.
 
 **The Neutral Paper Rule.** The light rendition's neutrals — ground, raised, sunk, ink, dim ink and
@@ -319,8 +318,8 @@ rendition moves it toward its own opposite pole.
   and it means *pending or held*, never *good*: the `stale` and `held` states, the instance hostname
   in the identity strip, the pressed border on a toggled control, the "synthetic fixture data" tag,
   a measured value moving the wrong way but not yet refused — a falling hit rate, a quota approaching
-  its limit. It is text, a 1px border, a state matrix or a meter's fill, never a large area — no
-  colour in the system is. Its lightness is re-derived per ground —
+  its limit — and the plate's ink in the dark rendition. It is the only colour that appears as a large
+  area anywhere in the system, and only through the plate. Its lightness is re-derived per ground —
   see The Re-Derived Lightness Rule.
 
   The degradation job was added after two surfaces reached for it independently — `AdminDashboard`'s
@@ -536,7 +535,8 @@ overflow purposes, which is exactly the case that matters.
 - **640 / 880 / 1140px** — display size steps only (72 / 88 / 104px). Nothing else moves.
 - **900px and below** — the sheet collapses to one column; the bay unsticks and becomes a
   horizontally scrolling row of registry chips with its selection edge moving from the left border to
-  a 2px bottom border; region padding drops 24 → 16px; the two least load-bearing columns (Size, Last fetch) are removed from the table rather
+  a 2px bottom border; region padding drops 24 → 16px; the plate widens to 64% and drops to 26%
+  opacity; the two least load-bearing columns (Size, Last fetch) are removed from the table rather
   than being squeezed; the remaining fixed column widths release to `width: auto`; and the state chip
   is allowed to wrap.
 
@@ -561,7 +561,7 @@ small widths — so it is recorded as law rather than as a fix.
 
 **This system has no elevation.** There are no ambient shadows, no blurs, no layered surfaces, and
 no glow — the Monofolio `--cyber-glow` / `--steam-glow` utilities do not survive into this world.
-Depth is entirely inked: a hairline changes weight or a value changes. The two
+Depth is entirely inked: a hairline changes weight, a value changes, or a texture appears. The two
 tonal steps that exist (`--ground-raised`, `--ground-sunk`) are confirmation, not elevation, and
 cannot be seen on their own in either rendition (see The Undependable Fill Rule). The settings
 popover is no exception: it is a 1px-framed box on `--ground-sunk`, floated by `z-index` alone, with
@@ -581,16 +581,33 @@ zero blur, solid colour, on the primary action only:
 
 ### The material layer
 
-**There is no image.** The proof's halftone plate — an authored raster applied as a CSS mask behind
-the specimen head — was ported once and then retired: the application ships no raster in its
-interface, and nothing about either rendition depends on one.
+**The plate** is the system's one image: an authored raster (`halftone-plate.png`), a 45° halftone
+screen at 60 lpi generated deterministically, running **99.7% ink coverage down to 6.3%** across its
+width, emitted as 8-bit grayscale + alpha. It is applied as a CSS **mask** over a colour fill, so the
+ink stays a token rather than being baked into the file. It sits behind the specimen head at
+`min(52%, 620px)` wide, anchored right, `pointer-events: none`, `aria-hidden`.
 
-**The dot field** is the one texture: a 9×9px radial dot grid in `--rule-soft` at 55% opacity,
-gradient-masked to fade at both ends. It is identity, and identity is what the home page is for; the
-console is a working surface, and a texture beside every admin title read as decoration, so it
-renders only on `/`. Its box stays everywhere, because it is the bar's flex spacer — the one box
-that holds no text and cannot acquire any, and which collapses to zero width exactly when the bar
-wraps.
+**Where the textures are.** The plate sits behind the catalog's specimen head and behind every
+console page title (`PageHeader`'s `h1`), never on the home page or a package page. Behind a page
+title it is the narrower `plate--header` (`min(38%, 520px)`) and only from `xl`, so a description
+— 64ch, in `--ink-dim`, which falls to 3.2:1 on the plate — ends before the plate begins; below
+`xl` the column is too narrow for that and no plate renders. The masthead's dot field renders on
+every page, in the bar's flex spacer. Both came back after a release removed them (398043a7,
+November 2026) because the product read as anonymous without them.
+
+**The same authored raster serves both renditions, inked with its own ground's colour**: `--copper`
+at **34%** opacity on near-black (26% below 900px), `--ink` at **20%** on paper — lower, because dark
+dots on a light ground carry further. Same screen, same geometry, the ink of its own ground. Nothing
+else about the plate changes.
+
+Two rules the build encodes and Phase 2 must keep: the plate is **mirrored** (`scaleX(-1)`) so its
+dense end bleeds off the outer margin instead of facing the caption — copper at 34% over near-black
+composites to roughly `#513021`, where `--ink-dim` would fall to 3.21:1; and its fill is
+**transparent until masking is confirmed supported**, in both renditions.
+
+**The dot field** is the second texture: a 9×9px radial dot grid in `--rule-soft` at 55% opacity,
+gradient-masked to fade at both ends. It lives only in the masthead's flex spacer — the one box that
+holds no text and cannot acquire any, and which collapses to zero width exactly when the bar wraps.
 Measured behind wrapped 12px `--ink-dim`, the field drops that text to 4.50:1, so it is confined by
 construction rather than tuned by opacity.
 
@@ -603,6 +620,12 @@ shadow anywhere else — cards, panels, popovers, the masthead — is out of the
 **The Texture-In-Empty-Boxes Rule.** A texture may only occupy a box that holds no text and cannot
 come to hold text. Painting order is not contrast: if a field can end up behind a label, it is
 confined, not faded.
+
+**The Gated Material Rule.** A masked element's fill is declared **only inside the `@supports` query
+that confirms the mask**, per rendition. An engine or minifier that dropped the mask would otherwise
+paint a solid copper (or ink) block over the right half of the specimen — precisely the 3.21:1
+condition the whole treatment exists to avoid. A material's failure mode must be *absence*, never a
+solid block.
 
 ## Shapes
 
@@ -790,8 +813,8 @@ mode) degrades to session-only, never to a thrown error.
   as confirmation only — 1.06:1 on near-black and 1.11:1 on paper (The Undependable Fill Rule).
 - **Do** port a token's hue across renditions and re-derive its lightness against the new ground, then
   re-measure every pair it participates in (The Re-Derived Lightness Rule).
-- **Do** write components rendition-blind: ask for `--accent`, never for a rendition. Outside the
-  token block, the code highlighter's theme switch is the only rendition-specific rule.
+- **Do** write components rendition-blind: ask for `--accent`, never for a rendition. The plate's
+  opacity and fill are the only rendition-specific rules the system is allowed.
 - **Do** store `system|light|dark` and `system|en|fr` as preferences, resolve theme before first
   paint, and re-resolve on environment change only while the preference is System.
 - **Do** draw every mutually-exclusive choice set as one bounding box with 1px dividers and the
@@ -805,7 +828,8 @@ mode) degrades to session-only, never to a thrown error.
   on unbreakable identifiers; the body must never scroll horizontally.
 - **Do** drop whole table columns when width runs out, and release the remaining fixed widths to
   `auto`; State, Package and Version stay at every size.
-- **Do** confine texture to boxes that hold no text and cannot acquire any.
+- **Do** confine texture to boxes that hold no text and cannot acquire any, and declare a masked
+  element's fill only inside the `@supports` query that confirms the mask.
 - **Do** keep the amber focus ring on everything focusable, at `2px` with `2px` offset.
 - **Do** state each refusal's rule in its own row, tied by `aria-describedby`.
 - **Do** move focus deliberately after any re-render that destroys the focused element — flip

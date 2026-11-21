@@ -179,8 +179,6 @@ watchDebounced(source, () => void load(), { debounce: 300 });
       <CardTitle>{{ t("exposurePanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("exposurePanel.intro") }}</p>
-
       <p
         v-if="scope.registry || scope.package"
         class="flex flex-wrap items-baseline gap-x-3 text-sm"

@@ -353,7 +353,10 @@ function rereadFromDisk() {
          sighted users only — on the surface whose audience includes the one
          person able to perform destructive actions. -->
     <Announcer :message="successMsg ?? ''" />
-    <PageHeader :title="t('adminNav.configReload')" />
+    <PageHeader
+      :title="t('adminNav.configReload')"
+      :description="t('adminConfigReload.pageDescription')"
+    />
 
     <!--
       The config could not be read: say so, say what it costs, offer a retry.
@@ -542,7 +545,7 @@ function rereadFromDisk() {
       @update:open="confirmReread = $event"
     />
 
-    <!-- Change History -->
+    <!-- Change history -->
     <ConfigChangeHistory :change-history="changeHistory" :loading="loadingHistory" />
   </div>
 </template>

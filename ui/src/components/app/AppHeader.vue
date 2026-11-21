@@ -152,11 +152,7 @@ function handleLogout() {
            viewport. Masked to fade at both edges so it reads as a field the bar
            passes through rather than a panel with borders. -->
       <div class="relative hidden self-stretch lg:block lg:flex-1" aria-hidden="true">
-        <!-- The dot field only on the home page: in the console the bar is
-             chrome, and a texture beside every admin title read as decoration.
-             The box itself stays — it is the flex spacer. -->
         <span
-          v-if="route.path === '/'"
           data-testid="header-dot-field"
           class="pointer-events-none absolute inset-0 opacity-55 [background-image:radial-gradient(var(--rule-soft)_1px,transparent_1.5px)] [background-size:9px_9px] [mask-image:linear-gradient(90deg,transparent,#000_40%,transparent)]"
         />

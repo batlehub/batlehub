@@ -252,7 +252,8 @@
     "thisInstance": "cette instance",
     "validWithWarnings": "Cette configuration est valide mais soulève {count} avertissement(s) :",
     "validate": "Valider",
-    "validating": "Validation…"
+    "validating": "Validation…",
+    "pageDescription": "Le fichier sur lequel tourne ce serveur : ce qu'il signale, la modification en attente de revue, et l'éditeur qui en prépare une."
   },
   "adminDashboard": {
     "hitRate": "Taux de hit",
@@ -487,7 +488,8 @@
     "selectPackage": "Sélectionner {name}",
     "selectedCount": "{count} sélectionné | {count} sélectionnés",
     "tryClearingTheFilter": "Essayez d'effacer le filtre.",
-    "unblockSelected": "Débloquer la sélection"
+    "unblockSelected": "Débloquer la sélection",
+    "pageDescription": "Tous les paquets que connaît cette instance, relayés ou publiés ici, avec les versions bloquées par un opérateur."
   },
   "adminSbom": {
     "aboutSbomFormats": "À propos des formats SBOM",
@@ -504,7 +506,8 @@
     "rangeInverted": "La date de début est postérieure à la date de fin : la sélection serait vide.",
     "spdx23": "SPDX 2.3",
     "spdxBlurb": "{name} — norme ISO/IEC largement utilisée pour la conformité et le suivi des licences. À privilégier pour la revue juridique et les processus conformes à OpenChain.",
-    "flagsLink": "Ce que les sources de signalement disent de ces versions → Sécurité › Signalements"
+    "flagsLink": "Ce que les sources de signalement disent de ces versions → Sécurité › Signalements",
+    "pageDescription": "Un SBOM pour toute l'organisation, fusionné à partir de ce que cette instance a servi sur une période."
   },
   "adminTeamNamespaces": {
     "assignPackageNamePrefixesTo": "Attribuer des préfixes de nom de paquet aux groupes du fournisseur d'authentification pour contrôler qui peut y publier.",
@@ -625,7 +628,8 @@
     "noMissesConnected": "Rien d'enregistré — les manques ne sont consignés que lorsque le mode isolé est actif.",
     "rejected": "Rejetés",
     "signer": "Signataire",
-    "title": "Réseau isolé"
+    "title": "Réseau isolé",
+    "pageDescription": "Ce que cette instance peut servir sans réseau : les bundles importés, et ce qui a été demandé sans qu'aucun bundle ne le contienne."
   },
   "appFooter": {
     "reportABug": "Signaler un bug",
@@ -661,7 +665,8 @@
     "purged": "{count} événement purgé. | {count} événements purgés.",
     "retention": "Rétention",
     "retentionHelp": "Supprime les événements d'audit antérieurs à une date de coupure. Cette action supprime des preuves définitivement et est irréversible.",
-    "exposureLink": "Qui a tiré une version signalée depuis → Sécurité › Exposition"
+    "exposureLink": "Qui a tiré une version signalée depuis → Sécurité › Exposition",
+    "pageDescription": "Qui a fait quoi sur cette instance : téléchargements, publications, blocages, connexions et refus, avec la règle derrière chacun."
   },
   "catalog": {
     "emptyBody": "Les paquets apparaissent ici dès qu'ils transitent par cette instance, ou dès qu'ils y sont publiés.",
@@ -821,7 +826,8 @@
     "allAnswering": "Les {count} registres répondent.",
     "healthUnknown": "Impossible de lire l'état de santé.",
     "someDegraded": "{failing} registres sur {total} sont dégradés ou ont signalé des erreurs : {names}.",
-    "title": "Tableau de bord"
+    "title": "Tableau de bord",
+    "pageDescription": "Si cette instance va bien, ce que la couche de sécurité retient, et ce que le cache fait gagner."
   },
   "destructive": {
     "canUndo": "Cette action pourra être annulée.",
@@ -844,7 +850,7 @@
     "empty": "Aucun téléchargement d'une version signalée sur cette période.",
     "exportCsv": "Exporter en CSV",
     "flag": "Signalement",
-    "intro": "Qui a téléchargé une version signalée par une source, et combien de ces téléchargements précèdent le signalement — le cas rétroactif, où le développeur n'a rien fait de mal et détient pourtant l'artefact.",
+    "intro": "Qui a téléchargé une version signalée depuis par une source, et combien de ces téléchargements précèdent le signalement.",
     "lastPull": "Dernier téléchargement",
     "lastScan": "dernier passage sur {registry} le {when}",
     "exportFailed": "L'export CSV a échoué.",
@@ -1201,13 +1207,32 @@
     "registryType": "Type de registre",
     "urlMapper": "Mappage d'URL"
   },
-  "quotaWidget": {
-    "approaching": "Au-delà de {pct} % d'une limite. La publication fonctionne toujours.",
-    "atLimit": "Limite atteinte. La prochaine publication peut être refusée.",
+  "limitsWidget": {
+    "allClear": "Aucune limite en vue.",
+    "atLimit": "Limite atteinte",
+    "downloads": "Téléchargements",
+    "downloadsAtLimit": "{used} requêtes sur {limit} {window} : refusées jusqu'à la remise à zéro, {resets}.",
+    "downloadsNear": "{used} requêtes sur {limit} {window}, remise à zéro {resets}. Une boucle de CI tire peut-être trop souvent.",
+    "downloadsWhat": "Les requêtes que vous pouvez faire à chaque registre, sur la fenêtre propre à ce registre. Au-delà de la limite, les requêtes sont refusées jusqu'à la remise à zéro.",
+    "inHours": "dans {n} h",
+    "inMinutes": "dans {n} min",
+    "inSeconds": "dans {n} s",
+    "near": "Proche de la limite",
+    "needAttention": "{count} limite demande votre attention. | {count} limites demandent votre attention.",
     "ofLimit": "{used} sur {limit}",
-    "storage": "Stockage",
-    "title": "Votre quota",
-    "versions": "Versions"
+    "perDay": "/jour",
+    "perHour": "/h",
+    "perMinute": "/min",
+    "perSecond": "/s",
+    "perSeconds": "/{n} s",
+    "publishAtLimit": "votre prochaine publication peut y être refusée. Retirez ou supprimez une version, ou demandez à un administrateur.",
+    "publishNear": "au-delà de {pct} % d'une limite. La publication fonctionne toujours.",
+    "publishing": "Publication",
+    "publishingWhat": "Ce que vous avez publié dans chaque registre : les versions et le stockage qu'elles occupent. Les téléchargements ne comptent pas.",
+    "requestsText": "{used} requêtes sur {limit} {window}",
+    "storage": "stockage",
+    "title": "Vos limites",
+    "versions": "versions"
   },
   "readmePanel": {
     "blocked": "Cette version est bloquée : son README n'est pas servi. Le motif du blocage figure sur sa ligne.",
@@ -1788,7 +1813,8 @@
     "scanCounts": "{scanned} analysées · {waiting} en attente · {failed} en échec",
     "notProtectedHint": "Ni profil [security] ni contrôle CVE : chaque version est servie sans analyse.",
     "warnsOnly": "avertit, refuse toujours un malware connu",
-    "unscannedNever": "jamais : une version non analysée attend la fin de son analyse"
+    "unscannedNever": "jamais : une version non analysée attend la fin de son analyse",
+    "registryDescription": "Comment ce registre est protégé : ses scanners, ses barrières, et l'âge qu'une version doit avoir avant d'être servie."
   },
   "securityScanners": {
     "workers": "Workers",

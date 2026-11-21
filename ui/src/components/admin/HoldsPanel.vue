@@ -59,7 +59,6 @@ onMounted(load);
       <CardTitle>{{ t("holdsPanel.title") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <p class="text-sm text-muted-foreground max-w-[70ch]">{{ t("holdsPanel.intro") }}</p>
       <AsyncState
         :loading="loading"
         :error="error"

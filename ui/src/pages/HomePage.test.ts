@@ -36,7 +36,7 @@ import HomePage from "./HomePage.vue";
 const stubs = {
   RouterLink: { template: "<a><slot /></a>" },
   AdvisoriesWidget: { template: "<section data-testid='widget' />" },
-  QuotaWidget: { template: "<section data-testid='widget' />" },
+  LimitsWidget: { template: "<section data-testid='widget' />" },
   RecentPullsWidget: { template: "<section data-testid='widget' />" },
 };
 

@@ -61,9 +61,9 @@ describe("AdminBanner", () => {
   it("refuses to set an empty banner", async () => {
     const wrapper = await mountPage();
 
-    expect(button(wrapper, "Set Banner")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Set banner")?.attributes("disabled")).toBeDefined();
     await wrapper.get("#banner-message").setValue("   ");
-    expect(button(wrapper, "Set Banner")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Set banner")?.attributes("disabled")).toBeDefined();
   });
 
   it("sets the banner at the chosen level and clears the field", async () => {
@@ -71,7 +71,7 @@ describe("AdminBanner", () => {
 
     await wrapper.get("#banner-message").setValue("Upgrading at 22:00 UTC");
     await wrapper.get("#banner-level").setValue("warning");
-    await button(wrapper, "Set Banner")!.trigger("click");
+    await button(wrapper, "Set banner")!.trigger("click");
     await flushPromises();
 
     expect(sdk.setBannerMock).toHaveBeenCalledWith({
@@ -86,7 +86,7 @@ describe("AdminBanner", () => {
     const wrapper = await mountPage();
 
     await wrapper.get("#banner-message").setValue("hello");
-    await button(wrapper, "Set Banner")!.trigger("click");
+    await button(wrapper, "Set banner")!.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("not permitted");
@@ -95,7 +95,7 @@ describe("AdminBanner", () => {
   it("only offers to clear a banner that exists, and shows who set it", async () => {
     const noBanner = await mountPage();
     expect(noBanner.text()).toContain("No banner currently set.");
-    expect(button(noBanner, "Clear Banner")?.attributes("disabled")).toBeDefined();
+    expect(button(noBanner, "Clear banner")?.attributes("disabled")).toBeDefined();
 
     stubBanner({ message: "Read-only mode", level: "error", set_at: "now", set_by: "alice" });
     const wrapper = await mountPage();
@@ -103,7 +103,7 @@ describe("AdminBanner", () => {
     expect(wrapper.text()).toContain("Read-only mode");
     expect(wrapper.text()).toContain("alice");
 
-    await button(wrapper, "Clear Banner")!.trigger("click");
+    await button(wrapper, "Clear banner")!.trigger("click");
     await flushPromises();
 
     expect(sdk.clearBannerMock).toHaveBeenCalled();
@@ -115,7 +115,7 @@ describe("AdminBanner", () => {
     sdk.clearBannerMock.mockResolvedValue({ error: { message: "storage unreachable" } });
     const wrapper = await mountPage();
 
-    await button(wrapper, "Clear Banner")!.trigger("click");
+    await button(wrapper, "Clear banner")!.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("storage unreachable");

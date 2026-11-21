@@ -89,10 +89,10 @@ const totalCachedBytes = computed<number | null>(() => {
 </script>
 
 <template>
-  <section class="relative overflow-hidden border-b border-rule-soft pb-6 pt-4">
-    <!-- No texture here (DESIGN.md, The material layer): the dot field is
-         the home page's, where identity is the point; the catalog is a working
-         surface and its header is a title, not a specimen. -->
+  <section class="relative overflow-hidden border-b border-rule-soft pb-6 pt-2">
+    <!-- The halftone plate (DESIGN.md, The material layer): the system's one
+         image, behind the catalog's specimen head and nowhere else. -->
+    <div class="plate" aria-hidden="true"></div>
     <!-- The proof's `.display` rule, ported rather than approximated:
          `line-height:.92`, `letter-spacing:.02em`, uppercase. The body
          line-height is 1.625, which on a 104px element costs 169px per line
