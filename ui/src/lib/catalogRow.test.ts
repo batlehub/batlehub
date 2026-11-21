@@ -33,6 +33,11 @@ describe("noteKey", () => {
     expect(noteKey(cached({ state: "yanked" }))).toBe("resolution.noteYanked");
     expect(noteKey(cached({ state: "held" }))).toBe("resolution.noteHeld");
   });
+  it("says an older version is refused when the newest is not", () => {
+    expect(noteKey(cached({ has_blocked: true }))).toBe("resolution.noteSomeBlocked");
+    expect(noteKey(cached({ has_yanked: true }))).toBe("resolution.noteSomeYanked");
+    expect(noteKey(cached({ state: "blocked", has_blocked: true }))).toBe("resolution.noteBlocked");
+  });
   it("is absent for a state that is not a refusal", () => {
     expect(noteKey(cached())).toBeUndefined();
     expect(noteKey(upstream())).toBeUndefined();

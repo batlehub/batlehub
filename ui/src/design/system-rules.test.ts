@@ -283,11 +283,11 @@ describe("the destructive contract", () => {
  * now.
  *
  * Whether a thrown message reaches a screen is not decidable from the source,
- * so this does the next best thing: it freezes the two that exist. Both are
- * control-flow throws whose text is never read — `LoginPage` discards the
- * error and shows `loginPage.invalidToken`, `useAuth` hands it to
- * `console.error` — and a third one appearing is the moment to check which
- * kind it is, rather than a year later.
+ * so this does the next best thing: it freezes the one that exists, a
+ * control-flow throw whose text is never read — `useAuth` hands it to
+ * `console.error` — and another one appearing is the moment to check which
+ * kind it is, rather than a year later. (`LoginPage` had the second; its
+ * sign-in now reads the answer's status instead of throwing.)
  *
  * Only *bare literals* count. Everything else in the tree throws `t(…)`,
  * `extractMessage(…)` or protocol data (`HTTP ${status}`, a response body),
@@ -298,7 +298,6 @@ describe("thrown text", () => {
 
   const FROZEN_LITERAL_THROWS: Record<string, number> = {
     "src/composables/useAuth.ts": 1,
-    "src/pages/LoginPage.vue": 1,
   };
 
   it("throws a bare English sentence only where nothing displays it", () => {

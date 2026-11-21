@@ -127,16 +127,32 @@ const {
 
 const registries = computed<RegistryHealthDto[]>(() => health.value ?? []);
 
+/** The live upstream verdict `/admin/registries` draws as *Degraded*. */
+const upstreamDegraded = computed(
+  () =>
+    new Set(
+      (stats.value?.per_registry ?? []).filter((r) => r.upstream_degraded).map((r) => r.registry),
+    ),
+);
+
 /**
- * A *fault*, not a refusal.
+ * A *fault*, not a refusal — or an upstream the proxy itself rates degraded.
  *
  * `recent_errors[].error_type` is `"denied"` or `"error"`: the first is RBAC
  * turning a developer away, which is the policy engine doing its job. Counting
  * both meant the page could raise an alarm because the product worked — and at
  * 3am an alarm that fires on correct behaviour is worse than none.
+ *
+ * `upstream_degraded` is the second half: a slow or flaky upstream records no
+ * fault row, so without it this page said "all answering" over a registry the
+ * registries page marked Degraded — the first sentence contradicting the second.
  */
 const degraded = computed(() =>
-  registries.value.filter((r) => r.recent_errors?.some((e) => e.error_type === "error")),
+  registries.value.filter(
+    (r) =>
+      upstreamDegraded.value.has(r.registry) ||
+      r.recent_errors?.some((e) => e.error_type === "error"),
+  ),
 );
 
 /**
@@ -353,29 +369,31 @@ const trendText = computed(() => {
       <!-- The figures, after the verdict and weighted by it: the verdict above
            says whether anything is wrong, so these four can be read as
            support rather than as four equal-weight claims (RFC 0003 §6.4).
-           Each is the figure plus the one qualifier it needs to be read. -->
+           Each is the figure plus the one qualifier it needs to be read.
+           On one ruled line, not four tiles: DESIGN.md refuses the stat row,
+           the same way AdminHealth's facts line does. -->
       <dl
         v-else-if="stats"
-        class="grid grid-cols-2 gap-3 lg:grid-cols-4"
+        class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-rule-soft py-4 lg:grid-cols-4"
         data-testid="dashboard-kpis"
       >
-        <div class="border border-border px-4 py-3">
+        <div>
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiHitRate") }}
           </dt>
           <!-- RFC 0050 §6.7: a rate of nothing is not a rate. -->
-          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ totalRequests ? fmtPct(hitRate) : "—" }}
           </dd>
           <dd class="mt-1 text-xs text-muted-foreground">
             {{ t("adminDashboard.kpiSince", { date: formatDate(stats.since_startup) }) }}
           </dd>
         </div>
-        <div class="border border-border px-4 py-3">
+        <div>
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiDownloads") }}
           </dt>
-          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ formatCount(totalRequests) }}
           </dd>
           <dd class="mt-1 text-xs text-muted-foreground">
@@ -386,24 +404,24 @@ const trendText = computed(() => {
             }}
           </dd>
         </div>
-        <div class="border border-border px-4 py-3">
+        <div>
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiCached") }}
           </dt>
-          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ fmtBytes(stats.aggregate.cached_bytes) }}
           </dd>
           <dd class="mt-1 text-xs text-muted-foreground">
             {{ t("adminDashboard.kpiCachedHint") }}
           </dd>
         </div>
-        <div class="border border-border px-4 py-3">
+        <div>
           <dt class="text-xs font-medium text-muted-foreground">
             {{ t("adminDashboard.kpiRegistries") }}
           </dt>
           <!-- The count comes from the health probe: an unread probe is unknown,
                never "0 registries, all answering" in the healthy colour. -->
-          <dd class="mt-1 font-mono text-2xl font-semibold tabular-nums">
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ health && !healthError ? formatCount(registries.length) : "—" }}
           </dd>
           <dd

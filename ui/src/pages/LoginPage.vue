@@ -71,8 +71,23 @@ async function submit() {
     const result = await me();
     const id = result.data as MeResponse | undefined;
     if (!id) {
-      throw new Error("no data returned from server");
+      // The client answers `{ error, response }` instead of throwing, and
+      // `response` is absent when nothing came back at all: offline, DNS, TLS,
+      // or a CORS refusal from a server that does not list this page's origin.
+      // Every one of those was reported as a bad token, which sent an operator
+      // on a dev front to check a token that was fine.
+      const status = result.response?.status;
+      error.value =
+        status === undefined
+          ? unreachable()
+          : status === 401 || status === 403
+            ? t("loginPage.invalidToken")
+            : t("loginPage.serverError", { status });
+      client.setConfig({ auth: undefined });
+      return;
     }
+    // An unknown token is answered as an anonymous visitor (and logged as a
+    // rejected sign-in), so this is a token the server does not recognise.
     if (id.role === "anonymous") {
       error.value = t("loginPage.anonymousOnly");
       client.setConfig({ auth: undefined });
@@ -81,11 +96,19 @@ async function submit() {
       void router.push(redirect.value);
     }
   } catch {
-    error.value = t("loginPage.invalidToken");
+    // Only a fetch that never got an answer rejects.
+    error.value = unreachable();
     client.setConfig({ auth: undefined });
   } finally {
     loading.value = false;
   }
+}
+
+function unreachable(): string {
+  return t("loginPage.serverUnreachable", {
+    server: API_BASE_URL || globalThis.location.origin,
+    origin: globalThis.location.origin,
+  });
 }
 
 function signInWithOidc(providerName: string) {

@@ -220,6 +220,7 @@
     "jumpStaged": "A reload is staged — review or discard it before editing. The editor did not jump to registry “{name}”.",
     "jumpedTo": "Jumped to registry “{name}”.",
     "leaveConsequence": "The edit is not saved anywhere: leaving this page discards it.",
+    "rereadConsequence": "The edit is not saved anywhere: re-reading the file replaces it with what is on disk.",
     "leaveDiscard": "Discard",
     "leaveItemNoun": "unsaved edit",
     "leaveScope": "the configuration editor",
@@ -235,7 +236,7 @@
     "reReadsTheConfig": "Re-reads the config file, validates it and applies what is on disk. You confirm first, because that file has not been shown to you here.",
     "reloadApplied": "Applied everywhere",
     "reloadConfirmWord": "reload",
-    "reloadFromDisk": "Reload from Disk",
+    "reloadFromDisk": "Re-read from disk",
     "reloadNow": "Reload Now",
     "reloadPartiallyApplied": "Applied to requests — background jobs (warming, imports, scans) keep the old value until a restart",
     "reloadRestartRequired": "Needs a restart",
@@ -260,7 +261,7 @@
     "openConfig": "Open config",
     "openHealth": "Open health",
     "perRegistry": "Per registry",
-    "registryErrors": "Errors — see health",
+    "registryErrors": "Degraded — see health",
     "registryServing": "Serving",
     "statsCouldNotLoad": "Cache statistics could not be loaded.",
     "trendDown": "Over the last {days} days the cache served {rate} of downloads — {points} points worse than the {days} days before.",
@@ -276,7 +277,7 @@
     "kpiHitRate": "Cache hit rate",
     "kpiRegistries": "Registries",
     "kpiSince": "since restart, {date}",
-    "kpiWithErrors": "{count} with errors | {count} with errors"
+    "kpiWithErrors": "{count} degraded | {count} degraded"
   },
   "adminHealth": {
     "allCachedArtifactsFor": "All cached artifacts for this registry will be permanently removed. Packages will be\n      re-fetched from upstream on the next request.",
@@ -819,7 +820,7 @@
   "dashboard": {
     "allAnswering": "All {count} registries are answering.",
     "healthUnknown": "Health could not be read.",
-    "someDegraded": "{failing} of {total} registries reported errors: {names}.",
+    "someDegraded": "{failing} of {total} registries are degraded or reported errors: {names}.",
     "title": "Dashboard"
   },
   "destructive": {
@@ -905,7 +906,7 @@
     "system": "System"
   },
   "loginPage": {
-    "anonymousOnly": "Token is valid but grants only anonymous access.",
+    "anonymousOnly": "The server does not recognise this token: it answered as for an anonymous visitor. Check the value and try again.",
     "authenticateToAccessProtected": "Authenticate to access protected resources.",
     "bearerToken": "Bearer token",
     "continueWithoutSigningIn": "Continue without signing in",
@@ -916,6 +917,8 @@
     "orUseAToken": "or use a token",
     "pasteYourTokenHere": "Paste your token here",
     "redirecting": "Redirecting…",
+    "serverError": "The server answered {status}, so the token was not checked. Try again in a moment.",
+    "serverUnreachable": "No answer from {server}. The token was not checked. If the server is up, it may not accept requests from this page's address ({origin}): add it to [server] cors_allowed_origins.",
     "signIn": "Sign in",
     "signInWithOidc": "Sign in with OIDC",
     "signInWithProvider": "Sign in with {provider}",
@@ -1079,6 +1082,8 @@
     "noVersionsMatch": "No version matches",
     "noVersionsMatchHint": "This package has versions; none of them contains what you typed.",
     "noVersionsYet": "No versions yet",
+    "unknownPackage": "Nothing is known about {name} in {registry}",
+    "searchCatalog": "Search the catalog",
     "notHeldHere": "not held here",
     "notHeldHereHelp": "This instance holds no bytes for this version; it exists upstream.",
     "notScanned": "not scanned",
@@ -1237,6 +1242,8 @@
     "held": "Held",
     "noteBlocked": "Blocked by an administrator — refused to every caller until the block is lifted.",
     "noteHeld": "Release-age gate — this release is still inside its quarantine window.",
+    "noteSomeBlocked": "Some versions are blocked by an administrator — this row shows the newest.",
+    "noteSomeYanked": "Some versions were yanked by their owner — this row shows the newest.",
     "noteYanked": "Yanked by its owner — resolvable only by exact version.",
     "pending": "Pending",
     "stale": "Stale",

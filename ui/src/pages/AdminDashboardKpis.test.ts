@@ -66,8 +66,19 @@ describe("AdminDashboard figures", () => {
       data: [{ registry: "npm", recent_errors: [{ error_type: "error" }] }],
     });
     const w = await mountDashboard();
-    expect(registriesState(w).text()).toBe("1 with errors");
+    expect(registriesState(w).text()).toBe("1 degraded");
     expect(registriesState(w).classes()).toContain("text-destructive");
+  });
+
+  // The registries page draws `upstream_degraded` as Degraded: a slow upstream
+  // records no fault row, and the dashboard must not call it answering.
+  it("counts a registry the proxy rates upstream-degraded", async () => {
+    adminStatsMock.mockResolvedValue({
+      data: { ...stats, per_registry: [{ registry: "npm", upstream_degraded: true }] },
+    });
+    const w = await mountDashboard();
+    expect(registriesState(w).text()).toBe("1 degraded");
+    expect(w.text()).not.toContain("All 1 registries are answering.");
   });
 
   // An unread probe is unknown: never "0 registries, all answering" in green.

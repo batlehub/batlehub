@@ -337,6 +337,13 @@ function settleLeave(leave: boolean) {
   resolveLeave?.(leave);
   resolveLeave = null;
 }
+
+/** Re-reading the file replaces the editor's text: an unsaved edit asks first. */
+const confirmReread = ref(false);
+function rereadFromDisk() {
+  if (dirty.value) confirmReread.value = true;
+  else void loadConfigContent();
+}
 </script>
 
 <template>
@@ -429,7 +436,7 @@ function settleLeave(leave: boolean) {
       :base-hash="contentHash"
       :refresh-pending="fetchPending"
       :jump-to="pendingSettled ? jumpRegistry : null"
-      @reload-from-disk="loadConfigContent"
+      @reload-from-disk="rereadFromDisk"
       @staged="savedContent = $event"
     />
 
@@ -516,6 +523,23 @@ function settleLeave(leave: boolean) {
       :consequence="t('adminConfigReload.leaveConsequence')"
       @confirm="settleLeave(true)"
       @update:open="(open: boolean) => !open && settleLeave(false)"
+    />
+
+    <!-- Re-reading the file over an unsaved edit: the same cost as leaving. -->
+    <DestructiveConfirm
+      :open="confirmReread"
+      :action="t('adminConfigReload.leaveDiscard')"
+      :count="1"
+      :item-noun="t('adminConfigReload.leaveItemNoun')"
+      :scope="t('adminConfigReload.leaveScope')"
+      :consequence="t('adminConfigReload.rereadConsequence')"
+      @confirm="
+        () => {
+          confirmReread = false;
+          loadConfigContent();
+        }
+      "
+      @update:open="confirmReread = $event"
     />
 
     <!-- Change History -->

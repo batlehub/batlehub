@@ -220,6 +220,7 @@
     "jumpStaged": "Un rechargement est en attente : examinez-le ou abandonnez-le avant de modifier. Le curseur n'a pas été placé sur le registre « {name} ».",
     "jumpedTo": "Curseur placé sur le registre « {name} ».",
     "leaveConsequence": "La modification n'est enregistrée nulle part : quitter cette page l'abandonne.",
+    "rereadConsequence": "La modification n'est enregistrée nulle part : relire le fichier la remplace par le contenu du disque.",
     "leaveDiscard": "Abandonner",
     "leaveItemNoun": "modification non enregistrée",
     "leaveScope": "l'éditeur de configuration",
@@ -235,7 +236,7 @@
     "reReadsTheConfig": "Relit le fichier de configuration, le valide et applique ce qui est sur le disque. Une confirmation est demandée d'abord, car ce fichier ne vous a pas été montré ici.",
     "reloadApplied": "Appliqué partout",
     "reloadConfirmWord": "reload",
-    "reloadFromDisk": "Recharger depuis le disque",
+    "reloadFromDisk": "Relire depuis le disque",
     "reloadNow": "Recharger maintenant",
     "reloadPartiallyApplied": "Appliqué aux requêtes — les tâches de fond (préchauffage, imports, analyses) gardent l’ancienne valeur jusqu’au redémarrage",
     "reloadRestartRequired": "Redémarrage nécessaire",
@@ -260,7 +261,7 @@
     "openConfig": "Ouvrir la configuration",
     "openHealth": "Ouvrir l'état de santé",
     "perRegistry": "Par registre",
-    "registryErrors": "Erreurs — voir la santé",
+    "registryErrors": "Dégradé — voir la santé",
     "registryServing": "En service",
     "statsCouldNotLoad": "Les statistiques du cache n'ont pas pu être chargées.",
     "trendDown": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements — {points} points de moins que les {days} jours précédents.",
@@ -276,7 +277,7 @@
     "kpiHitRate": "Taux de cache",
     "kpiRegistries": "Registres",
     "kpiSince": "depuis le redémarrage, {date}",
-    "kpiWithErrors": "{count} en erreur | {count} en erreur"
+    "kpiWithErrors": "{count} dégradé | {count} dégradés"
   },
   "adminHealth": {
     "allCachedArtifactsFor": "Tous les artefacts en cache de ce registre seront définitivement supprimés. Les paquets seront de nouveau récupérés depuis l'upstream à la prochaine requête.",
@@ -819,7 +820,7 @@
   "dashboard": {
     "allAnswering": "Les {count} registres répondent.",
     "healthUnknown": "Impossible de lire l'état de santé.",
-    "someDegraded": "{failing} registres sur {total} ont signalé des erreurs : {names}.",
+    "someDegraded": "{failing} registres sur {total} sont dégradés ou ont signalé des erreurs : {names}.",
     "title": "Tableau de bord"
   },
   "destructive": {
@@ -905,7 +906,7 @@
     "system": "Système"
   },
   "loginPage": {
-    "anonymousOnly": "Le token est valide mais n'accorde qu'un accès anonyme.",
+    "anonymousOnly": "Le serveur ne reconnaît pas ce token : il a répondu comme à un visiteur anonyme. Vérifiez la valeur et réessayez.",
     "authenticateToAccessProtected": "Authentifiez-vous pour accéder aux ressources protégées.",
     "bearerToken": "Token Bearer",
     "continueWithoutSigningIn": "Continuer sans se connecter",
@@ -916,6 +917,8 @@
     "orUseAToken": "ou utiliser un token",
     "pasteYourTokenHere": "Collez votre token ici",
     "redirecting": "Redirection…",
+    "serverError": "Le serveur a répondu {status}, le token n'a donc pas été vérifié. Réessayez dans un instant.",
+    "serverUnreachable": "Aucune réponse de {server}. Le token n'a pas été vérifié. Si le serveur fonctionne, il n'accepte peut-être pas les requêtes de l'adresse de cette page ({origin}) : ajoutez-la à [server] cors_allowed_origins.",
     "signIn": "Se connecter",
     "signInWithOidc": "Se connecter avec OIDC",
     "signInWithProvider": "Se connecter avec {provider}",
@@ -1079,6 +1082,8 @@
     "noVersionsMatch": "Aucune version ne correspond",
     "noVersionsMatchHint": "Ce paquet a des versions ; aucune ne contient ce que vous avez saisi.",
     "noVersionsYet": "Aucune version",
+    "unknownPackage": "Rien n'est connu de {name} dans {registry}",
+    "searchCatalog": "Chercher dans le catalogue",
     "notHeldHere": "non conservée ici",
     "notHeldHereHelp": "Aucun octet de cette version n'est conservé sur cette instance ; elle existe en amont.",
     "notScanned": "non analysée",
@@ -1237,6 +1242,8 @@
     "held": "Retenu",
     "noteBlocked": "Bloqué par un administrateur — refusé à tous tant que le blocage n'est pas levé.",
     "noteHeld": "Fenêtre de quarantaine — cette version est encore dans son délai de rétention.",
+    "noteSomeBlocked": "Certaines versions sont bloquées par un administrateur — cette ligne montre la plus récente.",
+    "noteSomeYanked": "Certaines versions ont été retirées par leur propriétaire — cette ligne montre la plus récente.",
     "noteYanked": "Retiré par son propriétaire — résolvable uniquement par version exacte.",
     "pending": "En cours",
     "stale": "Périmé",

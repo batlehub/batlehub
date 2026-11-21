@@ -815,6 +815,38 @@ describe("AdminConfigReload", () => {
       expect(await decision).toBe(true);
     });
 
+    const contentReads = () =>
+      authFetchMock.mock.calls.filter(([url]) => String(url).endsWith("/admin/config/content"))
+        .length;
+    const rereadDialog = (w: Page) =>
+      w
+        .findAllComponents(DestructiveConfirm)
+        .find((d) => String(d.props("consequence")).includes("re-reading the file"))!;
+
+    it("re-reads the file at once when nothing is edited", async () => {
+      routes(null);
+      const w = await mountPage();
+      const before = contentReads();
+      await button(w, "Re-read from disk")!.trigger("click");
+      await flushPromises();
+      expect(contentReads()).toBe(before + 1);
+      expect(rereadDialog(w).props("open")).toBe(false);
+    });
+
+    it("asks before re-reading the file over an edit, and keeps the edit on cancel", async () => {
+      routes(null);
+      const w = await mountPage();
+      await edit(w, "[server]\nport = 9090\n");
+      const before = contentReads();
+      await button(w, "Re-read from disk")!.trigger("click");
+      await flushPromises();
+      expect(rereadDialog(w).props("open")).toBe(true);
+      rereadDialog(w).vm.$emit("update:open", false);
+      await flushPromises();
+      expect(contentReads()).toBe(before);
+      expect((w.get("textarea").element as HTMLTextAreaElement).value).toContain("9090");
+    });
+
     it("is clean again once the edit is reverted", async () => {
       routes(null);
       const w = await mountPage();
