@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-macros"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 description = "Local stub — replaces crates.io sqlx-macros to keep sqlx-mysql/rsa out of the lock file. This crate is never compiled (the sqlx `macros` feature is disabled); the stub exists only so Cargo resolves zero transitive deps for this optional sqlx dep."
 

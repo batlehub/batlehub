@@ -149,6 +149,14 @@ skip = [
     { name = "core-foundation", version = "0.9" },
     # getrandom's UEFI backend.
     { name = "r-efi", version = "5" },
+    # iana-time-zone 0.1.65 (latest, under chrono) holds the windows 0.62 line;
+    # generator 0.8.12 (loom → evmap → metrics-exporter-prometheus) is on 0.100.
+    { name = "windows-core", version = "0.62" },
+    { name = "windows-implement", version = "0.60" },
+    { name = "windows-interface", version = "0.59" },
+    { name = "windows-link", version = "0.2" },
+    { name = "windows-result", version = "0.4" },
+    { name = "windows-strings", version = "0.5" },
 
     # ── The AWS SDK's own crypto and HTTP lineage ─────────────────────────────
     #
