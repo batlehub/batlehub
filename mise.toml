@@ -56,7 +56,7 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 # input (.github/workflows/postmortem.yaml) and in Containerfile.worker's
 # POSTMORTEM_VERSION, so the gate and the worker's scanner are one binary.
 "github:mlab-sh/postmortem" = "2.9.2"
-"github:mlab-sh/mlab-cli" = "1.2.0"
+"github:mlab-sh/mlab-cli" = "1.3.0"
 # Mutation testing on tier 1 (RFC 0041 §6.4): `task mutants`, mutants.yaml.
 # Pinned, with its checksum in mise.lock; on a pull request the job installs it
 # from the base's pins and calls it by `mise where`, never through a shim.
@@ -68,7 +68,7 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 uv = "latest"
 python = "latest"
 pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
-"github:batleforc/weebo-skillsagent" = "0.17.0"
+"github:batleforc/weebo-skillsagent" = "0.18.1"
 
 #"github:batleforc/batlehub" = { version = "latest", asset_pattern = "batlehub-cli-*" }
 

@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: Azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
 
       # The Trivy server sub-chart (RFC 0018 §6.3) is a declared dependency
       # fetched at build time; `charts/` is not committed. Helm 4 refuses
@@ -247,7 +247,7 @@ jobs:
       # against the committed config JSON Schema, checked by taplo — the
       # engine the editors run. The schema itself is held current by
       # `cargo test` (crates/config/tests/config_schema.rs).
-      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           version: 2026.9.5
           install: true

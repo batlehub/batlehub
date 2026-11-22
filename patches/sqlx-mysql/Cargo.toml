@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-mysql"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 description = "Local stub — replaces crates.io sqlx-mysql to remove rsa (RUSTSEC-2023-0071) from the lock file. MySQL is not used in this project; this stub satisfies Cargo's optional-dep resolution without pulling in rsa."
 

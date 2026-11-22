@@ -3714,10 +3714,12 @@ github_attestations = false
 [settings.url_replacements]
 $rewrite
 EOF
-  HOME="$root/home" \
+  # From $root, not the repo: the repo's mise.lock demands attestation
+  # provenance this config switches off, and mise then fails after the install.
+  (cd "$root" && HOME="$root/home" \
   MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
   MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
-    mise install "$backend:$spec@$version"
+    mise install "$backend:$spec@$version")
   return $?
 }
 
