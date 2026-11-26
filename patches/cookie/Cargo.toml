@@ -1,0 +1,21 @@
+[package]
+name = "cookie"
+version = "0.16.99"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Local shim — replaces the crates.io `cookie` 0.16 line (RUSTSEC-2026-0594, private-cookie nonce reuse after fork, fixed only in 0.18.3) with a re-export of cookie 0.18. The only holder of the 0.16 line is actix-web 4.20.0, its latest release, which still requires `cookie = \"^0.16\"`."
+
+# The 0.18 line under another name: a package cannot depend on itself by name,
+# and `^0.18.3` does not match this shim's 0.16.99, so the patch never applies
+# to it and it resolves from crates.io.
+[dependencies]
+cookie-018 = { package = "cookie", version = "0.18.3", features = ["percent-encode"] }
+
+# actix-web enables `percent-encode` only; the rest are declared so a holder
+# naming them still resolves, and forward to the 0.18 line.
+[features]
+percent-encode = ["cookie-018/percent-encode"]
+secure = ["cookie-018/secure"]
+private = ["cookie-018/private"]
+signed = ["cookie-018/signed"]
+key-expansion = ["cookie-018/key-expansion"]
