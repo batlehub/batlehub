@@ -623,6 +623,9 @@ fn detect_is_regex_remaining_triggers() {
     assert!(detect_is_regex("a(b)c"));
     assert!(detect_is_regex("a+b"));
     assert!(!detect_is_regex("plain-glob-*"));
+    // Each trigger on its own, with no `+`/`(`/`[` later in the chain to mask it.
+    assert!(detect_is_regex("v\\d"));
+    assert!(detect_is_regex("v\\w"));
 }
 
 // ── Template edge cases ───────────────────────────────────────────────────
@@ -655,6 +658,11 @@ async fn rule_with_no_role_contributes_group_only() {
     let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
     assert_eq!(id.role, Role::Anonymous);
     assert_eq!(id.groups, vec!["group-only"]);
+    assert_eq!(
+        id.user_id.as_deref(),
+        Some("bot"),
+        "a matched rule granting only a group still keeps the principal"
+    );
 }
 
 #[test]

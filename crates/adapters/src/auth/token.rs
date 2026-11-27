@@ -245,6 +245,21 @@ mod tests {
         assert_eq!(id.role, Role::Admin);
     }
 
+    /// `name()` labels `batlehub_auth_failures_total{provider}` and the auth
+    /// logs; it must name the same provider the identity's `auth_provider`
+    /// (the `static-token:` principal prefix) does.
+    #[tokio::test]
+    async fn name_matches_the_identity_auth_provider() {
+        let p = provider();
+        let id = p
+            .authenticate(&req("Bearer secret"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.name(), "static-token");
+        assert_eq!(id.auth_provider.as_deref(), Some(p.name()));
+    }
+
     #[tokio::test]
     async fn unknown_token_returns_none() {
         let p = provider();

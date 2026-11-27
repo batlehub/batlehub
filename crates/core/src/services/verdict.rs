@@ -1326,6 +1326,50 @@ mod tests {
             .all(|f| f.severity == Severity::Critical && f.judged_as.is_none()));
     }
 
+    /// An escalation whose target equals a finding's judged level leaves it
+    /// alone: the stored severity and its `judged_as` both stand.
+    #[test]
+    fn an_escalation_to_the_judged_level_leaves_the_finding_untouched() {
+        let now = Utc::now();
+        let mut p = policy();
+        p.escalation.insert(
+            "osv".into(),
+            Escalation {
+                kinds: vec![FindingKind::Vulnerability],
+                count: 1,
+                from: Severity::High,
+                to: Severity::High,
+            },
+        );
+        let v = evaluate(
+            &mature(now),
+            vec![unrated("GO-2024-1")],
+            done(),
+            &p,
+            now,
+            None,
+        );
+        assert_eq!(v.findings[0].severity, Severity::Unknown);
+        assert_eq!(v.findings[0].judged_as, Some(Severity::High));
+    }
+
+    /// Age and pending findings are re-derived on every evaluation, so a
+    /// stored one is dropped rather than carried.
+    #[test]
+    fn a_stored_pending_finding_is_re_derived_not_kept() {
+        let now = Utc::now();
+        let stale = Finding::new(
+            PENDING_SCANNER,
+            FindingKind::Pending,
+            ReasonCode::ScanPending,
+            Severity::High,
+            "required scanner 'osv' has not answered yet",
+        );
+        let v = evaluate(&mature(now), vec![stale], done(), &policy(), now, None);
+        assert_eq!(v.state, VerdictState::Allowed);
+        assert!(v.findings.is_empty(), "{:?}", v.findings);
+    }
+
     #[test]
     fn a_stored_mal_finding_is_known_malicious_on_read_under_warn_and_critical() {
         let now = Utc::now();
@@ -1823,17 +1867,23 @@ mod record_scan_tests {
                 "same state, the codes moved",
             ),
         ] {
-            let repo = Arc::new(OneVerdict::default());
-            repo.upsert(&row).await.unwrap();
-            let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
-            let v = svc.current(&pkg, &p, now).await.unwrap();
-            assert_eq!(v.reason_codes, vec![ReasonCode::Vulnerability], "{why}");
-            assert_eq!(repo.1.load(std::sync::atomic::Ordering::SeqCst), 2, "{why}");
-            assert_eq!(
-                repo.get(&pkg.id).await.unwrap().unwrap().state,
-                v.state,
-                "{why}"
-            );
+            // Tagged by this evaluator too: the difference is not a
+            // substitution, so `substitution_only` must not skip the save.
+            let mut tagged = row.clone();
+            tagged.policy_ref = format!("npm-public/default {EVALUATOR_TAG}");
+            for row in [row, tagged] {
+                let repo = Arc::new(OneVerdict::default());
+                repo.upsert(&row).await.unwrap();
+                let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+                let v = svc.current(&pkg, &p, now).await.unwrap();
+                assert_eq!(v.reason_codes, vec![ReasonCode::Vulnerability], "{why}");
+                assert_eq!(repo.1.load(std::sync::atomic::Ordering::SeqCst), 2, "{why}");
+                assert_eq!(
+                    repo.get(&pkg.id).await.unwrap().unwrap().state,
+                    v.state,
+                    "{why}"
+                );
+            }
         }
     }
 
@@ -1853,5 +1903,158 @@ mod record_scan_tests {
             .unwrap();
         assert_eq!(v.state, VerdictState::Allowed, "{:?}", v.findings);
         assert!(v.scanners_done.contains(&"guarddog".to_owned()));
+    }
+
+    /// A tagged row whose only difference is the on-read `MAL-` substitution
+    /// is not saved again: the plain judgement hides the citation.
+    #[tokio::test]
+    async fn a_tagged_row_is_not_resaved_for_a_mal_substitution_alone() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let mal = Finding::new(
+            "osv",
+            FindingKind::Vulnerability,
+            ReasonCode::Vulnerability,
+            Severity::Low,
+            "MAL-2023-1000",
+        )
+        .with_reference("MAL-2023-1000");
+        let row = Verdict {
+            package: pkg.id.clone(),
+            state: VerdictState::Allowed,
+            reason_codes: vec![],
+            findings: vec![mal],
+            policy_ref: format!("npm-public/default {EVALUATOR_TAG}"),
+            available_at: None,
+            evaluated_at: now,
+            last_scanned_at: Some(now),
+            scanners_done: vec!["osv".into()],
+        };
+        let repo = Arc::new(OneVerdict::default());
+        repo.upsert(&row).await.unwrap();
+        let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+        let v = svc.current(&pkg, &policy(), now).await.unwrap();
+        assert_eq!(v.reason_codes, vec![ReasonCode::KnownMalicious]);
+        assert_eq!(repo.1.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A row carrying `UNRECOGNISED` — in its codes, or in one finding — is
+    /// left as a newer release wrote it.
+    #[tokio::test]
+    async fn a_scan_leaves_a_row_with_an_unrecognised_code_untouched() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let in_codes = stored(&pkg, VerdictState::Denied, vec![ReasonCode::Unrecognised]);
+        let mut in_finding = stored(&pkg, VerdictState::Denied, vec![]);
+        in_finding.findings[0].code = ReasonCode::Unrecognised;
+        for row in [in_codes, in_finding] {
+            let repo = Arc::new(OneVerdict::default());
+            repo.upsert(&row).await.unwrap();
+            let svc = VerdictService::new(repo.clone(), Arc::new(NoQueue));
+            let (from, v) = svc
+                .record_scan(&pkg, &policy(), vec![], vec!["osv".into()], now)
+                .await
+                .unwrap();
+            assert_eq!(from, Some(VerdictState::Denied));
+            assert_eq!(v.reason_codes, row.reason_codes);
+            assert_eq!(repo.1.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    /// Counts the counters a closure registers, by name.
+    #[derive(Default)]
+    struct Names(Mutex<Vec<String>>);
+
+    impl metrics::Recorder for Names {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn register_counter(
+            &self,
+            key: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            self.0
+                .lock()
+                .expect("test mutex")
+                .push(key.name().to_owned());
+            metrics::Counter::noop()
+        }
+        fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// A scan records a transition when the state moves, and only then.
+    #[test]
+    fn a_scan_counts_a_transition_only_when_the_state_moves() {
+        let now = Utc::now();
+        let pkg = mature_package(now);
+        let s = svc();
+        let transitions = || {
+            let names = Names::default();
+            metrics::with_local_recorder(&names, || {
+                futures::executor::block_on(s.record_scan(
+                    &pkg,
+                    &policy(),
+                    vec![],
+                    vec!["osv".into()],
+                    now,
+                ))
+                .unwrap();
+            });
+            let n = names.0.lock().expect("test mutex");
+            n.iter()
+                .filter(|k| *k == "batlehub_verdict_transitions_total")
+                .count()
+        };
+        assert_eq!(transitions(), 1, "none -> allowed");
+        assert_eq!(transitions(), 0, "allowed -> allowed");
+    }
+
+    /// With no verdict noted, `create` builds one; without it there is none.
+    #[tokio::test]
+    async fn a_request_finding_creates_a_verdict_only_when_told() {
+        let now = Utc::now();
+        let id = PackageId::new("forge", "o/r", "main");
+        for (create, want) in [(true, Some(VerdictState::Warned)), (false, None)] {
+            let ((), v) = with_request_verdict(async {
+                augment_request_verdict(
+                    &id,
+                    "forge/default",
+                    vec![high_vuln()],
+                    false,
+                    create,
+                    now,
+                );
+            })
+            .await;
+            assert_eq!(v.map(|v| v.state), want, "create={create}");
+        }
     }
 }

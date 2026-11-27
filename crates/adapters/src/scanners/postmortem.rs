@@ -227,10 +227,9 @@ impl PostmortemScanner {
             let category = f.get("category").and_then(|c| c.as_str()).unwrap_or("");
             let (kind, code) = match category {
                 "install_hook" => (FindingKind::InstallHook, ReasonCode::InstallHook),
-                "ioc" | "obfuscation" | "sensitive_api" | "persistence" => {
-                    (FindingKind::MalwareSignal, ReasonCode::MalwareSignal)
-                }
                 "typosquat" => (FindingKind::Typosquat, ReasonCode::TyposquatSuspect),
+                // `ioc`, `obfuscation`, `sensitive_api` and `persistence` are
+                // malware signals, which is what the fallback below gives them.
                 // Machine-audit categories (`unsigned`, `third_party_source`,
                 // `tamper`, `policy`, `outdated`) describe a host, not an
                 // artifact, and do not occur in a `scan`; anything else is a
@@ -594,6 +593,36 @@ mod tests {
         let gone = PostmortemScanner::map_timeline(&doc, "9.9.9");
         assert_eq!(gone.len(), 1);
         assert_eq!(gone[0].code, ReasonCode::UnpublishedUpstream);
+    }
+
+    #[test]
+    fn a_typosquat_category_is_a_typosquat_finding() {
+        let doc = serde_json::json!({ "findings": [{ "category": "typosquat" }] });
+        let findings = scanner().map_scan(&doc);
+        assert_eq!(findings[0].kind, FindingKind::Typosquat);
+        assert_eq!(findings[0].code, ReasonCode::TyposquatSuspect);
+    }
+
+    /// The transition kinds the left-pad fixture does not carry.
+    #[test]
+    fn every_transition_kind_maps_to_its_reason_code() {
+        let doc = serde_json::json!({ "releases": [{ "version": "1.0.0", "events": [
+            { "kind": "install_script_added" },
+            { "kind": "dormancy" },
+            { "kind": "provenance_removed" },
+        ] }] });
+        let codes: Vec<ReasonCode> = PostmortemScanner::map_timeline(&doc, "1.0.0")
+            .iter()
+            .map(|f| f.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ReasonCode::InstallHookAdded,
+                ReasonCode::DormantRelease,
+                ReasonCode::ProvenanceRemoved
+            ]
+        );
     }
 
     #[test]

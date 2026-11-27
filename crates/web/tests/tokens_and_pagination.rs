@@ -602,6 +602,19 @@ async fn create_token_rejects_91_days() {
 }
 
 #[actix_web::test]
+async fn create_token_accepts_90_days() {
+    // The upper bound is inclusive: 90 is the documented maximum, not 89.
+    let app = make_app_with_tokens(InMemoryRepo::new(), InMemoryTokenRepository::new()).await;
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/tokens")
+        .insert_header(("Authorization", bearer(OIDC_USER_TOKEN)))
+        .set_json(serde_json::json!({"name": "max", "expires_in_days": 90, "role": "user"}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201);
+}
+
+#[actix_web::test]
 async fn create_token_rejects_empty_name() {
     let app = make_app_with_tokens(InMemoryRepo::new(), InMemoryTokenRepository::new()).await;
     let req = TestRequest::post()

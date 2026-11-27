@@ -1752,4 +1752,85 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         let id = p.authenticate(&bearer(&token)).await.unwrap().unwrap();
         assert_eq!(id.user_id.as_deref(), Some("alice"));
     }
+
+    #[tokio::test]
+    async fn get_decoding_key_does_not_refetch_a_fresh_jwks_cache() {
+        let mut server = mockito::Server::new_async().await;
+        // The endpoint would hand out the key; a fresh cache must not ask it.
+        let m = server
+            .mock("GET", "/jwks")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(TEST_JWKS_JSON)
+            .expect(0)
+            .create_async()
+            .await;
+        let mut p = default_provider();
+        p.jwks_uri = format!("{}/jwks", server.url());
+        *p.cache.write().await = JwksCache {
+            keys: serde_json::from_str::<JwkSet>(r#"{"keys":[]}"#).unwrap(),
+            fetched_at: Instant::now(),
+        };
+
+        let token = signed_token(
+            Some("test-kid"),
+            json!({ "sub": "alice", "exp": future_exp(), "aud": TEST_AUDIENCE }),
+        );
+        let err = p.authenticate(&bearer(&token)).await.unwrap_err();
+        assert!(matches!(err, CoreError::Auth(ref m) if m == "unknown JWT signing key"));
+        m.assert_async().await;
+    }
+
+    // ── Issuer and malformed tokens ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_token_from_another_issuer_is_not_ours() {
+        let mut p = default_provider();
+        p.issuer = "https://idp.test".to_owned();
+        let ours = signed_token(
+            Some("test-kid"),
+            json!({ "sub": "a", "iss": "https://idp.test", "exp": future_exp(), "aud": TEST_AUDIENCE }),
+        );
+        assert!(p.authenticate(&bearer(&ours)).await.unwrap().is_some());
+        let theirs = signed_token(
+            Some("test-kid"),
+            json!({ "sub": "a", "iss": "https://evil.test", "exp": future_exp(), "aud": TEST_AUDIENCE }),
+        );
+        assert!(p.authenticate(&bearer(&theirs)).await.unwrap().is_none());
+    }
+
+    /// A missing `exp` is a malformed token, not someone else's: neither the
+    /// expired arm nor the not-ours arm may swallow it into `Ok(None)`.
+    #[tokio::test]
+    async fn a_token_without_exp_is_an_error() {
+        let p = default_provider();
+        let token = signed_token(
+            Some("test-kid"),
+            json!({ "sub": "a", "aud": TEST_AUDIENCE }),
+        );
+        let err = p.authenticate(&bearer(&token)).await.unwrap_err();
+        assert!(matches!(err, CoreError::Auth(_)));
+    }
+
+    // ── OidcSsoFlow::session_subject ──────────────────────────────────────────
+
+    #[test]
+    fn session_subject_reads_the_user_id_claim() {
+        let flow = test_flow(); // user_id_claim = "sub"
+        assert_eq!(
+            flow.session_subject(&unsigned_jwt(&json!({ "sub": "alice" })))
+                .as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            flow.session_subject(&unsigned_jwt(&json!({ "sub": 42 })))
+                .as_deref(),
+            Some("42")
+        );
+        assert_eq!(
+            flow.session_subject(&unsigned_jwt(&json!({ "name": "x" }))),
+            None
+        );
+        assert_eq!(flow.session_subject("opaque"), None);
+    }
 }

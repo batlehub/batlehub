@@ -415,6 +415,11 @@ mod tests {
         }
         throttle.admit("late", t0 + RejectionThrottle::WINDOW);
         assert_eq!(
+            throttle.seen.lock().unwrap().len(),
+            2,
+            "the elapsed, empty entries are swept: only `held` and `late` remain"
+        );
+        assert_eq!(
             throttle.take_held(t0 + RejectionThrottle::WINDOW, false),
             vec![("held".to_owned(), 1)]
         );
@@ -526,5 +531,108 @@ mod tests {
         let req = TestRequest::get().uri("/").to_request();
         let body = test::read_body(test::call_service(&app, req).await).await;
         assert_eq!(body, "anonymous");
+    }
+
+    fn audit_with_admin() -> (Arc<CredentialRejectionAudit>, Arc<AdminService>) {
+        let admin = Arc::new(AdminService::new(
+            batlehub_adapters::in_memory::InMemoryPackageRepository::new(),
+        ));
+        (CredentialRejectionAudit::new(Arc::clone(&admin)), admin)
+    }
+
+    async fn rejected_rows(admin: &AdminService) -> Vec<AccessEvent> {
+        admin
+            .list_events(batlehub_core::entities::EventFilter {
+                actions: vec![AccessAction::CredentialRejected],
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A flushed row stands for one held attempt: a single held attempt carries
+    /// no `throttled_count` at all, not `Some(0)`.
+    #[actix_web::test]
+    async fn flushing_one_held_attempt_writes_no_throttled_count() {
+        let (audit, admin) = audit_with_admin();
+        let t0 = Instant::now();
+        audit.throttle.admit("10.0.0.1", t0);
+        audit.throttle.admit("10.0.0.1", t0);
+        audit
+            .flush_held(t0 + RejectionThrottle::WINDOW, false)
+            .await;
+        let rows = rejected_rows(&admin).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].throttled_count, None);
+    }
+
+    /// The row the middleware writes carries the attempts its window held back,
+    /// and nothing when it held none back.
+    #[actix_web::test]
+    async fn a_rejection_row_carries_only_what_the_window_held_back() {
+        let (audit, admin) = audit_with_admin();
+        // 203.0.113.9's window elapsed with five attempts held back.
+        let elapsed = Instant::now()
+            .checked_sub(RejectionThrottle::WINDOW + Duration::from_secs(1))
+            .unwrap();
+        audit
+            .throttle
+            .seen
+            .lock()
+            .unwrap()
+            .insert("203.0.113.9".to_owned(), (elapsed, 5));
+        let providers: Vec<Arc<dyn AuthProvider>> = vec![Arc::new(NeverAuth)];
+        let app = test::init_service(
+            App::new()
+                .wrap(AuthMiddlewareFactory::new(providers).with_audit(audit))
+                .route("/", web::get().to(who_am_i)),
+        )
+        .await;
+        for peer in ["203.0.113.9:4000", "198.51.100.7:4000"] {
+            let req = TestRequest::get()
+                .uri("/")
+                .peer_addr(peer.parse().unwrap())
+                .insert_header(("Authorization", "Bearer nope"))
+                .to_request();
+            test::call_service(&app, req).await;
+        }
+        let rows = rejected_rows(&admin).await;
+        let count_for = |ip: &str| {
+            rows.iter()
+                .find(|e| e.ip_address.as_deref() == Some(ip))
+                .map(|e| e.throttled_count)
+        };
+        assert_eq!(count_for("203.0.113.9"), Some(Some(5)));
+        assert_eq!(count_for("198.51.100.7"), Some(None));
+    }
+
+    /// Only a presented *and* refused credential marks the response: an
+    /// accepted one is not a failed login for the IP ban to count.
+    #[actix_web::test]
+    async fn only_a_refused_credential_marks_the_response() {
+        let cases: [(Arc<dyn AuthProvider>, bool); 2] = [
+            (Arc::new(AlwaysAuth("alice".into())), false),
+            (Arc::new(NeverAuth), true),
+        ];
+        for (provider, marked) in cases {
+            let app = test::init_service(
+                App::new()
+                    .wrap(AuthMiddlewareFactory::new(vec![provider]))
+                    .route("/", web::get().to(who_am_i)),
+            )
+            .await;
+            let req = TestRequest::get()
+                .uri("/")
+                .insert_header(("Authorization", "Bearer x"))
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            let got = resp
+                .response()
+                .extensions()
+                .get::<CredentialRejected>()
+                .is_some();
+            assert_eq!(got, marked);
+        }
     }
 }

@@ -345,6 +345,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 1, "{events:?}");
+        // The ban lasts `ban_duration_secs` from now.
+        let until = store.blocked_until("198.51.100.4").await.unwrap().unwrap();
+        assert!((now() + 3590..=now() + 3600).contains(&until), "{until}");
         let e = &events[0];
         assert_eq!(e.user_id.as_deref(), Some(Identity::SYSTEM_USER_ID));
         assert_eq!(e.ip_address.as_deref(), Some("198.51.100.4"));
