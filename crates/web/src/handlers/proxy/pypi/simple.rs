@@ -203,6 +203,9 @@ pub async fn pypi_json(
     batlehub_core::services::validate_package_name(&package)
         .map_err(|e| AppError::bad_request(format!("invalid project name: {e}")))?;
 
+    // Normalised before the grant check: namespaces are stored canonical, and the
+    // upstream normalises anyway, so `Acme_Internal` must be judged as `acme-internal`.
+    let package = batlehub_adapters::registry::pypi::normalize_name(&package);
     let proxy_base = registry_public_base(&req, &registry);
     let pkg = batlehub_core::entities::PackageId::new(&registry, &package, "latest");
     let proxy_req = batlehub_core::services::ProxyRequest {

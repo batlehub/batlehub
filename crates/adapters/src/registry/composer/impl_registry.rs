@@ -164,11 +164,17 @@ impl RegistryClient for ComposerRegistryClient {
 
         tracing::debug!(url = %dist_url, "fetching composer dist artifact");
 
-        let response = self
-            .get(&dist_url)
-            .send()
-            .await
-            .map_err(to_registry_error)?;
+        let parsed = reqwest::Url::parse(&dist_url).map_err(|e| {
+            CoreError::Registry(format!("invalid composer dist URL '{dist_url}': {e}"))
+        })?;
+        let response = crate::registry::ssrf::fetch_following_redirects(
+            &self.dl_credentialed,
+            &self.dl_plain,
+            &self.basic_auth,
+            &self.base_url,
+            parsed,
+        )
+        .await?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!(

@@ -183,6 +183,67 @@ async fn fetch_artifact_dist_streams_zip_bytes() {
     assert_eq!(content, zip_bytes);
 }
 
+fn client_with_basic_auth(url: &str) -> ComposerRegistryClient {
+    let opts = crate::registry::http_client::UpstreamHttpOptions {
+        basic_auth: Some(("op".into(), "secret".into())),
+        ..Default::default()
+    };
+    ComposerRegistryClient::new(url, &opts).unwrap()
+}
+
+/// `dist.url` is chosen by the p2 document: an off-origin target on an internal
+/// address is refused before any request, so neither the credential nor the
+/// internal response can be reached through it.
+#[tokio::test]
+async fn fetch_artifact_dist_refuses_an_off_origin_internal_url() {
+    let mut upstream = Server::new_async().await;
+    let mut internal = Server::new_async().await;
+    let dist_url = format!("{}/latest/meta-data", internal.url());
+    let _p2 = upstream
+        .mock("GET", "/p2/vendor/pkg.json")
+        .with_status(200)
+        .with_body(p2_json("vendor/pkg", "v1.0.0", &dist_url))
+        .create_async()
+        .await;
+    let hit = internal
+        .mock("GET", "/latest/meta-data")
+        .with_status(200)
+        .expect(0)
+        .create_async()
+        .await;
+
+    let c = client_with_basic_auth(&upstream.url());
+    let pkg = PackageId::new("pkgist", "vendor/pkg", "v1.0.0").with_artifact("dist");
+    assert!(c.fetch_artifact(&pkg).await.is_err());
+    hit.assert_async().await;
+}
+
+/// On the configured origin the operator's credential still goes out.
+#[tokio::test]
+async fn fetch_artifact_dist_sends_the_credential_on_the_upstream_origin() {
+    let mut server = Server::new_async().await;
+    let dist_url = format!("{}/dist/pkg.zip", server.url());
+    let _p2 = server
+        .mock("GET", "/p2/vendor/pkg.json")
+        .with_status(200)
+        .with_body(p2_json("vendor/pkg", "v1.0.0", &dist_url))
+        .create_async()
+        .await;
+    // base64("op:secret")
+    let zip = server
+        .mock("GET", "/dist/pkg.zip")
+        .match_header("authorization", "Basic b3A6c2VjcmV0")
+        .with_status(200)
+        .with_body("PK")
+        .create_async()
+        .await;
+
+    let c = client_with_basic_auth(&server.url());
+    let pkg = PackageId::new("pkgist", "vendor/pkg", "v1.0.0").with_artifact("dist");
+    c.fetch_artifact(&pkg).await.unwrap();
+    zip.assert_async().await;
+}
+
 #[tokio::test]
 async fn fetch_artifact_not_found_returns_not_found_error() {
     let mut server = Server::new_async().await;

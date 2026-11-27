@@ -206,7 +206,7 @@ argon2 = { version = "0.6", features = ["password-hash", "getrandom"] }
 clap = { version = "4", features = ["derive"] }
 
 # File watching (hot reload)
-notify = "8"
+notify = "9"
 
 # Testing utilities
 tempfile = "3"
@@ -236,6 +236,9 @@ paste       = { path = "patches/paste" }
 # memmap2 0.5 (RUSTSEC-2026-0186): pprof 0.15.0 is at its latest release and still
 # requires it; the shim re-exports 0.9. See patches/memmap2/src/lib.rs.
 memmap2     = { path = "patches/memmap2" }
+# cookie 0.16 (RUSTSEC-2026-0594): actix-web 4.20.0 is at its latest release and
+# still requires it; the shim re-exports 0.18. See patches/cookie/src/lib.rs.
+cookie      = { path = "patches/cookie" }
 sqlx-macros = { path = "patches/sqlx-macros" }
 sqlx-mysql  = { path = "patches/sqlx-mysql" }
 # sqlx-sqlite: same shape, an optional dep never compiled that still put

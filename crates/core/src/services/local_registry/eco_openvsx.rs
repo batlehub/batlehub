@@ -153,11 +153,23 @@ impl LocalRegistryService {
     ) -> Result<(), CoreError> {
         self.authorize_write(registry, name, version, identity, Action::ReleasesPublish)
             .await?;
+        // The publish grant is registry-wide; the namespace and owner gates are
+        // what keep one publisher off another's extension, as for yank.
+        self.check_namespace_membership(registry, name, identity)
+            .await?;
+        self.check_ownership_lifecycle_access(registry, name, identity)
+            .await?;
         let versions = self.backend.get_versions(registry, name).await?;
         if !versions.iter().any(|p| p.version == version) {
             return Err(CoreError::NotFound(format!(
                 "{name}@{version} is not published in registry '{registry}'"
             )));
+        }
+        let key = provided_vsix_signature_key(registry, name, version);
+        // Replacing an attached signature is an overwrite, as for any re-PUT.
+        if self.storage.exists(&key).await.unwrap_or(false) {
+            self.authorize_write(registry, name, version, identity, Action::ReleasesOverwrite)
+                .await?;
         }
         let vsix_key = artifact_storage_key(registry, name, version);
         let stored = self.storage.retrieve(&vsix_key).await?.ok_or_else(|| {
@@ -173,7 +185,6 @@ impl LocalRegistryService {
             )));
         }
 
-        let key = provided_vsix_signature_key(registry, name, version);
         self.storage
             .store(
                 &key,

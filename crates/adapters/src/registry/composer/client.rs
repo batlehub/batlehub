@@ -1,4 +1,6 @@
-use super::http_client::{to_registry_error, upstream_client, UpstreamHttpOptions};
+use super::http_client::{
+    no_redirect_client_pair, to_registry_error, upstream_client, UpstreamHttpOptions,
+};
 use super::models::PackagistV2Response;
 use crate::registry::encode_path;
 use batlehub_core::error::CoreError;
@@ -20,6 +22,11 @@ use batlehub_core::error::CoreError;
 ///   - `None`             → version metadata only
 pub struct ComposerRegistryClient {
     pub(super) http: super::super::http_client::UpstreamClient,
+    /// Dist downloads: `dist.url` comes from the (untrusted) p2 document, so it
+    /// goes through the SSRF guard like PyPI's — credentials only on `base_url`,
+    /// a public-address check on every other hop. Both clients redirect nowhere.
+    pub(super) dl_credentialed: reqwest::Client,
+    pub(super) dl_plain: reqwest::Client,
     pub(super) base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
     /// Resolved search base URL. `None` = disabled; `Some(url)` = use this.
@@ -33,6 +40,7 @@ impl ComposerRegistryClient {
             10,
             opts,
         )?;
+        let (dl_credentialed, dl_plain) = no_redirect_client_pair(opts)?;
         let base_url = base_url.into().trim_end_matches('/').to_owned();
 
         // Resolve the search base URL:
@@ -54,6 +62,8 @@ impl ComposerRegistryClient {
 
         Ok(Self {
             http,
+            dl_credentialed,
+            dl_plain,
             base_url,
             basic_auth: opts.basic_auth.clone(),
             search_base,
