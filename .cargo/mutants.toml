@@ -49,12 +49,29 @@ exclude_re = [
   # A cache or throttle window on `Instant`: `<` and `<=` differ only when the
   # elapsed time equals the window to the nanosecond, which no test (and no
   # caller) can arrange. Survivors of the first nightlies (RFC 0041 §6.4).
-  '^crates/adapters/src/auth/(actions_oidc/mod|kubernetes|user_token)\.rs:\d+:\d+: replace < with <= in (ActionsOidcAuthProvider::get_decoding_key|KubernetesAuthProvider::cached_review|UserTokenAuthProvider::should_record_use)$',
+  '^crates/adapters/src/auth/(actions_oidc/mod|oidc|kubernetes|user_token)\.rs:\d+:\d+: replace < with <= in (ActionsOidcAuthProvider::get_decoding_key|OidcAuthProvider::get_decoding_key|KubernetesAuthProvider::cached_review|UserTokenAuthProvider::should_record_use)$',
   # `segments.len() > 1` → `>= 1`: a single segment is empty only when the
   # value is, and `validate_path_safe` refuses an empty value before this runs,
   # while `has_traversal_after_decoding` (kind `path`) exempts a trailing empty
   # segment anyway.
   '^crates/core/src/services/local_registry/mod\.rs:\d+:\d+: replace > with >= in reject_traversal$',
+  # Survivors of the 24–27 Nov rotation (the second triage).
+  # `*role > matched_role` → `>=`: `Role` is a fieldless enum, so on equality
+  # the mutant writes back the value already there.
+  '^crates/adapters/src/auth/actions_oidc/evaluate\.rs:\d+:\d+: replace > with >= in evaluate_auth_rules$',
+  # `own && status == 400` picks `warn!` over `debug!` before the same
+  # `Ok(None)`, and `i == 0` only feeds that `own` flag: a log level. The
+  # adapters crate captures no logs in its tests.
+  '^crates/adapters/src/vulnerability/osv\.rs:\d+:\d+: replace (&& with \|\||== with !=) in OsvScanner::query_page$',
+  '^crates/adapters/src/vulnerability/osv\.rs:\d+:\d+: replace == with != in <impl VulnerabilityScanner for OsvScanner>::query_batch$',
+  # `f.names_malicious() && f.code != KnownMalicious` → `||` also strips the
+  # citation from findings `judge` does not re-derive (non-`MAL-`, or already
+  # `KNOWN_MALICIOUS`). Anchored on the column: the function's other `&&`
+  # (the final comparison) is killed and must stay examined.
+  '^crates/core/src/services/verdict\.rs:\d+:36: replace && with \|\| in substitution_only$',
+  # The derived `Default` is `from_policy(None)`: the type documents `Default`
+  # as the legacy-permissive policy.
+  '^crates/web/src/middleware/proxy_trust\.rs:\d+:\d+: replace ProxyTrust::legacy_permissive -> Self with Default::default\(\)$',
 ]
 
 # A refusal in tier 1 is often proved by the web suites, not by the mutated

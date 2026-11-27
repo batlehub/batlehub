@@ -4904,3 +4904,12 @@ async fn a_claimed_package_is_owned_by_the_publishers_provider_scoped_principal(
         vec!["corp:alice".to_owned()]
     );
 }
+
+/// The NAR key carries the store hash and the file name beside the coordinate.
+#[test]
+fn nix_nar_storage_key_keeps_hash_and_file() {
+    assert_eq!(
+        nix_nar_storage_key("nix", "hello", "2.12", "abc123", "x.nar.xz"),
+        "local:nix/hello/2.12/abc123/x.nar.xz"
+    );
+}

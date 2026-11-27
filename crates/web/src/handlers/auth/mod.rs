@@ -56,6 +56,7 @@ mod tests {
     #[test]
     fn contains_only_configured_names() {
         let names = OidcProviderNames::new(["authentik", "keycloak"]);
+        assert!(!names.is_empty());
         assert!(names.contains("authentik"));
         assert!(names.contains("keycloak"));
         // The historical hardcoded value is not special.

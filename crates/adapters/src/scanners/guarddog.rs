@@ -223,6 +223,41 @@ mod tests {
             && f.reference.as_deref() == Some("npm-exfiltrate-sensitive-data")));
     }
 
+    /// Each alternative of a rule family classifies on its own.
+    #[test]
+    fn each_rule_family_alternative_classifies_alone() {
+        for rule in ["npm-install-script", "exec-base64", "cmd-overwrite"] {
+            assert_eq!(
+                GuarddogScanner::classify(rule),
+                (
+                    FindingKind::InstallHook,
+                    ReasonCode::InstallHook,
+                    Severity::High
+                ),
+                "{rule}"
+            );
+        }
+        for rule in [
+            "npm-exfiltrate-sensitive-data",
+            "steganography",
+            "shady-links",
+        ] {
+            assert_eq!(
+                GuarddogScanner::classify(rule),
+                (
+                    FindingKind::MalwareSignal,
+                    ReasonCode::MalwareSignal,
+                    Severity::High
+                ),
+                "{rule}"
+            );
+        }
+        assert_eq!(
+            GuarddogScanner::classify("npm-obfuscation").2,
+            Severity::Medium
+        );
+    }
+
     #[test]
     fn an_unrecognised_shape_is_an_output_error_not_a_clean_answer() {
         let err = GuarddogScanner::map(&serde_json::json!({ "ok": true })).unwrap_err();

@@ -151,6 +151,28 @@ mod tests {
         ));
     }
 
+    /// The quarantine left is `min_age - age`, not their sum.
+    #[tokio::test]
+    async fn deny_reason_counts_the_seconds_remaining() {
+        let rule = ReleaseAgeGateRule::new(Duration::from_secs(3600), vec![]);
+        let meta = make_meta(Utc::now() - CDuration::minutes(5));
+        let identity = make_identity(Role::Anonymous);
+        let ctx = RuleContext {
+            identity: &identity,
+            package: &meta,
+            action: Action::ReleasesRead,
+            cache_entry: None,
+            requested_version: None,
+        };
+        let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await else {
+            panic!("a five-minute-old release is denied");
+        };
+        assert!(
+            reason.contains("3299 seconds remaining") || reason.contains("3300 seconds remaining"),
+            "{reason}"
+        );
+    }
+
     #[tokio::test]
     async fn admin_bypasses_age_gate() {
         let rule = ReleaseAgeGateRule::new(Duration::from_secs(3600), vec![Role::Admin]);
