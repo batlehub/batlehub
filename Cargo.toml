@@ -206,7 +206,7 @@ argon2 = { version = "0.6", features = ["password-hash", "getrandom"] }
 clap = { version = "4", features = ["derive"] }
 
 # File watching (hot reload)
-notify = "8"
+notify = "9"
 
 # Testing utilities
 tempfile = "3"

@@ -613,3 +613,36 @@ async fn a_provided_archive_is_checked_against_the_stored_bytes_and_gated_like_a
         .contains(&SIGNATURE.to_owned()));
     assert_eq!(asset(&app, "ms.thing", "3.0.0", SIGNATURE).await.0, 404);
 }
+
+/// The publish grant is registry-wide: without the owner gate any publisher
+/// could replace the signature on someone else's extension and get it refused
+/// by every editor that verifies.
+#[actix_web::test]
+async fn a_non_owner_cannot_attach_a_signature_to_someone_elses_extension() {
+    let app = local_ownership_app(REG, "openvsx").await;
+    let bytes = vsix("acme", "tool", "1.0.0");
+    let req = TestRequest::put()
+        .uri(&format!("/proxy/{REG}/acme.tool/1.0.0/vsix"))
+        .insert_header(("Authorization", bearer(NS_PLAIN_USER_TOKEN)))
+        .insert_header(("Content-Type", "application/octet-stream"))
+        .set_payload(bytes.clone())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200, "owner publish");
+
+    let archive = provided_archive(&bytes);
+    assert_eq!(
+        attach(&app, "acme.tool", "1.0.0", &archive, Some(NS_MEMBER_TOKEN)).await,
+        403
+    );
+    assert_eq!(
+        attach(
+            &app,
+            "acme.tool",
+            "1.0.0",
+            &archive,
+            Some(NS_PLAIN_USER_TOKEN)
+        )
+        .await,
+        200
+    );
+}

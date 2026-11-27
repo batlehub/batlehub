@@ -992,3 +992,49 @@ async fn a_namespace_seal_is_honoured_by_the_explore_detail_page() {
         );
     }
 }
+
+/// The PyPI JSON route judges the PEP 503 name, as the upstream fetches it.
+///
+/// Namespaces are stored canonical (`acme-internal`); the route built its
+/// coordinate from the raw path segment, so `Acme_Internal` matched no
+/// namespace, fell through to the registry grant and was served the sealed
+/// project's file list.
+#[actix_web::test]
+async fn a_pypi_namespace_seal_holds_for_every_spelling_of_the_name() {
+    use batlehub_core::entities::{
+        Action, GrantMap, Node, RegistryGrants, RegistryKind, Role, SubjectMatcher, Tier,
+    };
+    let parts = local_registry_app_parts("pypi-reg", "pypi", RegistryMode::Hybrid, None);
+    let hot = parts.proxy_svc.hot.clone();
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let grants = RegistryGrants {
+        kind: RegistryKind::Pypi,
+        registry: Node::new(
+            Tier::Registry,
+            "registry:pypi-reg",
+            Some(GrantMap::new().grant(
+                SubjectMatcher::Role(Role::User),
+                vec![Action::ReleasesRead, Action::ReleasesList],
+            )),
+        ),
+        namespaces: vec![(
+            "acme-internal".to_owned(),
+            Node::new(
+                Tier::Namespace,
+                "namespace:acme-internal",
+                Some(GrantMap::sealed()),
+            ),
+        )],
+    };
+    hot.write().await.grants = [("pypi-reg".to_owned(), Arc::new(grants))].into();
+
+    for spelling in ["acme-internal", "Acme_Internal", "acme.internal"] {
+        let status = get_as(
+            &app,
+            &format!("/proxy/pypi-reg/pypi/{spelling}/json"),
+            USER_TOKEN,
+        )
+        .await;
+        assert_eq!(status, 403, "{spelling} must meet the seal");
+    }
+}

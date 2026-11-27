@@ -1131,6 +1131,39 @@ mod tests {
     // makes the filter load-bearing — a directory fires on everything in it,
     // and in a development checkout the config sits in the working directory.
 
+    /// The one test on a real inotify watch: every other one feeds `is_relevant`
+    /// hand-built events, so a notify upgrade that changed what the backend
+    /// emits (event kinds, paths) would pass them all and lose hot reload.
+    #[test]
+    fn a_real_atomic_save_is_relevant_and_a_read_is_not() {
+        use notify::Watcher as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "a = 1\n").expect("seed config");
+        let paths = vec![path.to_string_lossy().into_owned()];
+        let names = watched_names(&paths);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher =
+            notify::RecommendedWatcher::new(tx, notify::Config::default()).expect("watcher");
+        assert!(attach_directory_watches(&mut watcher, &paths));
+        // Drains for a short quiet period, so late events of one burst count.
+        let relevant_burst = || {
+            let mut relevant = false;
+            while let Ok(e) = rx.recv_timeout(Duration::from_millis(500)) {
+                relevant |= is_relevant(&e, &names);
+            }
+            relevant
+        };
+
+        std::fs::read_to_string(&path).expect("read config");
+        assert!(!relevant_burst(), "a read of the config must not reload");
+
+        let tmp = dir.path().join(".config.toml.tmp");
+        std::fs::write(&tmp, "a = 2\n").expect("write temp");
+        std::fs::rename(&tmp, &path).expect("atomic rename");
+        assert!(relevant_burst(), "an atomic save of the config must reload");
+    }
+
     fn event_for(paths: &[&str]) -> notify::Result<notify::Event> {
         Ok(notify::Event {
             kind: notify::EventKind::Modify(notify::event::ModifyKind::Any),
