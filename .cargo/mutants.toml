@@ -74,6 +74,14 @@ exclude_re = [
   '^crates/web/src/middleware/proxy_trust\.rs:\d+:\d+: replace ProxyTrust::legacy_permissive -> Self with Default::default\(\)$',
 ]
 
+# Mutant `i` on shard `i % k`, not consecutive slices: the list is sorted by
+# path, so slices put every crates/web mutant (~3.5 min plus a cold ~9 min
+# baseline) in shards 14–31 and timed out seven of them on 25–26 Nov 2026,
+# while the adapters shards finished in 40 min. It also makes the PR job's
+# `--shard 0/k` the even spread its comment promises. Config, not a flag:
+# `--sharding` without `--shard` is an error, and pass 2 drops `--shard`.
+sharding = "round-robin"
+
 # A refusal in tier 1 is often proved by the web suites, not by the mutated
 # file's own crate; the core paths are run with `--test-workspace=true` by
 # `task mutants` and the workflow (two invocations, §6.4).
