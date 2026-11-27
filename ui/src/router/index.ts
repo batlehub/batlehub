@@ -186,7 +186,9 @@ function checkMetaGuards(
   if (to.meta.requiresOidcAuth && !isOidcSession.value) {
     // Signed in, just not through OIDC: sending them to "Sign in" reads as
     // being logged out. Their account hub is where the session does work.
-    if (isAuthenticated.value) return { path: "/me/profile" };
+    // Said there, not silently: the tokens tab is absent and the link they
+    // followed was not wrong.
+    if (isAuthenticated.value) return { path: "/me/profile", query: { from: "tokens" } };
     return { path: "/login", query: { redirect: to.fullPath } };
   }
   // RFC 0042 §4.3: an admin page is gated on the verb its reads ask for, not

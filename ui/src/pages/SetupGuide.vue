@@ -143,18 +143,39 @@ const visibleDefs = computed(() => {
  * one recipe can be sent to a colleague. `replaceState` keeps the router's own
  * history state; a fragment that names no served tool falls back to the first.
  */
-const selectedTool = ref(globalThis.location?.hash.slice(1) ?? "");
+/**
+ * Without a fragment, the tool picked last time: a developer comes back for the
+ * same package manager. Failing that, the first tool *as listed* (languages
+ * first) — not the first definition, which was mise's regex wall.
+ */
+const LAST_TOOL_KEY = "batlehub.setupTool";
+const lastTool = (): string => {
+  try {
+    return globalThis.localStorage?.getItem(LAST_TOOL_KEY) ?? "";
+  } catch {
+    return ""; // storage refused (privacy mode): no memory, not an error
+  }
+};
+const selectedTool = ref(globalThis.location?.hash.slice(1) || lastTool());
 function selectTool(id: string | null) {
   if (!id) return;
   selectedTool.value = id;
   globalThis.history?.replaceState(globalThis.history.state, "", `#${id}`);
+  try {
+    globalThis.localStorage?.setItem(LAST_TOOL_KEY, id);
+  } catch {
+    // remembered for this visit only
+  }
 }
-const currentDef = computed(
-  () =>
+const currentDef = computed(() => {
+  const listedFirst = groupedDefs.value[0]?.options[0]?.value;
+  return (
     activeDefs.value.find((d) => d.id === selectedTool.value) ??
+    visibleDefs.value.find((d) => d.id === listedFirst) ??
     visibleDefs.value[0] ??
-    activeDefs.value[0],
-);
+    activeDefs.value[0]
+  );
+});
 
 /** Spelled out, not built from the group id, so the catalogue check sees every key. */
 const groupLabel = computed<Record<RegistryGroup, string>>(() => ({

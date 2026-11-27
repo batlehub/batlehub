@@ -336,7 +336,7 @@ async function typeFilter(w: Awaited<ReturnType<typeof mountPage>>, value: strin
 }
 
 const fetchButton = (w: Awaited<ReturnType<typeof mountPage>>) =>
-  w.findAll("button").find((b) => b.text().includes("Fetch this version"));
+  w.findAll("button").find((b) => b.text().includes("Keep this version on this instance"));
 
 /**
  * RFC 0014 §4.6: an admin sees the audit's word on the selected version —
@@ -1015,7 +1015,7 @@ describe("PackageDetailPage fetch and the signed-out reader", () => {
     const wrapper = await mountPage();
 
     expect(fetchButton(wrapper)).toBeUndefined();
-    expect(wrapper.text()).toContain("Sign in to fetch this version");
+    expect(wrapper.text()).toContain("Sign in to keep this version on this instance");
   });
 
   it("keeps offering it to a signed-in reader", async () => {

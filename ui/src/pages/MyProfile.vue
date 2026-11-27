@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { computed } from "vue";
+import { useRoute } from "vue-router";
 import { Users, User, KeyRound } from "@lucide/vue";
 import { useAuth } from "@/composables/useAuth";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -11,6 +13,9 @@ import { roleLabel } from "@/lib/roles";
 const { t } = useI18n();
 
 const { identity, oidcProvider } = useAuth();
+/** Sent here from `/me/tokens`, which only an OIDC session can use. */
+const route = useRoute();
+const fromTokens = computed(() => route.query.from === "tokens");
 
 // Prefer the SSO provider stored at login time (reflects which button the user clicked)
 // over identity.auth_provider (which reflects which JWT validator processed the token —
@@ -37,6 +42,9 @@ function roleVariant(role: string) {
 
 <template>
   <div class="space-y-6">
+    <Alert v-if="fromTokens" data-testid="tokens-need-oidc">
+      {{ t("myProfile.tokensNeedOidc") }}
+    </Alert>
     <!-- Identity card -->
     <Card>
       <CardHeader>

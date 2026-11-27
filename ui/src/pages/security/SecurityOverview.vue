@@ -205,7 +205,7 @@ const decisionText = (d: DecisionItem) =>
           />
           <p
             v-if="showUnprotectedHint"
-            class="text-sm text-muted-foreground"
+            class="max-w-[64ch] text-sm text-muted-foreground"
             data-testid="unprotected"
           >
             {{ t("securityOverview.unprotectedHint") }}

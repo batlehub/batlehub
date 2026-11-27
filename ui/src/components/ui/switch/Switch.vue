@@ -37,7 +37,10 @@ function toggle() {
       :class="
         cn(
           'pointer-events-none block h-3.5 w-3.5 rounded-sm',
-          modelValue ? 'translate-x-4 bg-background' : 'translate-x-0.5 bg-muted-foreground',
+          // Off is hollow: a filled grey knob on an empty track read as on.
+          modelValue
+            ? 'translate-x-4 bg-background'
+            : 'translate-x-0.5 border border-muted-foreground bg-transparent',
         )
       "
     />

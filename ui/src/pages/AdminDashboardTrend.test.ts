@@ -7,12 +7,14 @@ const {
   registryHealthMock,
   configWarningsMock,
   instanceSecurityMock,
+  securityOverviewMock,
 } = vi.hoisted(() => ({
   adminStatsMock: vi.fn(),
   adminStatsHistoryMock: vi.fn(),
   registryHealthMock: vi.fn(),
   configWarningsMock: vi.fn(),
   instanceSecurityMock: vi.fn(),
+  securityOverviewMock: vi.fn(),
 }));
 
 vi.mock("@/client/sdk.gen", () => ({
@@ -21,6 +23,7 @@ vi.mock("@/client/sdk.gen", () => ({
   registryHealth: registryHealthMock,
   getConfigWarnings: configWarningsMock,
   instanceSecurity: instanceSecurityMock,
+  securityOverview: securityOverviewMock,
 }));
 
 import AdminDashboard from "./AdminDashboard.vue";
@@ -273,5 +276,81 @@ describe("AdminDashboard config line", () => {
     const w = await mountDashboard();
     expect(instanceSecurityMock).not.toHaveBeenCalled();
     expect(w.get('[data-testid="status-config"]').text()).toContain("2 configuration warnings");
+    expect(w.find('[data-testid="status-config-accepted"]').exists()).toBe(false);
+  });
+
+  // The config page lists accepted warnings too; the count leaves them out, so
+  // the line says how many it left out instead of disagreeing silently.
+  it("names the accepted warnings it does not count", async () => {
+    configWarningsMock.mockResolvedValue({
+      data: {
+        warnings: [
+          { code: "cors.any-origin", path: "server.cors", message: "…", dismissible: true },
+          { code: "a", path: "x", message: "…", dismissible: true, accepted: true },
+          { code: "b", path: "y", message: "…", dismissible: true, accepted: true },
+        ],
+      },
+    });
+    useAuth().identity.value = { verbs: ["stats:read", "config:read"], registries: {} } as never;
+    const w = await mountDashboard();
+    const line = w.get('[data-testid="status-config"]').text();
+    expect(line).toContain("1 configuration warning");
+    expect(line).toContain("2 accepted");
+  });
+});
+
+describe("AdminDashboard security lines", () => {
+  const overview = (protectedCount: number) => ({
+    computed_at: "2026-11-27T00:00:00Z",
+    decisions: { total: 0, by_kind: {}, items: [] },
+    holds: { state: "ok", held: 0, waiting: 0, malware: 0 },
+    flags: { state: "ok", blocking: 0, pulled_after_flag: 0 },
+    scanners: {
+      state: "ok",
+      uncovered: [],
+      live_workers: 1,
+      queued: 0,
+      failed: 0,
+      never_ran: 0,
+      scanners_attention: 0,
+      deferred_over_day: 0,
+      breaker_open: false,
+    },
+    coverage: {
+      state: protectedCount ? "ok" : "attention",
+      protected: protectedCount,
+      upstream: 2,
+      unprotected: protectedCount ? [] : ["npm", "pypi"],
+      accepted: [],
+    },
+  });
+
+  beforeEach(() => {
+    adminStatsMock.mockReset().mockResolvedValue({ data: stats });
+    registryHealthMock.mockReset().mockResolvedValue({ data: [] });
+    adminStatsHistoryMock.mockReset().mockResolvedValue({ data: trend() });
+    useAuth().identity.value = {
+      verbs: ["stats:read", "quarantine:read", "flags:read"],
+      registries: {},
+    } as never;
+  });
+
+  // /security's rule: with nothing protected, an OK on holds and scanners
+  // reassured about a pipeline that evaluates nothing.
+  it("replaces holds and scanners with the coverage alarm when nothing is protected", async () => {
+    securityOverviewMock.mockReset().mockResolvedValue({ data: overview(0) });
+    const w = await mountDashboard();
+    expect(w.find('[data-testid="status-holds"]').exists()).toBe(false);
+    expect(w.find('[data-testid="status-scanners"]').exists()).toBe(false);
+    expect(w.get('[data-testid="status-coverage"]').text()).toContain("No registry is protected");
+    expect(w.find('[data-testid="status-flags"]').exists()).toBe(true);
+  });
+
+  it("keeps holds and scanners once a registry is protected", async () => {
+    securityOverviewMock.mockReset().mockResolvedValue({ data: overview(1) });
+    const w = await mountDashboard();
+    expect(w.find('[data-testid="status-holds"]').exists()).toBe(true);
+    expect(w.find('[data-testid="status-scanners"]').exists()).toBe(true);
+    expect(w.find('[data-testid="status-coverage"]').exists()).toBe(false);
   });
 });

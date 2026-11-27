@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { formatDate } from "@/lib/format";
-import { useRoute } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 import { computed, ref } from "vue";
 import { checkAccess } from "@/client/sdk.gen";
 import type { AccessCheckResponse } from "@/client/types.gen";
 import { API_BASE_URL } from "@/config";
 import { extractMessage } from "@/composables/useApi";
+import { useAuth } from "@/composables/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +21,7 @@ import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/
 
 import { EXAMPLE_COORDINATES, FALLBACK_COORDINATE } from "@/config/registryTypes";
 const { t } = useI18n();
+const { can } = useAuth();
 
 /** RFC 0004-bis §6.2: the registry set is closed, small and already fetched. */
 const { options: registryOptions, typeOf, error: registriesError } = useRegistryOptions();
@@ -54,11 +56,14 @@ const versionSuggestions = useVersionSuggestions(registry, name);
 const artifact = ref(q("artifact"));
 const result = ref<AccessCheckResponse | null>(null);
 const error = ref<string | null>(null);
+/** T1 answers "unknown" and "hidden" alike; the page still owes a next step. */
+const notFound = ref(false);
 const loading = ref(false);
 
 async function check() {
   loading.value = true;
   error.value = null;
+  notFound.value = false;
   result.value = null;
   try {
     const {
@@ -85,6 +90,7 @@ async function check() {
         error.value = t("accessCheck.noResponse");
       } else if (response?.status === 404) {
         error.value = t("accessCheck.notFound");
+        notFound.value = true;
       } else {
         error.value = extractMessage(apiErr);
       }
@@ -132,58 +138,73 @@ const formatTime = (iso: string) => formatDate(iso);
       <CardTitle>{{ t("accessCheck.accessCheck") }}</CardTitle>
     </CardHeader>
     <CardContent class="space-y-4">
-      <div class="grid gap-3">
-        <div class="space-y-1">
-          <Label for="registry">{{ t("common.registry") }}</Label>
-          <Select
-            id="registry"
-            v-model="registry"
-            :options="registryOptions"
-            :placeholder="t('adminHealth.chooseRegistry')"
-          />
-          <!-- An empty list with no reason read as "this instance has no
+      <!-- A form, so Enter in any field checks: the combobox leaves Enter to
+           the form unless a suggestion is highlighted. -->
+      <form class="space-y-4" @submit.prevent="check">
+        <div class="grid gap-3">
+          <div class="space-y-1">
+            <Label for="registry">{{ t("common.registry") }}</Label>
+            <Select
+              id="registry"
+              v-model="registry"
+              :options="registryOptions"
+              :placeholder="t('adminHealth.chooseRegistry')"
+            />
+            <!-- An empty list with no reason read as "this instance has no
                registries"; it was a failed request. -->
-          <p v-if="registriesError" class="text-xs text-destructive">
-            {{ t("homePage.registriesCouldNotLoad") }} {{ registriesError }}
-          </p>
+            <p v-if="registriesError" class="text-xs text-destructive">
+              {{ t("homePage.registriesCouldNotLoad") }} {{ registriesError }}
+            </p>
+          </div>
+          <div class="space-y-1">
+            <Label for="name">{{ t("common.package") }}</Label>
+            <Combobox
+              id="name"
+              v-model="name"
+              :options="packageSuggestions.options.value"
+              :loading="packageSuggestions.loading.value"
+              :placeholder="example.name"
+            />
+          </div>
+          <div class="space-y-1">
+            <Label for="version">{{ t("common.version") }}</Label>
+            <Combobox
+              id="version"
+              v-model="version"
+              :options="versionSuggestions.options.value"
+              :loading="versionSuggestions.loading.value"
+              :disabled="!versionSuggestions.ready()"
+              :disabled-reason="t('accessCheck.versionNeedsPackage')"
+              :placeholder="example.version"
+            />
+          </div>
+          <div class="space-y-1">
+            <Label for="artifact">{{ t("accessCheck.artifactOptional") }}</Label>
+            <Input id="artifact" v-model="artifact" />
+          </div>
         </div>
-        <div class="space-y-1">
-          <Label for="name">{{ t("common.package") }}</Label>
-          <Combobox
-            id="name"
-            v-model="name"
-            :options="packageSuggestions.options.value"
-            :loading="packageSuggestions.loading.value"
-            :placeholder="example.name"
-          />
-        </div>
-        <div class="space-y-1">
-          <Label for="version">{{ t("common.version") }}</Label>
-          <Combobox
-            id="version"
-            v-model="version"
-            :options="versionSuggestions.options.value"
-            :loading="versionSuggestions.loading.value"
-            :disabled="!versionSuggestions.ready()"
-            :disabled-reason="t('accessCheck.versionNeedsPackage')"
-            :placeholder="example.version"
-          />
-        </div>
-        <div class="space-y-1">
-          <Label for="artifact">{{ t("accessCheck.artifactOptional") }}</Label>
-          <Input id="artifact" v-model="artifact" placeholder="12345678" />
-        </div>
-      </div>
 
-      <Button :disabled="loading" class="w-full" @click="check">
-        {{ loading ? t("accessCheck.checking") : t("accessCheck.checkAccess") }}
-      </Button>
+        <Button type="submit" :disabled="loading" class="w-full">
+          {{ loading ? t("accessCheck.checking") : t("accessCheck.checkAccess") }}
+        </Button>
+      </form>
 
       <!-- One live region, always in the DOM, so the verdict is announced
            when it lands rather than only painted. -->
       <div aria-live="polite" class="space-y-2">
         <p v-if="error" class="text-sm text-destructive">
           {{ error }}
+        </p>
+        <p v-if="notFound" class="text-sm text-muted-foreground" data-testid="not-found-next">
+          <span class="font-medium text-foreground">{{ t("accessCheck.next") }}</span>
+          {{ t("accessCheck.notFoundNext", { example: example.name }) }}
+          <RouterLink
+            v-if="can('authz:read')"
+            to="/admin/access/authorization#simulate"
+            class="text-primary underline underline-offset-[3px]"
+            >→ {{ t("accessCheck.simulate") }}</RouterLink
+          >
+          <template v-else>{{ t("accessCheck.askAdmin") }}</template>
         </p>
 
         <div v-if="result" class="border border-rule-strong p-4 space-y-2">
