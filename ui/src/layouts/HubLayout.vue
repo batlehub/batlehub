@@ -29,17 +29,22 @@ const isActive = (to: string): boolean => route.path === to || route.path.starts
       <p v-if="description" class="text-sm text-muted-foreground">{{ description }}</p>
     </header>
 
-    <nav :aria-label="t('a11y.sectionsOf', { title })" class="border-b border-border">
-      <ul class="-mb-px flex flex-wrap gap-1">
-        <li v-for="tab in tabs" :key="tab.to">
+    <!-- The segment grammar of TabsList and the primary nav (DESIGN.md,
+         Navigation): one 1px frame, the current tab reversed to an ink block.
+         It was the only underline tab strip in the product. The frame is split
+         between list (left/top) and cells (right/bottom) so it stays 1px when
+         the cells wrap. -->
+    <nav :aria-label="t('a11y.sectionsOf', { title })">
+      <ul class="inline-flex flex-wrap items-stretch border-l border-t border-border">
+        <li v-for="tab in tabs" :key="tab.to" class="flex">
           <RouterLink
             :to="tab.to"
             :aria-current="isActive(tab.to) ? 'page' : undefined"
-            class="inline-block border-b px-3 py-2 font-sans text-sm"
+            class="inline-flex items-center border-r border-b border-border px-3 py-2 font-sans text-sm font-medium"
             :class="
               isActive(tab.to)
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                ? 'bg-foreground font-bold text-background'
+                : 'text-muted-foreground hover:text-foreground'
             "
           >
             {{ t(tab.label) }}

@@ -110,7 +110,8 @@ describe("AccessCheck answer", () => {
     // Not `find("button")`: the registry Select and both Comboboxes render
     // triggers of their own, and the first one in the DOM is a radix element.
     const submit = wrapper.findAll("button").find((b) => /check access/i.test(b.text()))!;
-    await submit.trigger("click");
+    // A submit button submits its form; the detached test tree needs it said.
+    await submit.element.closest("form")!.dispatchEvent(new Event("submit"));
     await flushPromises();
     return wrapper;
   };
@@ -179,8 +180,27 @@ describe("AccessCheck answer", () => {
     });
     const wrapper = mountWith({});
     const submit = wrapper.findAll("button").find((b) => /check access/i.test(b.text()))!;
-    await submit.trigger("click");
+    // A submit button submits its form; the detached test tree needs it said.
+    await submit.element.closest("form")!.dispatchEvent(new Event("submit"));
     await flushPromises();
     expect(wrapper.text()).toContain("No such package, or not one you can see.");
+    // …and still a next step, which T1 leaves room for: both causes, named.
+    const next = wrapper.get('[data-testid="not-found-next"]').text();
+    expect(next).toContain("exists upstream");
+    expect(next).toContain("An administrator can see which rule decides.");
+  });
+
+  /** Enter in a field checks: the fields sit in a form the button submits. */
+  it("checks on submit, without a click on the button", async () => {
+    mockRoute = { query: { registry: "npm1", name: "left-pad" } };
+    checkAccessMock.mockClear().mockResolvedValue({
+      data: undefined,
+      error: { error: "not found" },
+      response: { status: 404 },
+    });
+    const wrapper = mountWith({});
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(checkAccessMock).toHaveBeenCalledTimes(1);
   });
 });

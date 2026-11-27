@@ -21,7 +21,9 @@ watch([() => props.code, () => props.lang, ready], update, { immediate: true });
 </script>
 
 <template>
-  <div class="relative">
+  <!-- Below `sm` the button takes its own row above the code: floated over a
+       phone-width block it sat on the end of the first line. -->
+  <div class="relative flex flex-col">
     <div v-if="html" class="shiki-wrapper" v-html="html" />
     <pre
       v-else
@@ -31,7 +33,7 @@ watch([() => props.code, () => props.lang, ready], update, { immediate: true });
     <CopyButton
       v-if="copy !== undefined"
       :text="copy"
-      class="absolute top-2 right-2 h-7 px-2 text-xs"
+      class="order-first mb-1 h-7 self-end px-2 text-xs sm:absolute sm:top-2 sm:right-2 sm:mb-0"
     />
     <slot />
   </div>

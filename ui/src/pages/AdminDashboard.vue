@@ -29,7 +29,7 @@ import type {
   StatsHistoryResponse,
   RegistryHealthDto,
 } from "@/client/types.gen";
-import SecurityStatusStrip from "@/components/admin/SecurityStatusStrip.vue";
+import SecurityStatusStrip, { type Domain } from "@/components/admin/SecurityStatusStrip.vue";
 import StateMark from "@/components/admin/StateMark.vue";
 import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
@@ -72,6 +72,16 @@ const {
       : Promise.resolve({ data: null }),
   [token],
 );
+/**
+ * `/security`'s own rule: with no registry protected, "nothing is held" and a
+ * scanners OK were true but reassuring about a pipeline that evaluates nothing —
+ * the coverage line (ATTENTION) replaces them, so the two spaces agree.
+ */
+const securityDomains = computed<Domain[]>(() =>
+  security.value?.coverage?.protected === 0
+    ? ["coverage", "flags"]
+    : ["holds", "flags", "scanners"],
+);
 const canConfigLine = computed(() => can("config:read"));
 /** Instance security needs `system:read` too; without it, the config page's own list. */
 const viaInstance = computed(() => canConfigLine.value && can("system:read"));
@@ -99,6 +109,13 @@ const securityWarnings = computed(
       ? (instance.value?.warnings ?? null)
       : (configWarnings.value?.warnings ?? null)
     )?.filter((w) => !w.accepted) ?? null,
+);
+/** Kept apart from the count, not hidden: the config page lists them all. */
+const acceptedWarnings = computed(
+  () =>
+    (viaInstance.value ? instance.value?.warnings : configWarnings.value?.warnings)?.filter(
+      (w) => w.accepted,
+    ).length ?? 0,
 );
 /** The config line is owed to whoever may read it: a failed read is UNKNOWN, not absent. */
 const configLineUnknown = computed(
@@ -307,7 +324,7 @@ const trendText = computed(() => {
       <SecurityStatusStrip
         v-if="security || securityWarnings || configLineUnknown"
         :overview="security ?? { computed_at: '', decisions: { total: 0, by_kind: {}, items: [] } }"
-        :domains="['holds', 'flags', 'scanners']"
+        :domains="securityDomains"
         @retry="reloadSecurity"
       >
         <li
@@ -319,13 +336,21 @@ const trendText = computed(() => {
             :state="!securityWarnings ? 'unknown' : securityWarnings.length ? 'attention' : 'ok'"
           />
           <span class="w-40 shrink-0 font-mono text-sm">{{ t("instanceSecurity.config") }}</span>
-          <span class="min-w-0 flex-1 text-sm">{{
-            !securityWarnings
-              ? t("securityStatus.couldNotRead")
-              : viaInstance
-                ? t("instanceSecurity.warnings", { n: securityWarnings.length })
-                : t("adminDashboard.configWarnings", { n: securityWarnings.length })
-          }}</span>
+          <span class="min-w-0 flex-1 text-sm"
+            >{{
+              !securityWarnings
+                ? t("securityStatus.couldNotRead")
+                : viaInstance
+                  ? t("instanceSecurity.warnings", { n: securityWarnings.length })
+                  : t("adminDashboard.configWarnings", { n: securityWarnings.length })
+            }}<span
+              v-if="securityWarnings && acceptedWarnings"
+              class="text-muted-foreground"
+              data-testid="status-config-accepted"
+            >
+              · {{ t("adminDashboard.warningsAccepted", { n: acceptedWarnings }) }}</span
+            ></span
+          >
           <RouterLink
             v-if="viaInstance"
             to="/admin/instance-security"

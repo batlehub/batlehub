@@ -10,6 +10,8 @@ const auth = {
   oidcProvider: ref(""),
 };
 vi.mock("@/composables/useAuth", () => ({ useAuth: () => auth }));
+const route = { query: {} as Record<string, string> };
+vi.mock("vue-router", () => ({ useRoute: () => route }));
 
 import MyProfile from "./MyProfile.vue";
 
@@ -26,6 +28,17 @@ function mountProfile(identity: Identity | null, oidcProvider = "") {
  * which is the normal case for a static-token user.
  */
 describe("MyProfile", () => {
+  // Bounced from /me/tokens, which only an OIDC session can use: said here.
+  it("says why the tokens tab sent a static-token user here", () => {
+    route.query = { from: "tokens" };
+    const w = mountProfile({ user_id: "ci", role: "user", auth_provider: "static-token" });
+    expect(w.get('[data-testid="tokens-need-oidc"]').text()).toContain("single sign-on");
+    route.query = {};
+    expect(mountProfile({ user_id: "ci" }).find('[data-testid="tokens-need-oidc"]').exists()).toBe(
+      false,
+    );
+  });
+
   it("states the user id, the role and the provider", () => {
     const w = mountProfile({
       user_id: "alice",

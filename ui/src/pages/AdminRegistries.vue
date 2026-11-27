@@ -42,7 +42,7 @@ const pct = (n: number | null | undefined) => (n == null ? "—" : `${(n * 100).
  * missing from it keeps its stats row with dashes, never disappears.
  */
 const { registries } = useRegistryOptions();
-const infoByName = computed(() => new Map(registries.value.map((r) => [r.name, r] as const)));
+const listed = computed(() => new Map(registries.value.map((r) => [r.name, r] as const)));
 
 /**
  * The last pull is only in the health probe, which asks `system:read` where
@@ -61,6 +61,18 @@ const { data: health } = useApi<RegistryHealthDto[]>(
 const healthByName = computed(
   () => new Map((health.value ?? []).map((h) => [h.registry, h] as const)),
 );
+/**
+ * The registry list misses registries the legacy access table does not name
+ * (hybrid `my-*` opened by grants alone); the health probe, read by whoever
+ * holds `system:read`, knows every configured one, so it fills the gap.
+ */
+const infoByName = computed(() => {
+  const m = new Map<string, { type: string; mode: string }>(
+    (health.value ?? []).map((h) => [h.registry, { type: h.registry_type, mode: h.mode }]),
+  );
+  for (const [name, r] of listed.value) m.set(name, r);
+  return m;
+});
 
 /**
  * `upstream_degraded: false` is also what a registry with no upstream traffic

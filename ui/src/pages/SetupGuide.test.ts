@@ -50,6 +50,7 @@ beforeEach(() => {
   auth.isAdmin.value = false;
   auth.expiresAt.value = 0;
   globalThis.history.replaceState(null, "", "/");
+  localStorage.clear();
 });
 
 /**
@@ -173,6 +174,32 @@ describe("SetupGuide", () => {
       { name: "alpine", type: "apk" },
     ]);
     expect(w.get("h3").text()).toBe("Alpine (apk)");
+  });
+
+  // mise is the first definition but a toolchain; a developer arriving with
+  // no fragment is shown the first tool the rail lists, a language.
+  it("opens on the first listed tool, not the first definition", async () => {
+    const w = await mountPage([
+      { name: "tools", type: "mise" },
+      { name: "npm", type: "npm" },
+    ]);
+    expect(w.get("h3").text()).toBe("npm");
+  });
+
+  it("reopens the tool picked last time", async () => {
+    const regs = [
+      { name: "py", type: "pypi" },
+      { name: "alpine", type: "apk" },
+    ];
+    const first = await mountPage(regs);
+    await first
+      .findAll("aside button")
+      .find((b) => b.text() === "Alpine (apk)")!
+      .trigger("click");
+    first.unmount();
+    globalThis.history.replaceState(null, "", "/");
+    const again = await mountPage(regs);
+    expect(again.get("h3").text()).toBe("Alpine (apk)");
   });
 
   it("leads with the one-command setup, aimed at this server", async () => {

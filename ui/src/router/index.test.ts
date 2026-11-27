@@ -168,6 +168,8 @@ describe("router navigation guards (integration)", () => {
   it("sends a signed-in, non-OIDC user to their profile, not to sign-in", async () => {
     await setAuth(USER, "tok"); // authenticated but no auth_provider
     expect(await go("/me/tokens")).toBe("/me/profile");
+    // …told why there, rather than bounced without a word.
+    expect(router.currentRoute.value.query.from).toBe("tokens");
   });
 
   it("redirects a static-token user, whose identity still names a provider", async () => {

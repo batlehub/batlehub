@@ -106,6 +106,27 @@ describe("AdminRegistries", () => {
     expect(rows[1]!.text()).toContain("—");
   });
 
+  // The registry list follows the legacy access table and can miss a
+  // configured registry; the health probe knows them all.
+  it("takes type and mode from the health probe when the registry list misses one", async () => {
+    adminStatsMock.mockResolvedValue({
+      data: {
+        since_startup: "2026-11-10T00:00:00Z",
+        aggregate: { artifact_hits: 0, artifact_misses: 0, cached_bytes: 0 },
+        per_registry: [row("my-gems")],
+      },
+    });
+    registryHealthMock.mockResolvedValue({
+      data: [
+        { registry: "my-gems", registry_type: "rubygems", mode: "hybrid", last_pull_at: null },
+      ],
+    });
+    const w = await mountPage();
+    const text = w.get('[data-testid="registry-row"]').text();
+    expect(text).toContain("rubygems");
+    expect(text).toContain("hybrid");
+  });
+
   // Without system:read the health probe is skipped: type and mode still show,
   // and no registry is claimed never pulled.
   it("keeps type and mode and claims no pull history without system:read", async () => {

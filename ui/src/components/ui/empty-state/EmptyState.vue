@@ -35,7 +35,10 @@ const props = withDefaults(
     :class="
       cn(
         'border px-6 py-10 text-center',
-        variant === 'error' ? 'border-primary' : 'border-border',
+        // A region on the hairline the rest of the page is ruled with; the
+        // control-boundary rule (`border-border`) drew it heavier than the
+        // tables around it. An error keeps its crimson edge.
+        variant === 'error' ? 'border-primary' : 'border-rule-soft',
         props.class,
       )
     "
