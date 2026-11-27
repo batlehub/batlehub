@@ -50,8 +50,7 @@ ignore = [
 #                         0.10, and cpufeatures 0.2 under sha1 0.10
 #   sqlx-core 0.9         sha2 0.10, hashbrown 0.16
 #   actix-http / -router  http 0.2, base64 0.22
-#   jsonwebtoken 11       base64 0.22, signature 2, simple_asn1 → num-bigint 0.4,
-#                         and pem 3 against rcgen 0.14's pem 4 (dev only)
+#   jsonwebtoken 12       simple_asn1 → num-bigint 0.4
 #   ring / aws-lc-rs      untrusted 0.7, getrandom 0.2
 #   opentelemetry_sdk,    rand 0.9
 #     metrics-util
@@ -115,14 +114,8 @@ skip = [
     # actix-http / actix-router, internal to actix.
     { name = "http", version = "0.2" },
     { name = "base64", version = "0.22" },
-    # jsonwebtoken 11, via simple_asn1.
-    { name = "signature", version = "2" },
+    # jsonwebtoken 12, via simple_asn1.
     { name = "num-bigint", version = "0.4" },
-    # No `pem` skip, deliberately: `cargo tree -d` on this host shows pem 3
-    # (jsonwebtoken 11) beside pem 4 (rcgen 0.14.10, a dev-dependency for the
-    # test TLS certificates), but cargo-deny's graph resolves a single version
-    # and rejects the skip as unnecessary. The gate is cargo-deny, so there is
-    # nothing to declare here.
     # ring / aws-lc-rs.
     { name = "untrusted", version = "0.7" },
     { name = "getrandom", version = "0.2" },
