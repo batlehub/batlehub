@@ -70,7 +70,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: mutants
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: 2026.11.3
           install: true
@@ -214,7 +214,7 @@ jobs:
       # From the base only (bootstrap aside): a head mise.toml cannot repoint
       # the binaries, set `[env]` or add a postinstall. mise.lock's checksum is
       # verified.
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: 2026.11.3
           working_directory: ${{ steps.pins.outputs.dir }}
