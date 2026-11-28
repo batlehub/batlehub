@@ -6,6 +6,11 @@ use batlehub_core::error::CoreError;
 
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
+    /// The status's reason phrase (`"Not Found"`), except on a `403`, where it
+    /// is the refusal itself, the same text as `message`. npm prints this
+    /// field and not `message` (`npm-registry-fetch/lib/errors.js`), so a
+    /// refusal it reported as `Forbidden` left its user nothing to act on
+    /// (RFC 0051 §15 decision 22).
     pub error: String,
     pub message: String,
     /// Stable slug identifying *which* refusal this is, when one status covers
@@ -139,8 +144,13 @@ impl actix_web::ResponseError for AppError {
     }
 
     fn error_response(&self) -> HttpResponse {
+        let error = if self.status == StatusCode::FORBIDDEN && !self.message.is_empty() {
+            self.message.clone()
+        } else {
+            self.status.canonical_reason().unwrap_or("error").to_owned()
+        };
         let body = ErrorBody {
-            error: self.status.canonical_reason().unwrap_or("error").to_owned(),
+            error,
             message: self.message.clone(),
             code: self.code.clone(),
         };
@@ -301,6 +311,27 @@ mod tests {
         let e = AppError::not_found("missing resource");
         assert_eq!(e.status, StatusCode::NOT_FOUND);
         assert_eq!(e.message, "missing resource");
+    }
+
+    #[actix_web::test]
+    async fn a_403_carries_its_reason_in_error_for_npm() {
+        use actix_web::ResponseError;
+        let resp = AppError::forbidden("package allowlist: 'x' is not listed").error_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "package allowlist: 'x' is not listed");
+        assert_eq!(v["message"], v["error"]);
+    }
+
+    #[actix_web::test]
+    async fn other_statuses_keep_the_reason_phrase() {
+        use actix_web::ResponseError;
+        let resp = AppError::not_found("no such package").error_response();
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "Not Found");
+        assert_eq!(v["message"], "no such package");
     }
 
     #[test]

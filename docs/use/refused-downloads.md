@@ -27,19 +27,19 @@ permission gets a `403`, and no challenge. Only `/proxy/…` routes send the
 challenge.
 
 **A `403` with a reason in it.** The registry runs its checks as the request
-happens. The response body's `message` names the check:
+happens. The message names the check, and npm prints it at the end of its
+error line:
 
 ```text
-$ curl -s https://hub.example.com/proxy/npm/left-pad/1.3.1/tarball
-{"error":"Forbidden","message":"release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)"}
+npm error 403 403 Forbidden - GET https://hub.example.com/proxy/npm/left-pad/1.3.1/tarball - release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)
 ```
 
 The messages are listed under [Refusals with a plain message](#plain-messages).
+The same text is in the response body's `error` and `message`.
 
-Your package manager may not show it. npm 11 prints the body's `error` field
-only (`npm error 403 403 Forbidden - GET … - Forbidden`), and pip reads a
-refused index page as an empty one (`Could not find a version that satisfies the
-requirement … (from versions: none)`). `batlehub-cli why --last` lists your own recent refusals with
+Some clients show no reason at all: pip reads a refused index page as an empty
+one (`Could not find a version that satisfies the requirement … (from
+versions: none)`). `batlehub-cli why --last` lists your own recent refusals with
 their reason code, so you can read what the client did not show.
 
 **A `403` naming a verdict.** The registry has a supply-chain profile: every

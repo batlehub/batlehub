@@ -53,10 +53,7 @@ bypass_roles = ["admin"]
 ```text
 $ npm install left-pad
 npm error code E403
-npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - Forbidden
-
-$ curl -s -H "Authorization: Bearer $TOKEN" http://batlehub:8080/proxy/npm/left-pad
-{"error":"Forbidden","message":"package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
 ```
 
 ```mermaid
@@ -134,8 +131,11 @@ the chain, so a refused version never reaches the verdict gate's scan queue.
   `packages.json` and a Helm `index.yaml` still name packages that are not
   listed. On a proxy registry those names are public upstream. On a local or
   hybrid registry they are the estate's own published names, which grants
-  already govern (RFC 0015 §6.3). The allowlist adds no second filter there.
-  Every per-package read of an unlisted name is refused either way.
+  already govern (RFC 0015 §6.3). The allowlist adds no second filter there,
+  with one exception (§15 decision 23): a local document built from each
+  package's own read, such as an Open VSX namespace listing, leaves an
+  unlisted local name out. Every per-package read of an unlisted name is
+  refused either way.
 - **Removing out-of-range versions from a package's version list.** A packument
   still shows `lodash@5.0.0` when the range stops at 5; npm picks it for
   `latest` and gets a `403`, as with `version_gate` today. Deferred to a bis
@@ -359,16 +359,13 @@ client sees and which `why` repeats as the cause detail (`rule_cause`,
 
 **Client refusal, name not listed** (npm 11.20, exit code 1, captured by
 `authz.sh allowlist`). npm prints the body's `error` field, not its `message`
-(`npm-registry-fetch/lib/errors.js:46`), so the reason is in the response body
-and in `batlehub-cli why --last`, not in npm's output:
+(`npm-registry-fetch/lib/errors.js:46`), so a `403`'s `error` carries the
+refusal itself (§15 decision 22):
 
 ```text
 $ npm install left-pad
 npm error code E403
-npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - Forbidden
-
-$ curl -s -H "Authorization: Bearer $TOKEN" http://batlehub:8080/proxy/npm/left-pad
-{"error":"Forbidden","message":"package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
 ```
 
 **Client refusal, version outside the range.** The packument is served and the
@@ -377,10 +374,7 @@ tarball is refused.
 ```text
 $ npm install lodash@4.17.20
 npm error code E403
-npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/lodash/4.17.20/tarball - Forbidden
-
-$ curl -s http://batlehub:8080/proxy/npm/lodash/4.17.20/tarball
-{"error":"Forbidden","message":"package allowlist: version '4.17.20' of 'lodash' is not allowed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/lodash/4.17.20/tarball - package allowlist: version '4.17.20' of 'lodash' is not allowed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
 ```
 
 **pip** (captured by `closed_world.sh allowlist`) reads a refused index page as
@@ -392,7 +386,7 @@ ERROR: Could not find a version that satisfies the requirement reqeusts (from ve
 ```
 
 The way to the reason is `batlehub-cli why --last`, which lists the caller's
-refusals with their code; `use/refused-downloads.md` says so for npm and pip.
+refusals with their code; `use/refused-downloads.md` says so.
 
 **`batlehub-cli why`, name not listed** (exit code 4). The name check runs right
 after the access step, so nothing after it is evaluated. The causes are
@@ -1104,6 +1098,8 @@ the downgraded pods crash-loop.
 | 19 | Two `package_allowlist` blocks in one rule list? | **Refused at load.** Both would run, and `effective_rules` replaces every base block with the first override (`builders.rs:818`). Decided during the second last review. |
 | 20 | UI labels for the two codes? | **None.** Access Check renders codes raw (`AccessCheck.vue:253`), and the label table is read only by verdict views, which never carry these codes. Decided during the second last review; the first revision had added labels nobody would see. |
 | 21 | Air-gapped out-of-range versions? | **Judged in `record_miss`**, beside `blocked_reason`, so they answer `VERSION_NOT_ALLOWED` and are not proposed for the next bundle. Decided during the second last review. |
+| 22 | Make npm show the refusal? | **Yes: on every `403`, `error` carries the refusal itself, the same text as `message`.** npm prints `error` and not `message` (`npm-registry-fetch/lib/errors.js:46`), so every refusal it reported read `Forbidden`. That held for every gate, not only this one. Other statuses keep their reason phrase. `AppError::error_response` and the IP-block middleware, the one other body written by hand. Found by `authz.sh allowlist`; decided 2026-11-28 by the author. |
+| 23 | Local multi-package documents built from per-package reads? | **They leave an unlisted local name out**, on the closed side: what would not be served is not advertised. The document itself is never refused, and the whole-registry inventory that asks per name is unfiltered. Found by the route sweep; decided 2026-11-28 by the author. |
 
 ### Still open
 
@@ -1157,12 +1153,10 @@ pypi.org). §4.5 now quotes what they captured.
    `an_out_of_range_version_is_refused_and_not_recorded_as_missing`
    (`air_gap.rs`).
 5. **Local multi-package documents built from per-package reads leave an
-   unlisted local name out.** This applies to an Open VSX namespace listing,
-   for example. §3 says whole-registry documents are not filtered; these local
-   ones are, on the closed side: what would not be served is not advertised.
-   The document itself is never refused. A namespace whose every extension is
-   unlisted answers `404`, as an empty namespace does. The whole-registry
-   inventory that asks per name (`check_read_access_unjudged`) is not filtered.
+   unlisted local name out**, an Open VSX namespace listing for one. §3 said
+   whole-registry documents are not filtered; the author accepted the closed
+   side (§15 decision 23). The document itself is never refused. A namespace
+   whose every extension is unlisted answers `404`, as an empty namespace does.
 6. **Composed listing coordinates are judged on their package.** SDKMAN keys a
    listing by `candidate/platform`, rustup a channel manifest by
    `rust/<channel>`, galaxy a version document by `name@version`.
@@ -1180,16 +1174,13 @@ pypi.org). §4.5 now quotes what they captured.
    grants, name, visibility, which is the order the rule chain already has.
    The property the decision protected holds: there is no existence oracle,
    because the refusal depends on the name alone (decision 9, T7).
-9. **npm 11 does not relay the reason.** It prints the body's `error`
-   (`"Forbidden"`), not its `message` (`npm-registry-fetch/lib/errors.js:46`).
-   pip reads a refused index as an empty one. Both phases therefore read the
-   reason off the same response with `curl`, and §4.5 quotes the clients' real
-   lines. `use/refused-downloads.md` claimed npm printed the reason. It now
-   shows the body and points to `why --last`.
-
-   Making npm show it would mean putting the reason in `error` for every 403,
-   which changes the error body of the whole API. **That is left for the
-   author to decide**, outside this RFC.
+9. **npm printed `Forbidden` for every refusal.** npm 11 prints the body's
+   `error`, not its `message` (`npm-registry-fetch/lib/errors.js:46`), and
+   every `403` body said `"error":"Forbidden"`. Now a `403`'s `error` carries
+   the refusal (§15 decision 22, for every gate), and both heavy phases assert
+   on npm's own output. pip reads a refused index as an empty one, and there
+   `why --last` is the way to the reason. `use/refused-downloads.md` showed
+   npm relaying a reason it never relayed; it now shows the real line.
 10. **`why <registry>/<name>` with no version, for an unlisted name,** answers
     one entry with an empty version that carries the refusal. The answer keeps
     its shape, so there is no spec change. The CLI prints it as the §4.5

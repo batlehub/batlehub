@@ -322,9 +322,9 @@ pub(crate) fn challenge_anonymous<B>(res: &mut actix_web::HttpResponse<B>) {
         .and_then(|e| e.as_error::<AppError>())
         .is_some_and(AppError::wants_credential)
     {
-        // shortcut: the JSON body was rendered for the 403 and still says
-        // "Forbidden"; rewriting it means an EitherBody middleware. Clients read
-        // the status and the challenge, never that field.
+        // shortcut: the JSON body was rendered for the 403 and still carries
+        // its reason in `error`; rewriting it means an EitherBody middleware.
+        // Clients read the status and the challenge, never that field.
         *res.status_mut() = StatusCode::UNAUTHORIZED;
         res.headers_mut().insert(
             header::WWW_AUTHENTICATE,

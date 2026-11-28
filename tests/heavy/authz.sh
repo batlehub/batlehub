@@ -4706,12 +4706,11 @@ phase_allowlist() {
     "npm installed a local package the allowlist does not list"; }
   heavy_wire_after "allowlist-unlisted" "$WIRE_403" \
     "npm failed, but no 403 crossed the tap — a failure for another reason proves nothing"
-  # npm prints `body.error` ("Forbidden"), not the reason (npm-registry-fetch
-  # errors.js), so the reason is read off the same response with curl.
+  # npm prints `body.error`, which carries the refusal on a 403 (RFC 0051
+  # §15 decision 22): the person running npm reads why.
   heavy_log "npm's line, as captured: $(grep -m1 'npm error 403' "$HEAVY_WORK/allow-unlisted.log")"
-  curl -s -H "Authorization: Bearer $T_READER" "${lbase}authz-unlisted" >"$HEAVY_WORK/allow-unlisted.body"
-  said "$HEAVY_WORK/allow-unlisted.body" "package allowlist: 'authz-unlisted' is not listed" \
-    "the 403 body does not carry the allowlist's reason"
+  said "$HEAVY_WORK/allow-unlisted.log" "package allowlist: 'authz-unlisted' is not listed" \
+    "npm did not print the allowlist's reason"
   [[ -d "$HEAVY_WORK/allow-consumer-no/node_modules/authz-unlisted" ]] \
     && heavy_fail "npm exited non-zero and installed the package anyway"
 
@@ -4730,9 +4729,8 @@ phase_allowlist() {
   [[ $rc -ne 0 ]] || heavy_fail "npm installed left-pad through an allowlist that does not list it"
   heavy_wire_after "allowlist-proxy" "$WIRE_403" \
     "no 403 for the unlisted name — on an upstream that does not resolve, only a refusal made before the dial can be a 403"
-  curl -s -H "Authorization: Bearer $T_READER" "${pbase}left-pad" >"$HEAVY_WORK/allow-proxy.body"
-  said "$HEAVY_WORK/allow-proxy.body" "package allowlist: 'left-pad' is not listed" \
-    "the 403 body does not carry the allowlist's reason"
+  said "$HEAVY_WORK/allow-proxy.log" "package allowlist: 'left-pad' is not listed" \
+    "npm did not print the allowlist's reason"
   [[ "$before" == "$after" ]] || heavy_fail \
     "the upstream histogram moved ($before -> $after) for a name the allowlist refuses"
   # The contrast: a listed name on the same registry is dialled, and fails as an

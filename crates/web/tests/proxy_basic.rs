@@ -272,8 +272,10 @@ async fn error_response_has_error_and_message_fields() {
         body["message"].is_string(),
         "response must have a 'message' field"
     );
-    // HTTP reason phrase for 403
-    assert_eq!(body["error"], "Forbidden");
+    // On a 403 `error` carries the refusal itself, because npm prints that
+    // field and not `message` (RFC 0051 §15 decision 22).
+    assert_eq!(body["error"], body["message"]);
+    assert_ne!(body["error"], "Forbidden");
 }
 
 // ── Audit log records access events ──────────────────────────────────────────

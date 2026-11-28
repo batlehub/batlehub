@@ -123,9 +123,12 @@ where
 
             match store.blocked_until(&ip).await {
                 Ok(Some(unblock_at)) => {
+                    // `error` carries the refusal on a 403, as every other one
+                    // does: npm prints that field (RFC 0051 §15 decision 22).
+                    const BLOCKED: &str = "your IP address has been temporarily blocked";
                     let body = serde_json::json!({
-                        "error": "Forbidden",
-                        "message": "your IP address has been temporarily blocked",
+                        "error": BLOCKED,
+                        "message": BLOCKED,
                     });
                     let http_res = HttpResponse::build(StatusCode::FORBIDDEN)
                         .insert_header(("X-Block-Expires", unblock_at.to_string()))

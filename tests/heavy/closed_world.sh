@@ -3638,10 +3638,9 @@ phase_allowlist() {
   heavy_wire_after allow-out "GET /proxy/$reg/lodash/4.17.20/tarball -> 403" \
     "allowlist: the out-of-range tarball was not refused with a 403"
   heavy_log "npm's line, as captured: $(grep -m1 'npm error 403' "$out")"
-  # npm prints `body.error`, not the reason: read it off the same response.
-  curl -s "$HEAVY_TAP_BASE/proxy/$reg/lodash/4.17.20/tarball" >"$HEAVY_WORK/allow-out.body"
-  said "$HEAVY_WORK/allow-out.body" "package allowlist: version '4.17.20' of 'lodash' is not allowed" \
-    "the 403 body does not carry the version refusal"
+  # npm prints `body.error`, which carries the refusal on a 403 (§15 decision 22).
+  said "$out" "package allowlist: version '4.17.20' of 'lodash' is not allowed" \
+    "npm did not print the version refusal"
   [[ "$before" == "$after" ]] || heavy_fail \
     "allowlist: the upstream was asked for an artifact ($before -> $after) the allowlist refused"
 
