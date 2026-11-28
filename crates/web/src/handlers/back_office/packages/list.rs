@@ -229,6 +229,7 @@ pub async fn block_package(
         name: body.name.clone(),
         version: body.version.clone(),
         artifact: body.artifact.clone(),
+        role: Default::default(),
     };
 
     admin_svc
@@ -302,6 +303,7 @@ pub async fn unblock_package(
         name: body.name.clone(),
         version: body.version.clone(),
         artifact: body.artifact.clone(),
+        role: Default::default(),
     };
 
     admin_svc
@@ -384,6 +386,7 @@ pub async fn delete_package(
         name: body.name.clone(),
         version: body.version.clone(),
         artifact: body.artifact.clone(),
+        role: Default::default(),
     };
 
     let deleted = admin_svc
@@ -470,6 +473,7 @@ pub async fn invalidate_package(
         name: body.name.clone(),
         version: body.version.clone(),
         artifact: body.artifact.clone(),
+        role: Default::default(),
     };
 
     let storage_key = format!("artifact:{}", pkg.cache_key());

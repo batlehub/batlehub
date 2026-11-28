@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: d0224ac7b2aa664f
+sourceHash: d84ef320d6485981
 ---
 
 # Référence de configuration
@@ -2337,6 +2337,35 @@ bypass_roles = ["admin"]
 > exacte**. Cela garde un `"1.2.3"` nu exact (plutôt que la sémantique de curseur
 > `^1.2.3` que semver déduirait) et permet de lister verbatim des chaînes de
 > version non semver (empreintes git, dates).
+
+**`[[registries.rules]]` — la liste d'autorisation de paquets :**
+
+Ne sert que les paquets listés, chacun éventuellement restreint à une plage de
+versions ([RFC 0051](/rfc/0051-package-allowlist),
+[le garde-fou](security-gates.md#package-allowlist)). Un nom non listé est
+refusé avant toute requête vers l'amont ; un nom listé hors de sa plage est
+refusé une fois sa version résolue.
+
+```toml
+[[registries.rules]]
+kind = "package_allowlist"
+packages = ["react", { name = "lodash", versions = [">=4.17.21, <5"] }, "@acme/*"]
+bypass_roles = ["admin"]
+```
+
+| Champ | Type | Défaut | Notes |
+|---|---|---|---|
+| `kind` | chaîne | — | Doit valoir `"package_allowlist"` |
+| `packages` | (chaîne \| table)[] | — | Obligatoire, non vide. Un nom, ou `{ name, versions }`. Un nom terminé par le séparateur de namespace et `*` couvre les noms sous ce préfixe. Une table n'accepte aucune autre clé. |
+| `packages[].versions` | chaîne[] | absent | Versions exactes ou plages semver, comme `version_gate.allow`. Absent, toute version est servie ; `[]` est refusé. Refusé sur les registres de forge. |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles qui peuvent contourner la liste. Le moins privilégié fixe le plancher. |
+
+> Une seule `package_allowlist` par liste de règles. Refusée sur `generic`,
+> `deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `nix`, `godist` et `mise-java`,
+> dont les requêtes ne nomment aucun paquet. Une couche de configuration
+> ultérieure dont les `rules` d'un registre ou d'un namespace feraient
+> disparaître une allowlist déclarée par une couche précédente est une erreur
+> de chargement.
 
 **`[[registries.rules]]` — le garde-fou de CVE :**
 

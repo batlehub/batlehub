@@ -82,14 +82,59 @@ pub fn policy_in(hot: &HotConfig, registry: &str, package: &str) -> Option<Arc<R
             // silently change which packages a namespace's gates reach. The
             // grant hierarchy carries it for exactly this reason, so it is read
             // from there rather than looked up again.
+            // RFC 0051 §15 decision 16: prefixes are canonicalised at build
+            // (`build_namespace_policies`), so the request name is brought to
+            // the same form here, or a spelling could select a wider list.
+            let package = grants.kind.canonical_package_name(package);
             if let Some((_, chain)) = chains.iter().rev().find(|(prefix, _)| {
-                crate::entities::namespace_matches(grants.kind, prefix, package)
+                crate::entities::namespace_matches(grants.kind, prefix, &package)
             }) {
                 return Some(Arc::clone(chain));
             }
         }
     }
     hot.policies.get(registry).cloned()
+}
+
+/// RFC 0051 §5.1 — the name half of a `package_allowlist`, judged from the
+/// coordinate alone, before anything is fetched.
+///
+/// Takes the policy the caller already holds, so a request judges its name and
+/// its version under one snapshot where it can (the two proxy funnels). Every
+/// rule but `package_allowlist` answers `None` from [`Rule::judge_name`], so
+/// with no allowlist configured this is one pass that finds nothing.
+///
+/// [`Rule::judge_name`]: crate::rules::Rule::judge_name
+pub fn judge_name_in(
+    policy: Option<&RegistryPolicy>,
+    package_id: &PackageId,
+    identity: &Identity,
+    action: Action,
+) -> Result<(), CoreError> {
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    if !crate::rules::package_allowlist::is_judged_action(action) {
+        return Ok(());
+    }
+    for rule in &policy.rules {
+        if let Some(RuleDecision::Deny { reason }) = rule.judge_name(package_id, identity) {
+            return Err(CoreError::access_denied(reason));
+        }
+    }
+    Ok(())
+}
+
+/// [`judge_name_in`] for a site that holds no policy yet: resolves the
+/// package's chain (namespace overrides included) under one read lock.
+pub async fn authorize_name(
+    hot: &HotConfigLock,
+    package_id: &PackageId,
+    identity: &Identity,
+    action: Action,
+) -> Result<(), CoreError> {
+    let policy = policy_for(hot, package_id.registry.as_str(), package_id.name.as_str()).await;
+    judge_name_in(policy.as_deref(), package_id, identity, action)
 }
 
 /// Resolve the caller's grants, and answer the denial when the action is not

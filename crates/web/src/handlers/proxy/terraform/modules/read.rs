@@ -172,7 +172,7 @@ pub async fn terraform_module_metadata(
     // upstream call, so a blocked version cannot be visible here while hidden
     // in `/versions` — one source, one answer.
     let req = batlehub_core::services::ProxyRequest {
-        package_id: batlehub_core::entities::PackageId::new(&registry, &pkg_name, "versions"),
+        package_id: batlehub_core::entities::PackageId::listing(&registry, &pkg_name, "versions"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),

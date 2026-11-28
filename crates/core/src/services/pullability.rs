@@ -246,11 +246,46 @@ impl PullabilityService {
             )
             .await
             .is_err()
-            || self
-                .local
-                .check_visibility(registry, name, identity)
-                .await
-                .is_err()
+        {
+            return Ok(Answer::NotFound);
+        }
+        let access = Cause {
+            kind: "access".into(),
+            state: CauseState::Pass,
+            reason_code: None,
+            until: None,
+            detail: format!("you may read {registry}"),
+            next: None,
+        };
+        // RFC 0051 §5.1 point 6 — the allowlist's name half, in the order every
+        // funnel judges it: after grants and before visibility, as the rule
+        // chain runs before visibility on the download, so `why` and the
+        // download never disagree. The refusal depends on the name alone, never
+        // on whether the package exists, so it discloses nothing about a hidden
+        // one. And it comes before anything below can reach the upstream: a
+        // typosquat the upstream does not know answers the same refusal as one
+        // it does, so `why` is no probe of the upstream.
+        if let Err(CoreError::AccessDenied(denial)) =
+            crate::services::authz::authorize_name(&self.local.hot, package, identity, action).await
+        {
+            let causes = vec![
+                access,
+                Cause {
+                    kind: "policy".into(),
+                    state: CauseState::Refuse,
+                    reason_code: Some(crate::rules::PACKAGE_NOT_ALLOWED.to_owned()),
+                    until: None,
+                    detail: denial.message,
+                    next: Some(ALLOWLIST_NAME_NEXT.into()),
+                },
+            ];
+            return Ok(Answer::Found(finish(causes, version)));
+        }
+        if self
+            .local
+            .check_visibility(registry, name, identity)
+            .await
+            .is_err()
             // A beta-channel version is invisible to a non-member, as the
             // download makes it: refused, it would confirm the version exists.
             || self
@@ -261,14 +296,7 @@ impl PullabilityService {
         {
             return Ok(Answer::NotFound);
         }
-        let mut causes = vec![Cause {
-            kind: "access".into(),
-            state: CauseState::Pass,
-            reason_code: None,
-            until: None,
-            detail: format!("you may read {registry}"),
-            next: None,
-        }];
+        let mut causes = vec![access];
 
         // ── 2. What the download would judge: the local row, else upstream ───
         let row: Option<PublishedPackage> = if scope.holds_local {
@@ -434,14 +462,42 @@ impl PullabilityService {
             || name.to_owned(),
             |k| k.canonical_package_name(name).into_owned(),
         );
+        if !scope.visible {
+            return Ok(None);
+        }
+        // RFC 0051 §5.1 point 6 — after grants, before visibility, as every
+        // funnel orders it. An unlisted name is refused before any
+        // version is listed or the upstream asked. One entry with no version
+        // carries the refusal, so the answer keeps its shape (§4.4: no spec
+        // change) and the CLI prints it as a refusal of the package.
+        if let Err(CoreError::AccessDenied(denial)) = crate::services::authz::authorize_name(
+            &self.local.hot,
+            &PackageId::listing(registry, name, "latest"),
+            identity,
+            Action::ReleasesList,
+        )
+        .await
+        {
+            let causes = vec![Cause {
+                kind: "policy".into(),
+                state: CauseState::Refuse,
+                reason_code: Some(crate::rules::PACKAGE_NOT_ALLOWED.to_owned()),
+                until: None,
+                detail: denial.message,
+                next: Some(ALLOWLIST_NAME_NEXT.into()),
+            }];
+            return Ok(Some(Resolution {
+                resolved_version: None,
+                versions: vec![finish(causes, "")],
+            }));
+        }
         // Nothing reaches the upstream for a caller who may not see the
         // package: an anonymous `why` on a closed registry asked it anyway.
-        if !scope.visible
-            || self
-                .local
-                .check_visibility(registry, name, identity)
-                .await
-                .is_err()
+        if self
+            .local
+            .check_visibility(registry, name, identity)
+            .await
+            .is_err()
         {
             return Ok(None);
         }
@@ -543,6 +599,10 @@ fn not_yet_resolved(registry: &str, name: &str, version: &str) -> Cause {
     }
 }
 
+/// The next step a `PACKAGE_NOT_ALLOWED` refusal names (RFC 0051 §4.5).
+const ALLOWLIST_NAME_NEXT: &str =
+    "ask an administrator to add it to the registry's package allowlist";
+
 fn finish(mut causes: Vec<Cause>, version: &str) -> Pullability {
     // The server's order (§4.8): access, block, lifecycle, policy, verdict,
     // upstream. Stable, so causes of one kind keep chain order.
@@ -617,6 +677,34 @@ fn rule_cause(
         detail,
         next: Some(next.into()),
     };
+    // RFC 0051 — two rules, one code each (§15 decision 11).
+    if rule == crate::rules::PACKAGE_ALLOWLIST_GATE
+        || rule == crate::rules::PACKAGE_ALLOWLIST_VERSION_GATE
+    {
+        let name_half = rule == crate::rules::PACKAGE_ALLOWLIST_GATE;
+        return Some(Cause {
+            kind: "policy".into(),
+            state: CauseState::Refuse,
+            reason_code: Some(
+                if name_half {
+                    crate::rules::PACKAGE_NOT_ALLOWED
+                } else {
+                    crate::rules::VERSION_NOT_ALLOWED
+                }
+                .to_owned(),
+            ),
+            until: None,
+            detail: reason.clone(),
+            next: Some(
+                if name_half {
+                    ALLOWLIST_NAME_NEXT
+                } else {
+                    "pin a version the package allowlist accepts"
+                }
+                .into(),
+            ),
+        });
+    }
     Some(match rule {
         // The administrator's note is theirs (T2): the code says what kind of
         // refusal it is, and an admin reading `why` sees the note too.

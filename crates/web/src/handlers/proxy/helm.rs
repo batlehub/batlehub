@@ -90,7 +90,7 @@ async fn index_value(
     local_svc: &LocalRegistryService,
     mode: RegistryMode,
 ) -> Result<(Value, Option<u32>), AppError> {
-    let pkg = PackageId::new(registry, INDEX_ADDRESS, "latest");
+    let pkg = PackageId::registry_document(registry, INDEX_ADDRESS, "latest");
     if mode == RegistryMode::Local {
         svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
             .await
@@ -669,6 +669,8 @@ pub async fn helm_api_chart(
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
     validate_chart_name(&name).map_err(AppError::from)?;
+    // RFC 0051 — one chart out of the whole index: the allowlist judges it.
+    authorize_chart_name(&svc, &registry, &name, &identity).await?;
     let mut entries = api_entries(&registry, &identity, &svc, &local_svc, &modes).await?;
     let versions = entries
         .remove(&name)
@@ -710,6 +712,8 @@ pub async fn helm_api_version(
     let (registry, name, version) = path.into_inner();
     validate_chart_name(&name).map_err(AppError::from)?;
     validate_version(&version).map_err(AppError::from)?;
+    // RFC 0051 — one chart out of the whole index: the allowlist judges it.
+    authorize_chart_name(&svc, &registry, &name, &identity).await?;
     let entries = api_entries(&registry, &identity, &svc, &local_svc, &modes).await?;
     let entry = entries
         .get(&name)
@@ -721,4 +725,23 @@ pub async fn helm_api_version(
         .cloned()
         .ok_or_else(|| AppError::not_found(format!("{name} {version} is not published here")))?;
     Ok(HttpResponse::Ok().json(entry))
+}
+
+/// RFC 0051 §5.1 — the per-chart API reads cut one chart out of the whole
+/// index, so the `package_allowlist` name check is applied here: no rule chain
+/// runs on them.
+async fn authorize_chart_name(
+    svc: &ProxyService,
+    registry: &str,
+    name: &str,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    batlehub_core::services::authz::authorize_name(
+        &svc.hot,
+        &PackageId::listing(registry, name, "latest"),
+        &identity.0,
+        Action::ReleasesList,
+    )
+    .await
+    .map_err(AppError::from)
 }

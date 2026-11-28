@@ -292,7 +292,7 @@ async fn mirror_versions(
 ) -> Result<Vec<String>, AppError> {
     let name = format!("providers/{namespace}/{ptype}");
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(registry, &name, "versions"),
+        package_id: PackageId::listing(registry, &name, "versions"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),

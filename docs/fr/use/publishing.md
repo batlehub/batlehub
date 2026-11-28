@@ -1,6 +1,6 @@
 ---
 sourcePath: use/publishing.md
-sourceHash: 66fdabd55153a8cf
+sourceHash: 9fa38b8b75987cf5
 ---
 
 # Publier des paquets sur BatleHub
@@ -157,6 +157,14 @@ BatleHub génère `maven-metadata.xml` dynamiquement depuis la base. Un envoi de
 `.pom` réussi (HTTP 201) signifie que la version a été enregistrée. Si le GET
 renvoie 404, c'est peut-être l'envoi du `.pom` qui a échoué — vérifiez le statut
 de réponse de chaque fichier envoyé en mode verbeux (`mvn deploy -X`).
+
+### Publié, mais chaque lecture répond `403` — « package allowlist »
+
+Le registre a une [`package_allowlist`](/fr/guide/security-gates#package-allowlist)
+et votre paquet n'y figure pas. La publication relève de vos droits : l'envoi
+réussit. La lecture relève de la liste : chaque lecture est refusée. Demandez à
+votre administrateur de lister le paquet, en général par son scope
+(`"@acme/*"`).
 
 ### `terraform init` échoue — « registry does not have a provider »
 

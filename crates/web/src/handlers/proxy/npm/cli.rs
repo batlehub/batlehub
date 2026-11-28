@@ -143,7 +143,7 @@ pub async fn npm_dist_tags(
     // `npm dist-tag ls` answered `404` for a package `npm view` had described a
     // second earlier (RFC 0009 §12.16).
     let public_base = registry_public_base(&req, &registry);
-    let pkg = PackageId::new(&registry, &package, "latest");
+    let pkg = PackageId::listing(&registry, &package, "latest");
     let (fetch_registry, fetch_package, base) =
         (registry.clone(), package.clone(), public_base.clone());
     let doc = local_or_proxy_document_value(

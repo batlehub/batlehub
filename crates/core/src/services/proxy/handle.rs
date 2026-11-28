@@ -374,8 +374,15 @@ impl ProxyService {
             req.action,
         )
         .await?;
+        // RFC 0051 §5.1 — the allowlist's name half, before the fetch.
+        crate::services::authz::judge_name_in(
+            prelude.policy.as_deref(),
+            &req.package_id,
+            &req.identity,
+            req.action,
+        )?;
 
-        let metadata = if capture_readme {
+        let mut metadata = if capture_readme {
             self.resolve_metadata_cached(
                 &prelude.client,
                 &prelude.policy,
@@ -396,6 +403,7 @@ impl ProxyService {
             )
             .await?
         };
+        metadata.id.role = req.package_id.role;
 
         let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
         let rules = prelude
@@ -447,6 +455,19 @@ impl ProxyService {
             // in the mirror. Only the offline client's refusal reaches this
             // arm; every other error passes through untouched.
             Err(e) => {
+                // RFC 0051 §4.2 — on an air-gapped instance the offline client
+                // refuses the resolve before the chain runs, so an out-of-range
+                // version of a listed package would otherwise answer `503` and
+                // be filed as "the next bundle needs this". Judged here, where
+                // the identity (and so the bypass) is still in hand.
+                if matches!(e, CoreError::ContentUnavailable { .. }) {
+                    if let Some(reason) = self
+                        .allowlist_version_refusal(&coordinate, &identity, action)
+                        .await
+                    {
+                        return Err(CoreError::access_denied(reason));
+                    }
+                }
                 if let Some(answer) = self
                     .synthesised_artifact_document(&coordinate, &identity, action, &e)
                     .await
@@ -639,6 +660,39 @@ impl ProxyService {
         self.repo.covering_block(id).await.ok().flatten()
     }
 
+    /// The `package_allowlist_version` refusal for a coordinate whose metadata
+    /// could not be resolved (RFC 0051 §4.2): the requested version is judged
+    /// as written, which is exact for every coordinate that names one.
+    async fn allowlist_version_refusal(
+        &self,
+        id: &crate::entities::PackageId,
+        identity: &crate::entities::Identity,
+        action: crate::entities::Action,
+    ) -> Option<String> {
+        let policy = {
+            let hot = self.hot.read().await;
+            crate::services::authz::policy_in(&hot, &id.registry, &id.name)
+        }?;
+        let metadata = crate::services::authz::synthetic_metadata(id);
+        let ctx = RuleContext {
+            identity,
+            package: &metadata,
+            action,
+            cache_entry: None,
+            requested_version: Some(&id.version),
+        };
+        for rule in policy
+            .rules
+            .iter()
+            .filter(|r| r.name() == crate::rules::PACKAGE_ALLOWLIST_VERSION_GATE)
+        {
+            if let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
     /// Resolve a forge coordinate's ref and rewrite the request onto the
     /// commit (RFC 0019 §4.2 *Cache key*). `None` for anything that is not a
     /// forge read of a ref — every package registry, a release listing, the
@@ -702,6 +756,16 @@ impl ProxyService {
         )
         .is_err()
             || crate::services::authz::authorize_grants_public(
+                &self.hot,
+                &req.package_id,
+                &req.identity,
+                req.action,
+            )
+            .await
+            .is_err()
+            // RFC 0051 §5.1 point 4 — an unlisted repository costs no forge
+            // call either; `handle_resolved` answers the refusal.
+            || crate::services::authz::authorize_name(
                 &self.hot,
                 &req.package_id,
                 &req.identity,
@@ -807,13 +871,51 @@ impl ProxyService {
                 credential,
             });
         }
+        // ── 1b. The package allowlist's name half (RFC 0051 §5.1) ─────────────
+        //
+        // Same reasoning as the grants: it reads the coordinate and nothing
+        // else, so it runs before the first line that can dial upstream, and
+        // against the policy this request already snapshotted. The rule is in
+        // the chain below as well, so this is the early exit, not the control.
+        if let Err(CoreError::AccessDenied(denial)) = crate::services::authz::judge_name_in(
+            policy.as_deref(),
+            &req.package_id,
+            &req.identity,
+            req.action,
+        ) {
+            let reason = denial.to_string();
+            super::warn_if_audit_failed(
+                self.repo
+                    .record_access(
+                        AccessEvent::denied_download(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone())
+                        .with_reason_code(Some(crate::rules::PACKAGE_NOT_ALLOWED.to_owned())),
+                    )
+                    .await,
+                "denied download",
+            );
+            super::finish_request(&registry_label, "denied", start);
+            return Ok(ProxyResponse::Denied {
+                reason,
+                verdict: None,
+                credential: false,
+            });
+        }
         // ── 2. Resolve metadata (cache-first) ─────────────────────────────────
         //
         // After the grants, which is the whole point of the ordering above:
         // this is the first line in the funnel that can dial upstream.
-        let metadata = self
+        let mut metadata = self
             .resolve_metadata_cached(&client, &policy, &req, &cache_key, ttl, &registry_label)
             .await?;
+        // The handler said what this coordinate addresses (RFC 0051 §15
+        // decision 8); the adapter built `metadata.id` without knowing.
+        metadata.id.role = req.package_id.role;
         // RFC 0019 §4.2 *Metadata contract*: what the ref resolved to rides in
         // `extra.forge`, and a coordinate the client could not date takes the
         // object's date from the resolution. Per request rather than cached:
@@ -1172,6 +1274,53 @@ impl ProxyService {
         Err(e)
     }
 
+    /// RFC 0051 §5.1 point 3 — the allowlist's name half for a listing of
+    /// **one** package. Not inside `authorize_listing`, which also serves the
+    /// whole-registry documents under placeholder names. On this path no rule
+    /// chain runs, so this check is the control, not an early exit.
+    fn listing_name_refusal(
+        &self,
+        policy: Option<&crate::services::hot_config::RegistryPolicy>,
+        req: &ProxyRequest,
+    ) -> Option<crate::error::Denial> {
+        match crate::services::authz::judge_name_in(
+            policy,
+            &req.package_id,
+            &req.identity,
+            crate::entities::Action::ReleasesList,
+        ) {
+            Err(CoreError::AccessDenied(d)) => Some(d),
+            _ => None,
+        }
+    }
+
+    async fn authorize_listing_name_audited(
+        &self,
+        policy: Option<&crate::services::hot_config::RegistryPolicy>,
+        req: &ProxyRequest,
+        what: &'static str,
+    ) -> Result<(), CoreError> {
+        let Some(denial) = self.listing_name_refusal(policy, req) else {
+            return Ok(());
+        };
+        super::warn_if_audit_failed(
+            self.repo
+                .record_access(
+                    AccessEvent::denied_metadata(
+                        req.package_id.clone(),
+                        req.identity.user_id.clone(),
+                        req.identity.role.clone(),
+                        denial.message.clone(),
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone())
+                    .with_reason_code(Some(crate::rules::PACKAGE_NOT_ALLOWED.to_owned())),
+                )
+                .await,
+            what,
+        );
+        Err(CoreError::AccessDenied(denial))
+    }
+
     /// Serve a proxied registry's version-listing document — for npm, the
     /// packument — with blocked versions removed and artifact URLs pointed back
     /// at this proxy.
@@ -1273,6 +1422,12 @@ impl ProxyService {
         let prelude = self.request_prelude(req).await?;
         self.authorize_listing_audited(req, "denied version document")
             .await?;
+        self.authorize_listing_name_audited(
+            prelude.policy.as_deref(),
+            req,
+            "denied version document",
+        )
+        .await?;
 
         let name = req.package_id.name.as_str();
         let mut doc = match self

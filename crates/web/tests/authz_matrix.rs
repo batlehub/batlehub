@@ -1605,6 +1605,225 @@ async fn every_local_read_route_enforces_the_registry_rule_chain() {
     assert!(report.is_empty(), "{report}");
 }
 
+// ═══ The package allowlist (RFC 0051) ════════════════════════════════════════
+//
+// The rows above prove grants and visibility on every read route. This proves
+// the third read gate on the same routes: with a `package_allowlist` that does
+// not list the row's package, a caller the grants **do** allow must not be
+// served it — on a per-package route. A whole-registry document is not judged
+// by the allowlist (RFC 0051 §3), so it must still be served. Each row has a
+// control: the same allowlist naming the package serves it.
+//
+// On a listing the allowlist is the *only* control — no rule chain runs there
+// (RFC 0051 §5.1, "What enforces what") — so this sweep, over the same route
+// table the inventory pins, is what makes a listing route that forgot the
+// check fail the build rather than a reviewer.
+
+/// Put a `package_allowlist` listing `listed` at the head of `reg`'s chain, as
+/// `server/src/builders.rs` places it, ahead of the fixture's block list.
+async fn inject_allowlist(parts: &LocalRegistryAppParts, kind: &str, listed: &str) {
+    use batlehub_core::entities::RegistryKind;
+    use batlehub_core::rules::{
+        Allowlist, AllowlistEntrySpec, PackageAllowlistRule, PackageAllowlistVersionRule,
+    };
+    let kind: RegistryKind = kind.parse().expect("a known kind");
+    let list = Arc::new(Allowlist::new(
+        kind,
+        &[AllowlistEntrySpec {
+            name: listed.to_owned(),
+            versions: None,
+        }],
+        vec![],
+    ));
+    let mut hot = parts.proxy_svc.hot.write().await;
+    let old = hot.policies.get("reg").cloned().expect("a policy");
+    let rules: Vec<Box<dyn batlehub_core::rules::Rule>> = vec![
+        Box::new(PackageAllowlistRule::new(Arc::clone(&list))),
+        Box::new(PackageAllowlistVersionRule::new(list)),
+        Box::new(batlehub_core::rules::BlockListRule::new(Arc::clone(
+            &parts.proxy_svc.repo,
+        ))),
+    ];
+    hot.policies.insert(
+        "reg".to_owned(),
+        Arc::new(batlehub_core::services::RegistryPolicy {
+            metadata_ttl: old.metadata_ttl,
+            firewall_only: old.firewall_only,
+            serve_stale_metadata: old.serve_stale_metadata,
+            artifact_ttl: old.artifact_ttl,
+            rules,
+        }),
+    );
+}
+
+/// `app_for`, with a `package_allowlist` listing `listed`.
+async fn allowlist_app_for(row: &Row, listed: &str) -> impl TestService {
+    let parts = local_only_app_parts_with_policy(
+        "reg",
+        row.kind,
+        RegistryMode::Local,
+        true,
+        rbac_policy_deny_anonymous,
+    )
+    .await;
+    inject_allowlist(&parts, row.kind, listed).await;
+    seed(&parts, row).await;
+    build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await
+}
+
+/// RFC 0051 §15 decision 9: the allowlist's refusal depends on the name alone,
+/// never on whether the package exists. So a hidden, unlisted local package
+/// answers exactly what a name that does not exist answers — no existence
+/// oracle — and a caller who may see it is told why.
+#[actix_web::test]
+async fn a_hidden_unlisted_package_answers_as_a_name_that_does_not_exist() {
+    for uri in ["/proxy/reg/pkg", "/proxy/reg/pkg/9.8.7/tarball"] {
+        let row = Row::new("npm", uri);
+        let ns_store = batlehub_adapters::in_memory::InMemoryTeamNamespaceStore::new();
+        let mut parts = local_only_app_parts_with_policy(
+            "reg",
+            "npm",
+            RegistryMode::Local,
+            true,
+            rbac_policy_anon_source,
+        )
+        .await;
+        let cur = parts.local_svc.clone();
+        parts.local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+            backend: cur.backend.clone(),
+            storage: cur.storage.clone(),
+            hot: cur.hot.clone(),
+            quota: cur.quota.clone(),
+            ownership: cur.ownership.clone(),
+            team_namespace: Some(
+                ns_store.clone() as Arc<dyn batlehub_core::ports::TeamNamespacePort>
+            ),
+            sbom: cur.sbom.clone(),
+            explore_cache: cur.explore_cache.clone(),
+            package_repo: cur.package_repo.clone(),
+            readme: cur.readme.clone(),
+        });
+        inject_allowlist(&parts, "npm", "zz-not-this-package").await;
+        seed(&parts, &row).await;
+        ns_store
+            .set_visibility(
+                "reg",
+                row.name,
+                batlehub_core::entities::Visibility::Internal,
+            )
+            .await
+            .expect("set_visibility");
+        let app =
+            build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+        let (shown, status) = disclosed(&app, &row).await;
+        assert!(!shown, "{uri}");
+        let ghost = Row::new(
+            "npm",
+            if uri.ends_with("tarball") {
+                "/proxy/reg/no-such-pkg/9.8.7/tarball"
+            } else {
+                "/proxy/reg/no-such-pkg"
+            },
+        );
+        let (_, ghost_status) = disclosed(&app, &ghost).await;
+        assert_eq!(
+            status, ghost_status,
+            "{uri}: a hidden package must answer as a name that does not exist"
+        );
+        // And the permitted caller is refused by the allowlist, with its reason.
+        let (shown, status) = disclosed_as(&app, &row, Some(USER_TOKEN)).await;
+        assert!(!shown, "{uri}");
+        assert_eq!(status, 403, "{uri}: a caller who may see it is told why");
+    }
+}
+
+/// Whether the package allowlist leaves this route alone: a whole-registry
+/// document (RFC 0051 §3). Starts from the visibility axis's own marker and
+/// corrects it where the two questions differ, each with its reason.
+fn allowlist_leaves_alone(row: &Row) -> bool {
+    // Marked whole-registry for visibility, but the coordinate names one
+    // package, so the allowlist judges it: nodedist's index is the `node`
+    // package's release list, rustup's `manifests.txt` is `rust`'s.
+    const JUDGED_ANYWAY: &[&str] = &[
+        "/proxy/reg/nodedist/index.tab",
+        "/proxy/reg/nodedist/index.json",
+        "/proxy/reg/rustup/manifests.txt",
+        // The fixture's query is `filterType: 7` (ExtensionName): how VS Code
+        // fetches one extension, not a search.
+        "/proxy/reg/vscode/gallery/extensionquery",
+    ];
+    // Not marked whole-registry (visibility filters them per chart), yet the
+    // whole index, which the allowlist does not filter.
+    const WHOLE_ANYWAY: &[&str] = &["/proxy/reg/helm/index.yaml", "/proxy/reg/helm/api/charts"];
+    if JUDGED_ANYWAY.contains(&row.uri) {
+        return false;
+    }
+    WHOLE_ANYWAY.contains(&row.uri)
+        || matches!(row.expect_vis, Expect::NotChecked(m) if m == "whole-registry document; per-package visibility is not its gate")
+}
+
+#[actix_web::test]
+async fn every_read_route_enforces_the_package_allowlist() {
+    use batlehub_core::entities::RegistryKind;
+    let mut failures: Vec<String> = Vec::new();
+    let mut broken_controls: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for row in matrix() {
+        let kind: RegistryKind = row.kind.parse().expect("a known kind");
+        // Refused at load on these kinds (RFC 0051 §4.3): nothing to sweep.
+        if !kind.has_package_names() || !row.control {
+            continue;
+        }
+        // Control: the allowlist names the package, so the permitted caller
+        // is served exactly as the chain axis's control is.
+        let listed = allowlist_app_for(&row, row.name).await;
+        let (shown, status) = disclosed_as(&listed, &row, Some(USER_TOKEN)).await;
+        if !shown {
+            broken_controls.push(format!(
+                "{} {} — listed, yet a permitted caller did NOT see the package (status {status})",
+                row.kind, row.uri
+            ));
+            continue;
+        }
+        let unlisted = allowlist_app_for(&row, "zz-not-this-package").await;
+        let (shown, status) = disclosed_as(&unlisted, &row, Some(USER_TOKEN)).await;
+        checked += 1;
+        if allowlist_leaves_alone(&row) {
+            // The document itself keeps working. A local one built from
+            // per-package reads may leave the unlisted name out (RFC 0051 §17):
+            // the closed side, and not a refusal of the document.
+            if status == 403 {
+                failures.push(format!(
+                    "{} {} — a whole-registry document was refused under an allowlist (status {status}); RFC 0051 §3 serves it",
+                    row.kind, row.uri
+                ));
+            }
+        } else if shown {
+            failures.push(format!(
+                "{} {} — served an unlisted package to a permitted caller (status {status})",
+                row.kind, row.uri
+            ));
+        }
+    }
+    assert!(checked > 40, "the sweep checked only {checked} rows");
+    let mut report = String::new();
+    if !broken_controls.is_empty() {
+        report.push_str(&format!(
+            "\n{} control(s) failed:\n  {}\n",
+            broken_controls.len(),
+            broken_controls.join("\n  ")
+        ));
+    }
+    if !failures.is_empty() {
+        report.push_str(&format!(
+            "\n{} route(s) the package allowlist does not govern:\n  {}\n",
+            failures.len(),
+            failures.join("\n  ")
+        ));
+    }
+    assert!(report.is_empty(), "{report}");
+}
+
 // ═══ The write surface ═══════════════════════════════════════════════════════
 //
 // Everything above this line is about reads, and until now so was the whole

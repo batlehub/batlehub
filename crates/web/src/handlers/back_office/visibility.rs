@@ -140,6 +140,7 @@ pub async fn set_package_visibility(
         name,
         version: String::new(),
         artifact: None,
+        role: Default::default(),
     };
     admin_svc
         .record_package_action(&pkg, AccessAction::SetVisibility, &identity.0, &identity.1)

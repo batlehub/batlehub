@@ -4,6 +4,7 @@ pub mod deny_latest;
 pub mod flags;
 pub mod forge_ref;
 pub mod license_gate;
+pub mod package_allowlist;
 pub mod raw_policy;
 pub mod rbac;
 pub mod release_age;
@@ -11,6 +12,7 @@ pub mod signed_release;
 pub mod trusted_publisher;
 pub mod verdict_gate;
 pub mod version_gate;
+pub mod version_match;
 
 pub use block_list::BlockListRule;
 pub use cve_gate::CveGateRule;
@@ -18,6 +20,11 @@ pub use deny_latest::DenyLatestRule;
 pub use flags::{FlagsRule, FLAGS_GATE};
 pub use forge_ref::{ForgeRefRule, FORGE_REF_GATE};
 pub use license_gate::LicenseGateRule;
+pub use package_allowlist::{
+    Allowlist, AllowlistEntrySpec, PackageAllowlistRule, PackageAllowlistVersionRule,
+    PACKAGE_ALLOWLIST_GATE, PACKAGE_ALLOWLIST_VERSION_GATE, PACKAGE_NOT_ALLOWED,
+    VERSION_NOT_ALLOWED,
+};
 pub use raw_policy::{RawPolicyRule, RAW_GATE};
 pub use rbac::RbacRule;
 pub use release_age::ReleaseAgeGateRule;
@@ -28,7 +35,7 @@ pub use version_gate::VersionGateRule;
 
 use async_trait::async_trait;
 
-use crate::entities::{Action, Identity, PackageMetadata};
+use crate::entities::{Action, Identity, PackageId, PackageMetadata, Role};
 use crate::ports::CacheEntry;
 
 pub struct RuleContext<'a> {
@@ -103,6 +110,35 @@ pub trait Rule: Send + Sync {
     /// later and louder (RFC 0048 §5.2).
     fn listing_age_gate(&self, _identity: &crate::entities::Identity) -> Option<ListingAgeGate> {
         None
+    }
+
+    /// Judge from the package name alone, before anything is fetched
+    /// (RFC 0051 §5.1). `None` means this rule needs the resolved metadata,
+    /// which is every rule but `package_allowlist`.
+    fn judge_name(&self, _id: &PackageId, _identity: &Identity) -> Option<RuleDecision> {
+        None
+    }
+}
+
+/// Turn a gate violation into a verdict, admitting a caller at or above the
+/// least-privileged configured bypass role.
+///
+/// The comparison happens here rather than being handed back for the caller
+/// to resolve: `RuleDecision` has no third variant, and its documentation
+/// says what the old `RequireRole` cost. Shared by every gate that takes
+/// `bypass_roles`, so the floor and the hint read the same everywhere.
+pub(crate) fn gate(bypass_roles: &[Role], identity: &Identity, reason: String) -> RuleDecision {
+    let Some(minimum) = bypass_roles.iter().min() else {
+        return RuleDecision::Deny { reason };
+    };
+    if identity.has_role_at_least(minimum) {
+        return RuleDecision::Allow;
+    }
+    RuleDecision::Deny {
+        reason: format!(
+            "{reason} (bypass requires role '{minimum}' or higher, you have '{}')",
+            identity.role
+        ),
     }
 }
 

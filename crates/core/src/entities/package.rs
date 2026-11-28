@@ -9,13 +9,60 @@ use uuid::Uuid;
 /// Examples:
 /// - GitHub release asset: `{ registry: "github", name: "rust-lang/rust", version: "v1.80.0", artifact: Some("12345678") }`
 /// - Cargo crate:          `{ registry: "cargo",  name: "tokio",           version: "1.38.0",  artifact: None }`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PackageId {
     pub registry: String,
     pub name: String,
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// What this coordinate addresses, as the handler that built it knows
+    /// (RFC 0051 §15 decision 8). A request annotation, not part of the
+    /// identity: never serialised, and left out of equality and hashing.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub role: CoordinateRole,
+}
+
+/// What a coordinate addresses, set by the handler that builds it.
+///
+/// Placeholder names and versions (`__simple__`, `_index`, `__index__`,
+/// `latest`) are legal package names or versions in some ecosystem, so no
+/// rule may decide what a coordinate is from its strings. The handler knows,
+/// and says so here. The default is [`CoordinateRole::Package`], so a
+/// handler that forgets is judged as a package: a whole-registry document it
+/// serves is refused by a `package_allowlist`, which fails closed and turns
+/// that document's test red rather than letting a real package through.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CoordinateRole {
+    /// One version (or a file of one version) of one package.
+    #[default]
+    Package,
+    /// A listing of one package's versions: its name is real, its version is
+    /// a placeholder.
+    PackageListing,
+    /// A document about the whole registry, named by a placeholder.
+    RegistryDocument,
+}
+
+impl PartialEq for PackageId {
+    fn eq(&self, other: &Self) -> bool {
+        self.registry == other.registry
+            && self.name == other.name
+            && self.version == other.version
+            && self.artifact == other.artifact
+    }
+}
+
+impl Eq for PackageId {}
+
+impl std::hash::Hash for PackageId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.registry.hash(state);
+        self.name.hash(state);
+        self.version.hash(state);
+        self.artifact.hash(state);
+    }
 }
 
 impl PackageId {
@@ -29,6 +76,34 @@ impl PackageId {
             name: name.into(),
             version: version.into(),
             artifact: None,
+            role: CoordinateRole::Package,
+        }
+    }
+
+    /// A listing of one package's versions, under a placeholder version
+    /// (`__index__`, `info`, `latest`): a `package_allowlist` judges its name
+    /// and skips its range.
+    pub fn listing(
+        registry: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: CoordinateRole::PackageListing,
+            ..Self::new(registry, name, version)
+        }
+    }
+
+    /// A document about the whole registry, under placeholder coordinates: a
+    /// `package_allowlist` does not judge it.
+    pub fn registry_document(
+        registry: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: CoordinateRole::RegistryDocument,
+            ..Self::new(registry, name, version)
         }
     }
 

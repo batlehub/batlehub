@@ -193,15 +193,69 @@ pub fn load_layered_text(paths: &[impl AsRef<Path>]) -> Result<(AppConfig, Vec<S
                 merged_layer_value(raw, &process_env)
                     .with_context(|| format!("parsing config file: {}", p.as_ref().display()))
             });
-            // `paths` has at least two entries here, so the first is present.
-            let mut merged = values.next().expect("at least two layers")?;
-            for value in values {
-                merge_value(&mut merged, value?);
-            }
+            let merged = merge_checked(&mut values)?;
             config_from_value(merged, &process_env)?
         }
     };
     Ok((config, layers))
+}
+
+/// Merge two or more layers in order, refusing a merge that drops a
+/// `package_allowlist` an earlier layer declared (RFC 0051 §15 decision 10).
+///
+/// A `[[registries.rules]]` entry has no `name` or `type`, so an overlay that
+/// writes any `rules` for a registry or namespace replaces the whole list
+/// (`merge_value`), the allowlist included. A warning could be dismissed, and
+/// would then be all that stood between an overlay and an open registry, so
+/// this is an error. To remove the rule on purpose, remove it from the layer
+/// that declares it. Every merge of more than one layer comes through here:
+/// startup, apply, preview and `explain-config` alike.
+fn merge_checked(values: &mut dyn Iterator<Item = Result<toml::Value>>) -> Result<toml::Value> {
+    let mut merged = values.next().context("no config layer given")??;
+    let mut declared = allowlist_scopes(&merged);
+    for (index, value) in values.enumerate() {
+        merge_value(&mut merged, value?);
+        let now = allowlist_scopes(&merged);
+        if let Some(lost) = declared.iter().find(|scope| !now.contains(*scope)) {
+            bail!(
+                "config layer {}: its rules for {lost} replace a package_allowlist an earlier                  layer declared, which would open the registry; repeat the package_allowlist                  in this layer, or remove it from the layer that declares it",
+                index + 2
+            );
+        }
+        declared.extend(now);
+    }
+    Ok(merged)
+}
+
+/// Every registry and namespace that carries a `package_allowlist`, as
+/// `registry 'npm'` / `registry 'npm' namespace '@acme'`.
+fn allowlist_scopes(doc: &toml::Value) -> std::collections::BTreeSet<String> {
+    fn has_allowlist(table: &toml::Value) -> bool {
+        table
+            .get("rules")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|rules| {
+                rules.iter().any(|r| {
+                    r.get("kind").and_then(toml::Value::as_str) == Some("package_allowlist")
+                })
+            })
+    }
+    let mut out = std::collections::BTreeSet::new();
+    let registries = doc.get("registries").and_then(toml::Value::as_array);
+    for reg in registries.into_iter().flatten() {
+        let name = reg.get("name").and_then(toml::Value::as_str).unwrap_or("?");
+        if has_allowlist(reg) {
+            out.insert(format!("registry '{name}'"));
+        }
+        let namespaces = reg.get("namespaces").and_then(toml::Value::as_array);
+        for ns in namespaces.into_iter().flatten() {
+            if has_allowlist(ns) {
+                let prefix = ns.get("match").and_then(toml::Value::as_str).unwrap_or("?");
+                out.insert(format!("registry '{name}' namespace '{prefix}'"));
+            }
+        }
+    }
+    out
 }
 
 /// One layer as a TOML document, with its env placeholders already expanded.
@@ -259,10 +313,7 @@ fn load_layers_with(layers: &[impl AsRef<str>], env: Env<'_>) -> Result<AppConfi
         [only] => config_from_str(only.as_ref(), env),
         _ => {
             let mut values = layers.iter().map(|l| merged_layer_value(l.as_ref(), env));
-            let mut merged = values.next().expect("at least two layers")?;
-            for value in values {
-                merge_value(&mut merged, value?);
-            }
+            let merged = merge_checked(&mut values)?;
             config_from_value(merged, env)
         }
     }
@@ -752,6 +803,83 @@ mod tests {
         type = "cargo"
         "#
         )
+    }
+
+    fn allowlisted() -> String {
+        format!(
+            "{}\n{}",
+            minimal(),
+            r#"
+        [[registries]]
+        name = "npm"
+        type = "npm"
+
+        [[registries.rules]]
+        kind = "package_allowlist"
+        packages = ["react"]
+        "#
+        )
+    }
+
+    /// RFC 0051 §15 decision 10: an overlay whose `rules` replace the list
+    /// and drop the allowlist is refused, not merged into an open registry.
+    #[test]
+    fn layer_dropping_allowlist_is_refused() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let err = crate::load_layered_from_str(&[
+            allowlisted(),
+            r#"
+            [[registries]]
+            name = "npm"
+            [[registries.rules]]
+            kind = "deny_latest"
+            "#
+            .to_owned(),
+        ])
+        .expect_err("a layer that drops the allowlist is refused")
+        .to_string();
+        assert!(
+            err.contains("config layer 2") && err.contains("registry 'npm'"),
+            "{err}"
+        );
+        let err = crate::validate_layers(
+            &[
+                allowlisted(),
+                "[[registries]]\nname = \"npm\"\n[[registries.rules]]\nkind = \"deny_latest\"\n"
+                    .to_owned(),
+            ],
+            &|_| None,
+        )
+        .expect_err("the preview and explain-config path refuses it too")
+        .to_string();
+        assert!(err.contains("package_allowlist"), "{err}");
+    }
+
+    /// The same overlay is accepted when it repeats the allowlist, and an
+    /// overlay that leaves `rules` alone keeps it.
+    #[test]
+    fn layer_keeping_allowlist_is_accepted() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::load_layered_from_str(&[
+            allowlisted(),
+            r#"
+            [[registries]]
+            name = "npm"
+            [[registries.rules]]
+            kind = "deny_latest"
+            [[registries.rules]]
+            kind = "package_allowlist"
+            packages = ["react", "vue"]
+            "#
+            .to_owned(),
+        ])
+        .expect("repeating the allowlist is fine");
+        let cfg = crate::load_layered_from_str(&[
+            allowlisted(),
+            "[[registries]]\nname = \"npm\"\nupstreams = [\"https://npm.acme.io\"]\n".to_owned(),
+        ])
+        .expect("an overlay that does not touch rules keeps the allowlist");
+        assert_eq!(cfg.registries[0].rules.len(), 1);
     }
 
     #[test]

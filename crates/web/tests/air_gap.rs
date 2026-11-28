@@ -3261,3 +3261,89 @@ async fn a_mise_versions_listing_is_a_404_and_not_a_recorded_miss() {
         "a listing no bundle can carry must not fill the record the next export reads"
     );
 }
+
+// ── RFC 0051: the package allowlist on an air-gapped instance ─────────────────
+
+#[actix_web::test]
+async fn an_out_of_range_version_is_refused_and_not_recorded_as_missing() {
+    use batlehub_core::entities::RegistryKind;
+    use batlehub_core::rules::{
+        Allowlist, AllowlistEntrySpec, PackageAllowlistRule, PackageAllowlistVersionRule,
+    };
+    let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
+    let misses = InMemoryMissRecorder::new();
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        let real = Arc::clone(hot.registries.get(REG).expect("the fixture built one"));
+        hot.registries.insert(
+            REG.to_owned(),
+            Arc::new(OfflineRegistryClient::new(real, REG)) as Arc<dyn RegistryClient>,
+        );
+        hot.air_gap = AirGapPolicy {
+            enabled: true,
+            record_misses: true,
+            miss_retention_days: 90,
+            bundle_trusted_keys: vec!["a".repeat(64)],
+            synthesise_listings: false,
+        };
+        hot.miss_recorder = Some(Arc::clone(&misses) as Arc<dyn MissRecorder>);
+        let list = Arc::new(Allowlist::new(
+            RegistryKind::Npm,
+            &[AllowlistEntrySpec {
+                name: "lodash".to_owned(),
+                versions: Some(vec![">=4.17.21, <5".to_owned()]),
+            }],
+            vec![],
+        ));
+        hot.policies.insert(
+            REG.to_owned(),
+            Arc::new(RegistryPolicy {
+                metadata_ttl: Some(Duration::ZERO),
+                firewall_only: false,
+                serve_stale_metadata: false,
+                artifact_ttl: None,
+                rules: vec![
+                    Box::new(PackageAllowlistRule::new(Arc::clone(&list))),
+                    Box::new(PackageAllowlistVersionRule::new(list)),
+                    Box::new(BlockListRule::new(Arc::clone(&repo))),
+                ],
+            }),
+        );
+    }
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    // Listed name, out of range: the offline client refuses the resolve, and
+    // the version is judged anyway — a refusal, not a gap.
+    let resp = get(&app, &tarball("1.1.0")).await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "an out-of-range version is a refusal, not a 503"
+    );
+    let body = String::from_utf8_lossy(&actix_web::test::read_body(resp).await).into_owned();
+    assert!(
+        body.contains("version '1.1.0' of 'lodash' is not allowed"),
+        "{body}"
+    );
+
+    // Unlisted name: refused before the offline client is asked.
+    let resp = get(&app, &format!("/proxy/{REG}/left-pad/1.3.0/tarball")).await;
+    assert_eq!(resp.status(), 403);
+
+    let rows = misses
+        .list(&MissFilter {
+            kind: Some(MissKind::Artifact),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "a refused coordinate must not reach the next bundle's list: {rows:?}"
+    );
+
+    // In range, the miss is a real gap and is recorded as one.
+    let resp = get(&app, &tarball("4.17.21")).await;
+    assert_eq!(resp.status(), 503);
+}

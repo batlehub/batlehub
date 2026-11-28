@@ -176,7 +176,16 @@ async fn local_entries(
     query: &GalleryQuery,
     identity: &AuthIdentity,
 ) -> Result<Vec<GalleryEntry>, AppError> {
-    authorize_gallery_read(svc, registry, "__search__", identity).await?;
+    // A gallery search names many extensions: a whole-registry document, which
+    // a `package_allowlist` does not judge (RFC 0051 §3). `__search__` cannot be
+    // an extension id (those are `publisher.name`).
+    svc.authorize_read(
+        &PackageId::registry_document(registry, "__search__", "latest"),
+        &identity.0,
+        Action::SourceRead,
+    )
+    .await
+    .map_err(AppError::from)?;
     let local = local_svc
         .get_openvsx_extensions(
             registry,

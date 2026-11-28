@@ -1252,6 +1252,10 @@ jobs:
           # holding no read verb, and the reader — are attributable to the
           # identity the client presented. Hermetic: the run publishes its own
           # collection and installs it back.
+          # RFC 0051: the package allowlist through npm. Hermetic — a local
+          # fixture and an upstream that does not resolve, so the refusal is
+          # provably made before the dial.
+          - target: allowlist
           - target: galaxy
           # `helm` sends basic auth proactively to the repository's host, and
           # the served index puts every chart URL there — so the index and the
@@ -1556,6 +1560,8 @@ jobs:
           # phase itself (Go is on the runner), pulling a stack at the host
           # root the registry is bound to (RFC 0035).
           - phase: devfile
+          # RFC 0051: the package allowlist against npmjs and pypi.org.
+          - phase: allowlist
     services:
       postgres:
         image: postgres:17-alpine

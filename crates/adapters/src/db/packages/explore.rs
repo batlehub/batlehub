@@ -84,6 +84,7 @@ pub(super) fn map_access_event(r: &sqlx::postgres::PgRow) -> Result<AccessEvent,
             name,
             version,
             artifact: package_artifact,
+            role: Default::default(),
         }),
         _ => None,
     };

@@ -245,7 +245,7 @@ async fn streamed_index(
         return Ok(None);
     }
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(registry, platform, "__repodata__"),
+        package_id: PackageId::registry_document(registry, platform, "__repodata__"),
         identity: identity.0.clone(),
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),
@@ -281,7 +281,7 @@ async fn probe_index(
         return Ok(None);
     }
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(registry, platform, "__repodata__"),
+        package_id: PackageId::registry_document(registry, platform, "__repodata__"),
         identity: identity.0.clone(),
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),
@@ -531,7 +531,7 @@ pub async fn conda_shard(
     // never change: cached once, correct forever. `__shards__` is a synthetic
     // package name in the same spirit as `__repodata__` — a shard belongs to the
     // subdir, not to a package this registry could block.
-    let pkg = PackageId::new(&registry, "__shards__", &shard)
+    let pkg = PackageId::registry_document(&registry, "__shards__", &shard)
         .with_artifact(format!("{platform}/{shard}.msgpack.zst"));
     proxy_stream(
         svc,
@@ -673,7 +673,7 @@ async fn store_plain_index(
     }
     let entry = batlehub_core::ports::CacheEntry {
         metadata: batlehub_core::entities::PackageMetadata::minimal(
-            PackageId::new(registry, platform, "__repodata__"),
+            PackageId::registry_document(registry, platform, "__repodata__"),
             serde_json::json!({ "storage_key": storage_key, "synthesised": null }),
         ),
         cached_at: chrono::Utc::now(),
@@ -865,7 +865,7 @@ async fn fetch_conda_index(
     // The *platform* is the coordinate: a conda listing is scoped to a subdir,
     // not to a package.
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(registry, platform, "__repodata__"),
+        package_id: PackageId::registry_document(registry, platform, "__repodata__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),
@@ -1264,7 +1264,7 @@ async fn serve_compressed_repodata(
             Ok(()) => {
                 let entry = batlehub_core::ports::CacheEntry {
                     metadata: batlehub_core::entities::PackageMetadata::minimal(
-                        PackageId::new(&registry, &platform, "__repodata__"),
+                        PackageId::registry_document(&registry, &platform, "__repodata__"),
                         serde_json::json!({
                             "storage_key": storage_key,
                             "synthesised": synthesised,

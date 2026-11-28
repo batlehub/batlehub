@@ -1,43 +1,7 @@
-use async_trait::async_trait;
-use semver::{Version, VersionReq};
-
 use crate::entities::{Identity, Role};
+use crate::rules::version_match::VersionMatcher;
 use crate::rules::{Rule, RuleContext, RuleDecision};
-
-/// A single allow/block entry: either an exact version string or a semver range.
-///
-/// An entry is treated as a semver [`VersionReq`] only when it contains a range
-/// operator (`<`, `>`, `=`, `^`, `~`, `*`, `,`) and parses successfully;
-/// otherwise it is matched by exact string equality. This keeps plain entries
-/// like `"1.2.3"` exact (rather than the caret semantics `VersionReq` would
-/// otherwise apply) while still allowing ranges such as `">=1.2.0, <2.0.0"`, and
-/// lets non-semver version strings (git hashes, dates) be listed verbatim.
-#[derive(Debug, Clone)]
-enum VersionMatcher {
-    Exact(String),
-    Range(VersionReq),
-}
-
-impl VersionMatcher {
-    fn parse(s: &str) -> Self {
-        const RANGE_CHARS: &[char] = &['<', '>', '=', '^', '~', '*', ','];
-        if s.contains(RANGE_CHARS) {
-            if let Ok(req) = VersionReq::parse(s) {
-                return VersionMatcher::Range(req);
-            }
-        }
-        VersionMatcher::Exact(s.to_owned())
-    }
-
-    fn matches(&self, version: &str) -> bool {
-        match self {
-            VersionMatcher::Exact(e) => e == version,
-            VersionMatcher::Range(req) => Version::parse(version)
-                .map(|v| req.matches(&v))
-                .unwrap_or(false),
-        }
-    }
-}
+use async_trait::async_trait;
 
 /// Gates downloads by version: an optional approved-version allowlist plus a
 /// blocklist of specific versions with known issues.
@@ -70,26 +34,9 @@ impl VersionGateRule {
     }
 
     /// Turn a gate violation into a verdict, admitting a caller at or above the
-    /// least-privileged configured bypass role.
-    ///
-    /// The least-privileged bypass role is the bar, mirroring `DenyLatestRule`.
-    /// The comparison happens here rather than being handed back as a
-    /// `RequireRole` for the caller to resolve — that variant is deleted, and
-    /// the reason is in `RuleDecision`'s own documentation.
+    /// least-privileged configured bypass role ([`crate::rules::gate`]).
     fn gate(&self, identity: &Identity, reason: String) -> RuleDecision {
-        if self.bypass_roles.is_empty() {
-            return RuleDecision::Deny { reason };
-        }
-        let minimum = self.bypass_roles.iter().min().expect("non-empty");
-        if identity.has_role_at_least(minimum) {
-            return RuleDecision::Allow;
-        }
-        RuleDecision::Deny {
-            reason: format!(
-                "{reason} (bypass requires role '{minimum}' or higher, you have '{}')",
-                identity.role
-            ),
-        }
+        crate::rules::gate(&self.bypass_roles, identity, reason)
     }
 }
 

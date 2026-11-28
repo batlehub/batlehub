@@ -52,7 +52,7 @@ pub async fn nuget_registration(
         // Enforce registry RBAC before the local read (proxy path runs the rule
         // chain via `proxy_stream`; a local hit otherwise bypasses it).
         svc.authorize_read(
-            &PackageId::new(&registry, &id, "__registration__"),
+            &PackageId::listing(&registry, &id, "__registration__"),
             &identity.0,
             Action::ReleasesRead,
         )
@@ -137,7 +137,7 @@ pub async fn nuget_registration(
     // actually resolves a version against — is filtered either way.
     proxy_document(
         svc,
-        PackageId::new(&registry, &id, "__registration__"),
+        PackageId::listing(&registry, &id, "__registration__"),
         identity,
         Action::ReleasesRead,
         DocumentKind::REGISTRATION,

@@ -39,7 +39,7 @@ pub async fn get_packument(
     let (registry, package) = path.into_inner();
     require_npm_or_cargo(&registry, &map)?;
 
-    let pkg = PackageId::new(&registry, &package, "latest");
+    let pkg = PackageId::listing(&registry, &package, "latest");
     if map.is_type(&registry, "npm") {
         let url = registry_public_base(&req, &registry);
         let not_found_msg = format!("package '{package}' not found");

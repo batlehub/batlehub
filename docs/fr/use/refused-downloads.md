@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: c8904d09d04abfd1
+sourceHash: da74023543728ab6
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -31,14 +31,20 @@ permission reçoit un `403`, sans demande d'identité. Seules les routes
 `/proxy/…` envoient cette demande.
 
 **Un `403` qui contient une raison.** Le registre exécute ses contrôles pendant
-la requête. Le message nomme le contrôle :
+la requête. Le message nomme le contrôle, et npm l'affiche à la fin de sa ligne
+d'erreur :
 
 ```text
-npm error 403 Forbidden - GET https://hub.example.com/proxy/npm/left-pad/-/left-pad-1.3.1.tgz
-npm error 403 release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)
+npm error 403 403 Forbidden - GET https://hub.example.com/proxy/npm/left-pad/1.3.1/tarball - release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)
 ```
 
-Les messages sont listés sous [Les refus à message simple](#plain-messages).
+Les messages sont listés sous [Les refus à message simple](#plain-messages). Le
+même texte figure dans les champs `error` et `message` du corps de la réponse.
+
+Certains clients n'affichent aucun motif : pip lit une page d'index refusée
+comme une page vide (`Could not find a version that satisfies the requirement …
+(from versions: none)`). `batlehub-cli why --last` liste vos propres refus
+récents avec leur code de motif, pour lire ce que le client n'a pas montré.
 
 **Un `403` qui nomme un verdict.** Le registre a un profil de chaîne
 d'approvisionnement : chaque version est analysée, et le résultat de l'analyse,
@@ -293,6 +299,21 @@ Ce registre ne sert que les paquets d'une liste approuvée d'éditeurs, et
 celui-ci n'y figure pas. Demandez à votre administrateur d'ajouter l'éditeur si
 vous en avez besoin.
 
+#### `PACKAGE_NOT_ALLOWED` {#package-not-allowed}
+
+Ce registre ne sert qu'une liste approuvée de paquets, et celui-ci n'y figure
+pas. Vérifiez d'abord l'orthographe : une faute de frappe dans un nom de paquet
+est la façon la plus courante de rencontrer ce code. Si vous avez besoin du
+paquet, demandez à votre administrateur de l'ajouter.
+
+#### `VERSION_NOT_ALLOWED` {#version-not-allowed}
+
+Le paquet est approuvé sur ce registre, mais seulement dans certaines versions,
+et celle-ci n'en fait pas partie. Épinglez une version approuvée. npm peut
+rencontrer ce code sur un simple `npm install <nom>`, car il choisit `latest`
+dans une liste de versions qui les montre encore toutes ; épinglez-en une
+explicitement.
+
 #### `BLOCK_LIST` {#block-list}
 
 Un administrateur a bloqué cette version, et `batlehub-cli why` affiche son motif
@@ -371,6 +392,8 @@ est toute la réponse, et `batlehub-cli why` n'a rien à y ajouter.
 | `requests for the 'latest' version tag are not allowed` | Ce registre exige une version explicite | Épinglez une version dans votre manifeste ou votre lockfile |
 | `version '…' is blocked by policy` | Cette version précise est connue comme mauvaise | Utilisez une autre version |
 | `version '…' is not in the approved allowlist` | Seules les versions approuvées sont servies ici | Utilisez-en une de la plage approuvée, ou demandez son approbation |
+| `package allowlist: '…' is not listed` | Seule une liste approuvée de paquets est servie, voir [`PACKAGE_NOT_ALLOWED`](#package-not-allowed) | Vérifiez l'orthographe, ou demandez l'ajout du paquet |
+| `package allowlist: version '…' of '…' is not allowed` | Ce paquet est approuvé dans d'autres versions, voir [`VERSION_NOT_ALLOWED`](#version-not-allowed) | Épinglez une version approuvée |
 | `publisher '…' is not in the trusted_publisher allowlist` | Seuls les éditeurs approuvés sont servis | Demandez l'ajout de l'éditeur |
 | `cannot verify the publisher` | Le contrôle d'éditeur est actif, et ce type de registre ne sait pas indiquer d'éditeur | La configuration de votre administrateur doit être corrigée |
 | `this release is not signed` | Seules les releases signées sont servies | Utilisez une version signée |

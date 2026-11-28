@@ -125,6 +125,7 @@ fn audit_id(target: &GrantTarget) -> PackageId {
         name: target.package.clone(),
         version: target.version.clone().unwrap_or_default(),
         artifact: None,
+        role: Default::default(),
     }
 }
 

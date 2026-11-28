@@ -396,6 +396,15 @@ export const sidebar = {
       ],
     },
     {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0051 — Package allowlist",
+          link: "/rfc/0051-package-allowlist",
+        },
+      ],
+    },
+    {
       text: "Settled",
       items: [
         {

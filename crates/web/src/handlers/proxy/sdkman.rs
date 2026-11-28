@@ -57,7 +57,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 /// A relayed API document's coordinate: the path is the package, so each is
 /// its own cache entry under the registry's `metadata_ttl`.
 fn relayed(registry: &str, path: String) -> PackageId {
-    PackageId::new(registry, path, "doc")
+    PackageId::registry_document(registry, path, "doc")
 }
 
 /// A candidate name, refused when it could not be a storage-key segment.
@@ -224,7 +224,7 @@ pub async fn sdkman_candidate_default(
 
     let default = fetch_proxy_document(
         svc.clone(),
-        PackageId::new(&registry, candidate, "default"),
+        PackageId::listing(&registry, candidate, "default"),
         AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesList,
         DocumentKind::SDKMAN_DEFAULT,
@@ -321,6 +321,7 @@ pub async fn sdkman_validate(
     svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
         .await
         .map_err(AppError::from)?;
+    authorize_candidate_name(&svc, &registry, candidate, &identity).await?;
     let blocked = svc
         .blocked_versions_for(&registry, candidate, RegistryKind::Sdkman)
         .await;
@@ -381,7 +382,7 @@ pub async fn sdkman_versions_all(
     let platform = platform(&p)?;
     proxy_document(
         svc,
-        PackageId::new(&registry, listing_package(candidate, platform), "versions"),
+        PackageId::listing(&registry, listing_package(candidate, platform), "versions"),
         identity,
         Action::ReleasesList,
         DocumentKind::Versions,
@@ -450,7 +451,7 @@ pub async fn sdkman_versions_list(
     );
     proxy_document(
         svc,
-        PackageId::new(&registry, package, "versions-list"),
+        PackageId::listing(&registry, package, "versions-list"),
         identity,
         Action::ReleasesList,
         DocumentKind::SDKMAN_VERSIONS_LIST,
@@ -499,6 +500,9 @@ pub async fn sdkman_hook(
     let candidate = candidate(&c)?;
     let version = version(&v)?;
     let platform = platform(&p)?;
+    // The hook is relayed as a document keyed by its path, which no allowlist
+    // entry names: the candidate is judged here (RFC 0051 §5.1).
+    authorize_candidate_name(&svc, &registry, candidate, &identity).await?;
     proxy_document(
         svc,
         relayed(
@@ -693,6 +697,24 @@ pub async fn sdkman_download(
         Some("application/octet-stream"),
     )
     .await
+}
+
+/// RFC 0051 — the `package_allowlist` name check for a document about one
+/// candidate that reaches no rule chain.
+async fn authorize_candidate_name(
+    svc: &ProxyService,
+    registry: &str,
+    candidate: &str,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    batlehub_core::services::authz::authorize_name(
+        &svc.hot,
+        &PackageId::listing(registry, candidate, "latest"),
+        &identity.0,
+        Action::ReleasesList,
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[cfg(test)]

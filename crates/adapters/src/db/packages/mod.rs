@@ -58,6 +58,7 @@ pub(super) fn map_package_summary(r: PgRow) -> PackageSummary {
             name: r.get("package_name"),
             version: r.get("package_version"),
             artifact: r.get("package_artifact"),
+            role: Default::default(),
         },
         status: map_package_status(&r),
         last_accessed: r.get("last_accessed"),

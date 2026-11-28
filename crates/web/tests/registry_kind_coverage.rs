@@ -252,6 +252,9 @@ fn every_live_claim_names_a_phase_that_exists() {
     // `mise-backends` drives conda and nuget through mise (RFC 0047 phase 3);
     // both kinds are claimed above.
     claimed.insert("mise-backends".to_owned());
+    // `allowlist` drives RFC 0051's package allowlist with npm and pip, both
+    // kinds claimed above; it proves a rule across kinds, not a kind.
+    claimed.insert("allowlist".to_owned());
 
     // And the other direction: a phase nobody claims is a phase whose kind was
     // removed, or a row that was never written.

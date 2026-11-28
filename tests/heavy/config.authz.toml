@@ -933,3 +933,46 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 "user:authz-lister" = ["releases:list"]
+
+# ── RFC 0051: package_allowlist ───────────────────────────────────────────────
+#
+# A local registry the `allowlist` target publishes into — one name listed, one
+# not, both published (publish is a grant, not this rule's) — and a proxy
+# registry whose upstream does not resolve. On the second, a `403` is only
+# possible if the name was refused before the upstream was dialled; an upstream
+# request would have answered an upstream failure instead.
+[[registries]]
+type = "npm"
+name = "authz-npm-allow-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries.rules]]
+kind = "package_allowlist"
+packages = ["authz-listed"]
+
+[[registries]]
+type = "npm"
+name = "authz-npm-allowpx-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/npm"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries.rules]]
+kind = "package_allowlist"
+packages = ["react"]
+

@@ -199,6 +199,7 @@ impl ForgeCoordinate {
             name: pkg.name.clone(),
             version: sha.to_owned(),
             artifact,
+            role: pkg.role,
         }
     }
 }

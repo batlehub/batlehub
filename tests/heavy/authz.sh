@@ -53,6 +53,8 @@
 #               target at all                                     (no client)
 #   signing     RFC 0012 capabilities: artifact binding, expiry, and secret
 #               rotation in both directions                      (no client)
+#   allowlist   RFC 0051: the package allowlist, through npm — a listed and an
+#               unlisted local package, and a refusal made before the dial  (npm)
 #   audit       RFC 0036 §6.7: the audit stream under `[logging] format =
 #               "json"`, as npm produces it, replayed through the shipped
 #               Sigma rules                                        (npm, uv)
@@ -4634,6 +4636,144 @@ phase_reads() {
   return 0
 }
 
+# ── RFC 0051: the package allowlist, through npm ─────────────────────────────
+#
+# Hermetic: the local registry holds the run's own fixture, and the proxy
+# registry's upstream does not resolve, so a `403` there proves the name was
+# refused before anything was dialled (§6.P observations 1, 2 and 4). The live
+# halves — a real upstream, a version range, pip's spellings — are
+# `closed_world.sh allowlist`.
+phase_allowlist() {
+  heavy_need npm "nodejs"
+  heavy_log "npm $(npm --version)"
+  local lreg="authz-npm-allow-$HEAVY_RUN" preg="authz-npm-allowpx-$HEAVY_RUN"
+  local lbase="$HEAVY_TAP_BASE/proxy/$lreg/" pbase="$HEAVY_TAP_BASE/proxy/$preg/"
+  export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
+
+  said() {  # file, ere, explanation — fails, unlike heavy_client_said
+    grep -qiE -- "$2" "$1" 2>/dev/null && return 0
+    tail -n 40 "$1" >&2
+    heavy_fail "$3 (nothing matching /$2/)"
+  }
+  npmrc_allow() {  # token, base, suffix -> echoes the file path
+    local token="$1" base="$2" suffix="$3" key
+    key="${base#http:}"
+    local file="$HEAVY_WORK/npmrc-allow-$suffix"
+    { echo "registry=$base"; echo "${key}:_authToken=$token"; } > "$file"
+    echo "$file"
+  }
+  upstream_samples() {  # registry -> the upstream histogram's sample count
+    curl -fsS "$HEAVY_BASE/metrics" \
+      | awk -v r="registry=\"$1\"" '/^batlehub_upstream_request_duration_seconds_count/ && index($0, r) { n += $NF } END { print n + 0 }'
+  }
+
+  # ── seed: both names publish ──
+  heavy_mark "allowlist-seed"
+  local name
+  for name in authz-listed authz-unlisted; do
+    mkdir -p "$HEAVY_WORK/allow-$name"
+    printf '{ "name": "%s", "version": "1.0.0", "license": "MIT", "main": "index.js" }\n' "$name" \
+      > "$HEAVY_WORK/allow-$name/package.json"
+    echo "module.exports = '$name';" > "$HEAVY_WORK/allow-$name/index.js"
+    NPM_CONFIG_USERCONFIG="$(npmrc_allow "$T_ADMIN" "$lbase" admin)" \
+      NPM_CONFIG_CACHE="$HEAVY_WORK/allow-seed-cache" \
+      bash -c "cd '$HEAVY_WORK/allow-$name' && npm publish --registry '$lbase'" \
+      >>"$HEAVY_WORK/allow-seed.log" 2>&1 \
+      || { tail -20 "$HEAVY_WORK/allow-seed.log" >&2; heavy_fail \
+        "publishing $name failed — publish is a grant, and the allowlist must not refuse it"; }
+  done
+
+  # ── 1. a listed local package installs ──
+  heavy_mark "allowlist-listed"
+  NPM_CONFIG_USERCONFIG="$(npmrc_allow "$T_READER" "$lbase" reader)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/allow-listed-cache" \
+    npm install --prefix "$HEAVY_WORK/allow-consumer-ok" --no-save authz-listed@1.0.0 \
+    >"$HEAVY_WORK/allow-listed.log" 2>&1 \
+    || { cat "$HEAVY_WORK/allow-listed.log" >&2; heavy_fail "npm install of the listed package failed — the positive control"; }
+  [[ -d "$HEAVY_WORK/allow-consumer-ok/node_modules/authz-listed" ]] \
+    || heavy_fail "npm reported success and installed nothing"
+
+  # ── 2. an unlisted local package is refused, with the reason relayed ──
+  heavy_mark "allowlist-unlisted"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(npmrc_allow "$T_READER" "$lbase" reader)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/allow-unlisted-cache" \
+    npm install --prefix "$HEAVY_WORK/allow-consumer-no" --no-save authz-unlisted@1.0.0 \
+    >"$HEAVY_WORK/allow-unlisted.log" 2>&1
+  local rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || { cat "$HEAVY_WORK/allow-unlisted.log" >&2; heavy_fail \
+    "npm installed a local package the allowlist does not list"; }
+  heavy_wire_after "allowlist-unlisted" "$WIRE_403" \
+    "npm failed, but no 403 crossed the tap — a failure for another reason proves nothing"
+  # npm prints `body.error`, which carries the refusal on a 403 (RFC 0051
+  # §15 decision 22): the person running npm reads why.
+  heavy_log "npm's line, as captured: $(grep -m1 'npm error 403' "$HEAVY_WORK/allow-unlisted.log")"
+  said "$HEAVY_WORK/allow-unlisted.log" "package allowlist: 'authz-unlisted' is not listed" \
+    "npm did not print the allowlist's reason"
+  [[ -d "$HEAVY_WORK/allow-consumer-no/node_modules/authz-unlisted" ]] \
+    && heavy_fail "npm exited non-zero and installed the package anyway"
+
+  # ── 3. proxy: an unlisted name is refused before the upstream is dialled ──
+  heavy_mark "allowlist-proxy"
+  local before after code
+  before="$(upstream_samples "$preg")"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(npmrc_allow "$T_READER" "$pbase" preader)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/allow-proxy-cache" \
+    npm install --prefix "$HEAVY_WORK/allow-consumer-px" --no-save left-pad \
+    >"$HEAVY_WORK/allow-proxy.log" 2>&1
+  rc=$?
+  set -e
+  after="$(upstream_samples "$preg")"
+  [[ $rc -ne 0 ]] || heavy_fail "npm installed left-pad through an allowlist that does not list it"
+  heavy_wire_after "allowlist-proxy" "$WIRE_403" \
+    "no 403 for the unlisted name — on an upstream that does not resolve, only a refusal made before the dial can be a 403"
+  said "$HEAVY_WORK/allow-proxy.log" "package allowlist: 'left-pad' is not listed" \
+    "npm did not print the allowlist's reason"
+  [[ "$before" == "$after" ]] || heavy_fail \
+    "the upstream histogram moved ($before -> $after) for a name the allowlist refuses"
+  # The contrast: a listed name on the same registry is dialled, and fails as an
+  # upstream failure — not as a 403.
+  code="$(curl -s -o "$HEAVY_WORK/allow-react.body" -w '%{http_code}' \
+    -H "Authorization: Bearer $T_READER" "${pbase}react")"
+  heavy_log "a listed name on the unreachable upstream answers $code"
+  [[ "$code" != 403 ]] || { cat "$HEAVY_WORK/allow-react.body" >&2; heavy_fail \
+    "a listed name was refused — the allowlist is refusing more than it lists"; }
+
+  # ── 4. a whole-registry document keeps working ──
+  code="$(curl -s -o "$HEAVY_WORK/allow-search.body" -w '%{http_code}' \
+    -H "Authorization: Bearer $T_READER" "${lbase}-/v1/search?text=authz")"
+  [[ "$code" == 200 ]] || { cat "$HEAVY_WORK/allow-search.body" >&2; heavy_fail \
+    "npm search answered $code under an allowlist; a whole-registry document is not judged by it"; }
+
+  # ── 5. why names the allowlist, and asks the upstream nothing ──
+  heavy_mark "allowlist-why"
+  cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+  local cli
+  cli="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli"
+  before="$(upstream_samples "$preg")"
+  set +e
+  BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$T_READER" \
+    "$cli" why "$preg/reqeusts@1.0.0" >"$HEAVY_WORK/allow-why.out" 2>&1
+  rc=$?
+  BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$T_READER" \
+    "$cli" why "$preg/reqeusts" >"$HEAVY_WORK/allow-why-noversion.out" 2>&1
+  local rc2=$?
+  set -e
+  after="$(upstream_samples "$preg")"
+  [[ $rc -eq 4 ]] || { cat "$HEAVY_WORK/allow-why.out" >&2; heavy_fail "why exited $rc; expected 4 (refused)"; }
+  [[ $rc2 -eq 4 ]] || { cat "$HEAVY_WORK/allow-why-noversion.out" >&2; heavy_fail "why without a version exited $rc2; expected 4"; }
+  said "$HEAVY_WORK/allow-why.out" "PACKAGE_NOT_ALLOWED" "why did not name the allowlist"
+  said "$HEAVY_WORK/allow-why-noversion.out" "PACKAGE_NOT_ALLOWED" "why without a version did not name the allowlist"
+  [[ "$before" == "$after" ]] || heavy_fail "why reached the upstream ($before -> $after) for a refused name"
+
+  heavy_log "ALLOWLIST-OK — listed served, unlisted refused locally and before the dial, search served, why names it"
+  return 0
+}
+
 case "$TARGET" in
   matrix)
     phase_matrix
@@ -4659,8 +4799,9 @@ case "$TARGET" in
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
   galaxy)    phase_galaxy;    heavy_done "AUTHZ-HEAVY-GALAXY-OK" ;;
   helm)      phase_helm;      heavy_done "AUTHZ-HEAVY-HELM-OK" ;;
+  allowlist) phase_allowlist; heavy_done "AUTHZ-HEAVY-ALLOWLIST-OK" ;;
   *)
     heavy_fail "unknown target '$TARGET' — one of: matrix signing reads audit npm pypi nuget \
-composer conda openvsx rubygems terraform maven cargo galaxy helm, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
+composer conda openvsx rubygems terraform maven cargo galaxy helm allowlist, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

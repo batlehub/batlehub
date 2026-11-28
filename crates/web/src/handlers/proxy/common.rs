@@ -356,7 +356,7 @@ pub async fn proxy_gem_specs(
         ));
     }
 
-    let pkg = PackageId::new(registry, "_index", spec_type);
+    let pkg = PackageId::registry_document(registry, "_index", spec_type);
     proxy_stream(
         svc,
         pkg,

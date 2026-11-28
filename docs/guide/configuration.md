@@ -1786,6 +1786,26 @@ bypass_roles = ["admin"]
 
 > **Matching:** each entry is treated as a semver range when it contains a range operator (`<`, `>`, `=`, `^`, `~`, `*`, `,`) and parses as a valid [`VersionReq`](https://docs.rs/semver/) (e.g. `">=1.2.0, <2.0.0"`); otherwise it is matched by **exact string equality**. This keeps a bare `"1.2.3"` exact (rather than the caret semantics `^1.2.3` semver would otherwise infer) and lets non-semver version strings (git hashes, dates) be listed verbatim.
 
+**`[[registries.rules]]` — Package allowlist:**
+
+Serves only the packages listed, each optionally restricted to a version range ([RFC 0051](/rfc/0051-package-allowlist), [the gate](security-gates.md#package-allowlist)). An unlisted name is refused before any upstream request; a listed name outside its range is refused once its version is resolved.
+
+```toml
+[[registries.rules]]
+kind = "package_allowlist"
+packages = ["react", { name = "lodash", versions = [">=4.17.21, <5"] }, "@acme/*"]
+bypass_roles = ["admin"]
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `kind` | string | — | Must be `"package_allowlist"` |
+| `packages` | (string \| table)[] | — | Required, non-empty. A name, or `{ name, versions }`. A name ending with the namespace separator and `*` covers the names under that prefix. A table accepts no other key. |
+| `packages[].versions` | string[] | absent | Exact versions or semver ranges, as `version_gate.allow`. Absent means any version; `[]` is refused. Refused on forge registries. |
+| `bypass_roles` | string[] | `[]` | Roles that may bypass the allowlist. The least-privileged one sets the floor. |
+
+> One `package_allowlist` per rule list. Refused on `generic`, `deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `nix`, `godist` and `mise-java`, whose requests name no package. A later config layer whose `rules` for a registry or namespace would drop an allowlist an earlier layer declared is a load error.
+
 **`[[registries.rules]]` — CVE gate:**
 
 Denies downloads of versions with a recorded vulnerability finding at or above a severity threshold. Requires a configured vulnerability scanner — see [Vulnerability scanning](security-scanning.md) for the full setup.

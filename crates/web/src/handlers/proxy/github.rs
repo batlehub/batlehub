@@ -85,7 +85,7 @@ pub async fn list_releases(
     // building a path does not walk past every rule on the way to the forge.
     proxy_document(
         svc,
-        PackageId::new(&registry, format!("{owner}/{repo}"), "releases"),
+        PackageId::listing(&registry, format!("{owner}/{repo}"), "releases"),
         identity,
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,

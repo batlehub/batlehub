@@ -140,7 +140,7 @@ pub async fn goproxy_latest(
     require_registry_type(&registry, "goproxy", &map)?;
     let module = raw_module.trim_end_matches('/');
 
-    let pkg = PackageId::new(&registry, module, "latest");
+    let pkg = PackageId::listing(&registry, module, "latest");
     let not_found_msg = format!("module '{module}' not found");
     let mode = mode_map.get(&registry);
 

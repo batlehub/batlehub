@@ -166,7 +166,7 @@ async fn serve_compact(
     // The registry itself is the coordinate: this document is scoped to the
     // whole channel, not to a gem — the same shape conda's repodata uses.
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(&registry, which.coordinate(), "__compact__"),
+        package_id: PackageId::registry_document(&registry, which.coordinate(), "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),
@@ -365,7 +365,7 @@ pub async fn gem_compact_info(
     }
 
     let req = batlehub_core::services::ProxyRequest {
-        package_id: PackageId::new(&registry, &gem, "__compact__"),
+        package_id: PackageId::listing(&registry, &gem, "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
         ip_address: identity.1.ip.clone(),

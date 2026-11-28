@@ -176,7 +176,7 @@ impl<'a> Reader<'a> {
         }
         self.svc
             .authorize_listing(
-                &PackageId::new(self.registry, "v2index", "__index__"),
+                &PackageId::registry_document(self.registry, "v2index", "__index__"),
                 &self.identity.0,
                 Action::ReleasesList,
             )
@@ -299,7 +299,7 @@ async fn serve_index(
 ) -> Result<HttpResponse, AppError> {
     let (address, kind) = index_address(path, req.query_string()).map_err(AppError::from)?;
     let legacy = kind == DocumentKind::LEGACY_INDEX;
-    let pkg = PackageId::new(registry, &address, "__index__");
+    let pkg = PackageId::listing(registry, &address, "__index__");
     if mode == RegistryMode::Local {
         svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
             .await
@@ -367,7 +367,7 @@ async fn filtered_v2(
     svc: &ProxyService,
 ) -> Result<serde_json::Value, AppError> {
     let preq = proxy_request(
-        PackageId::new(registry, "v2index", "__index__"),
+        PackageId::registry_document(registry, "v2index", "__index__"),
         identity,
         Action::ReleasesList,
     );
@@ -1086,7 +1086,7 @@ async fn check_claim(
         return Ok(());
     }
     let preq = proxy_request(
-        PackageId::new(registry, "v2index", "__index__"),
+        PackageId::registry_document(registry, "v2index", "__index__"),
         identity,
         Action::ReleasesList,
     );

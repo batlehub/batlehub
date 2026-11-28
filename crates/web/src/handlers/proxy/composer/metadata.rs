@@ -65,7 +65,7 @@ pub async fn composer_packages_json(
     // outright, which breaks `composer install` for the whole registry rather
     // than gating anything. See `authz::authorize_listing`.
     svc.authorize_listing(
-        &PackageId::new(&registry, "repo", "_"),
+        &PackageId::registry_document(&registry, "repo", "_"),
         &identity.0,
         // §4.2 — this document names many packages and no single version, which
         // is `releases:list`'s definition.
@@ -176,7 +176,7 @@ pub async fn composer_p2_metadata(
     let local_base_url = base_url.clone();
 
     // Use version="_index" so the artifact key is stable; p2_artifact encodes the ~dev variant.
-    let pkg = PackageId::new(&registry, &package_name, "_index").with_artifact(p2_artifact);
+    let pkg = PackageId::listing(&registry, &package_name, "_index").with_artifact(p2_artifact);
     let not_found_msg =
         format!("composer package '{package_name}' not found in local registry '{registry}'");
     let (fetch_registry, fetch_package_name) = (registry.clone(), package_name.clone());

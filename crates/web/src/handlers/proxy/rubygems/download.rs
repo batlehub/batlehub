@@ -93,7 +93,7 @@ pub async fn gem_info(
     let (registry, name) = path.into_inner();
     require_registry_type(&registry, "rubygems", &map)?;
 
-    let pkg = PackageId::new(&registry, &name, "info");
+    let pkg = PackageId::listing(&registry, &name, "info");
     let not_found_msg = format!("gem '{name}' not found");
     let mode = mode_map.get(&registry);
 
@@ -139,7 +139,7 @@ async fn proxy_gem_info(
 ) -> Result<HttpResponse, AppError> {
     let mut gem = fetch_proxy_document(
         svc.clone(),
-        PackageId::new(&registry, &name, "info"),
+        PackageId::listing(&registry, &name, "info"),
         AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesRead,
         DocumentKind::GEM,
@@ -149,7 +149,7 @@ async fn proxy_gem_info(
 
     let versions = fetch_proxy_document(
         svc,
-        PackageId::new(&registry, &name, "versions"),
+        PackageId::listing(&registry, &name, "versions"),
         identity,
         Action::ReleasesRead,
         DocumentKind::Versions,
@@ -227,7 +227,7 @@ pub async fn gem_versions(
     let (registry, name) = path.into_inner();
     require_registry_type(&registry, "rubygems", &map)?;
 
-    let pkg = PackageId::new(&registry, &name, "versions");
+    let pkg = PackageId::listing(&registry, &name, "versions");
     let not_found_msg = format!("gem '{name}' not found");
     let (fetch_registry, fetch_name) = (registry.clone(), name.clone());
     // A version listing, not an artifact: the proxy fall-through fetches and

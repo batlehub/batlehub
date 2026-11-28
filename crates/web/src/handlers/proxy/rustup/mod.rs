@@ -190,7 +190,7 @@ pub async fn rustup_dist_root(
         let public_base = registry_public_base(&req, &registry);
         return proxy_document(
             svc,
-            PackageId::new(&registry, RUST_PACKAGE, "stable-date"),
+            PackageId::listing(&registry, RUST_PACKAGE, "stable-date"),
             identity,
             Action::ReleasesList,
             DocumentKind::STABLE_DATE,
@@ -309,7 +309,7 @@ pub async fn rustup_manifests_txt(
     let public_base = registry_public_base(&req, &registry);
     proxy_document(
         svc,
-        PackageId::new(&registry, RUST_PACKAGE, "manifests"),
+        PackageId::listing(&registry, RUST_PACKAGE, "manifests"),
         identity,
         Action::ReleasesList,
         DocumentKind::Versions,
@@ -344,7 +344,7 @@ pub async fn rustup_release_stable(
     let public_base = registry_public_base(&req, &registry);
     proxy_document(
         svc,
-        PackageId::new(&registry, RUSTUP_PACKAGE, "release"),
+        PackageId::listing(&registry, RUSTUP_PACKAGE, "release"),
         identity,
         Action::ReleasesList,
         DocumentKind::RUSTUP_RELEASE,
@@ -438,7 +438,7 @@ pub async fn rustup_bootstrap(
     let public_base = registry_public_base(&req, &registry);
     let doc = fetch_proxy_document(
         svc.clone(),
-        PackageId::new(&registry, RUSTUP_PACKAGE, "release"),
+        PackageId::listing(&registry, RUSTUP_PACKAGE, "release"),
         identity.clone(),
         Action::ReleasesList,
         DocumentKind::RUSTUP_RELEASE,

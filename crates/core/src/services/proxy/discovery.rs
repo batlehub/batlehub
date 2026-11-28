@@ -80,13 +80,25 @@ impl ProxyService {
         // reaches a URL or a storage key: the cache key below is built from the
         // document kind, and nothing on this path fetches an artifact.
         let req = ProxyRequest {
-            package_id: PackageId::new(registry, name, "__listing__"),
+            package_id: PackageId::listing(registry, name, "__listing__"),
             identity: identity.clone(),
             action: Action::ReleasesRead,
             ip_address: None,
             user_agent: None,
         };
         let prelude = self.request_prelude(&req).await?;
+        // RFC 0051 §5.1 point 7 — an unlisted name is never asked of the
+        // upstream: "not attempted", and the page answers from what it holds.
+        if crate::services::authz::judge_name_in(
+            prelude.policy.as_deref(),
+            &req.package_id,
+            identity,
+            req.action,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
 
         let kind: RegistryKind = prelude
             .client
@@ -236,6 +248,17 @@ impl ProxyService {
             user_agent: None,
         };
         let prelude = self.request_prelude(&req).await?;
+        // RFC 0051 §5.1 point 7 — as `upstream_detail`.
+        if crate::services::authz::judge_name_in(
+            prelude.policy.as_deref(),
+            &req.package_id,
+            identity,
+            req.action,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
 
         let kind: RegistryKind = prelude
             .client

@@ -707,3 +707,53 @@ path_allow = ["**"]
 anonymous = ["releases:read", "source:read"]
 user = ["releases:read", "source:read"]
 admin = ["*"]
+
+# ── RFC 0051: package_allowlist, against the real upstreams ──────────────────
+#
+# The live half of the allowlist proof (§6.P observations 5-8); the hermetic
+# half is `authz.sh allowlist`. One npm registry with a range that includes
+# lodash's newest 4.x, one whose range stops before it, and a PyPI registry
+# listing python-dateutil and the `six` it depends on.
+[[registries]]
+type = "npm"
+name = "npm-allow-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries.rules]]
+kind = "package_allowlist"
+packages = [{ name = "lodash", versions = [">=4.17.21, <5"] }]
+bypass_roles = ["admin"]
+
+[[registries]]
+type = "npm"
+name = "npm-allowlo-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries.rules]]
+kind = "package_allowlist"
+packages = [{ name = "lodash", versions = ["<4.17.21"] }]
+
+[[registries]]
+type = "pypi"
+name = "pypi-allow-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries.rules]]
+kind = "package_allowlist"
+packages = ["python-dateutil", "six"]
+

@@ -71,7 +71,7 @@ async fn authorize(
     identity: &AuthIdentity,
 ) -> Result<(), AppError> {
     svc.authorize_listing(
-        &PackageId::new(registry, name, "index"),
+        &PackageId::listing(registry, name, "index"),
         &identity.0,
         Action::ReleasesList,
     )
@@ -108,7 +108,7 @@ async fn version_list(
     }
     proxy_document(
         svc,
-        PackageId::new(&registry, tool, "index"),
+        PackageId::listing(&registry, tool, "index"),
         identity,
         Action::ReleasesList,
         DocumentKind::Versions,
@@ -439,7 +439,7 @@ pub async fn wire_refusal(
     };
     match svc
         .authorize_listing(
-            &PackageId::new(registry, "index", "index"),
+            &PackageId::registry_document(registry, "index", "index"),
             &identity,
             Action::ReleasesList,
         )

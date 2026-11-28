@@ -58,7 +58,7 @@ pub async fn nuget_flat_versions(
         // Enforce registry RBAC before the local version listing (the proxy
         // fall-through runs the rule chain; a local hit otherwise bypasses it).
         svc.authorize_read(
-            &PackageId::new(&registry, &id, "__index__"),
+            &PackageId::listing(&registry, &id, "__index__"),
             &identity.0,
             Action::ReleasesRead,
         )
@@ -93,7 +93,7 @@ pub async fn nuget_flat_versions(
     // resolver picks one and is then refused the download.
     proxy_document(
         svc,
-        PackageId::new(&registry, &id, "__index__"),
+        PackageId::listing(&registry, &id, "__index__"),
         identity,
         Action::ReleasesRead,
         DocumentKind::Versions,

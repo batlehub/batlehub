@@ -103,7 +103,7 @@ pub(crate) async fn resolve_and_search(
     // rules judge a concrete version and a search result set names many. The
     // coordinate is the registry itself — there is no one package to name.
     svc.authorize_listing(
-        &PackageId::new(registry, "_search", "latest"),
+        &PackageId::registry_document(registry, "_search", "latest"),
         &identity.0,
         // §4.2 — this document names many packages and no single version, which
         // is `releases:list`'s definition.

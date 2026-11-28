@@ -192,7 +192,7 @@ async fn fetch_manifests_txt(
 ) -> Result<String, AppError> {
     let doc = fetch_proxy_document(
         svc.clone(),
-        PackageId::new(registry, RUST_PACKAGE, "manifests"),
+        PackageId::listing(registry, RUST_PACKAGE, "manifests"),
         identity.clone(),
         Action::ReleasesList,
         DocumentKind::Versions,

@@ -100,7 +100,7 @@ pub async fn cargo_registry_config(
         // avoid. Whether the tier is readable anonymously is a grant question.
         None => svc
             .authorize_listing(
-                &PackageId::new(&registry, "_", "_"),
+                &PackageId::registry_document(&registry, "_", "_"),
                 &Identity::anonymous(),
                 Action::SourceRead,
             )
@@ -232,7 +232,7 @@ async fn proxy_upstream_index(
     let name = crate_name_from_index_path(index_path);
     proxy_document(
         svc,
-        batlehub_core::entities::PackageId::new(registry, name, "__index__"),
+        batlehub_core::entities::PackageId::listing(registry, name, "__index__"),
         identity,
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,

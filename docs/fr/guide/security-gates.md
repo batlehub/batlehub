@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: 987e195abc86e95c
+sourceHash: 0004f9ab1fad4bc8
 ---
 
 # Contrôles de sécurité
@@ -27,7 +27,7 @@ section décide laquelle.
 | **Où tournent les garde-fous** | Sur la requête : chaque garde-fou répond oui ou non pendant le téléchargement | Surtout dans le scan worker. Ses constats sont stockés sous forme de **verdict**, que la requête lit |
 | **`release_age_gate`** | Une règle | Remplacé par `security.min_age_secs`. Déclarer les deux est une erreur de configuration |
 | **`cve_gate`, `license_gate`, `require_signed_release`, `trusted_publisher`** | Des règles, avec leurs propres `block`, `min_severity` et `bypass_roles` | Des scanners internes. Un constat est jugé par `security.max_severity` et `security.mode`, sans rôle de contournement |
-| **`deny_latest`, `version_gate`** | Des règles | Toujours des règles : elles jugent la requête, pas l'artefact |
+| **`deny_latest`, `version_gate`, `package_allowlist`** | Des règles | Toujours des règles : elles jugent la requête, pas l'artefact |
 | **Liste de blocage admin, flags du SOC** | Des règles | Des scanners internes dont les constats sont toujours `denied` |
 | **Ce que voit un client refusé** | Un simple `403` qui nomme le motif | La forme d'erreur native du registre, plus des en-têtes `X-BatleHub-*` pour les appelants autorisés à les voir |
 | **Une version peut-elle être retenue puis libérée ?** | Non : chaque requête est jugée à neuf | Oui : `quarantined` se lève d'elle-même une fois la condition de la retenue levée |
@@ -61,11 +61,16 @@ premier refus :
    C'est vérifié avant toute requête vers l'amont, de sorte qu'un appelant sans
    ce droit ne coûte aucun trafic sortant. Voir
    [Le modèle d'autorisation](/fr/guide/access-control#authorization).
+   Sur un registre doté d'une [`package_allowlist`](#package-allowlist), un nom
+   non listé est refusé juste après, lui aussi avant toute requête vers l'amont.
 3. **Les métadonnées.** Elles sont résolues d'abord depuis le cache. À la toute
    première requête pour une version non cachée, l'amont a donc déjà répondu
    avant qu'aucun garde-fou ne tourne : une date de publication ou un indicateur
    de signature est une vraie donnée, pas une supposition.
 4. **La chaîne de garde-fous du registre**, dans cet ordre :
+   - la [`package_allowlist`](#package-allowlist), si elle est configurée : ses
+     contrôles de nom et de version passent en premier, si bien qu'une version
+     refusée n'atteint jamais la file de scan du garde-fou du verdict ;
    - la [liste de blocage](#block-list) admin et le garde-fou des
      [flags](#flags), ou le [garde-fou du verdict](#verdict-gate) sur un
      registre `[security]`, qui porte les deux ;
@@ -87,7 +92,10 @@ chaîne complète sur les métadonnées de l'amont.
 
 **Les listings et les index n'exécutent aucun garde-fou.** Un packument, une
 liste de versions ou un `index.json` vérifie le droit `releases:list` et rien
-d'autre. Deux choses sont tout de même retirées d'un listing : les versions de
+d'autre, à ceci près qu'une `package_allowlist` refuse le listing d'un nom
+qu'elle ne liste pas. Un document qui couvre tout le registre (recherche,
+`packages.json`, `index.yaml`, `config.json` de cargo) n'est jamais jugé par
+elle. Deux choses sont tout de même retirées d'un listing : les versions de
 la liste de blocage admin et, sur un registre `[security]`, les versions dont
 le verdict n'est pas servi. `latest` est recalculé sans elles. Aucun autre
 garde-fou ne masque une version dans un listing : une version que `cve_gate`
@@ -164,6 +172,73 @@ bypass_roles = ["admin"]
 - **Refus :** `version '…' is blocked by policy (known issue)` ou
   `version '…' is not in the approved allowlist`.
 - **Sous `[security]` :** inchangé. Il tourne toujours sur la requête.
+
+### `package_allowlist` {#package-allowlist}
+
+Ne sert que les paquets listés, chacun éventuellement restreint à une plage de
+versions ([RFC 0051](/rfc/0051-package-allowlist)). Tout le reste est refusé.
+
+```toml
+[[registries.rules]]
+kind = "package_allowlist"
+packages = [
+  "react",                                         # any version
+  { name = "lodash", versions = [">=4.17.21, <5"] },
+  "@acme/*",                                       # every name under the scope
+  { name = "@acme/billing", versions = ["^2"] },   # one package inside it, pinned
+]
+bypass_roles = ["admin"]
+```
+
+- **Les noms :** écrits dans l'orthographe de l'écosystème et comparés comme
+  cette instance les stocke. `Requests` et `requests`, ou `python_dateutil` et
+  `python-dateutil`, désignent chacun un seul paquet PyPI ; les identifiants
+  NuGet ignorent la casse ; les chemins de modules Go correspondent quelle que
+  soit leur casse. Un nom terminé par le séparateur de namespace et `*`
+  (`@acme/*`, `com.acme:*`, `Acme.*`) couvre les noms sous ce préfixe, pas le
+  préfixe nu lui-même. Une entrée exacte l'emporte sur un préfixe, et le
+  préfixe le plus long sur un plus court.
+- **Les versions :** la même correspondance que `version_gate` : une version
+  exacte, ou une plage semver. Une version qui correspond à un élément est
+  servie. Sans `versions`, toutes le sont. Une version qui n'est pas semver ne
+  correspond jamais à une plage : sur PyPI, Maven, NuGet et RubyGems, listez
+  des versions exactes.
+- **Avant toute récupération :** un nom non listé est refusé avant que l'amont
+  ne soit interrogé, sur les téléchargements, les listings par paquet,
+  `batlehub-cli why`, la page Access Check et la page paquet de la console. Un
+  nom listé dans une version hors plage est refusé une fois la version
+  résolue : `latest` est donc jugé comme la version qu'il désigne.
+- **Les paquets locaux aussi :** un paquet publié localement doit être listé,
+  en général par son scope. Publier un nom non listé réussit toujours ; le
+  lire, non.
+- **Les listings :** la liste de versions d'un paquet listé est servie en
+  entier, versions hors plage comprises. npm peut alors choisir un `latest`
+  refusé ; épinglez une version autorisée. La recherche et les index qui
+  couvrent tout le registre ne sont pas filtrés par la liste, à ceci près que
+  sur un registre local ou hybride, un document construit à partir de la
+  lecture de chaque paquet (la liste d'un namespace Open VSX, par exemple)
+  omet un nom local non listé.
+- **Refus :** `package allowlist: '…' is not listed for registry '…'`
+  ([`PACKAGE_NOT_ALLOWED`](/fr/use/refused-downloads#package-not-allowed)) ou
+  `package allowlist: version '…' of '…' is not allowed for registry '…'`
+  ([`VERSION_NOT_ALLOWED`](/fr/use/refused-downloads#version-not-allowed)). La
+  liste et ses plages ne sont jamais affichées.
+- **Sous `[security]` :** inchangé. Il tourne en premier, avant le garde-fou du
+  verdict.
+- **Pas ici :** les requêtes `generic`, `deb`, `rpm`, `pacman`, `apk`,
+  `jetbrains`, `nix`, `godist` et `mise-java` ne nomment aucun paquet : la
+  règle y est refusée au chargement (`generic` a `path_allow`). Sur une forge,
+  `versions` est refusé, car les archives sont indexées par commit.
+- **En vigueur une fois appliquée :** une modification de la liste est mise en
+  attente comme toute modification de configuration, et prend effet quand un
+  administrateur l'applique. Une couche de configuration ultérieure dont les
+  `rules` feraient disparaître l'allowlist est refusée au chargement.
+
+Pour constituer une première liste, partez des noms que le registre sert déjà
+(l'audit des téléchargements, `GET /api/v1/audit/pulls`) ou de vos fichiers de
+verrouillage (`batlehub-cli check --lock package-lock.json --format json`),
+**avant** d'activer la règle. Essayez-la d'abord sur un namespace ou un nouveau
+registre, et surveillez `PACKAGE_NOT_ALLOWED` dans le journal d'accès.
 
 ### `trusted_publisher` {#trusted-publisher}
 
