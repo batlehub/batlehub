@@ -472,6 +472,7 @@ impl TestServer {
             name: name.to_owned(),
             version: version.to_owned(),
             artifact: None,
+            role: Default::default(),
         };
         let event = AccessEvent::allowed_download(pkg, Some("test-user".to_owned()), Role::Admin);
         let repo = self.repo.clone();
