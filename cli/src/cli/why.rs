@@ -204,6 +204,28 @@ fn findings(v: &crate::api::security::VerdictView) -> String {
 fn render_resolution(registry: &str, name: &str, answer: &Value) -> String {
     let mut out = String::new();
     let versions = answer["versions"].as_array().cloned().unwrap_or_default();
+    // A refusal of the package itself (RFC 0051: not on the registry's package
+    // allowlist) comes as one entry with no version: there is no table to show.
+    if let [only] = versions.as_slice() {
+        if only["version"].as_str() == Some("") {
+            if let Some(c) = only["causes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|c| c["state"] == "refuse")
+            {
+                out.push_str(&format!(
+                    "⛔ {registry}/{name} — not pullable: {}: {}\n",
+                    c["reason_code"].as_str().unwrap_or(""),
+                    c["detail"].as_str().unwrap_or("")
+                ));
+                if let Some(next) = c["next"].as_str() {
+                    out.push_str(&format!("next: {next}\n"));
+                }
+                return out;
+            }
+        }
+    }
     let newest = versions.first();
     match answer["resolved_version"].as_str() {
         Some(v) => {
@@ -314,6 +336,30 @@ async fn last(client: &BatleHubClient, limit: u64) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_refused_package_renders_as_one_refusal_line() {
+        let answer = json!({
+            "headline": "refused",
+            "resolved_version": null,
+            "versions": [{
+                "version": "",
+                "headline": "refused",
+                "causes": [{
+                    "kind": "policy", "state": "refuse",
+                    "reason_code": "PACKAGE_NOT_ALLOWED",
+                    "detail": "package allowlist: 'left-pad' is not listed for registry 'npm'",
+                    "next": "ask an administrator to add it to the registry's package allowlist"
+                }]
+            }]
+        });
+        let out = render_resolution("npm", "left-pad", &answer);
+        assert_eq!(
+            out,
+            "⛔ npm/left-pad — not pullable: PACKAGE_NOT_ALLOWED: package allowlist: 'left-pad' is not listed for registry 'npm'\n\
+             next: ask an administrator to add it to the registry's package allowlist\n"
+        );
+    }
 
     /// RFC 0041 §4.5: the stored severity stays what the scanner said, and the
     /// judged level is said beside it.

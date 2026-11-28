@@ -77,7 +77,7 @@ heavy_need python3 "python3 (the wire tap)"
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
         mise-versions godist mise-java mise-core mise-http mise-backends nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin
-        dnf pacman ansible devfile)
+        dnf pacman ansible devfile allowlist)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
 for want in "${WANTED[@]}"; do
@@ -3588,6 +3588,101 @@ phase_mise-versions() {
   heavy_log "CLOSED-WORLD-MISE-VERSIONS-OK (latest is $MV_PREV with $MV_NEWEST blocked or too young; python $py_blocked hidden from the precompiled index)"
   # 8. RFC 0045: the same tool through one auto-wire rule.
   mise_auto_wire_cases
+}
+
+# ── RFC 0051: the package allowlist against the real upstreams ───────────────
+#
+# §6.P observations 5-8: a listed package in and out of its range, a range that
+# excludes `latest`, PyPI's spellings, and the bypass role. The refusals made
+# before any dial are `authz.sh allowlist`, against an upstream that does not
+# resolve; this half needs the real npmjs and pypi.org for its positive arms.
+phase_allowlist() {
+  heavy_need npm "nodejs"
+  heavy_need python3 "python3 with venv"
+  local reg="npm-allow-$HEAVY_RUN" lo="npm-allowlo-$HEAVY_RUN" py="pypi-allow-$HEAVY_RUN"
+  local out rc before after
+  out="$(cw_out allowlist)"
+  said() {  # file, ere, explanation — fails, unlike heavy_client_said
+    grep -qiE -- "$2" "$1" 2>/dev/null && return 0
+    tail -n 40 "$1" >&2
+    heavy_fail "allowlist: $3 (nothing matching /$2/)"
+  }
+  fetches() {  # registry -> artifact fetches the upstream histogram has seen
+    curl -fsS "$HEAVY_BASE/metrics" | awk -v r="registry=\"$1\"" \
+      '/^batlehub_upstream_request_duration_seconds_count/ && index($0, r) && index($0, "operation=\"fetch_artifact\"") { n += $NF } END { print n + 0 }'
+  }
+  npm_in() {  # registry, token-or-empty, spec, dir -> rc
+    local r="$1" token="$2" spec="$3" dir="$HEAVY_WORK/allow-$4"
+    mkdir -p "$dir"
+    { echo "registry=$HEAVY_TAP_BASE/proxy/$r/"
+      [[ -n "$token" ]] && echo "//127.0.0.1:$HEAVY_TAP_PORT/proxy/$r/:_authToken=$token"
+      echo "audit=false"; echo "fund=false"; echo "update-notifier=false"; } >"$dir/.npmrc"
+    cw_step "$out" "$dir" "${DENY[@]}" npm_config_cache="$dir/cache" \
+      npm install --no-save --userconfig "$dir/.npmrc" "$spec"
+  }
+  heavy_log "npm $(npm --version), python $(python3 --version 2>&1)"
+
+  # 5. A listed package, in and out of its range.
+  heavy_mark allow-in
+  npm_in "$reg" "" lodash@4.17.21 in \
+    || { cat "$out" >&2; heavy_fail "allowlist: lodash@4.17.21 is in range and did not install"; }
+  heavy_wire_after allow-in "GET /proxy/$reg/lodash/4.17.21/tarball -> 200" \
+    "allowlist: the in-range tarball did not come through the proxy"
+  heavy_mark allow-out
+  before="$(fetches "$reg")"
+  set +e; npm_in "$reg" "" lodash@4.17.20 out; rc=$?; set -e
+  after="$(fetches "$reg")"
+  [[ $rc -ne 0 ]] || heavy_fail "allowlist: lodash@4.17.20 is out of range and installed"
+  heavy_wire_after allow-out "GET /proxy/$reg/lodash -> 200" \
+    "allowlist: npm did not read the packument — the listing of a listed name is served whole"
+  heavy_wire_after allow-out "GET /proxy/$reg/lodash/4.17.20/tarball -> 403" \
+    "allowlist: the out-of-range tarball was not refused with a 403"
+  heavy_log "npm's line, as captured: $(grep -m1 'npm error 403' "$out")"
+  # npm prints `body.error`, not the reason: read it off the same response.
+  curl -s "$HEAVY_TAP_BASE/proxy/$reg/lodash/4.17.20/tarball" >"$HEAVY_WORK/allow-out.body"
+  said "$HEAVY_WORK/allow-out.body" "package allowlist: version '4.17.20' of 'lodash' is not allowed" \
+    "the 403 body does not carry the version refusal"
+  [[ "$before" == "$after" ]] || heavy_fail \
+    "allowlist: the upstream was asked for an artifact ($before -> $after) the allowlist refused"
+
+  # 6. A range that excludes `latest`: npm takes `latest` from the packument,
+  #    which still lists it, and is refused (the listing non-goal, observed).
+  heavy_mark allow-latest
+  set +e; npm_in "$lo" "" lodash latest; rc=$?; set -e
+  [[ $rc -ne 0 ]] || heavy_fail "allowlist: npm installed lodash's latest through a range that excludes it"
+  heavy_wire_re_after allow-latest "GET /proxy/$lo/lodash/[0-9.]+/tarball -> 403" \
+    "allowlist: npm's pick of latest was not refused at its tarball"
+
+  # 7. PyPI: every spelling the server folds is the same package. Raw requests,
+  #    because pip normalises before it asks.
+  heavy_mark allow-pypi
+  local a b
+  a="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$py/simple/Python.Dateutil/")" \
+    || heavy_fail "allowlist: /simple/Python.Dateutil/ was not served"
+  b="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$py/simple/python_dateutil/")" \
+    || heavy_fail "allowlist: /simple/python_dateutil/ was not served"
+  [[ "$a" == "$b" ]] || heavy_fail "allowlist: two spellings of python-dateutil answered different pages"
+  local venv="$HEAVY_WORK/allow-venv"
+  python3 -m venv "$venv"
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "$venv/bin/pip" download --no-cache-dir -d "$HEAVY_WORK/allow-dl" \
+    -i "$HEAVY_TAP_BASE/proxy/$py/simple/" python-dateutil \
+    || { cat "$out" >&2; heavy_fail "allowlist: pip download python-dateutil failed"; }
+  set +e
+  cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "$venv/bin/pip" download --no-cache-dir -d "$HEAVY_WORK/allow-dl2" \
+    -i "$HEAVY_TAP_BASE/proxy/$py/simple/" reqeusts
+  rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "allowlist: pip downloaded a name the allowlist does not list"
+  heavy_wire_after allow-pypi "GET /proxy/$py/simple/reqeusts/ -> 403" \
+    "allowlist: pip's request for the unlisted name was not refused with a 403"
+  heavy_log "pip's refusal, as captured: $(grep -m1 -iE '403|error' "$out")"
+
+  # 8. The bypass role is served what nobody else is.
+  heavy_mark allow-bypass
+  npm_in "$reg" "heavy-admin-token" left-pad@1.3.0 bypass \
+    || { cat "$out" >&2; heavy_fail "allowlist: the bypass role was refused an unlisted package"; }
+
+  heavy_log "CLOSED-WORLD-ALLOWLIST-OK (in range served, out of range refused unfetched, latest refused at its tarball, spellings folded, bypass served)"
 }
 
 for phase in "${WANTED[@]}"; do

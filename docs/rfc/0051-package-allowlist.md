@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phase 1 implemented on PR #432 (§17); phase 2, the heavy proof, pending |
+| Status      | Accepted — phases 1 and 2 implemented on PR #432, both heavy phases green locally (§17); `Implemented` once merged |
 | Short       | Package allowlist                                             |
 | Settles     | How a registry serves only the packages an operator listed, each optionally pinned to a version range |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -53,8 +53,10 @@ bypass_roles = ["admin"]
 ```text
 $ npm install left-pad
 npm error code E403
-npm error 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad
-npm error 403 package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - Forbidden
+
+$ curl -s -H "Authorization: Bearer $TOKEN" http://batlehub:8080/proxy/npm/left-pad
+{"error":"Forbidden","message":"package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
 ```
 
 ```mermaid
@@ -247,10 +249,12 @@ to remove the rule, remove it from the layer that declares it.
 - **Read actions only:** the rule judges `ReleasesRead`, `ReleasesList`,
   `SourceRead` and, for the console's package page, `CatalogueBrowse`. Any
   other action passes it.
-- **Order of checks, in every funnel:** grants, then visibility where it
-  applies (local rows), then the name. So a local package the caller may not
-  see answers `404` whether or not it is listed, in the download and in `why`
-  alike (§15 decision 9).
+- **Order of checks, in every funnel:** grants, then the name, then
+  visibility where it applies (local rows) — the order every rule already has,
+  since the rule chain runs before visibility. The name refusal depends on the
+  name alone and never on whether the package exists, so a hidden, unlisted
+  package answers exactly what a name that does not exist answers: no
+  existence oracle. `why` and the download answer alike (§15 decision 9).
 - **Local and hybrid registries:** the rule judges every read, local rows
   included (§15 decision 1), so a locally published package must be listed,
   typically by its scope. A publish of an unlisted name still succeeds (`201`,
@@ -353,15 +357,18 @@ client sees and which `why` repeats as the cause detail (`rule_cause`,
   every sibling gate. The §1 example sets `bypass_roles = ["admin"]`, so the
   mocks show it.
 
-**Client refusal, name not listed** (npm, exit code 1). The second line is the
-reason npm relays from the body, in the form `use/refused-downloads.md`
-records. Not yet captured from a run: §6.P captures it.
+**Client refusal, name not listed** (npm 11.20, exit code 1, captured by
+`authz.sh allowlist`). npm prints the body's `error` field, not its `message`
+(`npm-registry-fetch/lib/errors.js:46`), so the reason is in the response body
+and in `batlehub-cli why --last`, not in npm's output:
 
 ```text
 $ npm install left-pad
 npm error code E403
-npm error 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad
-npm error 403 package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/left-pad - Forbidden
+
+$ curl -s -H "Authorization: Bearer $TOKEN" http://batlehub:8080/proxy/npm/left-pad
+{"error":"Forbidden","message":"package allowlist: 'left-pad' is not listed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
 ```
 
 **Client refusal, version outside the range.** The packument is served and the
@@ -370,14 +377,22 @@ tarball is refused.
 ```text
 $ npm install lodash@4.17.20
 npm error code E403
-npm error 403 Forbidden - GET http://batlehub:8080/proxy/npm/lodash/-/lodash-4.17.20.tgz
-npm error 403 package allowlist: version '4.17.20' of 'lodash' is not allowed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')
+npm error 403 403 Forbidden - GET http://batlehub:8080/proxy/npm/lodash/4.17.20/tarball - Forbidden
+
+$ curl -s http://batlehub:8080/proxy/npm/lodash/4.17.20/tarball
+{"error":"Forbidden","message":"package allowlist: version '4.17.20' of 'lodash' is not allowed for registry 'npm' (bypass requires role 'admin' or higher, you have 'user')"}
 ```
 
-**pip.** pip prints the status but not the body, so its user does not see the
-reason. Its exact line is captured by §6.P 7. The way to the reason is
-`batlehub-cli why --last`, which lists the caller's refusals with their code,
-and `use/refused-downloads.md` says so under pip.
+**pip** (captured by `closed_world.sh allowlist`) reads a refused index page as
+an empty one, so its user sees no reason at all:
+
+```text
+$ pip download reqeusts
+ERROR: Could not find a version that satisfies the requirement reqeusts (from versions: none)
+```
+
+The way to the reason is `batlehub-cli why --last`, which lists the caller's
+refusals with their code; `use/refused-downloads.md` says so for npm and pip.
 
 **`batlehub-cli why`, name not listed** (exit code 4). The name check runs right
 after the access step, so nothing after it is evaluated. The causes are
@@ -609,7 +624,7 @@ sequenceDiagram
   Z-->>H: Deny PACKAGE_NOT_ALLOWED
   H-->>C: 403 (audit row with code, denied metric)
   Note over H,U: no request reaches U
-  C->>H: GET /proxy/npm/lodash/-/lodash-4.17.20.tgz
+  C->>H: GET /proxy/npm/lodash/4.17.20/tarball
   H->>Z: grants, judge_name_in → Ok
   H->>U: resolve metadata
   U-->>H: lodash 4.17.20
@@ -847,7 +862,7 @@ that can drop it (T12).
 | T4 | Elevation: a read path that skips the chain serves an unlisted name | listings and console reads | The hoists of §5.1, which are the only control there. Test: `crates/web/tests/package_allowlist.rs` names every such path for one unlisted name and expects a refusal from each. That covers the proxy and local per-package listings of each kind with one, the metadata route, a forge archive, the forge API, an alias route, `/api/v1/packages/access` with and without a version, `/api/v1/admin/access-check`, and the console detail and README. Downloads, local reads and hybrid fall-through are covered as well. | A new listing route that runs neither a hoist nor the chain. The T5 suite's `NoRow` rule forces it to be classified; classified wrongly, only review catches it. |
 | T5 | Denial of service: callers make the instance resolve and cache arbitrary unlisted names, spending the upstream's rate limit | every pre-chain fetch (§5.1 table) | The name is judged before each of them. Test: the counting-client suite of §5.1. Heavy: §6.P 2 and 4. | Two paths stay: warming (admin-configured; `allowlist.warms-unlisted` warns), and the goproxy `sumdb/` relay (`goproxy/vuln.rs:218`), which looks up checksums, not packages. Accepted by the author; reviewed at sign-off. |
 | T6 | Tampering: a version string the matcher cannot parse slips through | version match | An unparseable version matches no range and is refused. Test: `allowlist_unparseable_version_is_refused`. | Over-refusal on non-semver kinds, surfaced by `allowlist.range-on-non-semver-kind`. |
-| T7 | Information disclosure: the refusal reveals the list or its ranges | `403` body, `why` | The body names only the requested package and the registry; no range anywhere. Test: `allowlist_refusal_body_names_no_range`, which asserts on the HTTP body. | A caller with `releases:read` can probe which public names are listed. Accepted (§15 decision 9): on a proxy registry that reveals policy, not data. A hidden local package answers `404` before the name is judged, so the probe reveals nothing about it. |
+| T7 | Information disclosure: the refusal reveals the list or its ranges, or confirms a hidden package exists | `403` body, `why` | The body names only the requested package and the registry; no range anywhere. The refusal depends on the name alone, so a hidden, unlisted package and a name that does not exist answer alike. Tests: `allowlist_refusal_body_names_no_range` (on the HTTP body); `a_hidden_unlisted_package_answers_as_a_name_that_does_not_exist` (`authz_matrix.rs`). | A caller with `releases:read` can probe which names are listed. Accepted (§15 decision 9): that reveals policy, not data. |
 | T8 | Elevation: the bypass role floor misread | `gate()` | The shared `gate()`. Test: `bypass_role_resolves_*`, as in `version_gate.rs`. | none |
 | T9 | Elevation: a namespace list admits what the registry list refuses | namespace override | By design (§4.1): the operator who writes the namespace block decides for it. Test: `namespace_allowlist_replaces_registry_allowlist`. | Accepted: config review is the control. |
 | T10 | Elevation: the namespace chain is selected on a spelling the rule does not use, so a spelling picks a wider list | `policy_in` | Namespace prefixes are canonicalised at build, as grants' are (`canonical_prefix`, `grants.rs:259`), so the rule and the namespace selection see one spelling (§15 decision 16). Test: `allowlist_namespace_override_alternate_spelling` (goproxy, nuget), and `mixed_case_nuget_namespace_gate_applies`. | none |
@@ -1075,7 +1090,7 @@ the downgraded pods crash-loop.
 | 5 | A rule only, or a pre-resolve check too? | **Both.** On downloads the chain guarantees the refusal and the hoist saves the fetch. On listings and console reads the hoist is the only control, and the T4 suite names each of them (§5.1, "What enforces what"). Refined by the second last review: the draft claimed the chain covered every path. |
 | 6 | Bare strings, tables, or both? | **Both.** The table refuses unknown keys, with a hand-written `Deserialize` so the error names the key; refined by the second last review, because `#[serde(untagged)]` loses the message. Long lists are names, and a few entries carry ranges. |
 | 7 | Exemptible under RFC 0015 §4.5? | **No.** Like `version_gate`: to serve a package, list it. |
-| 9 | `403` or `404` for an unlisted name? | **`403`**, like every sibling gate, because it names the reason and is what makes `why` useful. The residual probe (T7) reveals policy, not data, on a proxy registry. Decided 2026-11-27, as recommended. Refined by the second last review: the order is grants, then visibility, then the name, in every funnel, so a hidden local package answers `404` in the download and in `why` alike. |
+| 9 | `403` or `404` for an unlisted name? | **`403`**, like every sibling gate, because it names the reason and is what makes `why` useful. The residual probe (T7) reveals policy, not data, on a proxy registry. Decided 2026-11-27, as recommended. The second last review asked for "grants, then visibility, then the name" so a hidden local package stays a `404`. The implementation found that no funnel has that order: the rule chain runs before visibility for every rule. It also found the order is not needed, because the name refusal depends on the name alone, never on whether the package exists. So a hidden, unlisted package answers exactly what a name that does not exist answers, and there is no existence oracle. Every funnel, `why` included, now orders grants, name, visibility, so the download and `why` never disagree (§17). |
 | 8 | How does the rule tell a package, a listing of one package and a whole-registry document apart? | **A role on `PackageId`, set by the handler through new constructors:** `Package` (the default from `PackageId::new`, both halves judged), `PackageListing` (name judged, range skipped), `RegistryDocument` (neither). Core never reads a name or version string to decide, and a forgotten role fails closed. Phase 1 starts by mapping where `PackageId` is serialised or compared. First decided 2026-11-27 as a per-kind table of placeholder coordinates. Reopened by the second last review: no per-kind name validator exists to prove a placeholder illegal, `__shards__`, `_search` and `index.yaml` are legal names, and many per-package routes carry placeholder versions. Decided again 2026-11-27, as recommended. |
 | 10 | A layer that drops the allowlist? | **A hard error at load and at apply**, computed over the raw layers, from startup, apply, preview and `explain-config` alike. To remove the rule, remove it from the layer that declares it. First decided 2026-11-27 as a warning plus a replacement rule for `packages`. Reopened by the second last review: the replacement rule is a no-op, since the rule list is already replaced whole; no warning can see the layers today; and a warning can be dismissed, which is fail-open. Decided again 2026-11-27, as recommended. |
 | 11 | One rule or two? | **Two rules from one block** (`package_allowlist`, `package_allowlist_version`). `rule_cause`, `reason_code_for` and the access log key on the rule name, and one name cannot carry two codes (§5.1). Changed during the first last review; the draft had one rule. |
@@ -1107,73 +1122,108 @@ the docs the codes need in order to be read. Each phase leaves `cargo test
 
 ## 17. Revision against the tree (2026-11-28)
 
-Phase 1 is in the tree on PR #432. Phase 2 (the heavy phases of §6.P) is not:
-no observation of §6.P has been made yet, so the client output in §4.5 is
-still the mock, not a capture.
+Phase 1 and phase 2 are in the tree on PR #432. Both heavy phases have been run
+locally against real clients and are green: `authz.sh allowlist` (npm 11.20,
+hermetic) and `closed_world.sh allowlist` (npm 11.20 and pip, against npmjs and
+pypi.org). §4.5 now quotes what they captured.
 
-**What shipped as written.** Both rules at the head of the chain
-(`push_package_allowlist_rules`, `server/src/builders.rs`), the coordinate role
-(`CoordinateRole` on `PackageId`, `#[serde(skip)]`, left out of `Eq`/`Hash`),
-`has_package_names`, the hand-written `AllowlistEntry` deserializer, every
-§4.3 hard error and warning (`crates/config/src/schema/allowlist.rs`), the
-layer check (`merge_checked`, `crates/config/src/lib.rs`), canonical namespace
-prefixes, the `pullability` arms and the access-log codes, `NOT_COVERED`, and
-the docs pages in both languages.
+**What shipped as written.**
+- Both rules at the head of the chain (`push_package_allowlist_rules`,
+  `server/src/builders.rs`).
+- The coordinate role: `CoordinateRole` on `PackageId`, `#[serde(skip)]`, left
+  out of `Eq` and `Hash`, set at 54 handler sites.
+- `has_package_names`, and the hand-written `AllowlistEntry` deserializer.
+- Every §4.3 hard error and warning (`crates/config/src/schema/allowlist.rs`).
+- The layer check (`merge_checked`, `crates/config/src/lib.rs`) and canonical
+  namespace prefixes.
+- The `pullability` arms and the access-log codes, and `NOT_COVERED`.
+- The docs pages in both languages.
 
 **Where it differs from the text, and why.**
 
 1. **`judge_name` takes the `PackageId`, not the name.** It needs the
-   coordinate's role and the registry name for its message; §5.1 drew it with
-   the name alone.
+   coordinate's role and the registry name for its message.
 2. **The role reaches the chain by copying, not by a `RuleContext` field.**
    After the resolve, `handle_resolved` and `resolve_metadata_for_inner` set
    `metadata.id.role` from the request: the adapter builds `metadata.id`
    without knowing it. A site that forgets falls back to `Package`, which
-   fails closed. A new `RuleContext` field would have touched every literal of
-   it for the same effect.
+   fails closed.
 3. **`policy_in` canonicalises the request name** as well as the prefixes
-   being canonical at build, so the namespace selection and the rule see one
-   spelling from either side (§15 decision 16).
+   being canonical at build. Test: `allowlist_namespace_override_alternate_spelling`,
+   where a Go module requested as `github.com/Acme/tool` selects the namespace
+   stored as `github.com/!acme`.
 4. **The air-gap version check is in `handle`'s error arm**, not inside
-   `record_miss`: `record_miss` has no identity, so it could neither honour
-   `bypass_roles` nor word the refusal. It runs only for `ContentUnavailable`.
-5. **Local per-package listings judge the name in `check_read_access`**,
-   after grants and visibility (§15 decision 9). The whole-registry inventory
-   that asks per name calls `check_read_access_unjudged`, so whole-registry
-   documents stay unfiltered (§3).
-6. **Alias routes needed no new call site.** The canonical coordinate goes
-   back through `handle`, whose name check judges it (T13 as designed).
-7. **`why <registry>/<name>` with no version, for an unlisted name,** fetches
-   nothing (`upstream_detail` answers "not attempted"), but it answers as not
-   found rather than with the §4.5 `PACKAGE_NOT_ALLOWED` headline. `Resolution`
-   has no refusal field, and adding one changes the OpenAPI spec, which §4.4
-   rules out. The versioned form shows the refusal as mocked.
-8. **The npm tarball route in the §4.5 mocks is wrong:** this server serves
-   `/proxy/{registry}/{package}/{version}/tarball`, not `-/{package}-{v}.tgz`.
-   The mocks stay as written; §6.P captures the real lines.
-9. **The layer error names the layer by position** ("config layer 2"): the
-   reload path holds layer texts, not paths.
-10. **The T5 gate is narrower than §5.1 describes.**
-    `crates/web/tests/package_allowlist.rs` (10 cases) asserts zero upstream
-    calls with a counting client for an unlisted download, packument and
-    `why`. It also covers the out-of-range refusal, the bypass, the local
-    rows, the cargo `config.json`, the PyPI simple root and the PyPI
-    spellings. The sweep over the shared route rows of `authz_matrix.rs` is
-    not built yet, so a new route is not yet forced to be classified. That is
-    owed before `Implemented`.
-11. **`task fuzz:check` was not run locally:** the environment's `c++` shim has
-    no version set. No fuzz target names a changed type (`PackageId` is built
-    there through `PackageId::new`, whose signature is unchanged); the CI job
-    is the check.
+   `record_miss`, which has no identity to honour `bypass_roles` with. Test:
+   `an_out_of_range_version_is_refused_and_not_recorded_as_missing`
+   (`air_gap.rs`).
+5. **Local multi-package documents built from per-package reads leave an
+   unlisted local name out.** This applies to an Open VSX namespace listing,
+   for example. §3 says whole-registry documents are not filtered; these local
+   ones are, on the closed side: what would not be served is not advertised.
+   The document itself is never refused. A namespace whose every extension is
+   unlisted answers `404`, as an empty namespace does. The whole-registry
+   inventory that asks per name (`check_read_access_unjudged`) is not filtered.
+6. **Composed listing coordinates are judged on their package.** SDKMAN keys a
+   listing by `candidate/platform`, rustup a channel manifest by
+   `rust/<channel>`, galaxy a version document by `name@version`.
+   `RegistryKind::package_of_coordinate` takes the package out of them; none of
+   those characters can occur in those kinds' names. Found by the route sweep
+   below.
+7. **Four routes the hoists missed, found by the route sweep and fixed:**
+   - helm's per-chart API reads (`api/charts/{name}` and `…/{version}`), which
+     cut one chart out of the whole index;
+   - SDKMAN's `validate` and `hooks`, which are relayed documents keyed by
+     their path. The candidate is now judged there;
+   - the Open VSX gallery search, which authorised under `__search__` as if it
+     were a package and is now a `RegistryDocument`.
+8. **§15 decision 9's order was revised against the code.** Every funnel orders
+   grants, name, visibility, which is the order the rule chain already has.
+   The property the decision protected holds: there is no existence oracle,
+   because the refusal depends on the name alone (decision 9, T7).
+9. **npm 11 does not relay the reason.** It prints the body's `error`
+   (`"Forbidden"`), not its `message` (`npm-registry-fetch/lib/errors.js:46`).
+   pip reads a refused index as an empty one. Both phases therefore read the
+   reason off the same response with `curl`, and §4.5 quotes the clients' real
+   lines. `use/refused-downloads.md` claimed npm printed the reason. It now
+   shows the body and points to `why --last`.
 
-**Tests that now prove the threat rows:** T1, T2, T3, T6, T7 and T8 in
-`crates/core/src/rules/package_allowlist.rs`. T4 and T5 (partly, item 10) in
-`crates/web/tests/package_allowlist.rs`. T10 through
-`namespace_prefixes_are_canonicalised` (`server/src/builders.rs`). T11 through
-`unmarked_document_is_refused` and `a_registry_document_is_never_judged`. T12
-through `layer_dropping_allowlist_is_refused`. T9 and T13 have no dedicated
-test yet.
+   Making npm show it would mean putting the reason in `error` for every 403,
+   which changes the error body of the whole API. **That is left for the
+   author to decide**, outside this RFC.
+10. **`why <registry>/<name>` with no version, for an unlisted name,** answers
+    one entry with an empty version that carries the refusal. The answer keeps
+    its shape, so there is no spec change. The CLI prints it as the §4.5
+    one-line refusal and exits 4. Tests: `why_without_a_version_names_the_allowlist_without_asking_the_upstream`,
+    `a_refused_package_renders_as_one_refusal_line` (`cli/src/cli/why.rs`).
+11. **The npm tarball route in the first mocks was wrong.** This server serves
+    `/proxy/{registry}/{package}/{version}/tarball`; the mocks now use it.
+12. **The layer error names the layer by position** ("config layer 2"): the
+    reload path holds layer texts, not paths.
+13. **The T5/T4 gate is the route sweep of `authz_matrix.rs`**
+    (`every_read_route_enforces_the_package_allowlist`). For every read route
+    of a kind with package names, an allowlist that does not list the row's
+    package must refuse a caller the grants allow. The control, the same
+    allowlist listing the package, must serve the row. A whole-registry
+    document must not be refused wholesale.
 
-**Supply chain:** unchanged, as §8 said. No dependency was added; `semver` was
-already in `crates/core`.
+    The rows the matrix marks whole-registry but that name one package, and
+    the reverse, are listed in the test with their reasons. The zero-upstream
+    property is asserted with a counting client in
+    `crates/web/tests/package_allowlist.rs`.
 
+**Tests that now prove the threat rows.**
+- T1, T2, T3, T6, T7, T8: `crates/core/src/rules/package_allowlist.rs`.
+- T4: the route sweep.
+- T5: the counting-client cases of `package_allowlist.rs` and both heavy
+  phases.
+- T7, on the oracle side: `a_hidden_unlisted_package_answers_as_a_name_that_does_not_exist`.
+- T9: `namespace_allowlist_replaces_registry_allowlist`.
+- T10: `allowlist_namespace_override_alternate_spelling` and
+  `namespace_prefixes_are_canonicalised`.
+- T11: `unmarked_document_is_refused`, `a_registry_document_is_never_judged`,
+  the sweep's document rows.
+- T12: `layer_dropping_allowlist_is_refused`.
+- T13: `allowlist_judges_the_canonical_name_of_an_alias`.
+- `[security]` ordering: `an_allowlist_refusal_queues_no_scan_and_records_no_verdict`.
+
+**Supply chain:** unchanged, as §8 said. No dependency was added.

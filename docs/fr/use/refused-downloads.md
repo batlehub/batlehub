@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/refused-downloads.md
-sourceHash: e0e54f5199245203
+sourceHash: da8d6d206ec1f834
 ---
 
 # Pourquoi un téléchargement est refusé
@@ -31,18 +31,21 @@ permission reçoit un `403`, sans demande d'identité. Seules les routes
 `/proxy/…` envoient cette demande.
 
 **Un `403` qui contient une raison.** Le registre exécute ses contrôles pendant
-la requête. Le message nomme le contrôle :
+la requête. Le champ `message` du corps de la réponse nomme le contrôle :
 
 ```text
-npm error 403 Forbidden - GET https://hub.example.com/proxy/npm/left-pad/-/left-pad-1.3.1.tgz
-npm error 403 release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)
+$ curl -s https://hub.example.com/proxy/npm/left-pad/1.3.1/tarball
+{"error":"Forbidden","message":"release is too recent (age: 3600s, minimum: 259200s, 255600 seconds remaining in quarantine)"}
 ```
 
 Les messages sont listés sous [Les refus à message simple](#plain-messages).
 
-Certains clients affichent le statut et non le motif : pip, par exemple, ne
-montre que `HTTP error 403`. `batlehub-cli why --last` liste vos propres refus
-récents avec leur code de motif, pour lire ce que pip n'a pas montré.
+Votre gestionnaire de paquets peut ne pas l'afficher. npm 11 n'affiche que le
+champ `error` du corps (`npm error 403 403 Forbidden - GET … - Forbidden`), et
+pip lit une page d'index refusée comme une page vide (`Could not find a version
+that satisfies the requirement … (from versions: none)`). `batlehub-cli why --last` liste vos propres
+refus récents avec leur code de motif, pour lire ce que le client n'a pas
+montré.
 
 **Un `403` qui nomme un verdict.** Le registre a un profil de chaîne
 d'approvisionnement : chaque version est analysée, et le résultat de l'analyse,

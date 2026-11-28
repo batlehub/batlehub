@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/security-gates.md
-sourceHash: 310c6b47b43fafa6
+sourceHash: 0004f9ab1fad4bc8
 ---
 
 # Contrôles de sécurité
@@ -213,7 +213,11 @@ bypass_roles = ["admin"]
   lire, non.
 - **Les listings :** la liste de versions d'un paquet listé est servie en
   entier, versions hors plage comprises. npm peut alors choisir un `latest`
-  refusé ; épinglez une version autorisée.
+  refusé ; épinglez une version autorisée. La recherche et les index qui
+  couvrent tout le registre ne sont pas filtrés par la liste, à ceci près que
+  sur un registre local ou hybride, un document construit à partir de la
+  lecture de chaque paquet (la liste d'un namespace Open VSX, par exemple)
+  omet un nom local non listé.
 - **Refus :** `package allowlist: '…' is not listed for registry '…'`
   ([`PACKAGE_NOT_ALLOWED`](/fr/use/refused-downloads#package-not-allowed)) ou
   `package allowlist: version '…' of '…' is not allowed for registry '…'`

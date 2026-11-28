@@ -438,6 +438,23 @@ impl RegistryKind {
         matches!(self, Self::Github | Self::Gitlab | Self::Forgejo)
     }
 
+    /// The package a coordinate names, for a kind whose listing coordinates
+    /// compose more than the package name (RFC 0051 §17).
+    ///
+    /// SDKMAN keys a listing by `candidate/platform` (and the relayed query),
+    /// rustup a channel manifest by `rust/<channel>`, galaxy a version document
+    /// by `namespace.name@version`. None of those characters can occur in the
+    /// kind's package names, so the prefix before them is the package. Every
+    /// other kind's name is the package as it stands.
+    pub fn package_of_coordinate<'a>(&self, name: &'a str) -> &'a str {
+        let cut = match self {
+            Self::Sdkman | Self::Rustup => name.find(['/', '?']),
+            Self::Galaxy => name.find('@'),
+            _ => None,
+        };
+        cut.map_or(name, |i| &name[..i])
+    }
+
     /// Whether a request on this kind names a package, so that a
     /// `package_allowlist` can judge it (RFC 0051 §4.3).
     ///

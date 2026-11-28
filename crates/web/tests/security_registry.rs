@@ -2172,3 +2172,67 @@ async fn a_leased_batch_runs_concurrently() {
         "both jobs ran at once"
     );
 }
+
+/// RFC 0051 §4.2: on a `[security]` registry the package allowlist runs ahead
+/// of the verdict gate, so a refused version creates no verdict, queues no
+/// scan job, and is never fetched by the worker.
+#[actix_web::test]
+async fn an_allowlist_refusal_queues_no_scan_and_records_no_verdict() {
+    use batlehub_core::entities::RegistryKind;
+    use batlehub_core::rules::{
+        Allowlist, AllowlistEntrySpec, PackageAllowlistRule, PackageAllowlistVersionRule,
+    };
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    {
+        let mut hot = lab.hot.write().await;
+        let sec = hot.security.get(REG).cloned().expect("the lab's profile");
+        let service = Arc::new(VerdictService::new(
+            Arc::clone(&lab.verdicts) as Arc<dyn VerdictRepository>,
+            Arc::clone(&lab.queue) as Arc<dyn ScanQueue>,
+        ));
+        let list = Arc::new(Allowlist::new(
+            RegistryKind::Npm,
+            &[AllowlistEntrySpec {
+                name: "pkg".to_owned(),
+                versions: Some(vec!["^2".to_owned()]),
+            }],
+            vec![],
+        ));
+        hot.policies.insert(
+            REG.to_owned(),
+            Arc::new(RegistryPolicy {
+                metadata_ttl: Some(Duration::from_secs(300)),
+                firewall_only: false,
+                serve_stale_metadata: false,
+                artifact_ttl: None,
+                rules: vec![
+                    Box::new(PackageAllowlistRule::new(Arc::clone(&list))),
+                    Box::new(PackageAllowlistVersionRule::new(list)),
+                    Box::new(VerdictGateRule::new(service, sec, None)),
+                ],
+            }),
+        );
+    }
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(
+        body.contains("package allowlist: version '1.1.0'"),
+        "{body}"
+    );
+    assert!(!body.contains("SCAN_PENDING"), "not a hold: {body}");
+    assert!(
+        lab.queue.open_jobs().await.is_empty(),
+        "no scan job for a refused version"
+    );
+    let pkg = PackageId::new(REG, "pkg", "1.1.0");
+    assert!(
+        lab.verdicts.get(&pkg).await.unwrap().is_none(),
+        "no verdict for a refused version"
+    );
+
+    // Unlisted name: the same, before anything is resolved.
+    let (code, _) = status(&app, &format!("/proxy/{REG}/other/1.0.0/tarball")).await;
+    assert_eq!(code, 403);
+    assert!(lab.queue.open_jobs().await.is_empty());
+}

@@ -110,7 +110,9 @@ impl Allowlist {
     /// on NuGet the id `Acme` may belong to someone other than the owner of
     /// `Acme.*` (§15 decision 18).
     fn listing(&self, name: &str) -> Listing<'_> {
-        let canonical = self.kind.canonical_package_name(name);
+        let canonical = self
+            .kind
+            .canonical_package_name(self.kind.package_of_coordinate(name));
         if let Some(v) = self.exact.get(canonical.as_ref()) {
             return Listing::Listed(v);
         }
@@ -332,6 +334,35 @@ mod tests {
             reason,
             "package allowlist: 'left-pad' is not listed for registry 'npm'"
         );
+    }
+
+    #[tokio::test]
+    async fn composed_listing_coordinates_are_judged_on_their_package() {
+        let sdk =
+            PackageAllowlistRule::new(list(RegistryKind::Sdkman, &[spec("java", None)], vec![]));
+        let id = PackageId::listing("sdk", "java/linuxx64?current=&installed=", "versions");
+        assert!(!eval(&sdk, id, Role::User, Action::ReleasesList)
+            .await
+            .is_deny());
+        let id = PackageId::listing("sdk", "maven/linuxx64", "versions");
+        assert!(eval(&sdk, id, Role::User, Action::ReleasesList)
+            .await
+            .is_deny());
+        let rustup =
+            PackageAllowlistRule::new(list(RegistryKind::Rustup, &[spec("rust", None)], vec![]));
+        let id = PackageId::listing("r", "rust/stable", "manifests");
+        assert!(!eval(&rustup, id, Role::User, Action::ReleasesList)
+            .await
+            .is_deny());
+        let galaxy = PackageAllowlistRule::new(list(
+            RegistryKind::Galaxy,
+            &[spec("acme.util", None)],
+            vec![],
+        ));
+        let id = PackageId::listing("g", "acme.util@9.8.7", "latest");
+        assert!(!eval(&galaxy, id, Role::User, Action::ReleasesList)
+            .await
+            .is_deny());
     }
 
     #[tokio::test]

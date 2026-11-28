@@ -198,7 +198,10 @@ bypass_roles = ["admin"]
   its scope. Publishing an unlisted name still succeeds; reading it does not.
 - **Listings:** a listed package's version list is served whole, out-of-range
   versions included. npm may then pick a refused `latest`; pin an allowed
-  version.
+  version. Search and whole-registry indexes are not filtered by the
+  allowlist, except that on a local or hybrid registry a document built from
+  each package's own read (an Open VSX namespace listing, for one) leaves an
+  unlisted local name out.
 - **Refusal:** `package allowlist: '…' is not listed for registry '…'`
   ([`PACKAGE_NOT_ALLOWED`](/use/refused-downloads#package-not-allowed)) or
   `package allowlist: version '…' of '…' is not allowed for registry '…'`

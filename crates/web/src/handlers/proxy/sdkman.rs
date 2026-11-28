@@ -321,6 +321,7 @@ pub async fn sdkman_validate(
     svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
         .await
         .map_err(AppError::from)?;
+    authorize_candidate_name(&svc, &registry, candidate, &identity).await?;
     let blocked = svc
         .blocked_versions_for(&registry, candidate, RegistryKind::Sdkman)
         .await;
@@ -499,6 +500,9 @@ pub async fn sdkman_hook(
     let candidate = candidate(&c)?;
     let version = version(&v)?;
     let platform = platform(&p)?;
+    // The hook is relayed as a document keyed by its path, which no allowlist
+    // entry names: the candidate is judged here (RFC 0051 §5.1).
+    authorize_candidate_name(&svc, &registry, candidate, &identity).await?;
     proxy_document(
         svc,
         relayed(
@@ -693,6 +697,24 @@ pub async fn sdkman_download(
         Some("application/octet-stream"),
     )
     .await
+}
+
+/// RFC 0051 — the `package_allowlist` name check for a document about one
+/// candidate that reaches no rule chain.
+async fn authorize_candidate_name(
+    svc: &ProxyService,
+    registry: &str,
+    candidate: &str,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    batlehub_core::services::authz::authorize_name(
+        &svc.hot,
+        &PackageId::listing(registry, candidate, "latest"),
+        &identity.0,
+        Action::ReleasesList,
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[cfg(test)]
