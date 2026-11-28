@@ -109,6 +109,7 @@ pub async fn bulk_block_packages(
                 name: i.name,
                 version: i.version,
                 artifact: i.artifact,
+                role: Default::default(),
             },
             reason: i.reason,
         })
@@ -187,6 +188,7 @@ pub async fn bulk_unblock_packages(
             name: i.name,
             version: i.version,
             artifact: i.artifact,
+            role: Default::default(),
         })
         .collect();
 
@@ -278,6 +280,7 @@ pub async fn bulk_delete_packages(
             name: i.name,
             version: i.version,
             artifact: i.artifact,
+            role: Default::default(),
         })
         .collect();
 

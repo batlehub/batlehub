@@ -191,7 +191,7 @@ const NOT_COVERED: &[&str] = &[
     "per-package visibility (public/internal/team)",
     "the pre-release beta channel",
     "the artifact gates: block_list, cve_gate, license_gate, release_age, \
-     require_signed_release, trusted_publisher, version_gate",
+     require_signed_release, trusted_publisher, version_gate, package_allowlist",
     "the IP and account block layers",
 ];
 

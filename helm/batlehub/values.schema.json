@@ -85,6 +85,29 @@
       },
       "type": "object"
     },
+    "AllowlistEntry": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "versions": {
+              "description": "Exact versions or semver ranges; a version matching any is allowed.\nAbsent means any version. `[]` is refused as ambiguous.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "One allowlist entry: a bare name, or `{ name, versions }`.\n\n`Deserialize` is written by hand rather than derived as `untagged`: a\nderived untagged enum answers a misspelled key with \"data did not match any\nvariant\", and an entry that silently lost its `versions` would allow every\nversion (RFC 0051 §4.3). This one names the key."
+    },
     "ApiDocsConfig": {
       "additionalProperties": false,
       "description": "`[server.api_docs]` — what the `/scalar` API reference may do.\n\n```toml\n[server.api_docs]\nai_agent     = true\nai_agent_key = \"${SCALAR_AGENT_KEY}\"   # required off `localhost`\n```\n\nOff by default. \"Ask AI\" is Scalar's hosted agent: turning it on sends the\nwhole OpenAPI document, and every question typed into it, to\n`api.scalar.com`, and opens `connect-src` on `/scalar` to that origin —\nwhich also lets the bundle's registry lookups through, announcing the page\nto Scalar on every load. A private registry should leave it off.\n\n`connect-src` is opened only where the agent can actually appear: with a\nkey, or keyless on a host the bundle calls local (`localhost`, `127.0.0.1`,\n`[::1]`, …). A keyless agent anywhere else stays hidden, so that page keeps\nthe strict policy rather than paying the price for nothing.",
@@ -1646,6 +1669,27 @@
       },
       "type": "object"
     },
+    "PackageAllowlistConfig": {
+      "description": "Serve only the packages listed, each optionally restricted to a version\nrange (RFC 0051). An unlisted name is refused before any upstream request;\na listed name outside its range is refused after the resolve.\n\n```toml\n[[registries.rules]]\nkind = \"package_allowlist\"\npackages = [\n  \"react\",                                         # any version\n  { name = \"lodash\", versions = [\">=4.17.21, <5\"] },\n  \"@acme/*\",                                       # everything under the scope\n]\nbypass_roles = [\"admin\"]\n```",
+      "properties": {
+        "bypass_roles": {
+          "default": [],
+          "description": "Roles that may bypass the allowlist (e.g. `[\"admin\"]`).\nThe least-privileged listed role is the floor: a higher role bypasses too.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "packages": {
+          "description": "The packages served. Required and non-empty. A name may end with the\nkind's namespace separator and `*` (`@acme/*`, `com.acme:*`, `Acme.*`)\nto cover the names under that prefix (not the bare prefix itself).",
+          "items": {
+            "$ref": "#/$defs/AllowlistEntry"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ProcessRole": {
       "description": "What a process does (`[server].roles`, RFC 0018 §4.1).",
       "enum": [
@@ -2518,6 +2562,25 @@
               "properties": {
                 "kind": {
                   "const": "trusted_publisher",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/PackageAllowlistConfig"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "package_allowlist",
                   "type": "string"
                 }
               },

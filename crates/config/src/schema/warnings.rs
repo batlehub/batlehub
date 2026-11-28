@@ -219,6 +219,22 @@ pub const LICENSE_GATE_NO_EXTRACTOR: &str = "license-gate.no-extractor";
 /// it: the parser worked, the rule was loaded, and no licence was ever stored.
 pub const LICENSE_GATE_SBOM_DISABLED: &str = "license-gate.sbom-disabled";
 
+/// A `package_allowlist` gives version ranges on a kind whose versions are
+/// mostly not semver, so most of them are refused (RFC 0051 §4.3).
+pub const ALLOWLIST_RANGE_ON_NON_SEMVER_KIND: &str = "allowlist.range-on-non-semver-kind";
+
+/// A `package_allowlist` version reads like a wildcard (`4.x`) but is matched
+/// as that exact text, which no version equals (RFC 0051 §4.3).
+pub const ALLOWLIST_LITERAL_WILDCARD: &str = "allowlist.literal-wildcard";
+
+/// A registry has both a `package_allowlist` and a `version_gate` with
+/// `allow`; a version must pass both (RFC 0051 §4.3).
+pub const ALLOWLIST_OVERLAPS_VERSION_GATE: &str = "allowlist.overlaps-version-gate";
+
+/// A `cache.warm_packages` entry the registry's `package_allowlist` does not
+/// serve: warming fetches it, every read refuses it (RFC 0051 §4.3).
+pub const ALLOWLIST_WARMS_UNLISTED: &str = "allowlist.warms-unlisted";
+
 /// `require_signed_release` is configured on a registry that also *publishes*,
 /// while `[registries.signing] required` is not set.
 ///
@@ -530,6 +546,10 @@ pub const ALL: &[&str] = &[
     SIGNED_URLS_UNUSED,
     LICENSE_GATE_NO_EXTRACTOR,
     LICENSE_GATE_SBOM_DISABLED,
+    ALLOWLIST_RANGE_ON_NON_SEMVER_KIND,
+    ALLOWLIST_LITERAL_WILDCARD,
+    ALLOWLIST_OVERLAPS_VERSION_GATE,
+    ALLOWLIST_WARMS_UNLISTED,
     REQUIRE_SIGNED_RELEASE_UNSIGNED_PUBLISHES,
     README_UNSUPPORTED_TYPE,
     README_FROM_ARCHIVE_INERT,

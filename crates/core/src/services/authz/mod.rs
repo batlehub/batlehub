@@ -68,11 +68,11 @@ use crate::ports::{BetaChannelPort, TeamNamespacePort};
 use crate::services::hot_config::HotConfigLock;
 
 pub use chain::{
-    authorize_control, authorize_grants_public, authorize_listing, authorize_read,
+    authorize_control, authorize_grants_public, authorize_listing, authorize_name, authorize_read,
     authorize_read_against, authorize_read_against_coded, authorize_unheld_read,
     authorize_unheld_read_coded, authorize_unpinned, browsable_registries, config_tier_holds,
     effective_verbs, evaluate_chain, evaluate_chain_all, exempt_gates_in,
-    holds_anywhere_in_registry, installable_registries, policy_in, resolution_path,
+    holds_anywhere_in_registry, installable_registries, judge_name_in, policy_in, resolution_path,
     resolution_path_for_coordinate, synthetic_metadata, EffectiveVerbs, RegistryAccess,
 };
 

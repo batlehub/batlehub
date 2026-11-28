@@ -57,7 +57,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 /// A relayed API document's coordinate: the path is the package, so each is
 /// its own cache entry under the registry's `metadata_ttl`.
 fn relayed(registry: &str, path: String) -> PackageId {
-    PackageId::new(registry, path, "doc")
+    PackageId::registry_document(registry, path, "doc")
 }
 
 /// A candidate name, refused when it could not be a storage-key segment.
@@ -224,7 +224,7 @@ pub async fn sdkman_candidate_default(
 
     let default = fetch_proxy_document(
         svc.clone(),
-        PackageId::new(&registry, candidate, "default"),
+        PackageId::listing(&registry, candidate, "default"),
         AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesList,
         DocumentKind::SDKMAN_DEFAULT,
@@ -381,7 +381,7 @@ pub async fn sdkman_versions_all(
     let platform = platform(&p)?;
     proxy_document(
         svc,
-        PackageId::new(&registry, listing_package(candidate, platform), "versions"),
+        PackageId::listing(&registry, listing_package(candidate, platform), "versions"),
         identity,
         Action::ReleasesList,
         DocumentKind::Versions,
@@ -450,7 +450,7 @@ pub async fn sdkman_versions_list(
     );
     proxy_document(
         svc,
-        PackageId::new(&registry, package, "versions-list"),
+        PackageId::listing(&registry, package, "versions-list"),
         identity,
         Action::ReleasesList,
         DocumentKind::SDKMAN_VERSIONS_LIST,

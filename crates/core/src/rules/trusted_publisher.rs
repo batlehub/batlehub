@@ -86,25 +86,9 @@ impl TrustedPublisherRule {
     }
 
     /// Turn a gate violation into a verdict, admitting a caller at or above the
-    /// least-privileged configured bypass role (mirrors `VersionGateRule::gate`).
-    ///
-    /// The comparison happens here rather than being handed back as a
-    /// `RequireRole` for the caller to resolve — that variant is deleted, and
-    /// `RuleDecision`'s own documentation says what it cost.
+    /// least-privileged configured bypass role ([`crate::rules::gate`]).
     fn gate(&self, identity: &Identity, reason: String) -> RuleDecision {
-        if self.bypass_roles.is_empty() {
-            return RuleDecision::Deny { reason };
-        }
-        let minimum = self.bypass_roles.iter().min().expect("non-empty");
-        if identity.has_role_at_least(minimum) {
-            return RuleDecision::Allow;
-        }
-        RuleDecision::Deny {
-            reason: format!(
-                "{reason} (bypass requires role '{minimum}' or higher, you have '{}')",
-                identity.role
-            ),
-        }
+        crate::rules::gate(&self.bypass_roles, identity, reason)
     }
 }
 

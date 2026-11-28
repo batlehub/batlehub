@@ -89,7 +89,7 @@ fn entry_from_body(registry: &str, content_type: &str, body: &Bytes) -> CacheEnt
     // CacheStore only knows how to hold metadata). base64 keeps it JSON-safe
     // regardless of content.
     let metadata = PackageMetadata::minimal(
-        PackageId::new(registry, "_forward", "_"),
+        PackageId::registry_document(registry, "_forward", "_"),
         serde_json::json!({
             "body_b64": B64.encode(body),
             "content_type": content_type,

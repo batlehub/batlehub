@@ -279,6 +279,7 @@ pub async fn check_access(
                 name: query.name.clone(),
                 version: version.to_owned(),
                 artifact: query.artifact.clone(),
+                role: Default::default(),
             };
             match svc.explain(&identity.0, &pkg, scope).await? {
                 Answer::NotFound => return Err(not_found()),

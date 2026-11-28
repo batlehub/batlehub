@@ -128,6 +128,14 @@ The uploaded `.pom` file is missing `<groupId>` or `<artifactId>`. These are req
 
 BatleHub generates `maven-metadata.xml` dynamically from the database. A successful `.pom` upload (HTTP 201) means the version was recorded. If GET returns 404, the `.pom` upload may have failed — check the response status for each uploaded file in verbose output (`mvn deploy -X`).
 
+### Published, but every read answers `403` — "package allowlist"
+
+The registry has a [`package_allowlist`](/guide/security-gates#package-allowlist)
+and your package is not on it. Publishing is governed by your grants, so the
+upload succeeds; reading is governed by the allowlist, so every read is
+refused. Ask your administrator to list the package, usually by its scope
+(`"@acme/*"`).
+
 ### Terraform `terraform init` fails — "registry does not have a provider"
 
 Verify the `source` address in `terraform required_providers` matches the registry hostname and path exactly:

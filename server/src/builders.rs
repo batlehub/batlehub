@@ -786,7 +786,14 @@ pub(super) fn build_namespace_policies(
         };
         let owned = effective_rules(&reg.rules, overrides)?;
         out.push((
-            ns.match_prefix.clone(),
+            // RFC 0051 §15 decision 16: canonical, as grants' prefixes are
+            // (`grants::canonical_prefix`), so `policy_in` — which brings the
+            // request name to the same form — selects one namespace whatever
+            // the spelling.
+            reg.registry_type.parse::<RegistryKind>().map_or_else(
+                |_| ns.match_prefix.clone(),
+                |k| k.canonical_package_name(&ns.match_prefix).into_owned(),
+            ),
             Arc::new(build_policy_with_rules(
                 reg,
                 &owned,
@@ -902,6 +909,40 @@ fn push_forge_rules(
     rules.push(Box::new(raw));
 }
 
+/// RFC 0051 — both allowlist rules, from the one block validation allowed,
+/// sharing one built list.
+fn push_package_allowlist_rules(
+    rules: &mut Vec<Box<dyn batlehub_core::rules::Rule>>,
+    rule_configs: &[RuleConfig],
+    registry_kind: Option<RegistryKind>,
+) -> anyhow::Result<()> {
+    let Some(cfg) = rule_configs.iter().find_map(|r| match r {
+        RuleConfig::PackageAllowlist(c) => Some(c),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let kind = registry_kind
+        .ok_or_else(|| anyhow::anyhow!("package_allowlist needs a known registry type"))?;
+    let entries: Vec<batlehub_core::rules::AllowlistEntrySpec> = cfg
+        .packages
+        .iter()
+        .map(|e| batlehub_core::rules::AllowlistEntrySpec {
+            name: e.name().to_owned(),
+            versions: e.versions().map(<[String]>::to_vec),
+        })
+        .collect();
+    let bypass = parse_bypass_roles(&cfg.bypass_roles)?;
+    let list = Arc::new(batlehub_core::rules::Allowlist::new(kind, &entries, bypass));
+    rules.push(Box::new(batlehub_core::rules::PackageAllowlistRule::new(
+        Arc::clone(&list),
+    )));
+    rules.push(Box::new(
+        batlehub_core::rules::PackageAllowlistVersionRule::new(list),
+    ));
+    Ok(())
+}
+
 fn build_policy_with_rules(
     reg: &RegistryConfig,
     rule_configs: &[RuleConfig],
@@ -942,6 +983,11 @@ fn build_policy_with_rules(
     // the five gates it covers are not in the chain at all — one answer, and
     // no second path where a gate can fail open beside the verdict.
     let quarantined = security.is_some();
+    // RFC 0051 §4.2 — the package allowlist runs first, before the verdict
+    // gate and the block list: a refused version must never create a verdict,
+    // queue a scan job, or have the worker fetch it. This moves RFC 0018
+    // §5.1's "the verdict gate is first" one place down.
+    push_package_allowlist_rules(&mut rules, rule_configs, registry_kind)?;
     match security {
         Some(w) => rules.push(Box::new(VerdictGateRule::new(
             w.service,
@@ -1043,6 +1089,8 @@ fn build_policy_with_rules(
                     registry_kind,
                 )));
             }
+            // Pushed at the head of the chain by `push_package_allowlist_rules`.
+            RuleConfig::PackageAllowlist(_) => {}
         }
     }
     Ok(RegistryPolicy {
@@ -1514,6 +1562,73 @@ mod tests {
         assert!(policy.serve_stale_metadata);
         assert_eq!(policy.metadata_ttl, Some(Duration::from_secs(300)));
         assert!(policy.artifact_ttl.is_none());
+    }
+
+    /// RFC 0051 §4.2: both allowlist rules come first, ahead of the block
+    /// list, and are pushed once even though the block also reaches the
+    /// exhaustive match below.
+    #[test]
+    fn package_allowlist_rules_lead_the_chain_once() {
+        let r = make_registry(
+            "npm",
+            "reg",
+            r#"
+            [[registries.rules]]
+            kind = "deny_latest"
+            [[registries.rules]]
+            kind = "package_allowlist"
+            packages = ["react"]
+            "#,
+        );
+        let repo: Arc<dyn batlehub_core::ports::PackageRepository> =
+            InMemoryPackageRepository::new();
+        let policy = build_policy(
+            &r,
+            repo,
+            InMemoryVulnerabilityRepository::arc(),
+            NoopSbomRepository::arc(),
+            GateStores::default(),
+        )
+        .unwrap();
+        let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "package_allowlist",
+                "package_allowlist_version",
+                "block_list",
+                "deny_latest"
+            ]
+        );
+    }
+
+    /// RFC 0051 §15 decision 16: namespace prefixes are canonical, as grants'
+    /// are, so a NuGet namespace written `Acme.` selects `acme.billing`.
+    #[test]
+    fn namespace_prefixes_are_canonicalised() {
+        let r = make_registry(
+            "nuget",
+            "reg",
+            r#"
+            [[registries.namespaces]]
+            match = "Acme"
+            [[registries.namespaces.rules]]
+            kind = "deny_latest"
+            "#,
+        );
+        let repo: Arc<dyn batlehub_core::ports::PackageRepository> =
+            InMemoryPackageRepository::new();
+        let chains = build_namespace_policies(
+            &r,
+            repo,
+            InMemoryVulnerabilityRepository::arc(),
+            NoopSbomRepository::arc(),
+            GateStores::default(),
+            None,
+        )
+        .unwrap();
+        let prefixes: Vec<&str> = chains.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(prefixes, vec!["acme"]);
     }
 
     /// RFC 0018 §6.5: a `[security]` registry's chain is the verdict gate

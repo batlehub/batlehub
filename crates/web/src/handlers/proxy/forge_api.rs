@@ -130,6 +130,11 @@ async fn forge_for(
         .map_err(|_| {
             AppError::forbidden("this endpoint requires the 'releases:read' permission")
         })?;
+    // RFC 0051 §5.1 point 4 — an unlisted repository is refused before the
+    // forge is asked anything.
+    authz::authorize_name(&svc.hot, &pkg, &identity.0, Action::ReleasesRead)
+        .await
+        .map_err(AppError::from)?;
     Ok(client)
 }
 

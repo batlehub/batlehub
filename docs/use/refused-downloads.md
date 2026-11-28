@@ -36,6 +36,10 @@ npm error 403 release is too recent (age: 3600s, minimum: 259200s, 255600 second
 
 The messages are listed under [Refusals with a plain message](#plain-messages).
 
+Some clients print the status and not the reason: pip, for one, shows only
+`HTTP error 403`. `batlehub-cli why --last` lists your own recent refusals with
+their reason code, so you can read what pip did not show.
+
 **A `403` naming a verdict.** The registry has a supply-chain profile: every
 version is scanned, and the scan's result, its **verdict**, decides:
 
@@ -275,6 +279,19 @@ This registry serves only packages from an approved list of publishers, and
 this one is not on it. Ask your administrator to add the publisher if you need
 it.
 
+#### `PACKAGE_NOT_ALLOWED` {#package-not-allowed}
+
+This registry serves only an approved list of packages, and this one is not on
+it. Check the spelling first: a typo in a package name is the most common way
+to meet this code. If you need the package, ask your administrator to add it.
+
+#### `VERSION_NOT_ALLOWED` {#version-not-allowed}
+
+The package is approved on this registry, but only in certain versions, and
+this is not one of them. Pin an approved version. npm can meet this on a plain
+`npm install <name>`, because it picks `latest` from a version list that still
+shows every version; pin one explicitly.
+
 #### `BLOCK_LIST` {#block-list}
 
 An administrator blocked this version, and `batlehub-cli why` shows their reason
@@ -350,6 +367,8 @@ whole answer, and `batlehub-cli why` has nothing to add.
 | `requests for the 'latest' version tag are not allowed` | This registry requires an explicit version | Pin a version in your manifest or lockfile |
 | `version '…' is blocked by policy` | This exact version is known to be bad | Use another version |
 | `version '…' is not in the approved allowlist` | Only approved versions are served here | Use one in the approved range, or ask for it to be approved |
+| `package allowlist: '…' is not listed` | Only an approved list of packages is served, see [`PACKAGE_NOT_ALLOWED`](#package-not-allowed) | Check the spelling, or ask for the package to be added |
+| `package allowlist: version '…' of '…' is not allowed` | This package is approved in other versions, see [`VERSION_NOT_ALLOWED`](#version-not-allowed) | Pin an approved version |
 | `publisher '…' is not in the trusted_publisher allowlist` | Only approved publishers are served | Ask for the publisher to be added |
 | `cannot verify the publisher` | The publisher check is on, and this registry type cannot report publishers | Your administrator's configuration needs a fix |
 | `this release is not signed` | Only signed releases are served | Use a signed version |

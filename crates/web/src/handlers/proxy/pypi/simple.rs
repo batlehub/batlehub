@@ -44,7 +44,7 @@ pub async fn pypi_simple_root(
     require_registry_type(&registry, "pypi", &map)?;
 
     // Represent the root index as a special sentinel PackageId.
-    let pkg = PackageId::new(&registry, "__simple__", "__root__");
+    let pkg = PackageId::registry_document(&registry, "__simple__", "__root__");
     proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some("text/html")).await
 }
 
@@ -133,7 +133,7 @@ pub async fn pypi_simple_package(
     // before pip resolves against them.
     let doc = fetch_proxy_document(
         svc,
-        PackageId::new(&registry, &normalized, "__simple__"),
+        PackageId::listing(&registry, &normalized, "__simple__"),
         identity,
         Action::ReleasesRead,
         doc_kind,

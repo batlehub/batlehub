@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | In review                                                     |
+| Status      | Accepted — phase 1 implemented on PR #432 (§17); phase 2, the heavy proof, pending |
 | Short       | Package allowlist                                             |
 | Settles     | How a registry serves only the packages an operator listed, each optionally pinned to a version range |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1104,3 +1104,76 @@ None.
 Phase 1 is one change, because each piece it holds is either the control or
 the docs the codes need in order to be read. Each phase leaves `cargo test
 --workspace`, clippy, `ui:lint` and the docs gates green.
+
+## 17. Revision against the tree (2026-11-28)
+
+Phase 1 is in the tree on PR #432. Phase 2 (the heavy phases of §6.P) is not:
+no observation of §6.P has been made yet, so the client output in §4.5 is
+still the mock, not a capture.
+
+**What shipped as written.** Both rules at the head of the chain
+(`push_package_allowlist_rules`, `server/src/builders.rs`), the coordinate role
+(`CoordinateRole` on `PackageId`, `#[serde(skip)]`, left out of `Eq`/`Hash`),
+`has_package_names`, the hand-written `AllowlistEntry` deserializer, every
+§4.3 hard error and warning (`crates/config/src/schema/allowlist.rs`), the
+layer check (`merge_checked`, `crates/config/src/lib.rs`), canonical namespace
+prefixes, the `pullability` arms and the access-log codes, `NOT_COVERED`, and
+the docs pages in both languages.
+
+**Where it differs from the text, and why.**
+
+1. **`judge_name` takes the `PackageId`, not the name.** It needs the
+   coordinate's role and the registry name for its message; §5.1 drew it with
+   the name alone.
+2. **The role reaches the chain by copying, not by a `RuleContext` field.**
+   After the resolve, `handle_resolved` and `resolve_metadata_for_inner` set
+   `metadata.id.role` from the request: the adapter builds `metadata.id`
+   without knowing it. A site that forgets falls back to `Package`, which
+   fails closed. A new `RuleContext` field would have touched every literal of
+   it for the same effect.
+3. **`policy_in` canonicalises the request name** as well as the prefixes
+   being canonical at build, so the namespace selection and the rule see one
+   spelling from either side (§15 decision 16).
+4. **The air-gap version check is in `handle`'s error arm**, not inside
+   `record_miss`: `record_miss` has no identity, so it could neither honour
+   `bypass_roles` nor word the refusal. It runs only for `ContentUnavailable`.
+5. **Local per-package listings judge the name in `check_read_access`**,
+   after grants and visibility (§15 decision 9). The whole-registry inventory
+   that asks per name calls `check_read_access_unjudged`, so whole-registry
+   documents stay unfiltered (§3).
+6. **Alias routes needed no new call site.** The canonical coordinate goes
+   back through `handle`, whose name check judges it (T13 as designed).
+7. **`why <registry>/<name>` with no version, for an unlisted name,** fetches
+   nothing (`upstream_detail` answers "not attempted"), but it answers as not
+   found rather than with the §4.5 `PACKAGE_NOT_ALLOWED` headline. `Resolution`
+   has no refusal field, and adding one changes the OpenAPI spec, which §4.4
+   rules out. The versioned form shows the refusal as mocked.
+8. **The npm tarball route in the §4.5 mocks is wrong:** this server serves
+   `/proxy/{registry}/{package}/{version}/tarball`, not `-/{package}-{v}.tgz`.
+   The mocks stay as written; §6.P captures the real lines.
+9. **The layer error names the layer by position** ("config layer 2"): the
+   reload path holds layer texts, not paths.
+10. **The T5 gate is narrower than §5.1 describes.**
+    `crates/web/tests/package_allowlist.rs` (10 cases) asserts zero upstream
+    calls with a counting client for an unlisted download, packument and
+    `why`. It also covers the out-of-range refusal, the bypass, the local
+    rows, the cargo `config.json`, the PyPI simple root and the PyPI
+    spellings. The sweep over the shared route rows of `authz_matrix.rs` is
+    not built yet, so a new route is not yet forced to be classified. That is
+    owed before `Implemented`.
+11. **`task fuzz:check` was not run locally:** the environment's `c++` shim has
+    no version set. No fuzz target names a changed type (`PackageId` is built
+    there through `PackageId::new`, whose signature is unchanged); the CI job
+    is the check.
+
+**Tests that now prove the threat rows:** T1, T2, T3, T6, T7 and T8 in
+`crates/core/src/rules/package_allowlist.rs`. T4 and T5 (partly, item 10) in
+`crates/web/tests/package_allowlist.rs`. T10 through
+`namespace_prefixes_are_canonicalised` (`server/src/builders.rs`). T11 through
+`unmarked_document_is_refused` and `a_registry_document_is_never_judged`. T12
+through `layer_dropping_allowlist_is_refused`. T9 and T13 have no dedicated
+test yet.
+
+**Supply chain:** unchanged, as §8 said. No dependency was added; `semver` was
+already in `crates/core`.
+

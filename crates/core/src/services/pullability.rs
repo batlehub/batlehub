@@ -269,6 +269,23 @@ impl PullabilityService {
             detail: format!("you may read {registry}"),
             next: None,
         }];
+        // RFC 0051 §5.1 point 6 — the allowlist's name half, after visibility
+        // (§15 decision 9) and before anything below can reach the upstream.
+        // A typosquat the upstream does not know answers the same refusal as
+        // one it does, so `why` is no probe of the upstream.
+        if let Err(CoreError::AccessDenied(denial)) =
+            crate::services::authz::authorize_name(&self.local.hot, package, identity, action).await
+        {
+            causes.push(Cause {
+                kind: "policy".into(),
+                state: CauseState::Refuse,
+                reason_code: Some(crate::rules::PACKAGE_NOT_ALLOWED.to_owned()),
+                until: None,
+                detail: denial.message,
+                next: Some(ALLOWLIST_NAME_NEXT.into()),
+            });
+            return Ok(Answer::Found(finish(causes, version)));
+        }
 
         // ── 2. What the download would judge: the local row, else upstream ───
         let row: Option<PublishedPackage> = if scope.holds_local {
@@ -543,6 +560,10 @@ fn not_yet_resolved(registry: &str, name: &str, version: &str) -> Cause {
     }
 }
 
+/// The next step a `PACKAGE_NOT_ALLOWED` refusal names (RFC 0051 §4.5).
+const ALLOWLIST_NAME_NEXT: &str =
+    "ask an administrator to add it to the registry's package allowlist";
+
 fn finish(mut causes: Vec<Cause>, version: &str) -> Pullability {
     // The server's order (§4.8): access, block, lifecycle, policy, verdict,
     // upstream. Stable, so causes of one kind keep chain order.
@@ -617,6 +638,34 @@ fn rule_cause(
         detail,
         next: Some(next.into()),
     };
+    // RFC 0051 — two rules, one code each (§15 decision 11).
+    if rule == crate::rules::PACKAGE_ALLOWLIST_GATE
+        || rule == crate::rules::PACKAGE_ALLOWLIST_VERSION_GATE
+    {
+        let name_half = rule == crate::rules::PACKAGE_ALLOWLIST_GATE;
+        return Some(Cause {
+            kind: "policy".into(),
+            state: CauseState::Refuse,
+            reason_code: Some(
+                if name_half {
+                    crate::rules::PACKAGE_NOT_ALLOWED
+                } else {
+                    crate::rules::VERSION_NOT_ALLOWED
+                }
+                .to_owned(),
+            ),
+            until: None,
+            detail: reason.clone(),
+            next: Some(
+                if name_half {
+                    ALLOWLIST_NAME_NEXT
+                } else {
+                    "pin a version the package allowlist accepts"
+                }
+                .into(),
+            ),
+        });
+    }
     Some(match rule {
         // The administrator's note is theirs (T2): the code says what kind of
         // refusal it is, and an admin reading `why` sees the note too.

@@ -1,4 +1,5 @@
 pub mod air_gap;
+mod allowlist;
 pub mod audit;
 pub mod auth;
 pub mod flag_sources;
@@ -803,6 +804,7 @@ impl AppConfig {
         self.subdomain_warnings(&mut out);
         self.cors_warnings(&mut out);
         self.license_gate_warnings(&mut out);
+        self.package_allowlist_warnings(&mut out);
         self.readme_warnings(&mut out);
         self.upstream_detail_warnings(&mut out);
         self.search_warnings(&mut out);
@@ -2684,6 +2686,7 @@ impl AppConfig {
         self.validate_page_sizes()?;
         self.validate_search()?;
         self.validate_registries()?;
+        self.validate_package_allowlists()?;
         self.validate_security_globals(env)?;
         self.validate_console()?;
         self.validate_upstream_audit()?;

@@ -158,6 +158,7 @@ pub async fn my_downloads(
                 name,
                 version,
                 artifact,
+                ..
             } = package_id;
             Some(MyDownloadDto {
                 registry,

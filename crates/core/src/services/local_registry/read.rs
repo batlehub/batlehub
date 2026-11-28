@@ -1140,6 +1140,30 @@ impl LocalRegistryService {
         name: &str,
         identity: &Identity,
     ) -> Result<(), CoreError> {
+        self.check_read_access_unjudged(registry, name, identity)
+            .await?;
+        // RFC 0051 §5.1 point 3 — the allowlist's name half, after grants and
+        // visibility (§15 decision 9), so a hidden package stays a `404`.
+        // On a listing no rule chain runs, so this is the control here.
+        crate::services::authz::authorize_name(
+            &self.hot,
+            &PackageId::listing(registry, name, "latest"),
+            identity,
+            crate::entities::Action::ReleasesList,
+        )
+        .await
+    }
+
+    /// [`Self::check_read_access`] without the package allowlist, for a
+    /// whole-registry inventory that asks per name: RFC 0051 does not filter
+    /// whole-registry documents (§3), so an unlisted local name stays in them
+    /// and is refused on its own reads.
+    pub(super) async fn check_read_access_unjudged(
+        &self,
+        registry: &str,
+        name: &str,
+        identity: &Identity,
+    ) -> Result<(), CoreError> {
         // RFC 0015 §4.2 — a listing's verb is `releases:list`, by definition of what a
         // listing is: *"version documents, protocol indexes and search results —
         // including the cargo sparse index, which is a version listing whatever its URL
@@ -1579,7 +1603,10 @@ impl LocalRegistryService {
             if !readable.contains(&name) {
                 continue;
             }
-            match self.check_read_access(registry, &name, identity).await {
+            match self
+                .check_read_access_unjudged(registry, &name, identity)
+                .await
+            {
                 Ok(()) => {}
                 Err(CoreError::AccessDenied(_)) => continue,
                 Err(e) => return Err(e),

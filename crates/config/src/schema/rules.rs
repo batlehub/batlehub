@@ -66,6 +66,7 @@ pub enum RuleConfig {
     LicenseGate(LicenseGateConfig),
     VersionGate(VersionGateConfig),
     TrustedPublisher(TrustedPublisherConfig),
+    PackageAllowlist(PackageAllowlistConfig),
 }
 
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -280,4 +281,115 @@ pub struct TrustedPublisherConfig {
     /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
+}
+
+/// Serve only the packages listed, each optionally restricted to a version
+/// range (RFC 0051). An unlisted name is refused before any upstream request;
+/// a listed name outside its range is refused after the resolve.
+///
+/// ```toml
+/// [[registries.rules]]
+/// kind = "package_allowlist"
+/// packages = [
+///   "react",                                         # any version
+///   { name = "lodash", versions = [">=4.17.21, <5"] },
+///   "@acme/*",                                       # everything under the scope
+/// ]
+/// bypass_roles = ["admin"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PackageAllowlistConfig {
+    /// The packages served. Required and non-empty. A name may end with the
+    /// kind's namespace separator and `*` (`@acme/*`, `com.acme:*`, `Acme.*`)
+    /// to cover the names under that prefix (not the bare prefix itself).
+    pub packages: Vec<AllowlistEntry>,
+    /// Roles that may bypass the allowlist (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
+    #[serde(default)]
+    pub bypass_roles: Vec<String>,
+}
+
+/// One allowlist entry: a bare name, or `{ name, versions }`.
+///
+/// `Deserialize` is written by hand rather than derived as `untagged`: a
+/// derived untagged enum answers a misspelled key with "data did not match any
+/// variant", and an entry that silently lost its `versions` would allow every
+/// version (RFC 0051 §4.3). This one names the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum AllowlistEntry {
+    Name(String),
+    Pinned {
+        name: String,
+        /// Exact versions or semver ranges; a version matching any is allowed.
+        /// Absent means any version. `[]` is refused as ambiguous.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        versions: Option<Vec<String>>,
+    },
+}
+
+impl AllowlistEntry {
+    pub fn name(&self) -> &str {
+        match self {
+            AllowlistEntry::Name(n) | AllowlistEntry::Pinned { name: n, .. } => n,
+        }
+    }
+
+    pub fn versions(&self) -> Option<&[String]> {
+        match self {
+            AllowlistEntry::Name(_) => None,
+            AllowlistEntry::Pinned { versions, .. } => versions.as_deref(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AllowlistEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = AllowlistEntry;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a package name, or a table { name, versions }")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(AllowlistEntry::Name(v.to_owned()))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut name: Option<String> = None;
+                let mut versions: Option<Vec<String>> = None;
+                let mut unknown: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "versions" => versions = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                            unknown.get_or_insert(key);
+                        }
+                    }
+                }
+                if let Some(key) = unknown {
+                    let entry = name
+                        .as_deref()
+                        .map_or_else(String::new, |n| format!(" '{n}'"));
+                    return Err(serde::de::Error::custom(format!(
+                        "package_allowlist entry{entry}: unknown key '{key}'; expected 'name' or 'versions'"
+                    )));
+                }
+                let name = name.ok_or_else(|| {
+                    serde::de::Error::custom("package_allowlist entry: missing 'name'")
+                })?;
+                Ok(AllowlistEntry::Pinned { name, versions })
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
 }

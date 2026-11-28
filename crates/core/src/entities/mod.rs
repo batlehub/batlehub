@@ -61,7 +61,9 @@ pub use local_package::{
 pub use notification::{
     InboundWebhookEvent, NotificationEvent, NotificationEventType, NotificationSubscription,
 };
-pub use package::{PackageFilter, PackageId, PackageMetadata, PackageStatus, PackageSummary};
+pub use package::{
+    CoordinateRole, PackageFilter, PackageId, PackageMetadata, PackageStatus, PackageSummary,
+};
 pub use permission::{
     expand_pattern, expand_pattern_for, expand_patterns, expand_patterns_for, known_prefixes,
     Action, ActionParseError, WildcardScope, LEGACY_WILDCARD_EXPANSION,

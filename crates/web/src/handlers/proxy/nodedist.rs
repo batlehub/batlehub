@@ -86,7 +86,7 @@ pub async fn nodedist_index_tab(
     let name = package_name(&registry, &upstreams);
     proxy_document(
         svc,
-        PackageId::new(&registry, name, "index"),
+        PackageId::listing(&registry, name, "index"),
         identity,
         Action::ReleasesList,
         DocumentKind::Versions,
@@ -121,7 +121,7 @@ pub async fn nodedist_index_json(
     let name = package_name(&registry, &upstreams);
     proxy_document(
         svc,
-        PackageId::new(&registry, name, "index"),
+        PackageId::listing(&registry, name, "index"),
         identity,
         Action::ReleasesList,
         DocumentKind::INDEX_JSON,

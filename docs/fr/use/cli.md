@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 5c9dfd99ecfc029f
+sourceHash: 07c0e3ced93f671a
 ---
 
 # batlehub-cli
@@ -1852,6 +1852,11 @@ VERSION  STATE        UNTIL                  CODE
 1.3.9    allowed      —                      —
 1.3.8    yanked       —                      —
 ```
+
+Sous une plage de [`package_allowlist`](/fr/guide/security-gates#package-allowlist),
+le titre nomme la version *autorisée* la plus récente, alors que npm demande
+`latest` et se voit refusé (`VERSION_NOT_ALLOWED`) : épinglez la version que
+`why` nomme.
 
 ### `why --last [--limit 20]`
 

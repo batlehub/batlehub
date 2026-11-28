@@ -24,7 +24,7 @@ single section.
 | **Where gates run** | On the request: each gate answers allow or deny as the download happens | Mostly in the scan worker. Its findings are stored as a **verdict**, and the request reads that verdict |
 | **`release_age_gate`** | A rule | Replaced by `security.min_age_secs`. Declaring both is a config error |
 | **`cve_gate`, `license_gate`, `require_signed_release`, `trusted_publisher`** | Rules, with their own `block`, `min_severity` and `bypass_roles` | Internal scanners. A finding is judged by `security.max_severity` and `security.mode`, with no bypass role |
-| **`deny_latest`, `version_gate`** | Rules | Still rules: they judge the request, not the artifact |
+| **`deny_latest`, `version_gate`, `package_allowlist`** | Rules | Still rules: they judge the request, not the artifact |
 | **Admin block list, SOC flags** | Rules | Internal scanners whose findings are always `denied` |
 | **What a refused client sees** | A plain `403` naming the reason | The registry's native error shape, plus `X-BatleHub-*` headers for callers allowed to see them |
 | **Can a version be held and released later?** | No: each request is judged fresh | Yes: `quarantined` lifts on its own once the hold's condition clears |
@@ -54,11 +54,16 @@ refusal:
 2. **Grants.** The caller must hold `releases:read` on the coordinate. This is
    checked before any upstream fetch, so a caller without the grant costs no
    egress. See [The authorization model](/guide/access-control#authorization).
+   On a registry with a [`package_allowlist`](#package-allowlist), an unlisted
+   name is refused right after, also before any upstream fetch.
 3. **Metadata.** It is resolved cache-first. On the very first request for an
    uncached version, the upstream has therefore already answered before any
    gate runs, so a publish date or a signature flag is real data and not a
    guess.
 4. **The registry's gate chain**, in this order:
+   - the [`package_allowlist`](#package-allowlist), when configured: its name
+     and version checks come first, so a refused version never reaches the
+     verdict gate's scan queue;
    - the admin [block list](#block-list) and the [flags](#flags) gate, or the
      [verdict gate](#verdict-gate) on a `[security]` registry, which carries
      both;
@@ -79,7 +84,10 @@ through to the proxy path, which runs the full chain on the upstream's
 metadata.
 
 **Listings and indexes run no gate.** A packument, a version list or an
-`index.json` checks the `releases:list` grant and nothing else. Two things are
+`index.json` checks the `releases:list` grant and nothing else, except that a
+`package_allowlist` refuses the listing of a name it does not list. A
+whole-registry document (search, `packages.json`, `index.yaml`, cargo
+`config.json`) is never judged by it. Two things are
 removed from a listing anyway: versions on the admin block list and, on a
 `[security]` registry, versions whose verdict is not served. `latest` is
 recomputed without them. No other gate hides a version from a listing: a
@@ -152,6 +160,64 @@ bypass_roles = ["admin"]
 - **Refusal:** `version '…' is blocked by policy (known issue)` or
   `version '…' is not in the approved allowlist`.
 - **Under `[security]`:** unchanged. It still runs on the request.
+
+### `package_allowlist` {#package-allowlist}
+
+Serves only the packages listed, each optionally restricted to a version range
+([RFC 0051](/rfc/0051-package-allowlist)). Anything else is refused.
+
+```toml
+[[registries.rules]]
+kind = "package_allowlist"
+packages = [
+  "react",                                         # any version
+  { name = "lodash", versions = [">=4.17.21, <5"] },
+  "@acme/*",                                       # every name under the scope
+  { name = "@acme/billing", versions = ["^2"] },   # one package inside it, pinned
+]
+bypass_roles = ["admin"]
+```
+
+- **Names:** written in the ecosystem's own spelling and matched the way this
+  instance stores them, so `Requests`, `requests` and `python_dateutil` /
+  `python-dateutil` are each one PyPI package, NuGet ids ignore case, and Go
+  module paths match whatever their case. A name ending with the namespace
+  separator and `*` (`@acme/*`, `com.acme:*`, `Acme.*`) covers the names under
+  that prefix, not the bare prefix itself. An exact entry wins over a prefix,
+  and the longest prefix wins over a shorter one.
+- **Versions:** the same matching as `version_gate`: an exact version, or a
+  semver range. A version matching any element is served. With no `versions`,
+  every version is. A version that is not semver never matches a range, so on
+  PyPI, Maven, NuGet and RubyGems list exact versions.
+- **Before any fetch:** an unlisted name is refused before the upstream is
+  asked anything, on downloads, per-package listings, `batlehub-cli why`, the
+  Access Check page and the console's package page. A listed name at an
+  out-of-range version is refused once the version is resolved, so `latest`
+  is judged as the version it names.
+- **Local rows too:** a locally published package must be listed, usually by
+  its scope. Publishing an unlisted name still succeeds; reading it does not.
+- **Listings:** a listed package's version list is served whole, out-of-range
+  versions included. npm may then pick a refused `latest`; pin an allowed
+  version.
+- **Refusal:** `package allowlist: '…' is not listed for registry '…'`
+  ([`PACKAGE_NOT_ALLOWED`](/use/refused-downloads#package-not-allowed)) or
+  `package allowlist: version '…' of '…' is not allowed for registry '…'`
+  ([`VERSION_NOT_ALLOWED`](/use/refused-downloads#version-not-allowed)). The
+  list and its ranges are never shown.
+- **Under `[security]`:** unchanged. It runs first, before the verdict gate.
+- **Not here:** `generic`, `deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `nix`,
+  `godist` and `mise-java` requests name no package, so the rule is refused at
+  load (`generic` has `path_allow`). On a forge, `versions` is refused, because
+  archives are keyed by commit.
+- **In force once applied:** a change to the list is staged like any config
+  change, and takes effect when an administrator applies it. A later config
+  layer whose `rules` would drop the allowlist is refused at load.
+
+To build a first list, take the names your registry already serves (the pulls
+audit, `GET /api/v1/audit/pulls`) or your lockfiles
+(`batlehub-cli check --lock package-lock.json --format json`), **before**
+turning the rule on. Try it on a namespace or a new registry first, and watch
+for `PACKAGE_NOT_ALLOWED` in the access log.
 
 ### `trusted_publisher` {#trusted-publisher}
 

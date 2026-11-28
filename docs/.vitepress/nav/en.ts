@@ -393,6 +393,11 @@ export const sidebar = {
           text: "0041 — Test depth and gate scale",
           link: "/rfc/0041-test-depth-and-security-gate-scale",
         },
+      ],
+    },
+    {
+      text: "Ready to build",
+      items: [
         {
           text: "0051 — Package allowlist",
           link: "/rfc/0051-package-allowlist",

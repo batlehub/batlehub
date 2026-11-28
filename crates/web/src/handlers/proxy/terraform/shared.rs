@@ -425,7 +425,7 @@ pub async fn terraform_versions_response(
     // A version listing, not an artifact: `proxy_document` fetches and filters
     // it so `terraform init` never selects a blocked module or provider version
     // and then be refused the download of it.
-    let pkg = PackageId::new(registry, pkg_name, "versions");
+    let pkg = PackageId::listing(registry, pkg_name, "versions");
     proxy_document(
         svc,
         pkg,

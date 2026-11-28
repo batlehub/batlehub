@@ -92,7 +92,7 @@ pub async fn gl_list_releases(
     // (RFC 0019 §4.2 *API reads*).
     proxy_document(
         svc,
-        PackageId::new(&registry, project, "releases"),
+        PackageId::listing(&registry, project, "releases"),
         identity,
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,
@@ -287,7 +287,7 @@ pub async fn gl_packages(
     let (registry, api_path) = path.into_inner();
     require_gitlab(&registry, &map)?;
     batlehub_core::services::validate_path_safe("path", &api_path).map_err(AppError::from)?;
-    let pkg = PackageId::new(&registry, "_packages", "_")
+    let pkg = PackageId::registry_document(&registry, "_packages", "_")
         .with_artifact(format!("pkgpath/api/v4/{api_path}"));
     proxy_stream(svc, pkg, identity, Action::ReleasesRead, None).await
 }

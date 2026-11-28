@@ -438,6 +438,51 @@ impl RegistryKind {
         matches!(self, Self::Github | Self::Gitlab | Self::Forgejo)
     }
 
+    /// Whether a request on this kind names a package, so that a
+    /// `package_allowlist` can judge it (RFC 0051 §4.3).
+    ///
+    /// `false` where the coordinate is a constant or a content address
+    /// instead: the path-addressed kinds build `PackageId::new(registry,
+    /// "repo", "_")`, nix addresses store hashes, godist serves only `go` and
+    /// mise-java only `java`. Config validation refuses the rule there.
+    /// Exhaustive with no wildcard arm, so a new kind has to answer.
+    pub fn has_package_names(&self) -> bool {
+        match self {
+            Self::Deb
+            | Self::Rpm
+            | Self::Pacman
+            | Self::Apk
+            | Self::Jetbrains
+            | Self::Generic
+            | Self::Nix
+            | Self::Godist
+            | Self::MiseJava => false,
+            Self::Github
+            | Self::Forgejo
+            | Self::Gitlab
+            | Self::Cargo
+            | Self::Npm
+            | Self::Openvsx
+            | Self::Goproxy
+            | Self::Pypi
+            | Self::Conda
+            | Self::Composer
+            | Self::VscodeMarketplace
+            | Self::Maven
+            | Self::Terraform
+            | Self::Rubygems
+            | Self::Nuget
+            | Self::JetbrainsMarketplace
+            | Self::Nodedist
+            | Self::Sdkman
+            | Self::Rustup
+            | Self::Galaxy
+            | Self::Devfile
+            | Self::Helm
+            | Self::MiseVersions => true,
+        }
+    }
+
     /// Whether this kind is addressed purely by upstream file path, with the
     /// whole path carried in `PackageId::artifact` and no per-package metadata
     /// API — the kinds served by `PathProxyRegistryClient`. These are the kinds

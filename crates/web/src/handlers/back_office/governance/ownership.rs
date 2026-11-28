@@ -171,6 +171,7 @@ pub async fn add_package_owner(
         name,
         version: String::new(),
         artifact: None,
+        role: Default::default(),
     };
     admin_svc
         .record_package_action(&pkg, AccessAction::AddOwner, &identity.0, &identity.1)
@@ -227,6 +228,7 @@ pub async fn remove_package_owner(
         name,
         version: String::new(),
         artifact: None,
+        role: Default::default(),
     };
     admin_svc
         .record_package_action(&pkg, AccessAction::RemoveOwner, &identity.0, &identity.1)

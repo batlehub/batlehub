@@ -56,7 +56,7 @@ pub async fn fj_packages(
     let (registry, api_path) = path.into_inner();
     require_forgejo(&registry, &map)?;
     batlehub_core::services::validate_path_safe("path", &api_path).map_err(AppError::from)?;
-    let pkg = PackageId::new(&registry, "_packages", "_")
+    let pkg = PackageId::registry_document(&registry, "_packages", "_")
         .with_artifact(format!("pkgpath/api/packages/{api_path}"));
     proxy_stream(svc, pkg, identity, Action::ReleasesRead, None).await
 }

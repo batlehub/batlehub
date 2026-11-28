@@ -90,7 +90,7 @@ async fn index_value(
     local_svc: &LocalRegistryService,
     mode: RegistryMode,
 ) -> Result<(Value, Option<u32>), AppError> {
-    let pkg = PackageId::new(registry, INDEX_ADDRESS, "latest");
+    let pkg = PackageId::registry_document(registry, INDEX_ADDRESS, "latest");
     if mode == RegistryMode::Local {
         svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
             .await

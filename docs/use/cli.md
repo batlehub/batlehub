@@ -1767,6 +1767,10 @@ VERSION  STATE        UNTIL                  CODE
 1.3.8    yanked       —                      —
 ```
 
+Under a [`package_allowlist`](/guide/security-gates#package-allowlist) range the
+headline names the newest *allowed* version, while npm itself asks for `latest`
+and is refused (`VERSION_NOT_ALLOWED`): pin the version `why` names.
+
 ### `why --last [--limit 20]`
 
 Your own refusals from the last 30 days, newest first: the coordinate, the time and the reason code. Use it when npm printed a `403` and you do not know which exact version it asked for. Each row is a coordinate you can pass back to `why`. It reads `GET /api/v1/me/downloads?outcome=denied`, which returns only the caller's rows. A refusal recorded before the upgrade shows `—` as its code.
